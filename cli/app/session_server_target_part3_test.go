@@ -182,11 +182,15 @@ func waitForRemoteTranscriptPrompts(t *testing.T, events <-chan ongoingTranscrip
 			}
 			seen = append(seen, evt.Message)
 			var candidates []clientui.TranscriptPrompt
-			switch evt.Message.Kind {
+			switch evt.Message.Kind() {
 			case clientui.TranscriptMessageHydration:
-				candidates = evt.Message.Payload.Hydration.PendingPrompts
-			case clientui.TranscriptMessagePromptPending:
-				candidates = []clientui.TranscriptPrompt{*evt.Message.Payload.PromptPending}
+				hydration := evt.Message.Payload().(clientui.TranscriptHydration)
+				candidates = hydration.PendingPrompts
+			case clientui.TranscriptMessagePrompt:
+				prompt := evt.Message.Payload().(clientui.TranscriptPrompt)
+				if prompt.Status == clientui.TranscriptPromptStatusPending {
+					candidates = []clientui.TranscriptPrompt{prompt}
+				}
 			}
 			for _, prompt := range candidates {
 				if promptID == "" || prompt.PromptID == promptID {

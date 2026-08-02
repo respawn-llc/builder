@@ -118,9 +118,11 @@ func TestNativeOngoingFirstWindowSizeSuppressesDelayedRendererClearAfterHydratio
 
 	_ = m.Init()
 	hydration := ongoingHydrationMessage(1)
-	hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
-		*ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload.CommittedRow,
+	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
+	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+		ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow),
 	}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 	_, _ = m.Update(ongoingTranscriptEvent{
 		Kind:    ongoingTranscriptEventMessage,
 		Message: hydration,
@@ -150,10 +152,12 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 
 	hydration := ongoingHydrationMessage(1)
-	hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
-		*ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload.CommittedRow,
+	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
+	hydrationPayload.CommittedRows = []clientui.TranscriptCommittedRow{
+		ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow),
 	}
-	hydration.Payload.Hydration.CommittedRows[0].User.Text = "hydrated row"
+	hydrationPayload.CommittedRows[0].User.Text = "hydrated row"
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 	_, cmd := m.Update(ongoingTranscriptEvent{
 		Kind:    ongoingTranscriptEventMessage,
 		Message: hydration,
@@ -201,18 +205,13 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 		t.Fatalf("ask option picker cursor = %+v, want absent", got)
 	}
 
-	if _, _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageAssistantDelta,
-		Payload: clientui.TranscriptPayload{
-			AssistantDelta: &clientui.TranscriptAssistantDelta{
-				StepID:   ongoingTestStepID(),
-				StreamID: runtimeids.NewAssistantStreamID(),
-				Delta:    "working",
-				Phase:    transcript.AssistantPhaseCommentary,
-			},
-		},
-	}); err != nil {
+	if _, _, err := m.ongoingTranscript.Accept(clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptAssistantDelta{
+		StepID:   ongoingTestStepID(),
+		StreamID: runtimeids.NewAssistantStreamID(),
+		Delta:    "working",
+		Phase:    transcript.AssistantPhaseCommentary,
+	})),
+	); err != nil {
 		t.Fatalf("accept assistant delta: %v", err)
 	}
 
@@ -346,7 +345,7 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
+	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePrompt)); err != nil {
 		t.Fatalf("accept pending prompt: %v", err)
 	}
 	spySurface.calls = nil

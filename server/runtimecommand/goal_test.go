@@ -57,6 +57,10 @@ func (goalAuthorityClient) Generate(context.Context, llm.Request) (llm.Response,
 	return llm.Response{}, nil
 }
 
+func (goalAuthorityClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func TestGoalAuthorityDormantSetPersistsMetadataBeforeOneNoticeWithoutRuntime(t *testing.T) {
 	var liveEvents int
 	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(sessionruntime.AgentResourceDescriptor, runtime.Event) {

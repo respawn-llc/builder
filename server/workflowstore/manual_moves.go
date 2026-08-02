@@ -9,16 +9,28 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type ManualMovePreparation struct {
 	request                 ManualMoveRequest
 	target                  workflow.Node
+	choice                  *ManualMoveTransitionChoice
+	currentNodes            []workflow.CurrentNode
+	noOp                    bool
 	requiresExecutionTarget bool
 }
 
 func (p ManualMovePreparation) RequiresExecutionTarget() bool {
 	return p.requiresExecutionTarget
+}
+
+func (p ManualMovePreparation) IsNoOp() bool {
+	return p.noOp
+}
+
+func (p ManualMovePreparation) CurrentNodes() []workflow.CurrentNode {
+	return append([]workflow.CurrentNode(nil), p.currentNodes...)
 }
 
 func (p ManualMovePreparation) TaskID() workflow.TaskID {
@@ -34,71 +46,60 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 }
 
 func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreparation, error) {
-	if strings.TrimSpace(string(req.TaskID)) == "" {
-		return ManualMovePreparation{}, errors.New("task id is required")
+	if err := validateCommentarySize(req.Commentary); err != nil {
+		return ManualMovePreparation{}, err
 	}
-	if strings.TrimSpace(string(req.TargetNodeID)) == "" {
-		return ManualMovePreparation{}, errors.New("target node id is required")
-	}
-	task, err := s.queries.GetTask(ctx, string(req.TaskID))
+	req.Commentary = strings.TrimSpace(req.Commentary)
+	preview, err := s.resolveManualMove(ctx, s.queries, req)
 	if err != nil {
 		return ManualMovePreparation{}, err
 	}
-	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
-	if err != nil {
-		return ManualMovePreparation{}, err
-	}
-	target, err := currentNodeDefinitionNode(definition, req.TargetNodeID)
-	if err != nil {
-		return ManualMovePreparation{}, err
-	}
-	switch target.Kind() {
-	case workflow.NodeKindStart, workflow.NodeKindTerminal:
-		return ManualMovePreparation{request: req, target: target}, nil
-	case workflow.NodeKindAgent, workflow.NodeKindScript:
-		_, source, edge, sourceDefinition, err := resolveManualMoveExecutablePath(ctx, s.queries, req.TaskID, definition, workflow.NodeIDOf(target))
+	switch preview.Outcome {
+	case ManualMovePreviewOutcomeNoOp:
+		return ManualMovePreparation{request: req, noOp: true, currentNodes: preview.CurrentNodes}, nil
+	case ManualMovePreviewOutcomeDirect:
+		target, err := currentNodeDefinitionNodeFromTask(ctx, s.queries, req.TaskID, req.TargetNodeID)
 		if err != nil {
 			return ManualMovePreparation{}, err
 		}
-		group, err := manualMoveTransitionGroup(definition, edge)
+		return ManualMovePreparation{request: req, target: target, currentNodes: preview.CurrentNodes}, nil
+	case ManualMovePreviewOutcomeTransition:
+		if len(preview.Choices) != 1 {
+			return ManualMovePreparation{}, ErrManualMoveTransitionSelectionRequired
+		}
+		target, err := currentNodeDefinitionNodeFromTask(ctx, s.queries, req.TaskID, req.TargetNodeID)
 		if err != nil {
 			return ManualMovePreparation{}, err
 		}
-		preparedRequest, err := prepareCurrentNodeCompletionRequest(CurrentNodeCompletionRequest{
-			Source:       source.Reference,
-			TransitionID: "manual_move",
-			OutputValues: req.OutputValues,
-			Commentary:   req.Commentary,
-		})
-		if err != nil {
-			return ManualMovePreparation{}, err
-		}
-		if issues := currentNodeCompletionOutputIssues(definition, group, preparedRequest.OutputValues); len(issues) > 0 {
-			return ManualMovePreparation{}, CompletionValidationError{Issues: issues}
-		}
-		if _, err := materializeCompletionTargetCurrentNode(
-			ctx,
-			s.queries,
-			definition,
-			edge,
-			sourceDefinition,
-			target,
-			source,
-			preparedRequest.OutputValues,
-			nil,
-		); err != nil {
-			return ManualMovePreparation{}, err
-		}
-		req.OutputValues = preparedRequest.OutputValues
-		req.Commentary = preparedRequest.Commentary
-		return ManualMovePreparation{request: req, target: target, requiresExecutionTarget: true}, nil
+		choice := preview.Choices[0]
+		return ManualMovePreparation{
+			request:                 req,
+			target:                  target,
+			choice:                  &choice,
+			requiresExecutionTarget: executableNodeKind(target.Kind()),
+			currentNodes:            preview.CurrentNodes,
+		}, nil
+	case ManualMovePreviewOutcomeBlocked:
+		return ManualMovePreparation{}, manualMovePreviewBlockerError(preview.Blocker)
 	default:
-		return ManualMovePreparation{}, ErrManualMoveExecutableTargetNeedsEdge
+		return ManualMovePreparation{}, fmt.Errorf("manual move preview cannot be prepared from outcome %q", preview.Outcome)
 	}
 }
 
+func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.Node, error) {
+	task, err := q.GetTask(ctx, string(taskID))
+	if err != nil {
+		return nil, err
+	}
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
+	if err != nil {
+		return nil, err
+	}
+	return currentNodeDefinitionNode(definition, nodeID)
+}
+
 func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (ManualMoveResult, error) {
-	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || prepared.target == nil {
+	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || (!prepared.noOp && prepared.target == nil) {
 		return ManualMoveResult{}, errors.New("manual move preparation is invalid")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -111,11 +112,32 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
+	currentNodes, err := listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	definition, workflowRecord, err := workflowDefinitionFromQueries(ctx, q, task.WorkflowID)
+	for _, currentNode := range currentNodes {
+		if currentNode.Reference.NodeID == prepared.request.TargetNodeID {
+			return ManualMoveResult{
+				Outcome:      ManualMoveResultOutcomeNoOp,
+				CurrentNodes: append([]workflow.CurrentNode(nil), currentNodes...),
+			}, nil
+		}
+	}
+	preview, err := s.resolveManualMove(ctx, q, prepared.request)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if preview.Outcome == ManualMovePreviewOutcomeNoOp {
+		return ManualMoveResult{
+			Outcome:      ManualMoveResultOutcomeNoOp,
+			CurrentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+		}, nil
+	}
+	if preview.Outcome == ManualMovePreviewOutcomeBlocked {
+		return ManualMoveResult{}, manualMovePreviewBlockerError(preview.Blocker)
+	}
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
@@ -123,23 +145,17 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	var currentNodes []workflow.CurrentNode
-	var target workflow.CurrentNode
+	var targets []workflow.CurrentNode
 	if executableNodeKind(targetDefinition.Kind()) {
-		var source workflow.CurrentNode
-		var edge workflow.Edge
-		var sourceDefinition workflow.Node
-		currentNodes, source, edge, sourceDefinition, err = resolveManualMoveExecutablePath(ctx, q, prepared.request.TaskID, definition, workflow.NodeIDOf(targetDefinition))
+		if len(preview.Choices) != 1 {
+			return ManualMoveResult{}, ErrManualMoveTransitionSelectionRequired
+		}
+		choice := preview.Choices[0]
+		valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		preparedOutput, err := prepareCurrentNodeCompletionRequest(CurrentNodeCompletionRequest{
-			Source:       source.Reference,
-			TransitionID: "manual_move",
-			OutputValues: prepared.request.OutputValues,
-			Commentary:   prepared.request.Commentary,
-		})
-		if err != nil {
+		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 			return ManualMoveResult{}, err
 		}
 		targetMutation, err := s.prepareExecutionTargetMutation(ctx, task, executionTarget)
@@ -150,82 +166,48 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if targetMutation.candidateToLock != nil {
 			executionRoot = targetMutation.candidateToLock.Root
 		}
-		if targetDefinition.Kind() == workflow.NodeKindScript &&
-			(targetMutation.candidateToLock != nil || targetMutation.executionRoot != (ExecutionRoot{})) {
-			if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(targetDefinition), &executionRoot); err != nil {
+		for _, edge := range choice.Edges {
+			targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+			if err != nil {
 				return ManualMoveResult{}, err
 			}
+			if targetNode.Kind() == workflow.NodeKindScript &&
+				(targetMutation.candidateToLock != nil || targetMutation.executionRoot != (ExecutionRoot{})) {
+				if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(targetNode), &executionRoot); err != nil {
+					return ManualMoveResult{}, err
+				}
+			}
 		}
-		target, err = materializeCompletionTargetCurrentNode(
-			ctx,
-			q,
-			definition,
-			edge,
-			sourceDefinition,
-			targetDefinition,
-			source,
-			preparedOutput.OutputValues,
-			nil,
-		)
+		targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, s.now().UnixMilli()); err != nil {
 			return ManualMoveResult{}, err
 		}
-		if edge.RequiresApproval {
-			group, err := manualMoveTransitionGroup(definition, edge)
-			if err != nil {
-				return ManualMoveResult{}, err
-			}
-			if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(prepared.request.TaskID)); err != nil {
-				return ManualMoveResult{}, err
-			}
-			approval, err := newPendingApproval(
-				source,
-				workflowRecord.Version,
-				group,
-				workflow.NodeDisplayName(sourceDefinition),
-				edge,
-				targetDefinition,
-				target,
-				preparedOutput.Commentary,
-				preparedOutput.OutputValues,
-				s.now().UTC(),
-			)
-			if err != nil {
-				return ManualMoveResult{}, err
-			}
-			if err := insertPendingApproval(ctx, q, approval); err != nil {
-				return ManualMoveResult{}, err
-			}
-			if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
-				return ManualMoveResult{}, err
-			}
-			if err := tx.Commit(); err != nil {
-				return ManualMoveResult{}, err
-			}
-			return ManualMoveResult{
-				Retained:                currentNodes,
-				PendingApproval:         &approval,
-				TaskAttentionResolution: attentionResolution,
-			}, nil
-		}
 	} else {
-		currentNodes, err = listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		if len(currentNodes) == 0 {
-			return ManualMoveResult{}, ErrManualMoveNoSourcePosition
-		}
 		if executionTarget != nil {
 			return ManualMoveResult{}, errors.New("manual move to a non-executable target does not accept an execution target")
 		}
-		target, err = newNonExecutableCurrentNode(prepared.request.TaskID, workflow.NodeIDOf(targetDefinition))
+		targets = []workflow.CurrentNode{{
+			Reference: workflow.CurrentNodeReference{},
+		}}
+		targets[0], err = newNonExecutableCurrentNode(prepared.request.TaskID, workflow.NodeIDOf(targetDefinition))
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
+	}
+	if commentary := prepared.request.Commentary; commentary != "" {
+		for index := range targets {
+			if targets[index].CurrentInputValues == nil {
+				targets[index].CurrentInputValues = make(map[string]string)
+			}
+			targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
+		}
+	}
+	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
+	if err != nil {
+		return ManualMoveResult{}, err
 	}
 	if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(prepared.request.TaskID)); err != nil {
 		return ManualMoveResult{}, err
@@ -240,7 +222,11 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if _, err := q.DeleteTaskActiveFanout(ctx, string(prepared.request.TaskID)); err != nil {
 		return ManualMoveResult{}, err
 	}
-	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+	if len(targets) == 1 {
+		if err := insertTaskCurrentNode(ctx, q, targets[0]); err != nil {
+			return ManualMoveResult{}, err
+		}
+	} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets); err != nil {
 		return ManualMoveResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
@@ -253,64 +239,110 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	for _, currentNode := range currentNodes {
 		removedReferences = append(removedReferences, currentNode.Reference)
 	}
-	return ManualMoveResult{
-		CurrentNodeMutationResult: workflow.CurrentNodeMutationResult{
+	result := ManualMoveResult{
+		Outcome: ManualMoveResultOutcomeApplied,
+		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: removedReferences,
-			Created: []workflow.CurrentNode{target},
+			Created: append([]workflow.CurrentNode(nil), targets...),
 		},
 		TaskAttentionResolution: attentionResolution,
-	}, nil
+	}
+	if err := result.Validate(); err != nil {
+		return ManualMoveResult{}, err
+	}
+	return result, nil
 }
 
-func manualMoveTransitionGroup(definition workflow.Definition, edge workflow.Edge) (workflow.TransitionGroup, error) {
-	for _, group := range definition.TransitionGroups {
-		if group.ID == edge.TransitionGroupID {
-			return group, nil
+func manualMovePreviewBlockerError(blocker ManualMoveBlocker) error {
+	switch blocker {
+	case ManualMoveBlockerNoSourcePosition:
+		return ErrManualMoveNoSourcePosition
+	case ManualMoveBlockerContextSessionUnavailable:
+		return ErrManualMoveTransitionNotUsable
+	case ManualMoveBlockerParallelBranchRequiresFanOut, ManualMoveBlockerNoUsableTransition:
+		return ErrManualMoveTransitionNotUsable
+	default:
+		return fmt.Errorf("manual move is blocked: %s", blocker)
+	}
+}
+
+func (s *Store) materializeManualMoveTargets(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	choice ManualMoveTransitionChoice,
+	currentNodes []workflow.CurrentNode,
+	environment manualMoveValueEnvironment,
+	submitted map[workflow.ModelKey]map[string]string,
+) ([]workflow.CurrentNode, error) {
+	if len(choice.Edges) == 0 {
+		return nil, ErrManualMoveTransitionNotUsable
+	}
+	targets := make([]workflow.CurrentNode, 0, len(choice.Edges))
+	contextSource := manualMoveContextCurrentNode(currentNodes)
+	priorValues := manualMoveBasePriorValues(currentNodes)
+	for _, edge := range choice.Edges {
+		target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return nil, err
+		}
+		var branchKey *workflow.TransitionBranchKey
+		if len(choice.Edges) > 1 {
+			value := workflow.TransitionBranchKey(strings.TrimSpace(string(edge.Key)))
+			if value == "" {
+				return nil, errors.New("manual move fan-out branch key is required")
+			}
+			branchKey = &value
+		}
+		targetCurrentNode, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
+			Definition:           definition,
+			Edge:                 edge,
+			Source:               choice.SourceNode,
+			Target:               target,
+			ContextTaskID:        currentNodes[0].Reference.TaskID,
+			ContextCurrentSource: contextSource,
+			ManualMoveContext:    true,
+			PriorValues:          priorValues,
+			Value: func(providerNode, _ workflow.ModelKey, outputName string) (string, bool) {
+				value := manualMoveSubmittedOrResolved(providerNode, outputName, environment, submitted)
+				if value == nil {
+					return "", false
+				}
+				return *value, true
+			},
+			TransitionBranchKey: branchKey,
+		})
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, targetCurrentNode)
+	}
+	if len(targets) > 1 {
+		if err := validateFanoutTargets(currentNodes[0].Reference.TaskID, targets); err != nil {
+			return nil, err
 		}
 	}
-	return workflow.TransitionGroup{}, fmt.Errorf("manual move edge %q transition group %q is absent from workflow %q", edge.ID, edge.TransitionGroupID, definition.ID)
+	return targets, nil
 }
 
-func resolveManualMoveExecutablePath(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID, definition workflow.Definition, targetNodeID workflow.NodeID) ([]workflow.CurrentNode, workflow.CurrentNode, workflow.Edge, workflow.Node, error) {
-	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
-	if err != nil {
-		return nil, workflow.CurrentNode{}, workflow.Edge{}, nil, err
+func manualMoveBasePriorValues(currentNodes []workflow.CurrentNode) workflow.MaterializedPriorValues {
+	priorValues := workflow.MaterializedPriorValues{}
+	for _, currentNode := range currentNodes {
+		for transitionKey, values := range currentNode.PriorValues.TransitionParameters {
+			for parameterName, value := range values {
+				if _, exists := priorValues.TransitionParameters[transitionKey][parameterName]; !exists {
+					priorValues.SetTransitionParameter(transitionKey, parameterName, value)
+				}
+			}
+		}
 	}
-	if len(currentNodes) == 0 {
-		return nil, workflow.CurrentNode{}, workflow.Edge{}, nil, ErrManualMoveNoSourcePosition
-	}
+	return priorValues
+}
+
+func manualMoveContextCurrentNode(currentNodes []workflow.CurrentNode) *workflow.CurrentNode {
 	if len(currentNodes) != 1 || currentNodes[0].Reference.IsBranchScoped() {
-		return nil, workflow.CurrentNode{}, workflow.Edge{}, nil, ErrManualMoveExecutableTargetNeedsEdge
+		return nil
 	}
-	edge, sourceDefinition, err := manualMoveExecutableEdge(definition, currentNodes[0].Reference.NodeID, targetNodeID)
-	if err != nil {
-		return nil, workflow.CurrentNode{}, workflow.Edge{}, nil, err
-	}
-	return currentNodes, currentNodes[0], edge, sourceDefinition, nil
-}
-
-func manualMoveExecutableEdge(definition workflow.Definition, sourceNodeID, targetNodeID workflow.NodeID) (workflow.Edge, workflow.Node, error) {
-	source, err := currentNodeDefinitionNode(definition, sourceNodeID)
-	if err != nil {
-		return workflow.Edge{}, nil, err
-	}
-	groupSource := make(map[workflow.TransitionGroupID]workflow.NodeID, len(definition.TransitionGroups))
-	for _, group := range definition.TransitionGroups {
-		groupSource[group.ID] = group.SourceNodeID
-	}
-	var edge *workflow.Edge
-	for index := range definition.Edges {
-		candidate := definition.Edges[index]
-		if groupSource[candidate.TransitionGroupID] != sourceNodeID || candidate.TargetNodeID != targetNodeID {
-			continue
-		}
-		if edge != nil {
-			return workflow.Edge{}, nil, ErrManualMoveExecutableTargetNeedsEdge
-		}
-		edge = &candidate
-	}
-	if edge == nil {
-		return workflow.Edge{}, nil, ErrManualMoveExecutableTargetNeedsEdge
-	}
-	return *edge, source, nil
+	current := currentNodes[0]
+	return &current
 }

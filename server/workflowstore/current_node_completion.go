@@ -296,12 +296,8 @@ func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (Curr
 		return CurrentNodeCompletionRequest{}, err
 	}
 	req.TransitionID = strings.TrimSpace(req.TransitionID)
-	if len(req.Commentary) > workflow.MaxCommentaryBytes {
-		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
-			Code:    CompletionCodeCommentaryTooLarge,
-			Field:   "commentary",
-			Message: "commentary is too large",
-		}}}
+	if err := validateCommentarySize(req.Commentary); err != nil {
+		return CurrentNodeCompletionRequest{}, err
 	}
 	req.Commentary = strings.TrimSpace(req.Commentary)
 	req.OutputValues = cloneCurrentNodeOutputValues(req.OutputValues)
@@ -319,6 +315,17 @@ func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (Curr
 		return CurrentNodeCompletionRequest{}, CompletionValidationError{Issues: issues}
 	}
 	return req, nil
+}
+
+func validateCommentarySize(commentary string) error {
+	if len(commentary) > workflow.MaxCommentaryBytes {
+		return CompletionValidationError{Issues: []CompletionValidationIssue{{
+			Code:    CompletionCodeCommentaryTooLarge,
+			Field:   "commentary",
+			Message: "commentary is too large",
+		}}}
+	}
+	return nil
 }
 
 func cloneCurrentNodeOutputValues(values map[string]string) map[string]string {
@@ -504,6 +511,95 @@ func completionOutputFieldPresent(fields []workflow.OutputField, name string) bo
 	return false
 }
 
+type transitionTargetValueResolver func(providerNode workflow.ModelKey, transitionKey workflow.ModelKey, outputName string) (string, bool)
+
+type transitionTargetMaterializationRequest struct {
+	Definition           workflow.Definition
+	Edge                 workflow.Edge
+	Source               workflow.Node
+	Target               workflow.Node
+	ContextTaskID        workflow.TaskID
+	ContextCurrentSource *workflow.CurrentNode
+	ManualMoveContext    bool
+	PriorValues          workflow.MaterializedPriorValues
+	Value                transitionTargetValueResolver
+	TransitionBranchKey  *workflow.TransitionBranchKey
+}
+
+func materializeTransitionTargetCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	request transitionTargetMaterializationRequest,
+) (workflow.CurrentNode, error) {
+	definition := request.Definition
+	edge := request.Edge
+	source := request.Source
+	target := request.Target
+	if strings.TrimSpace(string(request.ContextTaskID)) == "" {
+		if request.ManualMoveContext {
+			return workflow.CurrentNode{}, ErrManualMoveTransitionNotUsable
+		}
+		return workflow.CurrentNode{}, errors.New("current node completion requires task id")
+	}
+	transitionGroup, err := transitionGroupForEdge(definition, edge)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	sourceTransitionKey := workflow.ModelKey(transitionGroup.TransitionID)
+	wiring := workflow.DeriveWiring(definition)
+	currentInputValues := make(map[string]string)
+	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
+		providerNode, err := transitionTargetInputProviderNodeKey(definition, wiring, source, binding.Field)
+		if err != nil {
+			return workflow.CurrentNode{}, err
+		}
+		value, exists := request.Value(providerNode, sourceTransitionKey, binding.Field)
+		if !exists {
+			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+				Code:    CompletionCodeRequiredOutputMissing,
+				Field:   strings.TrimSpace(binding.Field),
+				Message: "required output is missing",
+			}}}
+		}
+		currentInputValues[binding.Name] = value
+	}
+	priorValues := request.PriorValues.Clone()
+	for _, requirement := range wiring.PriorParameterRequirementsForNode(workflow.NodeIDOf(target)) {
+		value, exists := request.Value(requirement.ProviderNode, requirement.TransitionKey, requirement.ParameterName)
+		if !exists {
+			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+				Code:    CompletionCodeRequiredOutputMissing,
+				Field:   strings.TrimSpace(requirement.ParameterName),
+				Message: "required prior Transition parameter is missing",
+			}}}
+		}
+		priorValues.SetTransitionParameter(requirement.TransitionKey, requirement.ParameterName, value)
+	}
+	sessionID, err := resolveTransitionTargetSession(
+		ctx,
+		q,
+		definition,
+		edge,
+		request.ContextTaskID,
+		request.ContextCurrentSource,
+		request.TransitionBranchKey,
+		request.Source,
+		request.ManualMoveContext,
+	)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	return completionTargetCurrentNode(
+		request.ContextTaskID,
+		target,
+		request.TransitionBranchKey,
+		currentInputValues,
+		priorValues,
+		sessionID,
+		edge.ID,
+	)
+}
+
 func materializeCompletionTargetCurrentNode(
 	ctx context.Context,
 	q *sqlitegen.Queries,
@@ -516,19 +612,6 @@ func materializeCompletionTargetCurrentNode(
 	transitionBranchKey *workflow.TransitionBranchKey,
 ) (workflow.CurrentNode, error) {
 	wiring := workflow.DeriveWiring(definition)
-	currentInputValues := make(map[string]string)
-	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
-		value, exists := outputValues[binding.Field]
-		if !exists {
-			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
-				Code:    CompletionCodeRequiredOutputMissing,
-				Field:   strings.TrimSpace(binding.Field),
-				Message: "required output is missing",
-			}}}
-		}
-		currentInputValues[binding.Name] = value
-	}
-	priorValues := currentSource.PriorValues.Clone()
 	sourceKey := workflow.NodeKey(source)
 	var sourceTransitionKey workflow.ModelKey
 	for _, group := range definition.TransitionGroups {
@@ -540,48 +623,84 @@ func materializeCompletionTargetCurrentNode(
 	if sourceTransitionKey == "" {
 		return workflow.CurrentNode{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
 	}
-	for _, requirement := range wiring.PriorParameterRequirementsForNode(workflow.NodeIDOf(target)) {
-		var value string
-		var exists bool
-		if requirement.ProviderNode == sourceKey && requirement.TransitionKey == sourceTransitionKey {
-			value, exists = outputValues[requirement.ParameterName]
-		} else {
-			value, exists = currentSource.PriorValues.TransitionParameter(requirement.TransitionKey, requirement.ParameterName)
-			if !exists {
-				recoveredValue, recovered, recoveryErr := currentNodeEnteringTransitionParameterValue(
-					definition,
-					wiring,
-					currentSource,
-					requirement,
-				)
-				if recoveryErr != nil {
-					return workflow.CurrentNode{}, recoveryErr
-				}
-				value, exists = recoveredValue, recovered
+	value := func(providerNode, transitionKey workflow.ModelKey, outputName string) (string, bool) {
+		if transitionKey == sourceTransitionKey &&
+			sourceTransitionKey != "" &&
+			(providerNode == sourceKey || source.Kind() == workflow.NodeKindJoin) {
+			if resolved, exists := outputValues[outputName]; exists {
+				return resolved, true
 			}
 		}
-		if !exists {
-			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
-				Code:    CompletionCodeRequiredOutputMissing,
-				Field:   strings.TrimSpace(requirement.ParameterName),
-				Message: "required prior Transition parameter is missing",
-			}}}
+		if resolved, exists := currentSource.PriorValues.TransitionParameter(transitionKey, outputName); exists {
+			return resolved, true
 		}
-		priorValues.SetTransitionParameter(requirement.TransitionKey, requirement.ParameterName, value)
+		for _, requirement := range wiring.PriorParameterRequirementsForNode(workflow.NodeIDOf(target)) {
+			if requirement.ProviderNode != providerNode ||
+				requirement.TransitionKey != transitionKey ||
+				requirement.ParameterName != outputName {
+				continue
+			}
+			resolved, exists, err := currentNodeEnteringTransitionParameterValue(definition, wiring, currentSource, requirement)
+			if err != nil {
+				return "", false
+			}
+			if exists {
+				return resolved, true
+			}
+		}
+		return "", false
 	}
-	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource, transitionBranchKey)
-	if err != nil {
-		return workflow.CurrentNode{}, err
+	return materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
+		Definition:           definition,
+		Edge:                 edge,
+		Source:               source,
+		Target:               target,
+		ContextTaskID:        currentSource.Reference.TaskID,
+		ContextCurrentSource: &currentSource,
+		PriorValues:          currentSource.PriorValues,
+		Value:                value,
+		TransitionBranchKey:  transitionBranchKey,
+	})
+}
+
+func transitionTargetInputProviderNodeKey(
+	definition workflow.Definition,
+	derived workflow.DerivedWiring,
+	source workflow.Node,
+	fieldName string,
+) (workflow.ModelKey, error) {
+	if source.Kind() != workflow.NodeKindJoin {
+		return workflow.NodeKey(source), nil
 	}
-	return completionTargetCurrentNode(
-		currentSource.Reference.TaskID,
-		target,
-		transitionBranchKey,
-		currentInputValues,
-		priorValues,
-		sessionID,
-		edge.ID,
-	)
+	for _, edge := range definition.Edges {
+		if edge.TargetNodeID != workflow.NodeIDOf(source) {
+			continue
+		}
+		for _, field := range derived.RequiredProviderFieldsForJoinEdge(edge.ID) {
+			if strings.TrimSpace(field.Name) != strings.TrimSpace(fieldName) {
+				continue
+			}
+			group, err := transitionGroupForEdge(definition, edge)
+			if err != nil {
+				return "", err
+			}
+			provider, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
+			if err != nil {
+				return "", err
+			}
+			return workflow.NodeKey(provider), nil
+		}
+	}
+	return "", fmt.Errorf("manual move Join output %q has no provider", fieldName)
+}
+
+func transitionGroupForEdge(definition workflow.Definition, edge workflow.Edge) (workflow.TransitionGroup, error) {
+	for _, group := range definition.TransitionGroups {
+		if group.ID == edge.TransitionGroupID {
+			return group, nil
+		}
+	}
+	return workflow.TransitionGroup{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
 }
 
 func currentNodeEnteringTransitionParameterValue(
@@ -636,13 +755,16 @@ func currentNodeEnteringTransitionParameterValue(
 	return "", false, nil
 }
 
-func completionTargetSession(
+func resolveTransitionTargetSession(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	definition workflow.Definition,
 	edge workflow.Edge,
-	source workflow.CurrentNode,
+	taskID workflow.TaskID,
+	source *workflow.CurrentNode,
 	targetBranchKey *workflow.TransitionBranchKey,
+	sourceNode workflow.Node,
+	manualMoveContext bool,
 ) (*runtimeids.SessionID, error) {
 	if edge.ContextMode == workflow.ContextModeNewSession {
 		return nil, nil
@@ -650,8 +772,18 @@ func completionTargetSession(
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
 	switch contextSource.Kind {
 	case workflow.ContextSourceImmediateSource:
-		if source.SessionID == nil {
-			return nil, errors.New("immediate source continuation requires a source current node session")
+		if source == nil ||
+			source.SessionID == nil ||
+			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
+			sourceNode.Kind() != workflow.NodeKindAgent ||
+			(manualMoveContext && source.Reference.IsBranchScoped()) {
+			if manualMoveContext {
+				return nil, ErrManualMoveTransitionNotUsable
+			}
+			return nil, fmt.Errorf(
+				"current node completion cannot continue the immediate source session for node %q",
+				workflow.NodeIDOf(sourceNode),
+			)
 		}
 		sessionID := *source.SessionID
 		return &sessionID, nil
@@ -661,9 +793,9 @@ func completionTargetSession(
 			return nil, err
 		}
 		selectedReference, err := workflow.NewCurrentNodeReference(
-			source.Reference.TaskID,
+			taskID,
 			workflow.NodeIDOf(selected),
-			currentNodeReferenceBranchKey(source.Reference),
+			selectedContextBranchKey(manualMoveContext, source),
 		)
 		if err != nil {
 			return nil, err
@@ -676,9 +808,9 @@ func completionTargetSession(
 		return &sessionID, nil
 	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
 		targetReference, err := workflow.NewCurrentNodeReference(
-			source.Reference.TaskID,
+			taskID,
 			edge.TargetNodeID,
-			targetBranchKey,
+			nilIfManualMoveContext(manualMoveContext, targetBranchKey),
 		)
 		if err != nil {
 			return nil, err
@@ -693,8 +825,25 @@ func completionTargetSession(
 		sessionID := association.SessionID
 		return &sessionID, nil
 	default:
+		if manualMoveContext {
+			return nil, ErrManualMoveTransitionNotUsable
+		}
 		return nil, fmt.Errorf("current node completion does not yet support context source %q", contextSource.Kind)
 	}
+}
+
+func nilIfManualMoveContext(manualMoveContext bool, branchKey *workflow.TransitionBranchKey) *workflow.TransitionBranchKey {
+	if manualMoveContext {
+		return nil
+	}
+	return branchKey
+}
+
+func selectedContextBranchKey(manualMoveContext bool, source *workflow.CurrentNode) *workflow.TransitionBranchKey {
+	if manualMoveContext || source == nil {
+		return nil
+	}
+	return currentNodeReferenceBranchKey(source.Reference)
 }
 
 func currentNodeDefinitionNodeByKey(definition workflow.Definition, key workflow.ModelKey) (workflow.Node, error) {

@@ -56,6 +56,7 @@ import type {
   TaskApproveResponse,
   TaskMoveResponse,
   TaskResumeResponse,
+  TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowBoard,
   WorkflowDeleteImpact,
@@ -360,7 +361,10 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
+      await this.#transport.call("workflow.validate", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+        mode,
+      }),
     );
   }
 
@@ -448,7 +452,9 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
+      await this.#transport.call("workflow.deletePreview", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+      }),
     );
   }
 
@@ -553,6 +559,10 @@ export class ApiClient implements ApiService {
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
     return taskLifecycle.moveTask(this.#transport, input);
+  }
+
+  async previewMoveTask(taskID: string, targetNodeID: string): Promise<TaskMovePreviewResponse> {
+    return taskLifecycle.previewMoveTask(this.#transport, taskID, targetNodeID);
   }
 
   async interruptTask(taskID: string, sessionID?: string): Promise<void> {

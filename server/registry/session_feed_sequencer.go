@@ -51,35 +51,31 @@ func (s *sessionFeedSequencer) Subscribe(base clientui.TranscriptHydration) (*tr
 	if err := s.snapshot.applyToHydration(&hydration); err != nil {
 		return nil, err
 	}
-	message := clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &hydration},
-	}
-	if err := message.ValidatePayload(); err != nil {
+	event := clientui.NewTranscriptEvent(hydration)
+	if err := event.Validate(); err != nil {
 		return nil, fmt.Errorf("build canonical transcript hydration: %w", err)
 	}
-	return s.broker.Subscribe(message)
+	return s.broker.Subscribe(event)
 }
 
-func (s *sessionFeedSequencer) Publish(messages []clientui.TranscriptMessage) {
-	if s == nil || len(messages) == 0 {
+func (s *sessionFeedSequencer) Publish(events []clientui.TranscriptEvent) {
+	if s == nil || len(events) == 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	published := make([]clientui.TranscriptMessage, 0, len(messages))
-	for _, message := range messages {
-		if message.Kind == "" {
+	for _, event := range events {
+		if err := event.Validate(); err != nil {
+			panic(fmt.Sprintf("publish invalid canonical transcript event before batch mutation: %v", err))
+		}
+	}
+	published := make([]clientui.TranscriptEvent, 0, len(events))
+	for _, event := range events {
+		if s.snapshot.shouldDrop(event) {
 			continue
 		}
-		if err := message.ValidatePayload(); err != nil {
-			panic(fmt.Sprintf("publish invalid canonical transcript message kind %q: %v", message.Kind, err))
-		}
-		if s.snapshot.shouldDrop(message) {
-			continue
-		}
-		s.snapshot.apply(message)
-		published = append(published, message)
+		s.snapshot.apply(event)
+		published = append(published, event)
 	}
 	if len(published) > 0 {
 		s.broker.Publish(published)
@@ -116,14 +112,11 @@ func (s *sessionFeedSequencer) Close(err error) {
 
 func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.RuntimeReadModelUpdate) {
 	copied := s.snapshot.applyRuntimeReadModel(update)
-	message := clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessageRuntimeReadModelUpdate,
-		Payload: clientui.TranscriptPayload{RuntimeReadModelUpdate: &copied},
-	}
-	if err := message.ValidatePayload(); err != nil {
+	event := clientui.NewTranscriptEvent(copied)
+	if err := event.Validate(); err != nil {
 		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
-	s.broker.Publish([]clientui.TranscriptMessage{message})
+	s.broker.Publish([]clientui.TranscriptEvent{event})
 }
 
 func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydration) error {
@@ -226,55 +219,66 @@ func (s *sessionFeedSnapshot) reconcileStepOwnedState(next *clientui.RuntimeActi
 	s.inFlightTools = orderedFeedLedger[clientui.ToolCallID, clientui.TranscriptToolStart]{}
 }
 
-func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
-	payload := message.Payload
-	switch message.Kind {
+func (s *sessionFeedSnapshot) apply(event clientui.TranscriptEvent) {
+	switch event.Kind() {
 	case clientui.TranscriptMessageReasoningUpdate:
-		s.activeReasoning = cloneTranscriptReasoningUpdate(payload.ReasoningUpdate)
+		payload := event.Payload().(clientui.TranscriptReasoningUpdate)
+		s.activeReasoning = cloneTranscriptReasoningUpdate(&payload)
 	case clientui.TranscriptMessageReasoningReset:
 		s.activeReasoning = nil
 	case clientui.TranscriptMessageToolStart:
-		tool := *payload.ToolStart
+		tool := event.Payload().(clientui.TranscriptToolStart)
 		s.inFlightTools.upsert(tool.ToolCallID, tool)
 	case clientui.TranscriptMessageToolAbort:
-		s.inFlightTools.delete(payload.ToolAbort.ToolCallID)
+		s.inFlightTools.delete(event.Payload().(clientui.TranscriptToolAbort).ToolCallID)
 	case clientui.TranscriptMessageCommittedRow:
-		if payload.CommittedRow.Tool != nil {
-			s.inFlightTools.delete(payload.CommittedRow.Tool.ToolCallID)
+		payload := event.Payload().(clientui.TranscriptCommittedRow)
+		if payload.Tool != nil {
+			s.inFlightTools.delete(payload.Tool.ToolCallID)
 		}
 	case clientui.TranscriptMessageReviewerState:
-		if payload.ReviewerState.State == clientui.ReviewerStateRunning {
-			s.activeReviewer = cloneTranscriptReviewerState(payload.ReviewerState)
+		payload := event.Payload().(clientui.TranscriptReviewerState)
+		if payload.State == clientui.ReviewerStateRunning {
+			s.activeReviewer = cloneTranscriptReviewerState(&payload)
 		} else {
 			s.activeReviewer = nil
 		}
 	case clientui.TranscriptMessageQueuedMessageState:
-		s.queuedMessages.apply(*payload.QueuedMessageState)
-	case clientui.TranscriptMessagePromptPending:
-		prompt := cloneTranscriptPrompt(*payload.PromptPending)
-		s.pendingPrompts.upsert(prompt.PromptID, prompt)
-	case clientui.TranscriptMessagePromptResolved:
-		s.pendingPrompts.delete(payload.PromptResolved.PromptID)
+		payload := event.Payload().(clientui.TranscriptQueuedMessageState)
+		s.queuedMessages.apply(payload)
+	case clientui.TranscriptMessagePrompt:
+		payload := event.Payload().(clientui.TranscriptPrompt)
+		if payload.Status == clientui.TranscriptPromptStatusPending {
+			prompt := cloneTranscriptPrompt(payload)
+			s.pendingPrompts.upsert(prompt.PromptID, prompt)
+		} else {
+			s.pendingPrompts.delete(payload.PromptID)
+		}
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		s.applyRuntimeReadModel(*payload.RuntimeReadModelUpdate)
+		s.applyRuntimeReadModel(event.Payload().(clientui.RuntimeReadModelUpdate))
 	case clientui.TranscriptMessageSessionStatus:
-		status := cloneTranscriptSessionStatus(*payload.SessionStatus)
+		payload := event.Payload().(clientui.TranscriptSessionStatus)
+		status := cloneTranscriptSessionStatus(payload)
 		s.sessionStatus = &status
 	case clientui.TranscriptMessageSessionIdentity:
-		identity := cloneTranscriptSessionIdentity(*payload.SessionIdentity)
+		payload := event.Payload().(clientui.TranscriptSessionIdentity)
+		identity := cloneTranscriptSessionIdentity(payload)
 		s.sessionIdentity = &identity
 	case clientui.TranscriptMessageCompactionStatus:
-		if payload.CompactionStatus.State == clientui.CompactionStarted {
-			s.activeCompaction = cloneTranscriptCompactionStatus(payload.CompactionStatus)
+		payload := event.Payload().(clientui.TranscriptCompactionStatus)
+		if payload.State == clientui.CompactionStarted {
+			s.activeCompaction = cloneTranscriptCompactionStatus(&payload)
 		} else {
 			s.activeCompaction = nil
 		}
 	case clientui.TranscriptMessageContextUsage:
-		s.contextUsage = cloneTranscriptContextUsage(payload.ContextUsage)
+		payload := event.Payload().(clientui.TranscriptContextUsage)
+		s.contextUsage = cloneTranscriptContextUsage(&payload)
 	case clientui.TranscriptMessageGoalStatus:
-		s.goalStatus = cloneTranscriptGoalStatus(payload.GoalStatus)
+		payload := event.Payload().(clientui.TranscriptGoalStatus)
+		s.goalStatus = cloneTranscriptGoalStatus(&payload)
 	case clientui.TranscriptMessageBackgroundActivity:
-		background := *payload.BackgroundActivity
+		background := event.Payload().(clientui.TranscriptBackgroundActivity)
 		if background.Lifecycle == clientui.BackgroundLifecycleBackgrounded {
 			s.backgrounds.upsert(background.ActivityID, background)
 		} else {
@@ -283,16 +287,18 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 	}
 }
 
-func (s *sessionFeedSnapshot) shouldDrop(message clientui.TranscriptMessage) bool {
-	switch message.Kind {
+func (s *sessionFeedSnapshot) shouldDrop(event clientui.TranscriptEvent) bool {
+	switch event.Kind() {
 	case clientui.TranscriptMessageToolStart:
-		tool := *message.Payload.ToolStart
+		tool := event.Payload().(clientui.TranscriptToolStart)
 		existing, ok := s.inFlightTools.get(tool.ToolCallID)
 		return ok && reflect.DeepEqual(existing, tool)
 	case clientui.TranscriptMessageSessionStatus:
-		return s.sessionStatus != nil && reflect.DeepEqual(*s.sessionStatus, *message.Payload.SessionStatus)
+		payload := event.Payload().(clientui.TranscriptSessionStatus)
+		return s.sessionStatus != nil && reflect.DeepEqual(*s.sessionStatus, payload)
 	case clientui.TranscriptMessageSessionIdentity:
-		return s.sessionIdentity != nil && reflect.DeepEqual(*s.sessionIdentity, *message.Payload.SessionIdentity)
+		payload := event.Payload().(clientui.TranscriptSessionIdentity)
+		return s.sessionIdentity != nil && reflect.DeepEqual(*s.sessionIdentity, payload)
 	default:
 		return false
 	}

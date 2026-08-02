@@ -1,12 +1,19 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"sync"
 	"testing"
+	"time"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func queuedUserMessagesForTest(texts ...string) []clientui.QueuedUserMessage {
@@ -81,5 +88,309 @@ func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
 	}
 	if client.submitCalls != 1 {
 		t.Fatalf("authoritative submit calls = %d, want 1", client.submitCalls)
+	}
+}
+
+func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{submitErr: io.EOF}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	beforeActivity := model.activity
+
+	submitCmd := model.queueInjectedInput("  failed steering  ")
+	testSetMainInput(model, "newer draft")
+	if len(model.pendingInjected) != 1 || len(model.injectedQueue) != 1 {
+		t.Fatalf("queued input state = pending %d, queue %d; want one matching item", len(model.pendingInjected), len(model.injectedQueue))
+	}
+
+	var createDone injectedQueueCreateDoneMsg
+	foundCreateDone := false
+	for _, msg := range collectCmdMessages(t, submitCmd) {
+		if typed, ok := msg.(injectedQueueCreateDoneMsg); ok {
+			createDone = typed
+			foundCreateDone = true
+			break
+		}
+	}
+	if !foundCreateDone {
+		t.Fatal("queue submission produced no create completion")
+	}
+
+	next, returnedCmd := model.Update(createDone)
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, returnedCmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if got, want := testMainInput(updated), "newer draft\n\nfailed steering"; got != want {
+		t.Fatalf("restored composer text = %q, want %q", got, want)
+	}
+	wantInput := "newer draft\n\nfailed steering"
+	if got, want := testMainInputRuneCursor(updated), len([]rune(wantInput)); got != want {
+		t.Fatalf("composer cursor = %d, want %d", got, want)
+	}
+	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
+		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(updated.pendingInjected), len(updated.injectedQueue))
+	}
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if client.submitCalls != 1 {
+		t.Fatalf("submit calls = %d, want 1", client.submitCalls)
+	}
+
+	activeNotice := ansi.Strip(updated.layout().renderStatusNotice(statusLineUnboundedWidth))
+	if want := runtimeattach.FormatSubmissionError(io.EOF); activeNotice != want {
+		t.Fatalf("active status notice = %q, want %q", activeNotice, want)
+	}
+	activeToken := updated.transientStatusToken
+	updated = updateUIModel(t, updated, clearTransientStatusMsg{token: activeToken})
+	if got, want := ansi.Strip(updated.layout().renderStatusNotice(statusLineUnboundedWidth)), runtimeDisconnectedStatusMessage; got != want {
+		t.Fatalf("cleared status notice = %q, want %q", got, want)
+	}
+}
+
+func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *testing.T) {
+	client := &runtimeControlFakeClient{submitErr: io.EOF}
+	model := newProjectedTestUIModel(client)
+	control := newRecordingPromptControl()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control).withConnectionOutcomeSink(func(err error) {
+		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
+	})
+	if model.runtimeConnectionEvents == nil {
+		model.runtimeConnectionEvents = make(chan runtimeConnectionStateChangedMsg, 1)
+	}
+	model.setRuntimeActivityBusyForTest(true)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testApprovalPrompt(
+			"allow-commentary-create-failure",
+			"Allow access?",
+			clientui.ApprovalDecisionAllowOnce,
+			clientui.ApprovalDecisionDeny,
+		),
+	)})
+	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("failed commentary")})
+
+	next, queueCmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if queueCmd == nil || !model.ask.answerPending {
+		t.Fatal("allow commentary did not enter the queue stage")
+	}
+	queueResult := queueCmd()
+	queueMsg, ok := queueResult.(injectedQueueCreateDoneMsg)
+	if !ok {
+		t.Fatalf("queue completion = %T, want injectedQueueCreateDoneMsg", queueResult)
+	}
+
+	expiryStarted := make(chan struct{})
+	releaseExpiry := make(chan struct{})
+	var expiryOnce sync.Once
+	previousSchedule := scheduleTransientStatusClear
+	scheduleTransientStatusClear = func(_ time.Duration, token uint64) tea.Cmd {
+		return func() tea.Msg {
+			expiryOnce.Do(func() { close(expiryStarted) })
+			<-releaseExpiry
+			return clearTransientStatusMsg{token: token}
+		}
+	}
+	t.Cleanup(func() {
+		scheduleTransientStatusClear = previousSchedule
+	})
+
+	next, returnedCmd := model.Update(queueMsg)
+	model = next.(*uiModel)
+	if got, want := testMainInput(model), "failed commentary"; got != want {
+		t.Fatalf("restored commentary = %q, want %q", got, want)
+	}
+	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 0 {
+		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(model.pendingInjected), len(model.injectedQueue))
+	}
+	if model.activity == uiActivityError {
+		t.Fatalf("activity = %v, want no failure-owned error label", model.activity)
+	}
+	if got, want := ansi.Strip(model.layout().renderStatusNotice(statusLineUnboundedWidth)), runtimeattach.FormatSubmissionError(io.EOF); got != want {
+		t.Fatalf("active status notice = %q, want %q", got, want)
+	}
+
+	if returnedCmd == nil {
+		t.Fatal("queue failure returned no independent effects")
+	}
+	effect := returnedCmd()
+	batch, ok := effect.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("queue failure effect = %T, want exported tea.BatchMsg", effect)
+	}
+	results := make(chan tea.Msg, len(batch))
+	for _, child := range batch {
+		if child == nil {
+			continue
+		}
+		go func(command tea.Cmd) {
+			results <- command()
+		}(child)
+	}
+	select {
+	case <-expiryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("transient expiry did not start")
+	}
+
+	var approvalRequest serverapi.ApprovalAnswerRequest
+	select {
+	case approvalRequest = <-control.approvalRequests:
+	case <-time.After(time.Second):
+		t.Fatal("approval answer did not start while transient expiry was blocked")
+	}
+	if approvalRequest.Commentary != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
+		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
+	}
+
+	deliveryResult := <-results
+	model = updateUIModel(t, model, deliveryResult)
+	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
+	if model.runtimeDisconnectStatusVisible() {
+		t.Fatal("successful approval delivery did not clear the disconnect state")
+	}
+	if got, want := ansi.Strip(model.layout().renderStatusNotice(statusLineUnboundedWidth)), runtimeattach.FormatSubmissionError(io.EOF); got != want {
+		t.Fatalf("status after approval delivery = %q, want transient %q", got, want)
+	}
+
+	close(releaseExpiry)
+	model = updateUIModel(t, model, <-results)
+	if got := ansi.Strip(model.layout().renderStatusNotice(statusLineUnboundedWidth)); got != "" {
+		t.Fatalf("status after transient expiry = %q, want empty", got)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if client.submitCalls != 1 {
+		t.Fatalf("submit calls = %d, want 1", client.submitCalls)
+	}
+}
+
+func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	model.setRuntimeActivityBusyForTest(true)
+	beforeActivity := model.activity
+	if cmd := model.inputController().dispatchQueuedInput(queuedInputItem{ID: "queued-shell-id", Text: "$ echo queued"}); cmd == nil {
+		t.Fatal("queued shell dispatch produced no submit command")
+	}
+	if model.activeSubmit.origin != activeSubmitOriginQueued {
+		t.Fatalf("submit origin = %d, want queued", model.activeSubmit.origin)
+	}
+
+	next, cmd := model.Update(submitDoneMsg{
+		token:         model.activeSubmit.token,
+		submittedText: "$ echo queued",
+		err:           io.EOF,
+	})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+	if got, want := testMainInput(updated), "$ echo queued"; got != want {
+		t.Fatalf("restored queued text = %q, want %q", got, want)
+	}
+	if got, want := updated.transientStatus, runtimeattach.FormatSubmissionError(io.EOF); got != want {
+		t.Fatalf("transient status = %q, want %q", got, want)
+	}
+}
+
+func TestQueuedRuntimeSubmitFailureKeepsAcceptedSteerPending(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "queued steer"}}
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "steer-1",
+		ServerID: "steer-1",
+		Text:     "queued steer",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
+	model.activeSubmit = activeSubmitState{token: 1, origin: activeSubmitOriginQueued}
+	beforeActivity := model.activity
+
+	next, cmd := model.Update(submitDoneMsg{token: 1, err: io.EOF})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if got := testMainInput(updated); got != "" {
+		t.Fatalf("accepted steer composer text = %q, want empty", got)
+	}
+	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
+		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
+	}
+	if updated.injectedQueue[0].State != injectedRuntimeQueueEnqueued {
+		t.Fatalf("accepted steer state = %q, want enqueued", updated.injectedQueue[0].State)
+	}
+	if client.discardQueuedCalls != 0 {
+		t.Fatalf("discard calls = %d, want 0", client.discardQueuedCalls)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+}
+
+func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	model.setRuntimeDisconnected(true)
+	model.queued = queuedInputsForTest("queued message")
+	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "accepted steer"}}
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "steer-1",
+		ServerID: "steer-1",
+		Text:     "accepted steer",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
+	beforeActivity := model.activity
+
+	next, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		updated = updateUIModel(t, updated, msg)
+	}
+
+	if got, want := testMainInput(updated), "queued message"; got != want {
+		t.Fatalf("restored queued text = %q, want %q", got, want)
+	}
+	if len(updated.queued) != 0 {
+		t.Fatalf("queued items = %d, want 0", len(updated.queued))
+	}
+	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
+		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
+	}
+	if updated.activity != beforeActivity {
+		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+	}
+	if client.appendCalls != 0 {
+		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
+	}
+	if got, want := updated.transientStatus, runtimeDisconnectedStatusMessage; got != want {
+		t.Fatalf("transient status = %q, want %q", got, want)
 	}
 }

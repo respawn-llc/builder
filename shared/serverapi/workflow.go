@@ -10,6 +10,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 )
 
@@ -22,7 +23,7 @@ const (
 )
 
 const WorkflowPaginationMaxLimit = 100
-const WorkflowTaskListMaxSortSelectors = 5
+const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
 type WorkflowNodeKind string
@@ -912,7 +913,8 @@ type WorkflowTaskMoveRequest struct {
 	TaskID                     string                            `json:"task_id"`
 	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	TargetNodeID               string                            `json:"target_node_id"`
-	OutputValues               map[string]string                 `json:"output_values,omitempty"`
+	TransitionKey              *string                           `json:"transition_key,omitempty"`
+	Values                     map[string]map[string]string      `json:"values,omitempty"`
 	Commentary                 string                            `json:"commentary,omitempty"`
 	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
@@ -920,10 +922,15 @@ type WorkflowTaskMoveRequest struct {
 }
 
 type WorkflowTaskMoveResponse struct {
-	Outcome                    WorkflowTaskActionOutcome                    `json:"outcome,omitempty"`
+	Outcome                    WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
+	NoOp                       *WorkflowTaskMoveNoOp                        `json:"no_op,omitempty"`
 	Applied                    *WorkflowTaskMoveApplied                     `json:"applied,omitempty"`
 	SelectionRequired          *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
 	UnsatisfiedDependencyCount *int                                         `json:"unsatisfied_dependency_count,omitempty"`
+}
+
+type WorkflowTaskMoveNoOp struct {
+	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
 }
 
 type WorkflowTaskMoveApplied struct {
@@ -1193,6 +1200,8 @@ const (
 	WorkflowTaskListSortFieldStatus  WorkflowTaskListSortField = "status"
 	WorkflowTaskListSortFieldColumn  WorkflowTaskListSortField = "column"
 	WorkflowTaskListSortFieldTitle   WorkflowTaskListSortField = "title"
+	WorkflowTaskListSortFieldLabels  WorkflowTaskListSortField = "labels"
+	WorkflowTaskListSortFieldShortID WorkflowTaskListSortField = "short_id"
 )
 
 type WorkflowTaskListSortDirection string
@@ -1407,14 +1416,13 @@ type WorkflowBoardColumn struct {
 }
 
 type WorkflowBoardNodeSummary struct {
-	NodeID                 string                `json:"node_id"`
-	Key                    string                `json:"key"`
-	Kind                   string                `json:"kind"`
-	DisplayName            string                `json:"display_name"`
-	AssigneeRole           string                `json:"assignee_role,omitempty"`
-	SortOrder              int                   `json:"sort_order"`
-	OutputFields           []WorkflowOutputField `json:"output_fields,omitempty"`
-	TransitionOutputFields []WorkflowOutputField `json:"transition_output_fields,omitempty"`
+	NodeID       string                `json:"node_id"`
+	Key          string                `json:"key"`
+	Kind         string                `json:"kind"`
+	DisplayName  string                `json:"display_name"`
+	AssigneeRole string                `json:"assignee_role,omitempty"`
+	SortOrder    int                   `json:"sort_order"`
+	OutputFields []WorkflowOutputField `json:"output_fields,omitempty"`
 }
 
 type WorkflowBoardTaskCard struct {
@@ -1450,11 +1458,10 @@ type WorkflowTaskStatus struct {
 }
 
 type WorkflowTaskActions struct {
-	CanStart                bool     `json:"can_start"`
-	CanInterrupt            bool     `json:"can_interrupt"`
-	CanResume               bool     `json:"can_resume"`
-	CanDelete               bool     `json:"can_delete"`
-	ManualMoveTargetNodeIDs []string `json:"manual_move_target_node_ids,omitempty"`
+	CanStart     bool `json:"can_start"`
+	CanInterrupt bool `json:"can_interrupt"`
+	CanResume    bool `json:"can_resume"`
+	CanDelete    bool `json:"can_delete"`
 }
 
 type WorkflowProjectSubscribeRequest struct {
@@ -2752,6 +2759,28 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	if err := validateWorkflowTaskInvokingSession(r.InvokingSessionID); err != nil {
 		return err
 	}
+	if r.TransitionKey != nil && strings.TrimSpace(*r.TransitionKey) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "transition_key", "transition_key must be non-blank when present")
+	}
+	for nodeKey, outputs := range r.Values {
+		if strings.TrimSpace(nodeKey) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values node keys must be non-blank")
+		}
+		if outputs == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values node entries must not be null")
+		}
+		for outputName, value := range outputs {
+			if strings.TrimSpace(outputName) == "" {
+				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values output names must be non-blank")
+			}
+			if strings.TrimSpace(value) == "" {
+				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must be non-blank")
+			}
+			if len(value) > workflowcontract.MaxOutputValueBytes {
+				return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values must not exceed the maximum output value size")
+			}
+		}
+	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
 	}
@@ -3016,9 +3045,9 @@ func (r WorkflowTaskListRequest) validateAfterLabelFilter() error {
 	seenSortFields := map[WorkflowTaskListSortField]bool{}
 	for index, sortSelector := range r.Sort {
 		switch sortSelector.Field {
-		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldColumn, WorkflowTaskListSortFieldTitle:
+		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldColumn, WorkflowTaskListSortFieldTitle, WorkflowTaskListSortFieldLabels, WorkflowTaskListSortFieldShortID:
 		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, column, or title")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, column, title, labels, or short_id")
 		}
 		if seenSortFields[sortSelector.Field] {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must not be duplicated")

@@ -41,6 +41,12 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_project_workflow_link_idx
 	ON tasks(project_workflow_link_id);
+CREATE TABLE project_labels (
+	id TEXT PRIMARY KEY,
+	ordinal INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX project_labels_project_ordinal_idx
+	ON project_labels(ordinal);
 CREATE VIEW task_records AS
 SELECT
 	t.id,
@@ -114,6 +120,10 @@ CREATE INDEX task_label_assignments_label_task_idx
 		"",
 		int64(0),
 		"[]",
+		"",
+		int64(0),
+		"",
+		int64(0),
 		int64(101),
 		"[]",
 	}

@@ -325,14 +325,25 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
 	})
 
-	t.Run("ambiguous prior transition parameter placeholder blocks task validation", func(t *testing.T) {
+	t.Run("duplicate transition key across source nodes blocks task validation", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow(t)
 		transitionGroupByIDForValidationTest(t, &def, "group_start").TransitionID = "review"
-		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.summary}}."
 
 		result := validateForTask(def)
 
-		assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
+	})
+
+	t.Run("duplicate transition key across source nodes blocks execution", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		transitionGroupByIDForValidationTest(t, &def, "group_start").TransitionID = "review"
+
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+			Context:      workflow.ValidationContextExecution,
+			RoleResolver: testsetup.QuestionsEnabled("coder"),
+		})
+
+		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
 	})
 
 	t.Run("join source prompt validates current parameters against join aggregate", func(t *testing.T) {
@@ -392,10 +403,10 @@ func TestFanoutJoinTopology(t *testing.T) {
 			testJoinNode(def.ID, "node_join_late", "join_late", "Join Late"),
 		)
 		def.TransitionGroups = append(def.TransitionGroups,
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late", SourceNodeID: "node_impl_a", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late_join", SourceNodeID: "node_impl_a_late", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late", SourceNodeID: "node_impl_b", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late_join", SourceNodeID: "node_impl_b_late", TransitionID: "join_late", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late", SourceNodeID: "node_impl_a", TransitionID: "join_late_a", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late_join", SourceNodeID: "node_impl_a_late", TransitionID: "join_late_a_join", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late", SourceNodeID: "node_impl_b", TransitionID: "join_late_b", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late_join", SourceNodeID: "node_impl_b_late", TransitionID: "join_late_b_join", DisplayName: "Join Late"},
 			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_join_late_done", SourceNodeID: "node_join_late", TransitionID: "done", DisplayName: "Done"},
 		)
 		def.Edges = append(def.Edges,
@@ -426,7 +437,7 @@ func TestFanoutJoinTopology(t *testing.T) {
 			edit: func(def *workflow.Definition) {
 				def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_extra", "extra", "Extra", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Extra."}))
 				def.Edges[2].TargetNodeID = "node_extra"
-				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_extra_fanout", SourceNodeID: "node_extra", TransitionID: "split", DisplayName: "Split"})
+				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_extra_fanout", SourceNodeID: "node_extra", TransitionID: "split_extra", DisplayName: "Split"})
 				def.Edges = append(def.Edges,
 					workflow.Edge{WorkflowID: def.ID, ID: "edge_extra_a", Key: "extra_a", TransitionGroupID: "group_extra_fanout", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession},
 					workflow.Edge{WorkflowID: def.ID, ID: "edge_extra_b", Key: "extra_b", TransitionGroupID: "group_extra_fanout", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession},
@@ -444,8 +455,8 @@ func TestFanoutJoinTopology(t *testing.T) {
 			edit: func(def *workflow.Definition) {
 				def.Nodes = append(def.Nodes, testJoinNode(def.ID, "node_join2", "join2", "Join 2"))
 				def.TransitionGroups = append(def.TransitionGroups,
-					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_join2", SourceNodeID: "node_impl_a", TransitionID: "join2", DisplayName: "Join 2"},
-					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_join2", SourceNodeID: "node_impl_b", TransitionID: "join2", DisplayName: "Join 2"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_join2", SourceNodeID: "node_impl_a", TransitionID: "join2_a", DisplayName: "Join 2"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_join2", SourceNodeID: "node_impl_b", TransitionID: "join2_b", DisplayName: "Join 2"},
 					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_join2_done", SourceNodeID: "node_join2", TransitionID: "done", DisplayName: "Done"},
 				)
 				def.Edges = append(def.Edges,
@@ -688,8 +699,8 @@ func fanoutWorkflow(t *testing.T) workflow.Definition {
 		TransitionGroups: []workflow.TransitionGroup{
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"},
-			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join", DisplayName: "Join"},
-			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join", DisplayName: "Join"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join_a", DisplayName: "Join"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join_b", DisplayName: "Join"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_join_done", SourceNodeID: "node_join", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
@@ -721,8 +732,8 @@ func reviewAcceptanceWorkflow(t *testing.T) workflow.Definition {
 		TransitionGroups: []workflow.TransitionGroup{
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_implementation_review", SourceNodeID: "node_implementation", TransitionID: "review", DisplayName: "Review"},
-			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "reviewed", DisplayName: "Reviewed"},
-			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "reviewed", DisplayName: "Reviewed"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "code_review_done", DisplayName: "Reviewed"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "qa_test_done", DisplayName: "Reviewed"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_join_accept", SourceNodeID: "node_review_join", TransitionID: "accept", DisplayName: "Accept"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_accept_open_pr", SourceNodeID: "node_final_acceptance", TransitionID: "approved", DisplayName: "Approved"},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_open_pr_done", SourceNodeID: "node_open_pr", TransitionID: "done", DisplayName: "Done"},

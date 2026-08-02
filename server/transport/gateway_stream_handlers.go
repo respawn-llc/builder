@@ -149,7 +149,7 @@ func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.Trans
 		if err != nil {
 			return clientui.TranscriptMessage{}, err
 		}
-		if message.Kind == clientui.TranscriptMessageLiveRunFinished {
+		if message.Kind() == clientui.TranscriptMessageLiveRunFinished {
 			s.suppressed++
 			continue
 		}

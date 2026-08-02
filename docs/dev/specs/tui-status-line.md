@@ -11,7 +11,7 @@
   4. Context meter bar — disappears whole.
   5. Background process count (`ps N`) — always shown while running processes exist, never truncates.
   6. Status notices / error messages — truncate at the end. Items below (7–9) disappear entirely before this truncation kicks in; items above (2, 4) engage their disappearance only once this item has zero space left.
-  7. Model thinking/intent (reasoning status header) — disappears whole.
+  7. Thinking Status — disappears whole.
   8. Model label (model id / thinking level / fast) — disappears whole.
   9. Git branch — disappears whole.
   10. Help slot: idle help hint, or in detail mode the `Enter to expand`/`Enter to collapse` hint (one shown at a time) — disappears whole, yields first.
@@ -29,7 +29,8 @@
 - Running background-process count (running/starting only); hidden at zero.
 - The status line has no server-ownership segment because the TUI is always a client.
 - The context meter is the rightmost item. It shows used-context percentage and a proportional bar. Below 50% uses Success, 50–79% uses Warning, and 80% or more uses Error. It is hidden when the context-window size is unknown.
-- Live reasoning status header while the model is reasoning (ladder rung 7), in a right-aligned slot immediately before the context meter; visibility is governed purely by the space ladder.
+- Live Thinking Status while the model is reasoning (ladder rung 7), in a right-aligned slot immediately before the context meter; visibility is governed by the space ladder.
+- While a Question or Approval waits for the operator, Thinking Status is hidden. Resumed model work begins without retaining the stale pre-prompt Thinking Status.
 - Post-interrupt feedback appears as the ordinary status notice `interrupted`.
 - The help slot shows one item at a time. In Detail Mode it shows `Enter to expand` or `Enter to collapse`. Otherwise it shows the idle help hint. The hint is hidden while busy, compacting, reviewing, or while help is open.
 

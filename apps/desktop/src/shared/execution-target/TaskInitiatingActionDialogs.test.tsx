@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import type { TaskStartResponse, WorkflowExecutionTargetSelection } from "@/api";
+import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import {
   startTaskInitiatingAction,
   TaskInitiatingActionDialogs,
@@ -17,6 +18,8 @@ type ExecuteStub = (
   selection?: WorkflowExecutionTargetSelection,
 ) => Promise<Readonly<{ kind: "start"; response: TaskStartResponse }>>;
 
+const appServices = createTestServices([], undefined, { platform: "macos" });
+
 describe("TaskInitiatingActionDialogs", () => {
   it("closes dependency confirmation and returns approval without executing it", async () => {
     const execute = vi.fn<ExecuteStub>().mockResolvedValue({
@@ -27,7 +30,11 @@ describe("TaskInitiatingActionDialogs", () => {
       },
     });
     const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
-    render(<Harness execute={execute} onResult={onResult} />);
+    render(
+      <TestAppProviders services={appServices}>
+        <Harness execute={execute} onResult={onResult} />
+      </TestAppProviders>,
+    );
     const user = userEvent.setup();
 
     await user.click(screen.getByTestId("initiate-action"));
@@ -49,16 +56,18 @@ describe("TaskInitiatingActionDialogs", () => {
   it("closes dependency confirmation and returns View dependencies", async () => {
     const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
     render(
-      <Harness
-        execute={vi.fn<ExecuteStub>().mockResolvedValue({
-          kind: "start",
-          response: {
-            outcome: "dependency_confirmation_required",
-            unsatisfiedDependencyCount: 1,
-          },
-        })}
-        onResult={onResult}
-      />,
+      <TestAppProviders services={appServices}>
+        <Harness
+          execute={vi.fn<ExecuteStub>().mockResolvedValue({
+            kind: "start",
+            response: {
+              outcome: "dependency_confirmation_required",
+              unsatisfiedDependencyCount: 1,
+            },
+          })}
+          onResult={onResult}
+        />
+      </TestAppProviders>,
     );
     const user = userEvent.setup();
 
@@ -69,7 +78,7 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(screen.queryByTestId("dependency-confirmation-view")).not.toBeInTheDocument();
   });
 
-  it("closes target selection and returns the selected target without executing it", async () => {
+  it("keeps target selection while the selected target action is submitted", async () => {
     const execute = vi.fn<ExecuteStub>().mockResolvedValue({
       kind: "start",
       response: {
@@ -78,7 +87,11 @@ describe("TaskInitiatingActionDialogs", () => {
       },
     });
     const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
-    render(<Harness execute={execute} onResult={onResult} />);
+    render(
+      <TestAppProviders services={appServices}>
+        <Harness execute={execute} onResult={onResult} />
+      </TestAppProviders>,
+    );
     const user = userEvent.setup();
 
     await user.click(screen.getByTestId("initiate-action"));
@@ -95,7 +108,7 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(result.action.proceedDespiteDependencies).toBe(false);
     expect(result.selection).toEqual({ mode: "default_branch", customRef: null });
     expect(execute).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
   });
 });
 

@@ -10,7 +10,7 @@
 - An update to the active prompt refreshes it in place without replacing the user's selection or draft.
 - The terminal bell rings when a new prompt appears.
 - Submitting an answer fixes the submitted content for that attempt. The editor remains responsive while Kent delivers it. Further edits affect only a later retry if delivery fails.
-- Allow commentary is queued before the Approval answer. The prompt does not accept another action until that queue operation finishes.
+- Kent attempts to queue Allow commentary before the Approval answer. The prompt does not accept another action until that queue operation finishes. Queue-creation failure recovery is defined in `tui-chat-core.md`.
 - Repeated `Enter` during delivery does not submit another answer. It shows a brief nonblocking sending notice.
 - A terminal delivery failure preserves the prompt, selection, and edited retry draft.
 - Resolving the prompt discards the retry draft.
@@ -22,7 +22,7 @@
 
 - **Question with options**: numbered options plus an appended "Freeform answer" option. When the Question becomes active, its valid recommended option is selected; without a recommendation, option 1 is selected. A recommended option is marked (star + recommended suffix) and the selection marker is distinct from the recommendation marker. Exact glyphs are presentation, not contract.
 - **Pure freeform question** (no options): goes straight to text entry.
-- **Approval prompt**: options carry Approval decisions and have no freeform-answer option. The one-time allow decision is selected when offered; otherwise the first offered decision is selected. Optional commentary attaches to the chosen decision. Denial commentary travels only with the Approval answer. Allow commentary is queued before the Approval answer.
+- **Approval prompt**: options carry Approval decisions and have no freeform-answer option. The one-time allow decision is selected when offered; otherwise the first offered decision is selected. Optional commentary attaches to the chosen decision. Denial commentary travels only with the Approval answer. Allow commentary follows the Queue and Steer creation behavior defined in `tui-chat-core.md`.
 
 ## Keys
 

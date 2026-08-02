@@ -11,30 +11,23 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 	if p == nil {
 		return
 	}
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		if hydration := message.Payload.Hydration; hydration != nil {
-			p.acceptSessionIdentity(hydration.SessionIdentity)
-			p.acceptSessionStatus(hydration.SessionStatus)
-			for _, prompt := range hydration.PendingPrompts {
-				p.acceptPendingPrompt(prompt)
-			}
+		hydration := message.Payload().(clientui.TranscriptHydration)
+		p.acceptSessionIdentity(hydration.SessionIdentity)
+		p.acceptSessionStatus(hydration.SessionStatus)
+		for _, prompt := range hydration.PendingPrompts {
+			p.acceptPendingPrompt(prompt)
 		}
 	case clientui.TranscriptMessageSessionIdentity:
-		if identity := message.Payload.SessionIdentity; identity != nil {
-			p.acceptSessionIdentity(*identity)
-		}
+		p.acceptSessionIdentity(message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageSessionStatus:
-		if status := message.Payload.SessionStatus; status != nil {
-			p.acceptSessionStatus(*status)
-		}
+		p.acceptSessionStatus(message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageLiveRunFinished:
-		if result := message.Payload.LiveRunFinished; result != nil {
-			p.acceptLiveRunFailure(*result)
-		}
+		p.acceptLiveRunFailure(message.Payload().(clientui.TranscriptLiveRunResult))
 	case clientui.TranscriptMessageCompactionStatus:
-		status := message.Payload.CompactionStatus
-		if status != nil && status.State == clientui.CompactionStarted {
+		status := message.Payload().(clientui.TranscriptCompactionStatus)
+		if status.State == clientui.CompactionStarted {
 			p.enqueue(lifecyclecontract.NewCompactionStarted(
 				time.Now().UTC(),
 				p.isFocused(),
@@ -42,9 +35,10 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 				status.Mode,
 			))
 		}
-	case clientui.TranscriptMessagePromptPending:
-		if prompt := message.Payload.PromptPending; prompt != nil {
-			p.acceptPendingPrompt(*prompt)
+	case clientui.TranscriptMessagePrompt:
+		prompt := message.Payload().(clientui.TranscriptPrompt)
+		if prompt.Status == clientui.TranscriptPromptStatusPending {
+			p.acceptPendingPrompt(prompt)
 		}
 	}
 }

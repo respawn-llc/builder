@@ -9,6 +9,128 @@ type FanoutJoinResolution struct {
 	BranchJoinEdges map[TransitionBranchKey]Edge
 }
 
+type fanoutTopology struct {
+	nodesByID      map[NodeID]Node
+	groupsBySource map[NodeID][]TransitionGroup
+	edgesByGroup   map[TransitionGroupID][]Edge
+	outgoingByNode map[NodeID][]Edge
+}
+
+func newFanoutTopology(def Definition) fanoutTopology {
+	topology := fanoutTopology{
+		nodesByID:      make(map[NodeID]Node, len(def.Nodes)),
+		groupsBySource: make(map[NodeID][]TransitionGroup, len(def.TransitionGroups)),
+		edgesByGroup:   make(map[TransitionGroupID][]Edge, len(def.TransitionGroups)),
+		outgoingByNode: make(map[NodeID][]Edge, len(def.Nodes)),
+	}
+	for _, node := range def.Nodes {
+		topology.nodesByID[NodeIDOf(node)] = node
+	}
+	for _, group := range def.TransitionGroups {
+		topology.groupsBySource[group.SourceNodeID] = append(topology.groupsBySource[group.SourceNodeID], group)
+	}
+	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
+	for _, group := range def.TransitionGroups {
+		groupsByID[group.ID] = group
+	}
+	for _, edge := range def.Edges {
+		topology.edgesByGroup[edge.TransitionGroupID] = append(topology.edgesByGroup[edge.TransitionGroupID], edge)
+		if group, exists := groupsByID[edge.TransitionGroupID]; exists {
+			topology.outgoingByNode[group.SourceNodeID] = append(topology.outgoingByNode[group.SourceNodeID], edge)
+		}
+	}
+	return topology
+}
+
+// SerialTransitionRequiresFanoutSiblings reports whether a one-target
+// Transition enters a valid Fan-Out branch before its Join. Such a Transition
+// cannot recreate the sibling Current Nodes required by the Join.
+func SerialTransitionRequiresFanoutSiblings(def Definition, transitionGroupID TransitionGroupID) bool {
+	topology := newFanoutTopology(def)
+	var targetNodeID NodeID
+	found := false
+	for _, group := range def.TransitionGroups {
+		if group.ID != transitionGroupID {
+			continue
+		}
+		edges := topology.edgesByGroup[group.ID]
+		if len(edges) != 1 {
+			return false
+		}
+		targetNodeID = edges[0].TargetNodeID
+		found = true
+		break
+	}
+	if !found {
+		return false
+	}
+
+	for _, fanoutGroup := range def.TransitionGroups {
+		fanoutEdges := topology.edgesByGroup[fanoutGroup.ID]
+		if len(fanoutEdges) < 2 {
+			continue
+		}
+		branchJoinDistances := make([]map[NodeID]int, 0, len(fanoutEdges))
+		valid := true
+		for _, edge := range fanoutEdges {
+			traversal, ok := fanoutBranchTraversal(
+				topology.nodesByID,
+				topology.groupsBySource,
+				topology.edgesByGroup,
+				topology.outgoingByNode,
+				edge.TargetNodeID,
+			)
+			if !ok || len(traversal.joinDistances) == 0 {
+				valid = false
+				break
+			}
+			branchJoinDistances = append(branchJoinDistances, traversal.joinDistances)
+		}
+		if !valid {
+			continue
+		}
+		joinID, ok := fanoutNearestCommonJoin(branchJoinDistances)
+		if !ok {
+			continue
+		}
+		join, exists := topology.nodesByID[joinID]
+		if !exists || join.Kind() != NodeKindJoin {
+			continue
+		}
+		for _, edge := range fanoutEdges {
+			if _, ok := fanoutBranchJoinEdge(
+				topology.nodesByID,
+				topology.groupsBySource,
+				topology.edgesByGroup,
+				topology.outgoingByNode,
+				edge.TargetNodeID,
+				joinID,
+			); !ok {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		for _, edge := range fanoutEdges {
+			traversal, ok := fanoutBranchTraversal(
+				topology.nodesByID,
+				topology.groupsBySource,
+				topology.edgesByGroup,
+				topology.outgoingByNode,
+				edge.TargetNodeID,
+			)
+			if ok {
+				if _, exists := traversal.pathNodes[targetNodeID]; exists {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ResolveFanoutJoin resolves one current-definition Join for the frozen
 // fan-out branch keys. It returns false when those keys no longer identify one
 // valid fan-out topology with an unambiguous common Join.
@@ -28,30 +150,12 @@ func ResolveFanoutJoin(def Definition, branchKeys []TransitionBranchKey) (Fanout
 		return FanoutJoinResolution{}, false
 	}
 
-	nodesByID := make(map[NodeID]Node, len(def.Nodes))
-	groupsBySource := make(map[NodeID][]TransitionGroup, len(def.TransitionGroups))
-	edgesByGroup := make(map[TransitionGroupID][]Edge, len(def.TransitionGroups))
-	outgoingByNode := make(map[NodeID][]Edge, len(def.Nodes))
-	for _, node := range def.Nodes {
-		nodesByID[NodeIDOf(node)] = node
-	}
-	for _, group := range def.TransitionGroups {
-		groupsBySource[group.SourceNodeID] = append(groupsBySource[group.SourceNodeID], group)
-	}
-	for _, edge := range def.Edges {
-		edgesByGroup[edge.TransitionGroupID] = append(edgesByGroup[edge.TransitionGroupID], edge)
-		for _, group := range def.TransitionGroups {
-			if group.ID == edge.TransitionGroupID {
-				outgoingByNode[group.SourceNodeID] = append(outgoingByNode[group.SourceNodeID], edge)
-				break
-			}
-		}
-	}
+	topology := newFanoutTopology(def)
 
 	initialEdges := map[TransitionBranchKey]Edge{}
 	foundFanout := false
 	for _, group := range def.TransitionGroups {
-		edges := edgesByGroup[group.ID]
+		edges := topology.edgesByGroup[group.ID]
 		if len(edges) != len(expected) {
 			continue
 		}
@@ -83,7 +187,7 @@ func ResolveFanoutJoin(def Definition, branchKeys []TransitionBranchKey) (Fanout
 	distancesByBranch := make([]map[NodeID]int, 0, len(branchKeys))
 	for _, branchKey := range branchKeys {
 		edge := initialEdges[branchKey]
-		distances, ok := fanoutBranchJoinDistances(nodesByID, groupsBySource, edgesByGroup, outgoingByNode, edge.TargetNodeID)
+		distances, ok := fanoutBranchJoinDistances(topology.nodesByID, topology.groupsBySource, topology.edgesByGroup, topology.outgoingByNode, edge.TargetNodeID)
 		if !ok || len(distances) == 0 {
 			return FanoutJoinResolution{}, false
 		}
@@ -93,14 +197,14 @@ func ResolveFanoutJoin(def Definition, branchKeys []TransitionBranchKey) (Fanout
 	if !ok {
 		return FanoutJoinResolution{}, false
 	}
-	join, exists := nodesByID[joinID]
+	join, exists := topology.nodesByID[joinID]
 	if !exists || join.Kind() != NodeKindJoin {
 		return FanoutJoinResolution{}, false
 	}
 
 	branchJoinEdges := make(map[TransitionBranchKey]Edge, len(branchKeys))
 	for _, branchKey := range branchKeys {
-		edge, ok := fanoutBranchJoinEdge(nodesByID, groupsBySource, edgesByGroup, outgoingByNode, initialEdges[branchKey].TargetNodeID, joinID)
+		edge, ok := fanoutBranchJoinEdge(topology.nodesByID, topology.groupsBySource, topology.edgesByGroup, topology.outgoingByNode, initialEdges[branchKey].TargetNodeID, joinID)
 		if !ok {
 			return FanoutJoinResolution{}, false
 		}
@@ -154,36 +258,62 @@ func fanoutBranchJoinDistances(
 	outgoingByNode map[NodeID][]Edge,
 	start NodeID,
 ) (map[NodeID]int, bool) {
+	traversal, ok := fanoutBranchTraversal(nodesByID, groupsBySource, edgesByGroup, outgoingByNode, start)
+	if !ok {
+		return nil, false
+	}
+	return traversal.joinDistances, true
+}
+
+type fanoutBranchTraversalResult struct {
+	pathNodes     map[NodeID]int
+	joinDistances map[NodeID]int
+}
+
+func fanoutBranchTraversal(
+	nodesByID map[NodeID]Node,
+	groupsBySource map[NodeID][]TransitionGroup,
+	edgesByGroup map[TransitionGroupID][]Edge,
+	outgoingByNode map[NodeID][]Edge,
+	start NodeID,
+) (fanoutBranchTraversalResult, bool) {
 	type frame struct {
 		nodeID   NodeID
 		distance int
 		path     map[NodeID]bool
 	}
-	distances := map[NodeID]int{}
+	result := fanoutBranchTraversalResult{
+		pathNodes:     map[NodeID]int{},
+		joinDistances: map[NodeID]int{},
+	}
 	stack := []frame{{nodeID: start, distance: 0, path: map[NodeID]bool{}}}
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if current.path[current.nodeID] {
-			return nil, false
+			return fanoutBranchTraversalResult{}, false
 		}
 		node, exists := nodesByID[current.nodeID]
 		if !exists {
-			return nil, false
+			return fanoutBranchTraversalResult{}, false
 		}
 		if node.Kind() == NodeKindJoin {
-			previous, exists := distances[current.nodeID]
+			previous, exists := result.joinDistances[current.nodeID]
 			if !exists || current.distance < previous {
-				distances[current.nodeID] = current.distance
+				result.joinDistances[current.nodeID] = current.distance
 			}
 			continue
 		}
 		if node.Kind() == NodeKindTerminal {
-			return nil, false
+			return fanoutBranchTraversalResult{}, false
+		}
+		previous, exists := result.pathNodes[current.nodeID]
+		if !exists || current.distance < previous {
+			result.pathNodes[current.nodeID] = current.distance
 		}
 		for _, group := range groupsBySource[current.nodeID] {
 			if len(edgesByGroup[group.ID]) > 1 {
-				return nil, false
+				return fanoutBranchTraversalResult{}, false
 			}
 		}
 		nextPath := make(map[NodeID]bool, len(current.path)+1)
@@ -195,7 +325,7 @@ func fanoutBranchJoinDistances(
 			stack = append(stack, frame{nodeID: edge.TargetNodeID, distance: current.distance + 1, path: nextPath})
 		}
 	}
-	return distances, true
+	return result, true
 }
 
 func fanoutBranchJoinEdge(

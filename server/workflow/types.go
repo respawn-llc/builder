@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 )
 
 type NodeID string
@@ -67,20 +68,20 @@ const (
 )
 
 const (
-	MaxModelKeyChars               = 64
-	MaxDisplayNameChars            = 120
-	MaxOutputFieldNameChars        = 64
-	MaxOutputFieldDescriptionChars = 1000
-	MaxInputFieldNameChars         = MaxOutputFieldNameChars
-	MaxInputFieldDescriptionChars  = MaxOutputFieldDescriptionChars
-	MaxParameterKeyChars           = MaxOutputFieldNameChars
-	MaxParameterDescriptionChars   = MaxOutputFieldDescriptionChars
-	MaxOutputValueBytes            = 64 * 1024
-	MaxCommentaryBytes             = 64 * 1024
-	MaxTaskCommentBytes            = 256 * 1024
+	MaxModelKeyChars               = workflowcontract.MaxModelKeyChars
+	MaxDisplayNameChars            = workflowcontract.MaxDisplayNameChars
+	MaxOutputFieldNameChars        = workflowcontract.MaxOutputFieldNameChars
+	MaxOutputFieldDescriptionChars = workflowcontract.MaxOutputFieldDescriptionChars
+	MaxInputFieldNameChars         = workflowcontract.MaxInputFieldNameChars
+	MaxInputFieldDescriptionChars  = workflowcontract.MaxInputFieldDescriptionChars
+	MaxParameterKeyChars           = workflowcontract.MaxParameterKeyChars
+	MaxParameterDescriptionChars   = workflowcontract.MaxParameterDescriptionChars
+	MaxOutputValueBytes            = workflowcontract.MaxOutputValueBytes
+	MaxCommentaryBytes             = workflowcontract.MaxCommentaryBytes
+	MaxTaskCommentBytes            = workflowcontract.MaxTaskCommentBytes
 )
 
-const RuntimePromptParameterCommentary = "commentary"
+const RuntimePromptParameterCommentary = workflowcontract.RuntimePromptParameterCommentary
 
 type Definition struct {
 	ID                    runtimeids.WorkflowID

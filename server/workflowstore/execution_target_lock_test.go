@@ -75,7 +75,7 @@ func TestExecutableManualMoveCanPlaceScriptBeforeExecutionRootValidation(t *test
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
-	if len(moved.Created) != 1 || moved.Created[0].Reference.NodeID != workflow.NodeIDOf(script) {
+	if len(moved.Mutation.Created) != 1 || moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(script) {
 		t.Fatalf("manual move mutation = %+v, want script Current Node", moved)
 	}
 	assertExecutionTargetUnlocked(t, ctx, store, task.ID)

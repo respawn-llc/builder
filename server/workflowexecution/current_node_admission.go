@@ -379,6 +379,7 @@ func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, star
 func (c *CurrentNodeController) steerAndWaitStarts(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
+	recovery currentNodeStartFailureRecovery,
 ) ([]currentNodeQueuedStart, error) {
 	steered, steerErr := c.steerStartsAssignments(ctx, starts)
 	outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
@@ -388,10 +389,21 @@ func (c *CurrentNodeController) steerAndWaitStarts(
 			c.continueCurrentNodeAssignmentStarts(steered, steerErr)
 			return nil, cause
 		}
-		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, outcome.committed, false, cause))
+		recoveryStarts := outcome.committed
+		if recovery == recoverAllCurrentNodeStarts {
+			recoveryStarts = starts
+		}
+		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, recoveryStarts, false, cause))
 	}
 	return steered, nil
 }
+
+type currentNodeStartFailureRecovery uint8
+
+const (
+	recoverCommittedCurrentNodeStarts currentNodeStartFailureRecovery = iota
+	recoverAllCurrentNodeStarts
+)
 
 func pendingCurrentNodeAssignmentStarts(starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, []*pendingCurrentNodeAssignmentSteer) {
 	pendingStarts := append([]currentNodeQueuedStart(nil), starts...)

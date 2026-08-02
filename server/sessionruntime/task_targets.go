@@ -78,6 +78,63 @@ func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]
 	return snapshots, nil
 }
 
+type WorkflowTaskExecutionState struct {
+	Running          int
+	WaitingQuestions int
+	WaitingApprovals int
+	Queued           int
+	Finalizing       int
+}
+
+func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (WorkflowTaskExecutionState, error) {
+	if a == nil {
+		return WorkflowTaskExecutionState{}, errors.New("session runtime authority is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return WorkflowTaskExecutionState{}, errors.New("workflow task id is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state := WorkflowTaskExecutionState{}
+	for _, execution := range a.byScope {
+		ref, ok := execution.scope.Workflow()
+		if !ok || ref.CurrentNode.TaskID != taskID {
+			continue
+		}
+		switch execution.phase {
+		case executionPhaseQueued:
+			state.Queued++
+		case executionPhaseRunning:
+			pending, err := execution.prompts.pendingReferences()
+			if err != nil {
+				return WorkflowTaskExecutionState{}, err
+			}
+			questionPending := false
+			approvalPending := false
+			for _, prompt := range pending {
+				switch prompt.Kind {
+				case PendingPromptKindQuestion:
+					questionPending = true
+				case PendingPromptKindSessionApproval:
+					approvalPending = true
+				}
+			}
+			if questionPending {
+				state.WaitingQuestions++
+			} else if approvalPending {
+				state.WaitingApprovals++
+			} else if len(pending) == 0 {
+				state.Running++
+			}
+		case executionPhaseFinalizing:
+			state.Finalizing++
+		default:
+			return WorkflowTaskExecutionState{}, fmt.Errorf("workflow execution scope %s has invalid phase", execution.scope.ID())
+		}
+	}
+	return state, nil
+}
+
 func (a *Authority) CurrentScopedTaskExecutionSnapshot(projectID string, workflowID runtimeids.WorkflowID, taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	snapshots, err := a.CurrentScopedTaskExecutionSnapshots(projectID, workflowID, []workflow.TaskID{taskID})
 	if err != nil {

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
 import type { ProjectLabel } from "@/api";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import {
   ActionableListRow,
   Button,
@@ -58,12 +59,20 @@ export function LabelRenameEditor({
   rename: RenameState;
 }>) {
   const { t } = useTranslation();
+  const canSubmit = !rename.pending;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
   return (
     <form
       className="grid gap-[var(--space-1)] rounded-[var(--radius-s)] bg-[var(--color-island-1)] p-[var(--space-1)]"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        onCommit();
+        if (canSubmit) {
+          onCommit();
+        }
       }}
       role="listitem"
     >
@@ -72,14 +81,14 @@ export function LabelRenameEditor({
           aria-label={t("labels.renameField")}
           autoFocus
           className={`${fieldInputClassName} min-w-0 flex-1 py-[var(--space-1)]`}
-          disabled={rename.pending}
+          disabled={!canSubmit}
           onChange={(event) => {
             onChange(event.currentTarget.value);
           }}
           value={rename.draft}
         />
         <IconTooltipButton
-          disabled={rename.pending}
+          disabled={!canSubmit}
           label={t("labels.saveRename")}
           onClick={onCommit}
           size="icon-sm"

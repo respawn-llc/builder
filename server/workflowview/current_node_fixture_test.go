@@ -651,6 +651,10 @@ func (currentNodeViewLLMClient) Generate(context.Context, llm.Request) (llm.Resp
 	return llm.Response{}, nil
 }
 
+func (currentNodeViewLLMClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 type currentNodeViewPrompts struct {
 	bySession map[string][]PendingPromptSnapshot
 }

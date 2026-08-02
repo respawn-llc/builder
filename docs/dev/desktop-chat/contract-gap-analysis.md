@@ -157,6 +157,40 @@ The ratified desktop flow keeps TUI's zero-form and lazy semantics:
 
 Current `SessionLaunchService.PlanSession` creates an independent session plan but `server/launch.Planner.createSession` calls `EnsureDurable` before first model use. That code/spec drift must be resolved at the server ownership boundary rather than hidden by a desktop-only workaround.
 
+### Thinking Status And Reasoning Traces
+
+The current transcript feed combines two product concepts in
+`TranscriptReasoningUpdate`: cumulative Reasoning Trace text and an optional
+current Thinking Status. Hydration retains only one active reasoning update,
+while completed traces are persisted later as detail-only reasoning local
+entries.
+
+The shipped contract already supports cumulative live trace updates and an
+explicit provider-attempt reset. It does not yet provide the complete Desktop
+contract:
+
+- Thinking Status and Reasoning Trace need distinct typed ownership so clients
+  cannot conflate live runtime status with durable conversation content.
+- Hydration and live delivery must preserve every server-provided trace and its
+  authoritative order rather than exposing only one ambiguous active value.
+- One server-identified provisional trace must reconcile with its committed row
+  without duplication. A provider-attempt reset removes only the discarded
+  provisional trace and retains Thinking Status.
+- The server presentation projection must provide the compact first logical line
+  and complete plain text. It must move the TUI's existing removal of outer
+  literal `**` delimiters to the shared server projection while leaving
+  persisted and model-facing content unchanged.
+- Runtime activity and active-work kind already provide the authority for
+  Thinking Status visibility and fallback copy. Desktop must not infer activity
+  from transcript rows, local booleans, or reasoning-text presence.
+- Committed Reasoning Traces need the stable row identity and authoritative
+  timestamp owned by the transcript-row metadata task.
+
+Kent does not retain authoritative Reasoning Trace duration. That optional
+future capability is independent of initial Desktop parity. Its approved
+meaning is elapsed server time from the first nonempty update for one trace
+through that trace's commit.
+
 ### Session Settings And Lazy Draft
 
 The existing server surface provides useful but incomplete pieces:
@@ -202,6 +236,8 @@ The separate Context meter opens a compact detail pop-up. Its `Compact` action u
 
 The pop-up reproduces the TUI Context summary without its detailed instruction, skill, and Agent-file token breakdown. It needs remaining tokens and percentage against the context window, automatic-compaction threshold tokens and percentage, Auto-compaction state, and completed compaction count. The runtime main view already provides usage, Auto-compaction state, and count, but it does not expose the configured automatic-compaction threshold. The server read model must add that typed fact; Desktop must not derive policy by reading configuration.
 
+An open pop-up consumes the ordinary Session-status and context-usage broadcasts already used by Chat. Desktop must not add a Context-specific poll, refresh timer, or reconciliation state machine. Facts not changed by an ordinary broadcast refresh through the next standard authoritative snapshot.
+
 Lazy New Chat needs the same facts before a Session runtime exists. The server-owned Chat draft must project the effective draft Agent's context window, automatic-compaction threshold, and Auto-compaction state. Desktop presents zero used tokens and zero compactions until materialization. Agent or setting changes that alter the effective context contract update this one draft projection.
 
 Manual compaction is unavailable before the first Agent Step. A pre-Session `/compact` must remain a recognized command and return the typed unavailable or too-soon outcome without materializing a Session. Desktop must not create a throwaway Session merely to reject compaction.
@@ -221,6 +257,52 @@ Compaction policy, ordering, pre-submit compaction, and execution remain server-
 `compaction_mode=none` remains the authoritative fully disabled policy. Desktop must not call it Manual-only. In that state, the Context detail suppresses the irrelevant threshold, reports compaction and Auto-compaction as unavailable, and disables its Compact action. `/compact` still dispatches the typed operation so the server's disabled-policy error is surfaced rather than sending the text to the model.
 
 Existing onboarding language that calls `none` Manual-only is product drift. Its correction is a separate follow-up candidate and is not part of Desktop Sessions/Chat.
+
+### Goal Control
+
+The server already owns durable Goal state and typed set, pause, resume, complete,
+clear, and show operations. Goal inspection works for live and dormant Sessions.
+Runtime and transcript projections broadcast objective, status, and the
+runtime-local suspension fact. The unary Goal projection also carries created
+and updated timestamps.
+
+Desktop's locked Goal design exposes a narrower user contract:
+
+- Goal suspension is not a Desktop product state and must not affect Goal copy,
+  controls, or visual state.
+- The sidebar needs Goal created time for `Set <age> ago`, but the current
+  `clientui.RuntimeGoal` and transcript Goal projection drop both timestamps.
+- The under-composer control can use the ordinary Chat Goal snapshot, while the
+  sidebar intentionally performs one fresh ShowGoal read on open and then
+  consumes ordinary Goal broadcasts.
+- A Goal broadcast that arrives while the open read is pending must win over the
+  late unary response. This is one bounded client rule, not a Goal revision,
+  retry loop, or poller.
+- The selected Agent's authoritative locked-tool capability must distinguish
+  missing `ask_question` from Questions being toggled off. Only the former makes
+  Save and Resume unavailable.
+
+Runtime control and its tests allow user Goal mutations in workflow-controlled
+Sessions. That behavior is authoritative. Desktop must expose the same Goal
+affordance and mutation controls there rather than inventing a workflow-specific
+read-only mode.
+
+Goal Set currently requires an existing Session ID. Lazy New Chat therefore
+needs a first-agentic-trigger flow that materializes the Session and then applies
+the Goal operation. Product does not require rollback if later Goal validation
+or admission fails: the Session remains, Goal work does not start for the failed
+request, the Goal draft remains available in the open sidebar, and the error is
+surfaced. Once Goal work is accepted, later provider, tool, or runtime failure
+uses ordinary Session failure behavior and leaves the Session and Goal intact.
+
+The current Task Description Markdown field is feature-local. Goal must not copy
+it. The editor/read-view, overflow, Markdown, focus, accessibility, and draft
+reconciliation behavior need one shared UI-kit module used by both Task Detail
+and Goal. Save and Goal lifecycle controls remain outside that field.
+
+Desktop deliberately does not copy two TUI presentation mechanics: active-Goal
+Clear has no confirmation, and Goal mutation requests are single-flight rather
+than client-coalesced newest-request state.
 
 ### Project Workflow Links Read Model
 

@@ -95,7 +95,9 @@ func TestHydrationRuntimeTupleAdmissionMapping(t *testing.T) {
 				hasMainView: true,
 			}
 			message := ongoingHydrationMessage(1)
-			message.Payload.Hydration.RuntimeReadModelUpdate = tt.incoming
+			payload := message.Payload().(clientui.TranscriptHydration)
+			payload.RuntimeReadModelUpdate = tt.incoming
+			message = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
 			result, err := client.admitTranscriptMessageState(message)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("admission error = %v, wantErr=%t", err, tt.wantErr)

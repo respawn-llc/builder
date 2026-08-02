@@ -5,6 +5,7 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
 import {
   executionTargetSelectionFromDraft,
@@ -141,15 +142,20 @@ function ExecutionTargetForm({
 }>) {
   const { t } = useTranslation();
   const selectedTarget = executionTargetSelectionFromDraft(pending.selection);
+  const canSubmit = selectedTarget !== null;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
   return (
     <form
       className="grid gap-[var(--space-4)]"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        if (selectedTarget === null) {
+        if (!canSubmit) {
           return;
         }
-        continuation.close();
         onResult({
           kind: "continue",
           action: pending.action,

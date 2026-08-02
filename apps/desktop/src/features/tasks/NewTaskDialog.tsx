@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
-import { useConnectionSnapshot } from "@/app-facade";
+import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
@@ -168,7 +168,7 @@ function NewTaskFormContent({
     const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
     return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
   }, [catalog.data, selectedLabelIDs]);
-  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
+  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID;
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
   const initialWorkspaceID = resolveInitialSourceWorkspaceID(
     initialSourceWorkspaceID,
@@ -181,21 +181,23 @@ function NewTaskFormContent({
     defaultValues: {
       title: "",
       body: "",
-      sourceWorkspaceID: initialWorkspaceID,
+      sourceWorkspaceID: initialWorkspaceID ?? "",
     },
   });
+  const canSubmit =
+    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID !== undefined;
 
   useEffect(() => {
-    if (!initializedRef.current && initialWorkspaceID.length > 0) {
+    if (!initializedRef.current && initialWorkspaceID !== undefined) {
       form.reset({ title: "", body: "", sourceWorkspaceID: initialWorkspaceID });
       initializedRef.current = true;
     }
   }, [form, initialWorkspaceID]);
   async function submit(values: NewTaskFormValues): Promise<void> {
-    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
-    if (sourceWorkspaceID.length === 0) {
+    if (!canSubmit) {
       return;
     }
+    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
       await createTask.mutateAsync({
@@ -225,13 +227,16 @@ function NewTaskFormContent({
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
   const displayedWorkspaceID =
-    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
-  const disabled =
-    connection.phase !== "connected" || createTask.isPending || initialWorkspaceID.length === 0;
+    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : (initialWorkspaceID ?? "");
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
 
   return (
     <form
       className={cx("grid gap-[var(--space-3)]", className)}
+      onKeyDown={formShortcut}
       onSubmit={(event) => void form.handleSubmit(submit)(event)}
     >
       <TextInput
@@ -288,7 +293,7 @@ function NewTaskFormContent({
       {createTask.error !== null ? (
         <p className="m-0 text-[var(--color-error)]">{errorMessage(createTask.error)}</p>
       ) : null}
-      <Button className="mx-auto w-full max-w-[400px]" disabled={disabled} type="submit" variant="primary">
+      <Button className="mx-auto w-full max-w-[400px]" disabled={!canSubmit} type="submit" variant="primary">
         {t("task.create")}
       </Button>
     </form>
@@ -352,17 +357,17 @@ function NewTaskLabels({
 
 function resolveInitialSourceWorkspaceID(
   requestedWorkspaceID: string | undefined,
-  defaultWorkspaceID: string,
+  defaultWorkspaceID: string | undefined,
   workspaceItems: readonly { id: string }[],
-): string {
+): string | undefined {
   if (
     requestedWorkspaceID !== undefined &&
     workspaceItems.some((workspace) => workspace.id === requestedWorkspaceID)
   ) {
     return requestedWorkspaceID;
   }
-  if (defaultWorkspaceID.length > 0) {
+  if (defaultWorkspaceID !== undefined) {
     return defaultWorkspaceID;
   }
-  return workspaceItems[0]?.id ?? "";
+  return workspaceItems[0]?.id;
 }

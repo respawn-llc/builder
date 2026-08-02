@@ -376,7 +376,6 @@ const TaskCard = memo(function TaskCard({
     canStart: card.actions.canStart,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.statusKind,
-    manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
   };
   return (
     <ContextMenu>
@@ -439,7 +438,7 @@ const TaskCard = memo(function TaskCard({
           </AdaptiveLineClamp>
           {hasFooter ? (
             <div
-              className="task-card-footer flex items-center justify-between gap-[var(--space-3)]"
+              className="task-card-footer flex min-w-0 items-center justify-between gap-[var(--space-3)]"
               data-testid="task-card-footer"
             >
               <div
@@ -448,7 +447,7 @@ const TaskCard = memo(function TaskCard({
               >
                 {card.statusKind === "running" ? (
                   <Spinner
-                    className="h-[20px] w-[20px]"
+                    className="h-[20px] w-[20px] shrink-0"
                     strokeWidth={1.8}
                     testID="task-card-active-run-spinner"
                   />

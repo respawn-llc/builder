@@ -419,7 +419,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents))
+		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}

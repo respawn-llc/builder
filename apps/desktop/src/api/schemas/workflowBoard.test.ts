@@ -1,4 +1,9 @@
-import { activityPageSchema, boardNodeCardsPageSchema, workflowBoardSchema } from "./workflowBoard";
+import {
+  activityPageSchema,
+  boardNodeCardsPageSchema,
+  taskMovePreviewResponseSchema,
+  workflowBoardSchema,
+} from "./workflowBoard";
 
 const workspace = {
   workspace_id: "workspace-default",
@@ -58,7 +63,6 @@ const card = {
     can_interrupt: false,
     can_resume: false,
     can_delete: true,
-    manual_move_target_node_ids: [],
   },
   label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
   updated_at_unix_ms: 1,
@@ -101,6 +105,40 @@ describe("workflow board schemas", () => {
         },
       }),
     ).toMatchObject({ selectedWorkflow: null });
+  });
+
+  it("preserves whitespace in resolved Manual Move values", () => {
+    const resolvedValue = "  indented code\n ";
+    const parsed = taskMovePreviewResponseSchema.parse({
+      outcome: "transition",
+      transition: {
+        choices: [
+          {
+            transition_key: "next",
+            label: "Next",
+            source_node_display_name: "Plan",
+            required_values: [
+              {
+                node_key: "plan",
+                output_name: "summary",
+                description: "Summary",
+                resolved_value: resolvedValue,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      transition: {
+        choices: [
+          {
+            requiredValues: [{ resolvedValue }],
+          },
+        ],
+      },
+    });
   });
 
   it("rejects legacy prefixed Workflow IDs", () => {

@@ -59,6 +59,15 @@ type WorkflowProjectLabelDeleteResponse struct {
 	LabelID string `json:"label_id"`
 }
 
+type WorkflowProjectLabelReorderRequest struct {
+	ProjectID string   `json:"project_id"`
+	LabelIDs  []string `json:"label_ids"`
+}
+
+type WorkflowProjectLabelReorderResponse struct {
+	Catalog WorkflowProjectLabelCatalog `json:"catalog"`
+}
+
 type WorkflowTaskAssignedLabelIDs struct {
 	TaskID   string   `json:"task_id"`
 	LabelIDs []string `json:"label_ids"`
@@ -335,6 +344,22 @@ func (r WorkflowProjectLabelRenameResponse) Validate() error {
 
 func (r WorkflowProjectLabelDeleteResponse) Validate() error {
 	return validateLabelID("label_id", r.LabelID)
+}
+
+func (r WorkflowProjectLabelReorderRequest) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	_, err := validateUniqueLabelIDs("label_ids", r.LabelIDs)
+	return err
+}
+
+func (r WorkflowProjectLabelReorderRequest) ValidateRPC() error {
+	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
+}
+
+func (r WorkflowProjectLabelReorderResponse) Validate() error {
+	return r.Catalog.Validate()
 }
 
 func (r WorkflowTaskLabelsGetRequest) Validate() error {

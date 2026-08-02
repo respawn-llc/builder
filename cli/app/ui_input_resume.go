@@ -12,7 +12,7 @@ import (
 
 func (c uiInputController) startQueuedInjectionSubmission() tea.Cmd {
 	m := c.model
-	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, ""); blocked {
+	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return disconnectCmd
 	}
 	if m.injectedQueueBlocksDrain() {
@@ -90,7 +90,7 @@ func (c uiInputController) requestIdleRuntimeControlCommittedRefresh(origin uiCo
 func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	token := m.beginSubmitAttempt("", "", operationRef)
+	token := m.beginSubmitAttempt("", "", operationRef, activeSubmitOriginQueued)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {

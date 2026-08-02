@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -34,6 +35,49 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 		t.Fatalf("runtime_registry.go calls transcript broker %s directly; route through sessionFeed sequencer", selector.Sel.Name)
 		return false
 	})
+}
+
+func TestProductionTranscriptPublishersDoNotConstructSequencedMessages(t *testing.T) {
+	repoRoot := testsetup.RepositoryRoot(t)
+	for _, rel := range []string{
+		filepath.Join("server", "registry"),
+		filepath.Join("server", "runtimeview"),
+	} {
+		root := filepath.Join(repoRoot, rel)
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || strings.HasSuffix(info.Name(), "_test.go") || !strings.HasSuffix(info.Name(), ".go") {
+				return nil
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				lit, ok := node.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				selector, ok := lit.Type.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "TranscriptMessage" {
+					return true
+				}
+				for _, element := range lit.Elts {
+					if _, ok := element.(*ast.KeyValueExpr); ok {
+						t.Errorf("%s constructs a sequenced TranscriptMessage literal; publish a TranscriptEvent instead", path)
+						break
+					}
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("scan transcript publishers under %s: %v", rel, err)
+		}
+	}
 }
 
 func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {

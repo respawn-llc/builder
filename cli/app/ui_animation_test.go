@@ -77,7 +77,8 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 
 	m := newAnimationTranscriptModel(t)
 	running := ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)
-	running.Payload.RuntimeReadModelUpdate.Activity = clientui.RuntimeActivity{
+	runningPayload := running.Payload().(clientui.RuntimeReadModelUpdate)
+	runningPayload.Activity = clientui.RuntimeActivity{
 		State: clientui.RuntimeActivityRunning,
 		ActiveStep: &clientui.RuntimeActiveStep{
 			RunID:      ongoingTestRunID(),
@@ -85,6 +86,7 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		},
 	}
+	running = clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(runningPayload))
 	next, cmd := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: running})
 	updated := next.(*uiModel)
 	if !updated.isBusy() || updated.spinnerTickToken == 0 || updated.spinnerTickDue.IsZero() || cmd == nil {
@@ -119,14 +121,11 @@ func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
 	t.Cleanup(func() { uiAnimationNow = oldNow })
 
 	m := newAnimationTranscriptModel(t)
-	startedMessage := clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageReviewerState,
-		Payload: clientui.TranscriptPayload{ReviewerState: &clientui.TranscriptReviewerState{
-			StepID: ongoingTestStepID(),
-			State:  clientui.ReviewerStateRunning,
-		}},
-	}
+	startedMessage := clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptReviewerState{
+		StepID: ongoingTestStepID(),
+		State:  clientui.ReviewerStateRunning,
+	}))
+
 	next, _ := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: startedMessage})
 	started := next.(*uiModel)
 	if !started.isReviewerRunning() || started.spinnerTickToken == 0 {
@@ -135,10 +134,11 @@ func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
 
 	completedMessage := startedMessage
 	completedMessage.Sequence = 3
-	completedMessage.Payload.ReviewerState = &clientui.TranscriptReviewerState{
+	completedPayload := clientui.TranscriptReviewerState{
 		StepID: ongoingTestStepID(),
 		State:  clientui.ReviewerStateCompleted,
 	}
+	completedMessage = clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(completedPayload))
 	next, _ = started.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: completedMessage})
 	completed := next.(*uiModel)
 	if completed.isReviewerRunning() || completed.spinnerTickToken != 0 {
@@ -166,14 +166,11 @@ func newAnimationTranscriptModel(t *testing.T) *uiModel {
 
 func animationAssistantDeltaMessage(sequence uint64) clientui.TranscriptMessage {
 	streamID := runtimeids.NewAssistantStreamID()
-	return clientui.TranscriptMessage{
-		Sequence: sequence,
-		Kind:     clientui.TranscriptMessageAssistantDelta,
-		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StepID:   ongoingTestStepID(),
-			StreamID: streamID,
-			Delta:    "working",
-			Phase:    transcript.AssistantPhaseCommentary,
-		}},
-	}
+	return clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(clientui.TranscriptAssistantDelta{
+		StepID:   ongoingTestStepID(),
+		StreamID: streamID,
+		Delta:    "working",
+		Phase:    transcript.AssistantPhaseCommentary,
+	}))
+
 }

@@ -125,14 +125,12 @@ func TestRuntimeMainViewRefreshPreservesMetadataChangedAfterRequestStarted(t *te
 	if !ok {
 		t.Fatal("refresh command returned an unexpected message")
 	}
-	statusMessage := clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageSessionStatus,
-		Payload: clientui.TranscriptPayload{SessionStatus: &clientui.TranscriptSessionStatus{
-			ReviewerFrequency: "fresh transcript reviewer",
-			ThinkingLevel:     "fresh transcript thinking",
-			CompactionMode:    "auto",
-		}},
-	}
+	statusMessage := clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptSessionStatus{
+		ReviewerFrequency: "fresh transcript reviewer",
+		ThinkingLevel:     "fresh transcript thinking",
+		CompactionMode:    "auto",
+	}))
+
 	admission, err := runtimeClient.admitTranscriptMessageState(statusMessage)
 	if err != nil {
 		t.Fatalf("admit transcript status: %v", err)
@@ -170,11 +168,13 @@ func runtimeTupleTestHydration(
 	reconciliation clientui.RuntimeInputReconciliationSnapshot,
 ) clientui.TranscriptMessage {
 	message := ongoingHydrationMessage(1)
-	message.Payload.Hydration.RuntimeReadModelUpdate = clientui.RuntimeReadModelUpdate{
+	payload := message.Payload().(clientui.TranscriptHydration)
+	payload.RuntimeReadModelUpdate = clientui.RuntimeReadModelUpdate{
 		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: sequence},
 		Activity:            activity,
 		InputReconciliation: reconciliation,
 	}
+	message = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
 	return message
 }
 
@@ -184,15 +184,12 @@ func runtimeTupleTestUpdateMessage(
 	activity clientui.RuntimeActivity,
 	reconciliation clientui.RuntimeInputReconciliationSnapshot,
 ) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: deliverySequence,
-		Kind:     clientui.TranscriptMessageRuntimeReadModelUpdate,
-		Payload: clientui.TranscriptPayload{RuntimeReadModelUpdate: &clientui.RuntimeReadModelUpdate{
-			Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: runtimeSequence},
-			Activity:            activity,
-			InputReconciliation: reconciliation,
-		}},
-	}
+	return clientui.NewTranscriptMessage(deliverySequence, clientui.NewTranscriptEvent(clientui.RuntimeReadModelUpdate{
+		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: runtimeSequence},
+		Activity:            activity,
+		InputReconciliation: reconciliation,
+	}))
+
 }
 
 func runtimeTupleTestIdleActivity() clientui.RuntimeActivity {

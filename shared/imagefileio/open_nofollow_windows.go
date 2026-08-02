@@ -1,6 +1,6 @@
 //go:build windows
 
-package readimage
+package imagefileio
 
 import (
 	"os"

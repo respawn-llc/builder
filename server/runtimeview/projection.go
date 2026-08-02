@@ -62,12 +62,13 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 		return clientui.RuntimeStatus{}, err
 	}
 	usage := engine.ContextUsage()
+	fastModeAvailable := engine.FastModeAvailable()
 	status := clientui.RuntimeStatus{
 		ReviewerFrequency:                 engine.ReviewerFrequency(),
 		ReviewerEnabled:                   engine.ReviewerEnabled(),
 		AutoCompactionEnabled:             engine.AutoCompactionEnabled(),
 		QuestionsEnabled:                  engine.QuestionsEnabled(),
-		FastModeAvailable:                 engine.FastModeAvailable(),
+		FastModeAvailable:                 fastModeAvailable,
 		FastModeEnabled:                   engine.FastModeEnabled(),
 		ConversationFreshness:             ConversationFreshnessFromSession(freshness),
 		PreviousSessionID:                 engine.PreviousSessionID(),
@@ -100,12 +101,13 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 	if engine == nil {
 		return clientui.TranscriptSessionStatus{}, nil
 	}
+	fastModeAvailable := engine.FastModeAvailable()
 	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:         engine.ReviewerFrequency(),
 		ReviewerEnabled:           engine.ReviewerEnabled(),
 		AutoCompactionEnabled:     engine.AutoCompactionEnabled(),
 		QuestionsEnabled:          engine.QuestionsEnabled(),
-		FastModeAvailable:         engine.FastModeAvailable(),
+		FastModeAvailable:         fastModeAvailable,
 		FastModeEnabled:           engine.FastModeEnabled(),
 		ThinkingLevel:             engine.ThinkingLevel(),
 		CompactionMode:            engine.CompactionMode(),

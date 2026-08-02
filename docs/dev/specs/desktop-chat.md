@@ -27,13 +27,36 @@
 - Context rows start collapsed: loaded instructions with their source label, skill guidance, environment facts, Subagent context, handoff context, mode instructions and restoration, Workflow execution instructions, active-goal continuation, Compaction-Preserved User Messages, compaction summaries, context-pressure reminders, Goal feedback, and worktree changes. Worktree entry shows branch and path; return to the main workspace shows its destination. Full expansion shows the original complete content.
 - Assistant commentary is a full assistant message without a phase label.
 - Warnings, runtime errors, generic system notices, generic warnings, legacy notices, and reviewer errors start expanded. Runtime diagnostics start collapsed. Empty known developer context is omitted; empty unknown developer context is an expanded Diagnostic row that identifies the unknown source and integrity failure.
-- Reasoning summaries and reviewer lifecycle are shown only in Thinking or status, never as transcript rows. Reviewer suggestions create exactly one collapsed Reviewer feedback row; the related model instruction is never another transcript row.
+- Reasoning Traces are dedicated transcript items. Reviewer lifecycle appears only in Thinking Status and creates no transcript row. Reviewer suggestions create exactly one collapsed Reviewer feedback row; the related model instruction is never another transcript row.
 - Pending Questions and Approvals appear only in their prompt controls. A completed Question creates exactly one expanded Ask Question row. Approval has no separate decision-history row: its associated tool item owns the request and outcome.
 - A tool-associated prompt has one prompt control and one associated tool item; it is never duplicated as another transcript row.
 - Runtime lifecycle, active-work changes, compaction lifecycle, Goal lifecycle, unavailable runtime, accepted or discarded Pending Work, Queue failure, and input-operation reconciliation do not create transcript rows. Their controls or notifications own feedback.
 - User interruption creates no transcript row. Runtime error feedback and committed error items remain visible where supplied by the server.
 - Background activity and controls appear in Processes, while committed Background process results remain in transcript order. Worktree control outcomes, sleep-guard failures, and prompt-history failures use notifications and create no transcript row.
-- Thinking, Context, Goal, and Pending Work are the only persistent live-control areas defined here. Session name stays in application chrome. Transient status-line notices and errors use notifications rather than feature-specific status surfaces.
+- Thinking Status, Context, Goal, and Pending Work are the only live-control areas defined here. Session name stays in application chrome. Transient status-line notices and errors use notifications rather than feature-specific status surfaces.
+- While authoritative runtime activity is running, Thinking Status appears at the live end of the transcript immediately before the composer. It uses the same visual language as an assistant message but is transient runtime presentation, not a transcript row or durable history.
+- Thinking Status contains an animated activity spinner followed by one status line. Main-agent user-turn, Workflow-turn, and Goal-loop work shows the latest authoritative Thinking Status text, or `Working…` before the server supplies one for the current Agent Step. Reviewer work shows `Reviewing…`. Compaction and pre-submit compaction show `Compacting…`. User shell, background, and runtime-maintenance work show `Running…`.
+- The Thinking Status spinner follows the TUI's semantic activity tones: Reviewer uses Success, compaction uses Secondary, and every other running kind uses Primary.
+- A reasoning update without a new Thinking Status value retains the latest value for that Agent Step. Desktop never derives Thinking Status from Reasoning Trace text.
+- The server supplies one logical Thinking Status line. It may wrap to at most two visual lines, and the spinner aligns with the first line rather than the visual center of the wrapped block.
+- Thinking Status never presents steps, a timeline, or a Chain of Thought. Desktop does not parse text or manufacture work stages.
+- Thinking Status remains visible throughout the complete running active-work scope. For a main-agent Agent Step this includes assistant streaming and tool execution. As live or committed content arrives, it remains the final transient tail immediately before the composer.
+- Thinking Status disappears when its owning active work finishes or runtime activity leaves running. Its initial production exit combines a short downward slide with a fade; reduced motion removes the transition.
+- A later Agent Step starts fresh at `Working…`. Desktop does not morph Thinking Status into an assistant message.
+- Thinking Status is non-interactive. It has no disclosure, Copy action, timestamp, hover detail, or link to a Reasoning Trace.
+- While the Reviewer model request is processing, the same transient presentation shows a spinner and `Reviewing…`. Reviewer completion removes it and creates no completed-review marker.
+- Main-agent Thinking Status takes precedence over Reviewer activity. If a main-agent follow-up starts while Reviewer activity is still represented, the fresh ordinary `Working…` and Thinking Status presentation replaces `Reviewing…`.
+- While a Question or Approval waits for the operator, Thinking Status is absent. The prompt picker alone owns the waiting state.
+- When answering or external resolution resumes main-agent work, Desktop starts fresh at `Working…`.
+- A Reasoning Trace is a durable collapsible transcript item. Its collapsed header shows a brain icon, its first logical line end-truncated to the available width, and the disclosure affordance. It has no separate type label.
+- Expanding a Reasoning Trace reveals its complete selectable plain text in a muted tone. Desktop does not render Reasoning Trace content as Markdown.
+- The first nonempty progressive Reasoning Trace update creates one provisional collapsed item. Later updates change that same item in place. The operator may expand it while it streams, and its complete visible text continues updating in place.
+- If the server resets a provider attempt, Desktop removes the discarded provisional Reasoning Trace but retains the current Thinking Status. A later trace update creates fresh provisional trace content.
+- A live Reasoning Trace does not auto-open or auto-close. A provider that supplies only a completed trace creates the collapsed item when that trace becomes available.
+- A live Reasoning Trace has no timestamp or actions. After it commits, its expanded presentation shows the authoritative timestamp and an icon-only Copy action for the complete plain text.
+- The server's Reasoning Trace presentation projection removes only the provider's outer literal `**` delimiters. It preserves interior asterisks and all other content. Desktop and the TUI display and copy that projected text without repeating the cleanup. Persisted and model-facing content remains unchanged.
+- Desktop represents every Reasoning Trace supplied by the server in authoritative order. It never concatenates, groups, drops, or otherwise interprets separate traces.
+- Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. A future authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. Desktop does not infer row identity from display text, role, position, or transport order.
 
@@ -68,13 +91,15 @@
 - Chat is edge-to-edge. Existing Session hydration shows a compact centered loading state while retaining application chrome; transcript and composer appear together only after authoritative hydration. On initial failure, the same position shows an error with Retry and Back remains available. New Chat does not show this loading state.
 - Application chrome owns Session title and Back. Chat has neither an in-content title nor a second Back action.
 - Transcript content is at most 1200px wide. User and assistant messages are content-sized up to 1000px, with normal wrapping. User messages align right and assistant messages align left; there are no avatars or role labels.
+- User messages, assistant commentary, and assistant final answers are the only durable transcript islands. Tools, Reasoning Traces, context, diagnostics, notices, and every other durable non-conversational item use borderless inline disclosure or tool-row presentation.
+- Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
 - Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. User messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Editing is the only fork action: submitting an edit creates a new Session branch and leaves the original Session unchanged.
 - A live assistant message has no footer. The committed message receives timestamp and Copy together when it resolves.
 - Committed-message time uses the server's durable timestamp: relative age for 24 hours, then localized compact date and time, including the year only when different from the current year. Full date, time, and time zone are available on focus or hover.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
-- Contextual destinations adapt between shifted and overlay presentation. Processes is the only defined Chat destination. Session settings use a non-modal popover under the composer, not a contextual destination.
+- Contextual destinations adapt between shifted and overlay presentation. Processes and Goal are the defined Chat destinations. Session settings use a non-modal popover under the composer, not a contextual destination.
 
 ## Session Settings And Drafts
 
@@ -126,6 +151,7 @@
 - Clicking or tapping the Context meter opens a compact pop-up with detailed context-window usage and a `Compact` action. When normal browser focus is on the meter, its ordinary button Enter and Space behavior also opens the pop-up; these keys are not Context shortcuts elsewhere.
 - Escape or clicking away closes the Context pop-up.
 - The pop-up shows remaining-context percentage and tokens against the complete context window, the automatic-compaction threshold in tokens and percentage, whether Auto-compaction is on or off, and the completed compaction count.
+- An open Context pop-up reacts to ordinary authoritative Session-status and context-usage broadcasts. It adds no Context-specific polling, refresh loop, or reconciliation state.
 - The pop-up omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown.
 - The Context details are four plain-text lines. Important labels and numeric values use bold primary text; connective and explanatory text stays muted.
 - The pop-up has no chips, badges, statistic cards, inset items, or other secondary containers.
@@ -149,6 +175,110 @@
 - When Session policy disables compaction, the pop-up replaces the threshold and Auto-compaction lines with truthful disabled and unavailable text, and its `Compact` action is unavailable.
 - In that policy state, `/compact` remains a known command and surfaces the server's typed disabled-policy failure instead of becoming an ordinary user message.
 - Context and compaction lifecycle create no transcript status rows.
+
+## Goal
+
+- Goal is a Session control, not a Session setting.
+- The left side of the under-composer control row always contains one Goal affordance. An active Goal uses a primary-colored Goal chip. A paused, completed, or absent Goal uses a neutral `Goal` affordance. Activating it opens the existing Goal when present or Goal creation when absent.
+- The control label is always `Goal`. It shows no objective preview or state text; its primary or neutral treatment communicates whether Goal work is active.
+- The control shows a target icon before `Goal`. It never becomes icon-only.
+- Desktop has no `/goal` command. The visible Goal affordance and Goal sidebar are its only Goal entry path.
+- Goal uses the shared adaptive contextual-sidebar host.
+- The same Goal sidebar handles creation and management. It edits the complete objective as Markdown and has an explicit `Save` action.
+- Goal objective editing uses the same shared UI-kit editor as Task Description. Desktop does not maintain a Goal-specific large-text editor implementation.
+- An existing Goal opens as rendered Markdown. Activating the objective enters the shared editor. Goal creation opens the editor focused.
+- `Save` appears only while the objective draft differs from the authoritative Goal and contains non-whitespace text. A whitespace-only draft has no Save action. Saving an existing Goal replaces it directly without another confirmation. Success keeps the sidebar open and re-baselines the editor to the authoritative Goal.
+- Every successful Save uses set-or-replace semantics: the resulting Goal is active and Goal work starts or continues, including when the previous Goal was paused or complete.
+- Goal management offers Pause or Resume when applicable and an error-colored outline Clear action.
+- Goal remains visible and inspectable when the selected Agent lacks the locked `ask_question` tool. In that state, Save and Resume are unavailable with `Unavailable for this Agent`; Pause and Clear remain available.
+- The Questions toggle being off does not make Goal unavailable. The server owns final Goal-loop admission, and a raced rejected request uses ordinary Goal mutation error feedback.
+- Clear applies immediately in every Goal state. Desktop shows no confirmation and offers no undo.
+- Pause or Resume preserves any dirty objective draft. Clear resets the sidebar to blank creation state and discards any dirty objective draft.
+- Goal mutations are single-flight. While one mutation request is pending, Desktop disables every Goal mutation and shows pending state only on the initiating action. Desktop keeps no desired-state buffer, replacement queue, or client-side replay.
+- Every Goal mutation failure uses Sonner. Save failure preserves the complete dirty objective draft. Pause, Resume, and Clear failure leave the Goal and sidebar state unchanged. Successful mutations show no success notification.
+- The sidebar uses one sticky adaptive action row. At wide widths, Pause or Resume and Clear occupy the start side and dirty-state Save occupies the end side. Create mode shows Save alone.
+- When the sidebar narrows, the action row flows onto additional lines without truncating, overlapping, shrinking, or mangling button labels and controls.
+- Desktop offers no human `Mark complete` Goal action.
+- Goal suspension is not a Desktop product state. Desktop presents a durably active Goal as Active and never shows suspension copy, explanation, iconography, or a separate Resume action for runtime-local suspension.
+- The sidebar shows the authoritative Goal status and a small secondary line `Set <age> ago` derived from the server's Goal creation timestamp. It omits Goal ID and updated time.
+- Goal status uses ordinary foreground text in every state. The age line alone uses muted text. Desktop adds no Goal-status badge or semantic status color.
+- The age line shows `Set just now` below one minute, `Set N min ago` below one hour, `Set HhMm ago` below one day, and `Set DdHhMm ago` from one day onward. It omits zero-value units, keeps days unbounded, and refreshes once per minute.
+- Opening the sidebar for an existing Goal performs one authoritative Goal read. Until it resolves, the sidebar uses the standard compact Loading state. Failure uses the matching compact Error state with Retry. Lazy Goal creation opens directly without this read.
+- While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
+- If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
+- Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
+- Workflow-controlled Sessions use the same Goal affordance, sidebar, and mutation controls as every other Session. Workflow ownership does not hide Goal, make it read-only, or restrict user Goal mutations.
+- In untouched lazy New Chat, Goal Save is the first agentic trigger and may materialize the Session before Goal validation or admission completes.
+- If Goal validation or admission then fails, the newly materialized Session remains. Desktop keeps the complete dirty Goal draft in the open sidebar, starts no Goal work for the rejected request, and uses ordinary Goal mutation error feedback.
+- After Goal acceptance starts work, later provider, tool, or runtime failure follows ordinary Session failure behavior and leaves the Session and Goal intact.
+- Desktop adds no rollback, compensation, or history-rewrite mechanism for partial lazy Goal launch.
+- Goal remains available in the ordinary bottom control row while a Question or Approval picker replaces the editor. Opening Goal does not resolve, decline, hide, or otherwise change the pending prompt picker.
+
+## Worktree
+
+- Worktree is a Session execution-target control, not a Session setting.
+- Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
+- Worktree management never materializes a lazy Session and is not a first-agentic trigger.
+- The under-composer control row contains one Worktree affordance that identifies the Session's current concise execution target.
+- For a branch-backed worktree, the affordance shows the branch name. For a detached or otherwise non-branch worktree, it shows the Kent worktree display name. For the main workspace, it shows the workspace name.
+- When the current target is missing or inaccessible, the affordance preserves that recorded target name and adds warning iconography and semantic warning treatment. It does not replace the identity with generic warning copy.
+- The affordance end-truncates a long target name. The Worktree sidebar owns the complete target facts.
+- Activating the Worktree affordance opens the shared adaptive contextual-sidebar host.
+- Desktop does not place Worktree management in the Settings popover or a separate full-page destination.
+- The Worktree sidebar opens directly to one management list. It has no overview landing page, cards, tabs, or nested Manage screen.
+- The sidebar header has a primary icon-only `+` action for creating a worktree.
+- The sidebar header has a secondary icon-only Refresh action beside `+`.
+- Opening the Worktree sidebar performs one fresh authoritative list read. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
+- Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
+- Desktop adds no Worktree-list polling loop or timer-based refresh.
+- The list contains the server's complete worktree topology in authoritative order without pagination.
+- The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
+- Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
+- Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
+- While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
+- A successful Switch acknowledgement closes the Worktree sidebar immediately and reports that the switch was scheduled.
+- Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
+- If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
+- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic, and follows the server's existing model-visible failure-Steer behavior.
+- The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
+- Each Worktree row uses the display name as its title.
+- Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
+- The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.
+- When the branch or ref differs from the display name, the row shows that branch or ref on a second line. It omits the second line when it would repeat the title.
+- Worktree rows never show a path.
+- An External row places an `External` warning-colored chip after its title.
+- A Missing row places a `Missing` error-colored chip after its title.
+- Every deletable row has an icon-only trash action. Activating it opens the delete popup in a loading state and requests an authoritative typed deletion preview for that target.
+- The deletion preview reports Clean, Dirty with the modified-or-untracked file count, or Unknown with an authoritative diagnostic.
+- The popup shows a Dirty or Unknown warning before its action items. Worktree List and Worktree Status remain lightweight and do not add dirty state.
+- After preview, a branch-backed target offers `Confirm` and `Confirm + Branch`.
+- The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.
+- For a deletable target without a branch, the previewed delete popup contains only `Confirm`.
+- Only a branch-backed target offers both `Confirm` and `Confirm + Branch`.
+- Confirming after a Dirty or Unknown preview authorizes force folder removal in the same click. Confirming after a Clean preview does not authorize force folder removal.
+- Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
+- If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
+- Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
+- A Completed result closes the popup, refreshes the list, and reports completed deletion.
+- A Scheduled result closes the popup back to the refreshed list and reports scheduled deletion. Desktop does not wait for current-Session retargeting or Git removal to finish.
+- The later authoritative transition outcome refreshes target and list state and surfaces final failure. Desktop adds no long-lived scheduled-deletion spinner.
+- A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
+- A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
+- Worktree creation uses a focused child state within the same Worktree sidebar destination.
+- The creation state places `Branch or ref` before `Base ref`.
+- `Branch or ref` starts focused and is prefilled only from the sanitized Session title. When the Session has no usable title, the field starts empty.
+- Desktop never falls back to the current branch, `main`, or a generated generic Worktree name.
+- Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
+- `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
+- The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
+- While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
+- Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
+- Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
+- If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
+- Desktop does not delete or otherwise roll back a successfully created worktree because its automatic Switch failed.
 
 ## Questions And Approvals
 

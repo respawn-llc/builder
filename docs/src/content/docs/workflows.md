@@ -292,7 +292,7 @@ Assign labels atomically when creating a task or update them immediately from ta
 
 On the board, a named Label row cycles neutral → included → excluded. An included condition requires the Label; an excluded condition requires its absence. `--label-match any` matches when any included or excluded condition is true, while `all` requires every condition. `No labels` remains a binary filter for tasks without assignments and is mutually exclusive with named conditions. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
 
-The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
+The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
 
@@ -324,6 +324,8 @@ Task listing is always project-scoped. Omitting `--workflow` lists tasks across 
 kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
+
+Task sorting accepts `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id` selectors with explicit `asc` or `desc` directions. A command may provide up to seven distinct selectors in one or repeated `--sort` flags.
 
 ### Task Dependencies
 
@@ -360,6 +362,20 @@ kent task search "retry policy" --project . --status backlog,running
 ```
 
 Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
+
+### Manually Move A Task
+
+Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
+
+```bash
+kent task move <task> <target-node-id> --transition <transition-key> \
+  --values-json '{"plan":{"summary":"Approved plan"}}'
+kent task move <task> <target-node-id> --values-file ./move-values.json
+```
+
+Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
+
+Desktop shows the server's Transition choices and required values, including resolved values that can be edited. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
 
 ### Complete Work From The CLI
 

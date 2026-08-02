@@ -236,22 +236,25 @@ export function useBoardTaskActions() {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const boardGeneration = useBoardFilterGeneration();
-  async function refresh(): Promise<void> {
+  const refresh = useCallback(async (): Promise<void> => {
     const activeGeneration = boardGeneration.controller.getSnapshot().active.generation;
     await boardGeneration.queryRegistry.invalidateGeneration(activeGeneration);
-  }
-  async function refreshAfterTaskDelete(taskID: string): Promise<void> {
-    await Promise.all([
-      refresh(),
-      queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
-    ]);
-  }
+  }, [boardGeneration.controller, boardGeneration.queryRegistry]);
+  const refreshAfterTaskDelete = useCallback(
+    async (taskID: string): Promise<void> => {
+      await Promise.all([
+        refresh(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
+      ]);
+    },
+    [queryClient, refresh],
+  );
   const interruptMutation = useMutation({
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
     onSettled: refresh,

@@ -54,7 +54,7 @@ export function useTaskInitiatingActionController({
 
   const handleResult = useCallback(
     async (result: TaskInitiatingActionResult): Promise<void> => {
-      if (result.response.outcome === "applied") {
+      if (result.response.outcome === "applied" || result.response.outcome === "no_op") {
         setPending(null);
         try {
           await onApplied(result);
@@ -93,7 +93,21 @@ export function useTaskInitiatingActionController({
           const result = await execute(action, selection);
           await handleResult(result);
         } catch (error) {
-          setPending(null);
+          if (selection === undefined) {
+            setPending(null);
+          } else {
+            setPending((current) =>
+              current?.kind !== "execution_target"
+                ? current
+                : {
+                    ...current,
+                    selection: {
+                      mode: selection.mode,
+                      customRef: selection.customRef ?? "",
+                    },
+                  },
+            );
+          }
           if (onExecuteError !== undefined) {
             onExecuteError(action, error);
           } else {

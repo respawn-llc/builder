@@ -218,6 +218,10 @@ func (retargetRuntimeClient) Generate(context.Context, llm.Request) (llm.Respons
 	return llm.Response{}, nil
 }
 
+func (retargetRuntimeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.InferProviderCapabilities("openai")
+}
+
 func projectContainsWorkspaceRoot(t *testing.T, store *metadata.Store, projectID string, workspaceRoot string) bool {
 	t.Helper()
 	workspaces, err := store.ListProjectWorkspaces(context.Background(), projectID)

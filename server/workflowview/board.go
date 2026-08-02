@@ -603,14 +603,13 @@ func boardColumns(snapshot definitionSnapshot) []serverapi.WorkflowBoardColumn {
 	for index, node := range boardColumnNodes(snapshot.api) {
 		columns = append(columns, serverapi.WorkflowBoardColumn{
 			Node: serverapi.WorkflowBoardNodeSummary{
-				NodeID:                 node.ID,
-				Key:                    node.Key,
-				Kind:                   node.Kind,
-				DisplayName:            node.DisplayName,
-				AssigneeRole:           node.SubagentRole,
-				SortOrder:              index,
-				OutputFields:           OutputFields(derived.PossibleProvisionFieldsForNode(workflow.NodeID(node.ID))),
-				TransitionOutputFields: OutputFields(workflow.TransitionOutputFieldsForTargetNode(snapshot.domain, derived, workflow.NodeID(node.ID))),
+				NodeID:       node.ID,
+				Key:          node.Key,
+				Kind:         node.Kind,
+				DisplayName:  node.DisplayName,
+				AssigneeRole: node.SubagentRole,
+				SortOrder:    index,
+				OutputFields: OutputFields(derived.PossibleProvisionFieldsForNode(workflow.NodeID(node.ID))),
 			},
 			GroupID:   node.GroupID,
 			SortOrder: index,

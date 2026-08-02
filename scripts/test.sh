@@ -460,9 +460,9 @@ def observe_line(line):
     if package is None or test is None:
         return
     test_id = (package, test)
-    if action == "run":
+    if action in {"run", "cont"}:
         running_tests.add(test_id)
-    elif action in {"pass", "fail", "skip"}:
+    elif action in {"pause", "pass", "fail", "skip"}:
         running_tests.discard(test_id)
 
 def consume_output():

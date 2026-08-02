@@ -105,35 +105,6 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 	}
 }
 
-func TestWorkflowTaskResumeRequestCarriesSetupOperationAndConcreteTarget(t *testing.T) {
-	customRef := "refs/heads/release"
-	request := WorkflowTaskResumeRequest{
-		TaskID:           "task",
-		SetupOperationID: NewWorktreeSetupOperationID(),
-		ExecutionTarget: &WorkflowExecutionTargetSelection{
-			Mode:      WorkflowExecutionTargetModeCustomRef,
-			CustomRef: &customRef,
-		},
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("valid Resume request rejected: %v", err)
-	}
-
-	for _, invalid := range []WorkflowTaskResumeRequest{
-		{TaskID: "task"},
-		{TaskID: "task", SetupOperationID: WorktreeSetupOperationID{}, ExecutionTarget: request.ExecutionTarget},
-		{
-			TaskID:           "task",
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			ExecutionTarget:  &WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeAskOnFirstExecution},
-		},
-	} {
-		if err := invalid.Validate(); err == nil {
-			t.Fatalf("invalid Resume request validated: %#v", invalid)
-		}
-	}
-}
-
 func TestWorkflowTaskMutationSelfTargetErrorRoundTripsRPCData(t *testing.T) {
 	original := &WorkflowTaskMutationSelfTargetError{TaskID: "task-1"}
 	decoded := DecodeWorkflowTaskMutationSelfTargetError(original.RPCErrorData(), original.Error())
@@ -200,35 +171,40 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 	requirement := WorkflowExecutionTargetSelectionRequirement{
 		Reason: WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
 	}
+	dependencyCount := 2
 	for _, response := range []interface{ Validate() error }{
-		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied},
-		WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
+		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeApplied, Applied: &startApplied},
+		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
+		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeNoOp, NoOp: &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
-		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}},
-		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &WorkflowExecutionTargetSelectionRequirement{
-			Reason: WorkflowExecutionTargetSelectionReasonUnlockedPreparationFailed,
-		}},
+		WorkflowTaskMoveResponse{
+			Outcome:                    WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+			UnsatisfiedDependencyCount: &dependencyCount,
+		},
 	} {
 		if err := response.Validate(); err != nil {
 			t.Fatalf("%T valid response rejected: %v", response, err)
 		}
 	}
-	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &startApplied, SelectionRequired: &requirement}).Validate(); err == nil {
+	if err := (WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeApplied, Applied: &startApplied, SelectionRequired: &requirement}).Validate(); err == nil {
 		t.Fatal("multi-branch response validated")
 	}
-	if err := (WorkflowTaskStartResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
+	if err := (WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeSelectionRequired, Applied: &startApplied}).Validate(); err == nil {
 		t.Fatal("mismatched response branch validated")
 	}
-	for _, response := range []WorkflowTaskResumeResponse{
-		{Outcome: WorkflowExecutionTargetActionOutcomeApplied},
-		{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}, SelectionRequired: &requirement},
-		{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}},
-		{Outcome: WorkflowExecutionTargetActionOutcome("future")},
-	} {
-		if err := response.Validate(); err == nil {
-			t.Fatalf("invalid Resume response validated: %#v", response)
-		}
+	if err := (WorkflowTaskMoveResponse{
+		Outcome:           WorkflowExecutionTargetActionOutcomeNoOp,
+		NoOp:              &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes},
+		SelectionRequired: &requirement,
+	}).Validate(); err == nil {
+		t.Fatal("move no-op response with selection requirement validated")
+	}
+	if err := (WorkflowTaskMoveResponse{
+		Outcome:                    WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+		UnsatisfiedDependencyCount: intPointer(0),
+	}).Validate(); err == nil {
+		t.Fatal("move dependency confirmation response accepted non-positive count")
 	}
 }
 

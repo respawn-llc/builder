@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -12,6 +13,52 @@ import (
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
+
+type ManualMoveDisposition string
+
+const (
+	ManualMoveDispositionQuiescent         ManualMoveDisposition = "quiescent"
+	ManualMoveDispositionAutoInterruptible ManualMoveDisposition = "auto_interruptible"
+	ManualMoveDispositionWaitingQuestion   ManualMoveDisposition = "waiting_question"
+	ManualMoveDispositionLifecycleConflict ManualMoveDisposition = "lifecycle_conflict"
+)
+
+var ErrManualMoveLifecycleConflict = errors.New("workflow task has a non-interruptible lifecycle conflict")
+
+func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (ManualMoveDisposition, error) {
+	if c == nil {
+		return "", errors.New("current node workflow controller is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return "", errors.New("workflow task id is required")
+	}
+	state, err := c.authority.CurrentWorkflowTaskExecutionState(taskID)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.ensureTaskAvailableLocked(taskID); err != nil && !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		return "", err
+	}
+	quiescent, err := c.taskQuiescentLocked(taskID)
+	if err != nil {
+		return "", err
+	}
+	if state.WaitingQuestions > 0 {
+		return ManualMoveDispositionWaitingQuestion, nil
+	}
+	if state.WaitingApprovals > 0 || state.Queued > 0 || state.Finalizing > 0 {
+		return ManualMoveDispositionLifecycleConflict, nil
+	}
+	if state.Running > 0 {
+		return ManualMoveDispositionAutoInterruptible, nil
+	}
+	if quiescent {
+		return ManualMoveDispositionQuiescent, nil
+	}
+	return ManualMoveDispositionLifecycleConflict, nil
+}
 
 // Recover marks any executable Current Nodes found at process startup as
 // interrupted before a new execution lifecycle is admitted.
@@ -32,6 +79,44 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, ReasonCurrentNodeStartupRecovery)
 	}
 	return int64(len(recovered)), nil
+}
+
+func (c *CurrentNodeController) StartTaskWithExecutionTarget(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	candidate *workflowstore.ExecutionTargetCandidate,
+) (workflowstore.StartTaskResult, error) {
+	if c == nil {
+		return workflowstore.StartTaskResult{}, errors.New("current node workflow controller is required")
+	}
+	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
+		c.mu.Lock()
+		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
+			c.mu.Unlock()
+			return workflowstore.StartTaskResult{}, err
+		}
+		c.mu.Unlock()
+		started, err := c.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
+		if err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
+			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
+			reference:          started.Mutation.Created[0].Reference,
+			launchPreparation:  LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
+		}); err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		return started, nil
+	})
 }
 
 func (c *CurrentNodeController) StartTaskWithPreparation(
@@ -265,6 +350,48 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 	})
 }
 
+func (c *CurrentNodeController) ApplyManualMove(
+	ctx context.Context,
+	prepared workflowstore.ManualMovePreparation,
+	candidate *workflowstore.ExecutionTargetCandidate,
+) (workflowstore.ManualMoveResult, error) {
+	if c == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("current node workflow controller is required")
+	}
+	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
+		taskID := prepared.TaskID()
+		c.mu.Lock()
+		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
+			c.mu.Unlock()
+			return workflowstore.ManualMoveResult{}, err
+		}
+		c.mu.Unlock()
+		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
+		if err != nil {
+			return workflowstore.ManualMoveResult{}, err
+		}
+		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
+			return moved, nil
+		}
+		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
+		if err != nil {
+			return moved, err
+		}
+		starts, err = c.steerAndWaitStarts(ctx, starts, recoverAllCurrentNodeStarts)
+		if err != nil {
+			return moved, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, start := range starts {
+			if err := c.queueExplicitStartLocked(start); err != nil {
+				return moved, err
+			}
+		}
+		return moved, nil
+	})
+}
+
 func (c *CurrentNodeController) ApplyManualMoveWithPreparation(
 	ctx context.Context,
 	prepared workflowstore.ManualMovePreparation,
@@ -288,12 +415,12 @@ func (c *CurrentNodeController) ApplyManualMoveWithPreparation(
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
-		if moved.PendingApproval != nil {
+		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
 			return moved, nil
 		}
-		starts, err := currentNodeExplicitStarts(moved.Created)
+		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
 		if err != nil {
-			return workflowstore.ManualMoveResult{}, err
+			return moved, err
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -301,7 +428,7 @@ func (c *CurrentNodeController) ApplyManualMoveWithPreparation(
 			start.launchPreparation = preparation
 			start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryAssignment
 			if err := c.queueExplicitStartLocked(start); err != nil {
-				return workflowstore.ManualMoveResult{}, err
+				return moved, err
 			}
 		}
 		return moved, nil

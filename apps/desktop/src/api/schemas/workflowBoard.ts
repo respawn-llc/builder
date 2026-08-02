@@ -13,6 +13,7 @@ import type {
   TaskApproveResponse,
   TaskMoveResponse,
   TaskResumeResponse,
+  TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowBoard,
@@ -207,6 +208,17 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
   dependencyConfirmationRequiredResponseSchema,
 ]);
 
+const taskMoveNoOpResponseSchema = z
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
+  .strict()
+  .transform((value) => ({
+    outcome: value.outcome,
+    noOp: { currentNodes: value.no_op.current_nodes },
+  }));
+
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
   z
     .object({
@@ -226,6 +238,7 @@ export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminat
         }) as const,
     ),
   selectionRequiredResponseSchema,
+  taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
 ]);
 
@@ -243,6 +256,79 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
+const manualMoveBlockerSchema = z.enum([
+  "invalid_workflow",
+  "no_source_position",
+  "unsupported_destination",
+  "waiting_question",
+  "lifecycle_conflict",
+  "context_session_unavailable",
+  "no_usable_transition",
+  "parallel_branch_requires_fan_out",
+]);
+
+const nonBlankPreservingString = z.string().refine((value) => value.trim().length > 0);
+
+const manualMoveRequiredValueSchema = z
+  .object({
+    node_key: z.string().trim().min(1),
+    output_name: z.string().trim().min(1),
+    description: z.string(),
+    resolved_value: nonBlankPreservingString.nullable().optional(),
+  })
+  .strict()
+  .transform((value) => ({
+    nodeKey: value.node_key,
+    outputName: value.output_name,
+    description: value.description,
+    resolvedValue: value.resolved_value ?? null,
+  }));
+
+export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
+  "outcome",
+  [
+    taskMoveNoOpResponseSchema,
+    z
+      .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, direct: {} })),
+    z
+      .object({
+        outcome: z.literal("transition"),
+        transition: z
+          .object({
+            choices: z
+              .array(
+                z
+                  .object({
+                    transition_key: z.string().trim().min(1),
+                    label: z.string().trim().min(1),
+                    source_node_display_name: z.string().trim().min(1),
+                    required_values: z.array(manualMoveRequiredValueSchema),
+                  })
+                  .strict()
+                  .transform((value) => ({
+                    transitionKey: value.transition_key,
+                    label: value.label,
+                    sourceNodeDisplayName: value.source_node_display_name,
+                    requiredValues: value.required_values,
+                  })),
+              )
+              .min(1),
+          })
+          .strict(),
+      })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, transition: value.transition })),
+    z
+      .object({
+        outcome: z.literal("blocked"),
+        blocked: z.object({ reason: manualMoveBlockerSchema }).strict(),
+      })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, blocked: value.blocked })),
+  ],
+);
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
   z
     .object({

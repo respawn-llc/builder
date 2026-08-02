@@ -1,19 +1,11 @@
 package readimage
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/gif"
-	"image/jpeg"
-	_ "image/png"
-	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -25,6 +17,7 @@ import (
 
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/imagefileio"
 )
 
 // ErrResolveWorkspaceRealPath is returned when the workspace root cannot be
@@ -33,7 +26,7 @@ import (
 var ErrResolveWorkspaceRealPath = errors.New("resolve workspace real path")
 
 const maxFileSizeBytes int64 = 800 << 10
-const maxOriginalRasterSizeBytes int64 = 10 << 20
+const maxOriginalRasterSizeBytes = imagefileio.MaxReadBytes
 const minOptimizationSizeBytes int64 = 100 << 10
 const maxDecodedPixels int64 = 16_000_000
 
@@ -146,11 +139,10 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		return tools.ErrorResult(c, err.Error()), nil
 	}
 
-	file, info, err := openResolvedRegularFile(resolvedPath)
+	info, err := statResolvedRegularFile(resolvedPath)
 	if err != nil {
 		return tools.ErrorResult(c, err.Error()), nil
 	}
-	defer func() { _ = file.Close() }()
 	if strings.EqualFold(filepath.Ext(resolvedPath), ".pdf") && info.Size() > maxFileSizeBytes {
 		return tools.ErrorResult(c, fmt.Sprintf("file %q is too large (%d bytes). max supported size is %d bytes (800 KiB). compress the image or PDF and try again", resolvedPath, info.Size(), maxFileSizeBytes)), nil
 	}
@@ -161,7 +153,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		return tools.ErrorResult(c, fmt.Sprintf("file %q is too large (%d bytes). max readable size is %d bytes (10 MiB). resize or compress the image or PDF and try again", resolvedPath, info.Size(), maxOriginalRasterSizeBytes)), nil
 	}
 
-	data, err := readLimitedFile(file, maxOriginalRasterSizeBytes)
+	data, err := imagefileio.Read(ctx, resolvedPath, maxOriginalRasterSizeBytes)
 	if err != nil {
 		return tools.ErrorResult(c, fmt.Sprintf("unable to read file at %q: %v", resolvedPath, err)), nil
 	}
@@ -278,58 +270,15 @@ func normalizeMIME(raw string) string {
 	return strings.ToLower(main)
 }
 
-func openResolvedRegularFile(path string) (*os.File, os.FileInfo, error) {
-	pathInfo, err := os.Lstat(path)
+func statResolvedRegularFile(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stat path at %q: %v", path, err)
-	}
-	if !pathInfo.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("path %q is not a regular file", path)
-	}
-	file, err := openReadOnlyNoFollow(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to locate file at %q: %v", path, err)
-	}
-	info, err := file.Stat()
-	if err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			return nil, nil, fmt.Errorf("stat file at %q: %v; close file: %w", path, err, closeErr)
-		}
-		return nil, nil, fmt.Errorf("stat file at %q: %v", path, err)
+		return nil, fmt.Errorf("stat path at %q: %v", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		if closeErr := file.Close(); closeErr != nil {
-			return nil, nil, fmt.Errorf("path %q is not a regular file; close file: %w", path, closeErr)
-		}
-		return nil, nil, fmt.Errorf("path %q is not a regular file", path)
+		return nil, fmt.Errorf("path %q is not a regular file", path)
 	}
-	if !os.SameFile(pathInfo, info) {
-		if closeErr := file.Close(); closeErr != nil {
-			return nil, nil, fmt.Errorf("path %q changed while opening; retry the tool call; close file: %w", path, closeErr)
-		}
-		return nil, nil, fmt.Errorf("path %q changed while opening; retry the tool call", path)
-	}
-	if err := setReadBlocking(file); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			return nil, nil, fmt.Errorf("set file blocking mode at %q: %v; close file: %w", path, err, closeErr)
-		}
-		return nil, nil, fmt.Errorf("set file blocking mode at %q: %v", path, err)
-	}
-	return file, info, nil
-}
-
-func readLimitedFile(file *os.File, limit int64) ([]byte, error) {
-	if limit < 0 {
-		return nil, errors.New("read limit must be non-negative")
-	}
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("file exceeds max readable size of %d bytes (10 MiB)", limit)
-	}
-	return data, nil
+	return info, nil
 }
 
 func readImageOutsideWorkspaceApprovalFailed(req patchtool.OutsideWorkspaceRequest, err error) error {
@@ -405,126 +354,4 @@ func buildContentItemsForFile(path, mimeType string, data []byte) ([]contentItem
 	}
 
 	return nil, fmt.Errorf("unsupported file type at %q: expected an image or PDF", path)
-}
-
-func prepareFileForAttachment(path, mimeType string, data []byte, raw bool) ([]byte, string, error) {
-	if mimeType == "application/pdf" || strings.EqualFold(filepath.Ext(path), ".pdf") {
-		return data, "application/pdf", nil
-	}
-
-	if !strings.HasPrefix(mimeType, "image/") {
-		return data, mimeType, nil
-	}
-	if _, ok := supportedImageMIMEs[mimeType]; !ok {
-		return data, mimeType, fmt.Errorf("cannot attach image at %q: unsupported image format %q", path, mimeType)
-	}
-	img, decodedMIME, err := decodeSupportedRasterImage(path, data)
-	if err != nil {
-		return data, mimeType, err
-	}
-	if raw || int64(len(data)) < minOptimizationSizeBytes {
-		return data, decodedMIME, nil
-	}
-
-	optimized, optimizedMIME, ok := optimizeRasterImage(img)
-	if !ok || len(optimized) >= len(data) {
-		return data, decodedMIME, nil
-	}
-	return optimized, optimizedMIME, nil
-}
-
-func decodeSupportedRasterImage(path string, data []byte) (image.Image, string, error) {
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", fmt.Errorf("cannot attach image at %q: unable to decode image: %v", path, err)
-	}
-	mimeType, ok := mimeTypeForImageFormat(format)
-	if !ok {
-		return nil, "", fmt.Errorf("cannot attach image at %q: unsupported image format %q", path, format)
-	}
-	if _, ok := supportedImageMIMEs[mimeType]; !ok {
-		return nil, "", fmt.Errorf("cannot attach image at %q: unsupported image format %q", path, mimeType)
-	}
-	if err := validateDecodedDimensions(path, cfg.Width, cfg.Height); err != nil {
-		return nil, "", err
-	}
-	switch mimeType {
-	case "image/gif":
-		img, err := decodeStillGIF(path, data)
-		if err != nil {
-			return nil, "", err
-		}
-		return img, mimeType, nil
-	}
-	img, decodedFormat, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", fmt.Errorf("cannot attach image at %q: unable to decode image: %v", path, err)
-	}
-	decodedMIME, ok := mimeTypeForImageFormat(decodedFormat)
-	if !ok {
-		return nil, "", fmt.Errorf("cannot attach image at %q: unsupported image format %q", path, decodedFormat)
-	}
-	return img, decodedMIME, nil
-}
-
-func decodeStillGIF(path string, data []byte) (image.Image, error) {
-	frames, err := countGIFFrames(data, 2)
-	if err != nil {
-		return nil, fmt.Errorf("cannot attach GIF at %q: %v", path, err)
-	}
-	if frames != 1 {
-		return nil, fmt.Errorf("cannot attach GIF at %q: animated GIFs are not supported; use a still image or PDF", path)
-	}
-	img, err := gif.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("cannot attach GIF at %q: %v", path, err)
-	}
-	return img, nil
-}
-
-func validateDecodedDimensions(path string, width, height int) error {
-	if width <= 0 || height <= 0 {
-		return fmt.Errorf("cannot attach image at %q: invalid image dimensions %dx%d", path, width, height)
-	}
-	pixels := int64(width) * int64(height)
-	if pixels > maxDecodedPixels {
-		return fmt.Errorf("cannot attach image at %q: decoded image dimensions %dx%d exceed the supported pixel limit of %d", path, width, height, maxDecodedPixels)
-	}
-	return nil
-}
-
-func mimeTypeForImageFormat(format string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "png":
-		return "image/png", true
-	case "jpeg":
-		return "image/jpeg", true
-	case "gif":
-		return "image/gif", true
-	default:
-		return "", false
-	}
-}
-
-func optimizeRasterImage(img image.Image) ([]byte, string, bool) {
-	if img == nil {
-		return nil, "", false
-	}
-	bounds := img.Bounds()
-	if bounds.Empty() {
-		return nil, "", false
-	}
-	opaque := image.NewRGBA(bounds)
-	draw.Draw(opaque, bounds, &image.Uniform{C: color.White}, image.Point{}, draw.Src)
-	draw.Draw(opaque, bounds, img, bounds.Min, draw.Over)
-	for _, quality := range []int{85, 75, 65, 55} {
-		var out bytes.Buffer
-		if err := jpeg.Encode(&out, opaque, &jpeg.Options{Quality: quality}); err != nil {
-			return nil, "", false
-		}
-		if int64(out.Len()) <= maxFileSizeBytes {
-			return out.Bytes(), "image/jpeg", true
-		}
-	}
-	return nil, "", false
 }

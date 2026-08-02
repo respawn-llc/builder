@@ -104,17 +104,47 @@ type DeleteTaskResult struct {
 }
 
 type ManualMoveRequest struct {
-	TaskID       workflow.TaskID
-	TargetNodeID workflow.NodeID
-	OutputValues map[string]string
-	Commentary   string
+	TaskID        workflow.TaskID
+	TargetNodeID  workflow.NodeID
+	TransitionKey *workflow.TransitionID
+	Values        map[workflow.ModelKey]map[string]string
+	Commentary    string
 }
 
+type ManualMoveResultOutcome string
+
+const (
+	ManualMoveResultOutcomeNoOp    ManualMoveResultOutcome = "no_op"
+	ManualMoveResultOutcomeApplied ManualMoveResultOutcome = "applied"
+)
+
 type ManualMoveResult struct {
-	workflow.CurrentNodeMutationResult
-	Retained        []workflow.CurrentNode
-	PendingApproval *workflow.PendingApproval
+	Outcome      ManualMoveResultOutcome
+	CurrentNodes []workflow.CurrentNode
+	Mutation     workflow.CurrentNodeMutationResult
 	TaskAttentionResolution
+}
+
+func (r ManualMoveResult) Validate() error {
+	switch r.Outcome {
+	case ManualMoveResultOutcomeNoOp:
+		if len(r.CurrentNodes) == 0 {
+			return errors.New("manual move no-op must return current nodes")
+		}
+		if len(r.Mutation.Removed) != 0 || len(r.Mutation.Created) != 0 {
+			return errors.New("manual move no-op must not return a mutation")
+		}
+	case ManualMoveResultOutcomeApplied:
+		if len(r.CurrentNodes) != 0 {
+			return errors.New("applied manual move must not return no-op current nodes")
+		}
+		if len(r.Mutation.Removed) == 0 || len(r.Mutation.Created) == 0 {
+			return errors.New("applied manual move must return a non-empty replacement mutation")
+		}
+	default:
+		return fmt.Errorf("manual move result outcome %q is invalid", r.Outcome)
+	}
+	return nil
 }
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {

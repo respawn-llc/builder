@@ -162,7 +162,7 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 		return
 	}
 	id := parseOngoingPromptID(prompt.PromptID)
-	if prompt.State != clientui.TranscriptPromptStatePending {
+	if prompt.Status != clientui.TranscriptPromptStatusPending {
 		m.pendingPrompts.remove(id)
 		m.refreshPendingPromptSection(80)
 		return

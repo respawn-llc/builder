@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,9 +16,8 @@ import (
 )
 
 var (
-	taskStartSessionPollTimeout       = 7 * time.Second
-	taskStartSessionPollInterval      = 200 * time.Millisecond
-	taskStartInterruptionProbeTimeout = 250 * time.Millisecond
+	taskStartSessionPollTimeout  = 7 * time.Second
+	taskStartSessionPollInterval = 200 * time.Millisecond
 )
 
 func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -319,7 +319,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		resp, stopSetupProgress, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
+		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
 			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 				SetupOperationID:           setupOperationID,
 				TaskID:                     taskID,
@@ -328,7 +328,6 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
-		defer setupProgressStopper(stderr, stopSetupProgress)()
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
@@ -361,13 +360,13 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
-		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
-			return 1
-		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
+		}
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 		detail, err = workflowTaskDetailForCLI(detail)
 		if err != nil {
@@ -466,8 +465,6 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
-	jsonOut := fs.Bool("json", false, "write the typed resume outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -475,11 +472,6 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 {
 		fmt.Fprintln(stderr, "task resume requires <short-id-or-task-id>")
-		return 2
-	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	invokingSessionID, err := workflowTaskInvokingSessionID()
@@ -493,15 +485,12 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		resp, stopSetupProgress, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
-			return remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
-				TaskID:            taskID,
-				InvokingSessionID: invokingSessionID,
-				SetupOperationID:  setupOperationID,
-				ExecutionTarget:   executionTarget,
-			})
+		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+		defer cancel()
+		resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+			TaskID:            taskID,
+			InvokingSessionID: invokingSessionID,
 		})
-		defer setupProgressStopper(stderr, stopSetupProgress)()
 		if err != nil {
 			if writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				return 1
@@ -509,30 +498,10 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if err := resp.Validate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-			} else {
-				writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
-			}
-			return 1
-		}
-		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			fmt.Fprintf(stderr, "resumed task %s but failed to load task detail for output: %v\n", taskID, err)
 			return 1
-		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
-		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
-			return 1
-		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, resp)
 		}
 		writeTaskResumeResult(stdout, detail, resp)
 		return 0
@@ -634,9 +603,9 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 			fmt.Fprintf(stderr, "approved workflow change %s but response did not include task id for output\n", positionals[0])
 			return 1
 		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, applied.TaskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
 		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			fmt.Fprintf(stderr, "approved workflow change %s but failed to load task detail for output: %v\n", positionals[0], err)
 			return 1
 		}
 		writeTaskLifecycleResult(stdout, "Approved", detail)
@@ -650,9 +619,10 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
+	transition := fs.String("transition", "", "workflow Transition key")
+	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
+	valuesFile := fs.String("values-file", "", "read nested Node/output values from a JSON file")
 	jsonOut := fs.Bool("json", false, "write the typed move outcome as JSON")
-	outputs := stringMapFlag{}
-	fs.Var(&outputs, "output", "transition value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -672,25 +642,107 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	values, err := readManualMoveValues(
+		*valuesJSON,
+		*valuesFile,
+		flagExplicit(fs, "values-json"),
+		flagExplicit(fs, "values-file"),
+	)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		resp, stopSetupProgress, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
+		preview, err := remote.PreviewWorkflowTaskMove(context.Background(), serverapi.WorkflowTaskMovePreviewRequest{
+			TaskID: taskID, TargetNodeID: positionals[1],
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := preview.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeBlocked {
+			fmt.Fprintf(stderr, "task move blocked: %s\n", manualMoveBlockerMessage(preview.Blocked.Reason))
+			return 1
+		}
+		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
+			if flagExplicit(fs, "transition") || len(values) != 0 {
+				fmt.Fprintln(stderr, "task move no-op does not accept --transition or --values-json/--values-file")
+				return 2
+			}
+			if *jsonOut {
+				return writeCommandJSON(stdout, stderr, serverapi.WorkflowTaskMoveResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+					NoOp: &serverapi.WorkflowTaskMoveNoOp{
+						CurrentNodes: preview.NoOp.CurrentNodes,
+					},
+				})
+			}
+			detail, detailErr := getWorkflowTaskByID(context.Background(), remote, taskID)
+			if detailErr != nil {
+				fmt.Fprintf(stderr, "task %s is already at %s but failed to load task detail: %v\n", taskID, positionals[1], detailErr)
+				return 1
+			}
+			writeTaskLifecycleResult(stdout, "No-op move", detail)
+			return 0
+		}
+		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeDirect {
+			if flagExplicit(fs, "transition") || len(values) != 0 {
+				fmt.Fprintln(stderr, "direct task move does not accept --transition or --values-json/--values-file")
+				return 2
+			}
+		}
+		var transitionKey *string
+		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
+			key := strings.TrimSpace(*transition)
+			if key == "" {
+				if flagExplicit(fs, "transition") {
+					fmt.Fprintln(stderr, "task move --transition cannot be blank")
+					return 2
+				}
+				if len(preview.Transition.Choices) != 1 {
+					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
+					return 2
+				}
+				key = preview.Transition.Choices[0].TransitionKey
+			}
+			var selected *serverapi.WorkflowTaskMovePreviewTransitionChoice
+			for _, choice := range preview.Transition.Choices {
+				if choice.TransitionKey == key {
+					value := choice
+					selected = &value
+					break
+				}
+			}
+			if selected == nil {
+				fmt.Fprintf(stderr, "task move Transition %q is not a usable incoming Transition\n", key)
+				return 2
+			}
+			choice := *selected
+			authoredKey := choice.TransitionKey
+			transitionKey = &authoredKey
+		}
+		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 				TaskID:                     taskID,
 				InvokingSessionID:          invokingSessionID,
 				TargetNodeID:               positionals[1],
-				OutputValues:               outputs.values,
+				TransitionKey:              transitionKey,
+				Values:                     values,
 				Commentary:                 *commentary,
 				SetupOperationID:           setupOperationID,
 				ExecutionTarget:            executionTarget,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
-		defer setupProgressStopper(stderr, stopSetupProgress)()
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
@@ -702,15 +754,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeDependencyConfirmationRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-			} else {
-				writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
-			}
-			return 1
-		}
-		if resp.Outcome == serverapi.WorkflowTaskActionOutcomeSelectionRequired {
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
 			if *jsonOut {
 				_ = writeCommandJSON(stdout, stderr, resp)
 			} else {
@@ -718,22 +762,95 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return 1
 		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+				return 1
+			}
+			writeTaskDependencyConfirmationRequired(stderr, positionals[0], resp.UnsatisfiedDependencyCount)
 			return 1
 		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
-		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
+			if *jsonOut {
+				return writeCommandJSON(stdout, stderr, resp)
+			}
+			detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+			if err != nil {
+				fmt.Fprintf(stderr, "task %s move became a no-op but failed to load task detail: %v\n", taskID, err)
+				return 1
+			}
+			writeTaskLifecycleResult(stdout, "No-op move", detail)
+			return 0
+		}
+		if _, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied); err != nil {
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
 		}
+		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+		if err != nil {
+			fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
+			return 1
+		}
 		writeTaskLifecycleResult(stdout, "Moved", detail)
 		return 0
 	})
+}
+
+func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) string {
+	switch reason {
+	case serverapi.WorkflowTaskMovePreviewBlockerInvalidWorkflow:
+		return "the workflow is invalid; fix the workflow definition and try again"
+	case serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition:
+		return "the task has no current workflow position; start the task before moving it"
+	case serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination:
+		return "the destination cannot be entered by Manual Move; choose an executable or terminal node"
+	case serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion:
+		return "the task is waiting for an answer; answer the question before moving it"
+	case serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict:
+		return "the task is changing state; wait for the current operation to finish and try again"
+	case serverapi.WorkflowTaskMovePreviewBlockerContextSessionUnavailable:
+		return "the selected transition needs a retained context session that is unavailable"
+	case serverapi.WorkflowTaskMovePreviewBlockerNoUsableTransition:
+		return "the destination has no usable incoming transition from the task's current position"
+	case serverapi.WorkflowTaskMovePreviewBlockerParallelBranchRequiresFanOut:
+		return "the destination is inside a parallel branch; move to the Fan-Out transition or choose another destination"
+	default:
+		return "the server could not explain why this move is blocked; try again"
+	}
+}
+
+func readManualMoveValues(inline, file string, inlineProvided, fileProvided bool) (map[string]map[string]string, error) {
+	if inlineProvided && fileProvided {
+		return nil, errors.New("--values-json and --values-file cannot be combined")
+	}
+	raw := inline
+	if fileProvided {
+		if strings.TrimSpace(file) == "" {
+			return nil, errors.New("--values-file requires a path")
+		}
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("read --values-file: %w", err)
+		}
+		raw = string(content)
+	}
+	if strings.TrimSpace(raw) == "" {
+		if inlineProvided || fileProvided {
+			return nil, errors.New("parse manual move values: expected a JSON object")
+		}
+		return nil, nil
+	}
+	var values map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("parse manual move values: %w", err)
+	}
+	if values == nil {
+		return nil, errors.New("parse manual move values: expected a JSON object")
+	}
+	return values, nil
 }
 
 func writeTaskDependencyConfirmationRequired(stderr io.Writer, taskRef string, count *int) {
@@ -763,7 +880,7 @@ type worktreeSetupProgressSubscriber interface {
 	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
 }
 
-func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, func() error, error) {
+func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
 	setupOperationID := serverapi.NewWorktreeSetupOperationID()
 	stopSetupProgress, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
 	if err != nil {
@@ -771,18 +888,10 @@ func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote wor
 		stopSetupProgress = func() error { return nil }
 	}
 	resp, mutateErr := mutate(ctx, setupOperationID)
-	return resp, stopSetupProgress, mutateErr
-}
-
-func setupProgressStopper(stderr io.Writer, stop func() error) func() {
-	return func() {
-		if stop == nil {
-			return
-		}
-		if err := stop(); err != nil {
-			fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", err)
-		}
+	if setupProgressErr := stopSetupProgress(); setupProgressErr != nil {
+		fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", setupProgressErr)
 	}
+	return resp, mutateErr
 }
 
 func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
@@ -828,189 +937,32 @@ func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupE
 	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.ScriptPath, event.WorktreeRoot)
 }
 
-type stringMapFlag struct {
-	values map[string]string
-}
-
-func (f *stringMapFlag) String() string {
-	if f == nil || len(f.values) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%v", f.values)
-}
-
-func (f *stringMapFlag) Set(raw string) error {
-	name, value, ok := strings.Cut(raw, "=")
-	name = strings.TrimSpace(name)
-	if !ok || name == "" {
-		return fmt.Errorf("output must be name=value")
-	}
-	if f.values == nil {
-		f.values = map[string]string{}
-	}
-	f.values[name] = value
-	return nil
-}
-
-type workflowTaskRunWaitInterruption struct {
-	attention serverapi.WorkflowAttentionItem
-}
-
-func (e *workflowTaskRunWaitInterruption) Error() string {
-	if e == nil || e.attention.Message == nil || strings.TrimSpace(*e.attention.Message) == "" {
-		return "workflow task was interrupted before live-scope acknowledgement"
-	}
-	return *e.attention.Message
-}
-
-func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, targets []serverapi.WorkflowTaskCurrentNode, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
+func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
-	}
-	if len(targets) == 0 {
-		return serverapi.WorkflowTaskDetail{}, errors.New("workflow task run acknowledgement requires Current Nodes")
 	}
 	if interval <= 0 {
 		interval = taskStartSessionPollInterval
 	}
-	deadline := time.Now().Add(timeout)
+	pollCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			if attention, ok := probeWorkflowTaskRunInterruption(ctx, remote, taskID, targets); ok {
-				return serverapi.WorkflowTaskDetail{}, &workflowTaskRunWaitInterruption{attention: attention}
-			}
-			return serverapi.WorkflowTaskDetail{}, workflowTaskRunWaitTimeout(taskID, timeout, serverapi.WorkflowTaskDetail{})
-		}
-		pollCtx, cancel := context.WithTimeout(ctx, remaining)
 		detail, err := getWorkflowTaskByID(pollCtx, remote, taskID)
 		if err != nil {
-			cancel()
-			if attention, ok := probeWorkflowTaskRunInterruption(ctx, remote, taskID, targets); ok {
-				return serverapi.WorkflowTaskDetail{}, &workflowTaskRunWaitInterruption{attention: attention}
+			if pollCtx.Err() != nil {
+				return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskID, timeout)
 			}
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("failed to load task detail while waiting for live-scope acknowledgement: %w", err)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but failed to load task detail while waiting for session id: %w", taskID, err)
 		}
-		attention, attentionErr := remote.ListWorkflowTaskAttention(pollCtx, serverapi.WorkflowTaskAttentionListRequest{TaskID: taskID})
-		cancel()
-		if attentionErr != nil {
-			if attention, ok := probeWorkflowTaskRunInterruption(ctx, remote, taskID, targets); ok {
-				return serverapi.WorkflowTaskDetail{}, &workflowTaskRunWaitInterruption{attention: attention}
-			}
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("failed to load task attention while waiting for live-scope acknowledgement: %w", attentionErr)
-		}
-		if interrupted, ok := interruptedWorkflowTaskRunTarget(attention.Items, targets); ok {
-			return serverapi.WorkflowTaskDetail{}, &workflowTaskRunWaitInterruption{attention: interrupted}
-		}
-		if workflowTaskRunAcknowledged(detail, targets) {
+		if len(detail.CurrentScripts) > 0 || len(detail.LiveSessionIDs) > 0 {
 			return detail, nil
 		}
-		sleepFor := interval
-		if remaining < sleepFor {
-			sleepFor = remaining
-		}
-		timer := time.NewTimer(sleepFor)
+		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
+		case <-pollCtx.Done():
 			timer.Stop()
-			return serverapi.WorkflowTaskDetail{}, context.Cause(ctx)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s but session id was not assigned within %s", taskDisplayID(detail), timeout)
 		case <-timer.C:
 		}
 	}
-}
-
-func probeWorkflowTaskRunInterruption(ctx context.Context, remote workflowCommandRemote, taskID string, targets []serverapi.WorkflowTaskCurrentNode) (serverapi.WorkflowAttentionItem, bool) {
-	probeCtx, cancel := context.WithTimeout(ctx, taskStartInterruptionProbeTimeout)
-	defer cancel()
-	attention, err := remote.ListWorkflowTaskAttention(probeCtx, serverapi.WorkflowTaskAttentionListRequest{TaskID: taskID})
-	if err != nil {
-		return serverapi.WorkflowAttentionItem{}, false
-	}
-	return interruptedWorkflowTaskRunTarget(attention.Items, targets)
-}
-
-func workflowTaskRunWaitTimeout(taskID string, timeout time.Duration, detail serverapi.WorkflowTaskDetail) error {
-	displayID := taskID
-	if detail.Summary.ShortID != "" {
-		displayID = taskDisplayID(detail)
-	}
-	return fmt.Errorf("task %s did not reach live-scope acknowledgement within %s", displayID, timeout)
-}
-
-func workflowTaskRunAcknowledged(detail serverapi.WorkflowTaskDetail, targets []serverapi.WorkflowTaskCurrentNode) bool {
-	for _, target := range targets {
-		current, found := workflowTaskCurrentNode(detail.CurrentNodes, target)
-		if !found {
-			continue
-		}
-		if current.SessionID != nil && containsString(detail.LiveSessionIDs, *current.SessionID) {
-			continue
-		}
-		if workflowTaskCurrentScript(detail.CurrentScripts, target) {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func workflowTaskCurrentNode(nodes []serverapi.WorkflowTaskCurrentNode, target serverapi.WorkflowTaskCurrentNode) (serverapi.WorkflowTaskCurrentNode, bool) {
-	for _, node := range nodes {
-		if node.NodeID == target.NodeID && equalOptionalString(node.TransitionBranchKey, target.TransitionBranchKey) {
-			return node, true
-		}
-	}
-	return serverapi.WorkflowTaskCurrentNode{}, false
-}
-
-func workflowTaskCurrentScript(scripts []serverapi.WorkflowTaskCurrentScript, target serverapi.WorkflowTaskCurrentNode) bool {
-	for _, script := range scripts {
-		if script.CurrentNode.NodeID == target.NodeID &&
-			equalOptionalString(script.CurrentNode.TransitionBranchKey, target.TransitionBranchKey) {
-			return true
-		}
-	}
-	return false
-}
-
-func interruptedWorkflowTaskRunTarget(items []serverapi.WorkflowAttentionItem, targets []serverapi.WorkflowTaskCurrentNode) (serverapi.WorkflowAttentionItem, bool) {
-	for _, item := range items {
-		if item.Kind != serverapi.WorkflowAttentionItemKindInterruptedCurrentNode || item.CurrentNode == nil {
-			continue
-		}
-		if _, found := workflowTaskCurrentNode(targets, *item.CurrentNode); found {
-			return item, true
-		}
-	}
-	return serverapi.WorkflowAttentionItem{}, false
-}
-
-func equalOptionalString(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
-}
-
-func containsString(values []string, value string) bool {
-	for _, candidate := range values {
-		if candidate == value {
-			return true
-		}
-	}
-	return false
-}
-
-func writeWorkflowTaskRunWaitError(stdout io.Writer, stderr io.Writer, err error) {
-	var interrupted *workflowTaskRunWaitInterruption
-	if errors.As(err, &interrupted) {
-		if interrupted.attention.Message != nil {
-			fmt.Fprintln(stdout, *interrupted.attention.Message)
-		}
-		if interrupted.attention.DetailJSON != nil {
-			fmt.Fprintln(stdout, *interrupted.attention.DetailJSON)
-		}
-		return
-	}
-	fmt.Fprintln(stderr, err)
 }

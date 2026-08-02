@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package readimage
+package imagefileio
 
 import (
 	"os"

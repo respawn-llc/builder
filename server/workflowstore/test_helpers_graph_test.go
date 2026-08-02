@@ -291,9 +291,9 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) r
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: startGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 			TransitionGroupRecord{ID: splitGroup, WorkflowID: workflowID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
-			TransitionGroupRecord{ID: joinAGroup, WorkflowID: workflowID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
-			TransitionGroupRecord{ID: joinBGroup, WorkflowID: workflowID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
-			TransitionGroupRecord{ID: synthGroup, WorkflowID: workflowID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+			TransitionGroupRecord{ID: joinAGroup, WorkflowID: workflowID, SourceNodeID: implAID, TransitionID: "join_a", DisplayName: "Join"},
+			TransitionGroupRecord{ID: joinBGroup, WorkflowID: workflowID, SourceNodeID: implBID, TransitionID: "join_b", DisplayName: "Join"},
+			TransitionGroupRecord{ID: synthGroup, WorkflowID: workflowID, SourceNodeID: joinID, TransitionID: "synthesize", DisplayName: "Synthesize"},
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: workflowID, SourceNodeID: synthID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,

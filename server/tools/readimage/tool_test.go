@@ -11,10 +11,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/imagefileio"
 	"core/shared/toolspec"
 )
 
@@ -22,6 +24,16 @@ var tinyPNG = []byte{
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
 	8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
 	0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("KENT_TEST_BLOCK_IMAGE_FILE_READER") == "1" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	os.Exit(m.Run())
 }
 
 func newReadImageTestTool(t *testing.T, workspace string, supported bool, opts ...Option) *Tool {
@@ -193,6 +205,30 @@ func TestCall_DirectoryPathReturnsToolError(t *testing.T) {
 	result := callReadImageTool(t, tool, "call-1", `{"path":"."}`)
 	if !result.IsError {
 		t.Fatalf("expected tool error result for directory path")
+	}
+}
+
+func TestCall_CancelledBlockedFileOpenReturnsToolError(t *testing.T) {
+	workspace := t.TempDir()
+	writeReadImageTestFile(t, workspace, "blocked.png", tinyPNG)
+	t.Setenv("KENT_TEST_BLOCK_IMAGE_FILE_READER", "1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	result, err := newReadImageTestTool(t, workspace, true).Call(ctx, tools.Call{
+		ID:    "call-blocked-open",
+		Name:  toolspec.ToolViewImage,
+		Input: json.RawMessage(`{"path":"blocked.png"}`),
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected blocked file open to return a tool error")
+	}
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("blocked file open returned after %s, want prompt cancellation", elapsed)
 	}
 }
 

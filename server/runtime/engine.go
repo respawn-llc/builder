@@ -305,6 +305,11 @@ func New(
 		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
 		compactionPlanner:    newCompactionPlanner(),
 	}
+	providerCapabilities, err := eng.providerCapabilities(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)
+	}
+	eng.cfg.ProviderCapabilitiesOverride = &providerCapabilities
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
 
@@ -330,12 +335,14 @@ func New(
 			meta = store.Meta()
 		}
 		if strings.TrimSpace(meta.Locked.ProviderContract.ProviderID) == "" {
-			if caps, err := eng.currentProviderCapabilities(context.Background()); err == nil {
-				if err := store.BackfillLockedProviderContract(llm.LockedProviderCapabilitiesFromContract(caps)); err != nil {
-					return nil, err
-				}
-				meta = store.Meta()
+			caps, err := eng.providerCapabilities(context.Background())
+			if err != nil {
+				return nil, fmt.Errorf("resolve provider capabilities for locked contract: %w", err)
 			}
+			if err := store.BackfillLockedProviderContract(llm.LockedProviderCapabilitiesFromContract(caps)); err != nil {
+				return nil, err
+			}
+			meta = store.Meta()
 		}
 		copyLocked := *meta.Locked
 		eng.lockedContractState().Set(copyLocked)

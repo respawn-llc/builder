@@ -146,6 +146,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Step/run lifecycle stays in runtime/status; actual user/assistant/tool/error-feedback rows own durable history rather than lifecycle markers.
 - Compaction lifecycle is Thinking/status/Context-only; goal lifecycle is Goal/status-only. Neither creates lifecycle transcript rows, while committed compaction/goal rows own history.
 - Live background activity and process controls belong to a new dedicated contextual-sidebar destination with no duplicate live transcript rows.
+- Goal uses a second typed contextual-sidebar destination for creation, objective editing, and lifecycle control. It shares the existing adaptive sidebar host and never nests another destination.
 - Processes is one typed list-only sidebar destination with no detail destination or nested navigation. Desktop presentation copies `/ps`; server scope/order/retention redesign is out of scope and remains owned by its existing ticket.
 - Process rows copy TUI fields/order, are dense and non-expandable, and expose direct actions only.
 - Desktop intentionally has no `/ps inline`/Insert output equivalent.
@@ -186,15 +187,34 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The gate is below 1,000 net production lines and includes actual-cadence 50k-character, malformed Markdown, GFM, hostile-content, and 500-line unfinished-fence fixtures. The user makes the final performance verdict through manual product review; no fixed benchmark hardware, numeric timing budget, or mandatory visible-render cadence substitutes for that verdict. Failure selects plain streaming text followed by shared static Markdown on commit.
 - Diffs, links, copying, selection, and accessibility.
 - Grouping and spacing of user, assistant, tool, prompt, notice, and reviewer entries.
+- Durable islands are limited to user messages, assistant commentary, and assistant final answers. Every other durable transcript item defaults to borderless tool-style inline presentation. Transient Thinking Status is the sole non-message exception and may imitate an assistant island.
 - Timestamp policy.
+
+## Thinking Status And Reasoning Traces
+
+- Thinking Status and Reasoning Trace are separate product types. Thinking Status is transient runtime presentation; Reasoning Traces are durable transcript content.
+- One Thinking Status tail appears immediately before the composer while authoritative runtime activity is running. It is outside the composer and is the sole transient non-message surface allowed to imitate an assistant island.
+- Main-agent user/workflow/Goal work shows the latest server Thinking Status or `Working…`; Reviewer work shows `Reviewing…`; compaction shows `Compacting…`; shell/background/maintenance shows `Running…`.
+- Main-agent Thinking Status remains through assistant streaming and tool execution. It is hidden while a Question or Approval waits, and resumes fresh at `Working…`.
+- A provider-attempt reset retains Thinking Status but removes the discarded provisional Reasoning Trace.
+- Thinking Status is non-interactive and has no disclosure, Copy, timestamp, or link to a Reasoning Trace.
+- Reasoning Traces use borderless tool-style inline disclosure. The collapsed header is brain icon, responsive first-line preview, and disclosure affordance.
+- Live traces start collapsed, update one server-identified item in place, and never auto-open or auto-close. A committed expanded trace adds authoritative timestamp and Copy.
+- Expanded trace content is complete selectable muted plain text. The server presentation projection removes only provider outer `**` delimiters; clients do not repeat the cleanup.
+- Desktop preserves every server-provided trace and its order without concatenation, grouping, dropping, or interpretation.
+- Current Chat omits duration. A future optional server capability measures from a trace's first nonempty update through commit and can support `Thought for N seconds`.
 
 ## AI Elements Baselines
 
-- Selectively reuse Chain of Thought, Context, Model Selector adapted as Agent Role Selector, and Reasoning.
+- Reuse Context, Model Selector adapted as Agent Role Selector, and Reasoning where their interaction models fit the locked Kent contracts.
+- Thinking Status does not use Chain of Thought or Reasoning disclosure behavior. It is one non-interactive transient runtime line.
+- Reasoning adapts to dedicated Reasoning Trace items: brain icon, responsive first-line preview, manual expansion, muted selectable plain text, no Markdown, and no upstream auto-open/auto-close.
+- Chain of Thought is rejected for the current Sessions/Chat design because Kent has no typed thought-step contract and Desktop must not parse or invent steps.
 - Keep the selected source close to pinned upstream registry output and deliberately re-sync it; Kent's shared UI kit owns the sole local source and typed Kent adapters.
+- Do not record an exact AI Elements release or commit in the product or task contract.
 - All other AI Elements components are out of scope/not fitting unless explicitly reopened.
 - Speech Input is future Voice Mode work and creates no Sessions/Chat behavior or task.
-- Audit the four active candidates independently; adopting their upstream state/data ownership is not implied.
+- Audit the three active candidates independently; adopting their upstream state/data ownership is not implied.
 - Attachments/client uploads are outside this initiative and create no task. Workspace `@` references remain independent.
 
 ## 6. Composer
@@ -318,6 +338,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Compact is unavailable before the first Agent Step. Pre-Session `/compact` remains recognized, creates no Session, and surfaces the typed unavailable/too-soon failure.
 - Click/tap opens the compact usage pop-up. Enter/Space opens it only through ordinary browser button behavior while the meter has focus; neither is a global shortcut. Escape/click-away closes it.
 - The pop-up matches the TUI Context summary: remaining percentage/tokens against the window, automatic-compaction threshold tokens/percentage, Auto-compaction on/off, and completed compaction count.
+- Reuse ordinary authoritative broadcasts to update an open pop-up. Add no Context-specific polling or reconciliation path.
 - It omits the TUI status inspection's detailed instruction, skill, and Agent-file token breakdown. It does not add cache-hit, compaction-mode, debug, cost, or token-category rows.
 - Present those facts as four plain-text lines. Bold primary text emphasizes important labels and numeric values; supporting text stays muted.
 - Do not introduce chips, badges, stat cards, inset rows, or nested detail containers.
@@ -334,9 +355,56 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Successful user-requested compaction is silent in a focused Desktop window. An unfocused window sends a system notification after the following Pending Work drain is idle; activation opens the owning Session at latest.
 - Automatic, pre-submit, and handoff compaction send no completion notification.
 - Under disabled compaction policy, replace threshold/Auto-compaction status with disabled/unavailable text, disable Compact, and keep `/compact` recognized so its typed policy failure reaches Sonner.
-- Goal management.
+- Goal is a Session control, not a setting, and uses one typed adaptive-sidebar destination.
+- Target icon + `Goal` is always present on the left of the under-composer control row. Active uses a primary chip; paused, complete, and absent use the neutral affordance. It never becomes icon-only and shows no objective or state text.
+- Desktop does not implement `/goal`. The visible control and sidebar are the only Goal entry path.
+- Existing Goal opens through one fresh authoritative ShowGoal read with standard compact Loading and Error+Retry. Lazy create opens directly. Later ordinary broadcasts update the clean sidebar state; no poll or server-refresh timer exists.
+- If a Goal broadcast overlaps that open read, the broadcast wins and the late read response is discarded without retry, revision, timestamp ordering, or polling.
+- The sidebar shows ordinary-text status plus muted `Set <age> ago`, then the complete objective through the shared Task Description Markdown field. Omit Goal ID and updated time.
+- Age copy is: under 1m `Set just now`; under 1h `Set N min ago`; under 1d `Set HhMm ago`; 1d+ `Set DdHhMm ago`. Omit zero units, keep days unbounded, refresh once per minute.
+- Existing objectives open as rendered Markdown and enter the extracted shared editor on activation. Create mode focuses the editor.
+- Clean drafts follow broadcasts; dirty drafts survive while the destination is alive. Closing/navigation/relaunch discards unsaved text. No server-owned Goal-editor draft is added.
+- Save exists only for dirty nonblank text. It directly set/replaces the Goal, always yields Active, and starts/continues Goal work. Save success keeps the sidebar open and re-baselines.
+- The adaptive sticky action flow places Pause/Resume and error-outline Clear at start and dirty Save at end when wide. It wraps without overlap, truncation, shrinking, or label mangling. Create shows Save only.
+- Pause/Resume preserves dirty objective text. Clear is immediate in every state, has no confirmation/undo, discards dirty text, and resets to blank create mode.
+- No human Mark complete action exists. Paused and complete Goals offer Resume. Runtime-local suspension is not a Desktop product state and is presented simply as Active.
+- Goal mutations are single-flight. Disable all mutations while one request is pending, show pending only on the initiating action, and add no desired-state buffer, replacement queue, or client replay.
+- All Goal mutation errors use Sonner. Save preserves dirty text; lifecycle failures preserve state; successes have no toast.
+- Goal status uses ordinary foreground in every state. Only age is muted; no status badge or semantic status color.
+- A selected Agent without locked `ask_question` leaves Goal visible but makes Save and Resume unavailable with `Unavailable for this Agent`; Pause/Clear remain. Questions off does not block Goal.
+- Workflow-controlled Sessions use the same Goal affordance, sidebar, and mutations as ordinary Sessions. Workflow ownership never hides Goal or makes it read-only.
+- In untouched lazy New Chat, Goal Save may materialize the Session before Goal validation/admission completes. Rejected validation/admission retains that Session, starts no Goal work, preserves the dirty sidebar draft, and adds no rollback or compensation. Failure after accepted work starts follows ordinary Session failure and retains Goal.
+- Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
-- Worktree inspection and control.
+- Worktree is a first-class Session execution-target control in the under-composer row.
+- Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
+- The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
+- Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
+- Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
+- Worktree management is not nested in Settings and does not use a separate full-page destination.
+- The sidebar opens directly to a simple complete authoritative topology list. A primary icon-only `+` action in the header opens worktree creation; creation is not a list row.
+- A secondary icon-only Refresh action sits beside `+`. Open performs one fresh list read, successful mutations refresh, and manual Refresh catches out-of-band Git changes. No poll or timer exists.
+- Initial list loading/error uses standard compact Loading and Error + Retry.
+- The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
+- Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
+- Switch copies TUI lifecycle: request-scoped pending only until scheduling acknowledgement, then close the sidebar immediately. Never wait through the Agent Step, never optimistically move selection, and let authoritative target/outcome updates refresh state.
+- An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses the typed outcome and existing model-visible failure Steer.
+- The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
+- Rows use display name as the title. A second line shows branch/ref only when it differs from the title. Rows show no path.
+- Before adoption, an External row uses branch name as its title or the final path component when detached. It never shows the full path; ordinary Kent display-name rules apply after adoption.
+- External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
+- Every deletable row has an icon-only trash action. Opening its popup performs one typed target-local delete preview with a loading state.
+- Preview reports Clean, Dirty with file count, or Unknown with diagnostic. Dirty/Unknown warnings appear before the action items; List/Status stay free of dirty state.
+- Only branch-backed rows show both `Confirm` and `Confirm + Branch`. Branchless rows show `Confirm` only. The popup remains both confirmation and branch-cleanup selector, with no second dialog.
+- Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
+- Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner. Final outcome refreshes/surfaces failure.
+- Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
+- The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
+- Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.
+- Base ref defaults to HEAD and appears/enables only for New branch. There is no custom path field. Create submits; Back returns to the list.
+- Creation and optional setup use one simple spinner for the complete operation. Do not expose phases, phase labels, percentage, or a progress bar.
+- Setup failure returns immediately to the refreshed list and uses Sonner for the authoritative diagnostic. Preserve the retained worktree; no inline Error, Retry, or automatic deletion.
+- Successful creation completes optional setup and then automatically uses the ordinary Switch operation. If Switch fails, preserve the created worktree, refresh the list, keep the prior Session target, and surface failure without rollback.
 - Review/init/file-backed prompt entry points.
 - Login/logout and account state.
 
@@ -372,6 +440,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 13. Delivery And Task Graph
 
+- Every implementation task must estimate 200–2,000 changed LOC including tests. Merge a coherent sub-200-line slice into its nearest owner; split an over-2,000-line slice before creation.
 - Contract prerequisites.
 - UI-kit primitives.
 - Navigation and route substrate.

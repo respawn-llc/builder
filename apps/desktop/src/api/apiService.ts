@@ -43,6 +43,7 @@ import type {
   TaskDependencyMutationResponse,
   TaskMoveResponse,
   TaskResumeResponse,
+  TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowBoard,
   WorkflowDefinition,
@@ -146,6 +147,7 @@ export interface ApiService {
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(input: TaskStartInput): Promise<TaskStartResponse>;
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;
+  previewMoveTask(taskID: string, targetNodeID: string): Promise<TaskMovePreviewResponse>;
   interruptTask(taskID: string, sessionID?: string): Promise<void>;
   resumeTask(input: TaskResumeInput): Promise<TaskResumeResponse>;
   approveApproval(approvalID: string): Promise<TaskApproveResponse>;

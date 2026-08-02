@@ -1,6 +1,7 @@
 import { ApiClient } from "./client";
 import {
   taskApproveResponseSchema,
+  taskMovePreviewResponseSchema,
   taskMoveResponseSchema,
   taskResumeResponseSchema,
   taskStartResponseSchema,
@@ -24,6 +25,29 @@ describe("task lifecycle client", () => {
         result: {
           outcome: "applied",
           applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }] },
+        },
+      },
+      {
+        method: "workflow.task.move.preview",
+        result: {
+          outcome: "transition",
+          transition: {
+            choices: [
+              {
+                transition_key: "next",
+                label: "Next",
+                source_node_display_name: "Plan",
+                required_values: [
+                  {
+                    node_key: "plan",
+                    output_name: "summary",
+                    description: "Summary",
+                    resolved_value: "prefilled",
+                  },
+                ],
+              },
+            ],
+          },
         },
       },
       {
@@ -56,13 +80,28 @@ describe("task lifecycle client", () => {
       outcome: "applied",
       applied: { currentNodes: [{ nodeID: "node-2" }] },
     });
-    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
+    await expect(client.previewMoveTask("task-1", "node-2")).resolves.toEqual({
+      outcome: "transition",
+      transition: {
+        choices: [
+          {
+            transitionKey: "next",
+            label: "Next",
+            sourceNodeDisplayName: "Plan",
+            requiredValues: [
+              { nodeKey: "plan", outputName: "summary", description: "Summary", resolvedValue: "prefilled" },
+            ],
+          },
+        ],
+      },
     });
     await expect(client.resumeTask({ taskID: "task-1" })).resolves.toMatchObject({
       outcome: "applied",
       applied: { currentNodes: [{ nodeID: "node-4" }] },
+    });
+    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({
+      outcome: "applied",
+      applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
     });
 
     expect(transport.calls).toContainEqual({
@@ -79,6 +118,17 @@ describe("task lifecycle client", () => {
     expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
       "auto_approve",
     );
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
+      "allow_missing_edge",
+    );
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
+      "auto_approve",
+    );
+    expect(transport.calls.find((call) => call.method === "workflow.task.move.preview")).toEqual({
+      method: "workflow.task.move.preview",
+      options: { timeoutMs: null },
+      params: { task_id: "task-1", target_node_id: "node-2" },
+    });
   });
 
   it("maps typed execution-target selection requirements", () => {
@@ -109,6 +159,15 @@ describe("task lifecycle client", () => {
       },
     });
     expect(
+      taskMoveResponseSchema.parse({
+        outcome: "dependency_confirmation_required",
+        unsatisfied_dependency_count: 2,
+      }),
+    ).toEqual({
+      outcome: "dependency_confirmation_required",
+      unsatisfiedDependencyCount: 2,
+    });
+    expect(
       taskApproveResponseSchema.parse({
         outcome: "selection_required",
         selection_required: { reason: "policy_requires_selection" },
@@ -119,46 +178,35 @@ describe("task lifecycle client", () => {
     });
   });
 
-  it("maps dependency confirmation and sends explicit proceed intent", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "workflow.task.start",
-        result: {
-          outcome: "dependency_confirmation_required",
-          unsatisfied_dependency_count: 2,
-        },
-      },
-      {
-        method: "workflow.task.move",
-        result: {
-          outcome: "dependency_confirmation_required",
-          unsatisfied_dependency_count: 3,
-        },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(client.startTask({ taskID: "task-1", proceedDespiteDependencies: true })).resolves.toEqual({
-      outcome: "dependency_confirmation_required",
-      unsatisfiedDependencyCount: 2,
-    });
-    await expect(
-      client.moveTask({
-        taskID: "task-1",
-        targetNodeID: "node-2",
-        proceedDespiteDependencies: true,
+  it("parses every Manual Move preview outcome and same-current no-op", () => {
+    expect(
+      taskMovePreviewResponseSchema.parse({
+        outcome: "no_op",
+        no_op: { current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }] },
       }),
-    ).resolves.toEqual({
-      outcome: "dependency_confirmation_required",
-      unsatisfiedDependencyCount: 3,
+    ).toEqual({
+      outcome: "no_op",
+      noOp: { currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }] },
     });
-
-    expect(transport.calls[0]?.params).toMatchObject({ proceed_despite_dependencies: true });
-    expect(transport.calls[1]?.params).toMatchObject({ proceed_despite_dependencies: true });
+    expect(taskMovePreviewResponseSchema.parse({ outcome: "direct", direct: {} })).toEqual({
+      outcome: "direct",
+      direct: {},
+    });
+    expect(
+      taskMovePreviewResponseSchema.parse({
+        outcome: "blocked",
+        blocked: { reason: "waiting_question" },
+      }),
+    ).toEqual({ outcome: "blocked", blocked: { reason: "waiting_question" } });
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {
-    const schemas = [taskStartResponseSchema, taskMoveResponseSchema, taskResumeResponseSchema, taskApproveResponseSchema];
+    const schemas = [
+      taskStartResponseSchema,
+      taskMoveResponseSchema,
+      taskResumeResponseSchema,
+      taskApproveResponseSchema,
+    ];
     for (const schema of schemas) {
       expect(() =>
         schema.parse({

@@ -107,29 +107,38 @@ func forward() {
 			t.Fatalf("standalone and external-helper raw SQL constants must violate, violations = %v", violations)
 		}
 	})
+}
 
-	violations := make([]string, 0)
+func TestProductionDarwinGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "darwin", "arm64")
+}
+
+func TestProductionLinuxGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "linux", "amd64")
+}
+
+func TestProductionWindowsGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "windows", "amd64")
+}
+
+func assertProductionGeneratedQueryBoundaries(t *testing.T, goos string, goarch string) {
+	t.Helper()
 	repoRoot := findRepoRoot(t)
-	for _, platform := range []struct {
-		goos   string
-		goarch string
-	}{
-		{goos: "darwin", goarch: "arm64"},
-		{goos: "linux", goarch: "amd64"},
-		{goos: "windows", goarch: "amd64"},
-	} {
-		pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, platform.goos, platform.goarch, "./server/...", "./cli/...", "./shared/...")
-		assertCoreRepositoryModule(t, pkgs)
-		for _, pkg := range pkgs {
-			if !isProductionRepositoryPackage(pkg) {
-				continue
-			}
-			violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
+	pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, goos, goarch, "./server/...", "./cli/...", "./shared/...")
+	assertCoreRepositoryModule(t, pkgs)
+	violations := make([]string, 0)
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) {
+			continue
 		}
+		violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
 	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
-		t.Fatalf("production database query boundary violations:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf("%s/%s production database query boundary violations:\n%s", goos, goarch, strings.Join(violations, "\n"))
 	}
 }
 

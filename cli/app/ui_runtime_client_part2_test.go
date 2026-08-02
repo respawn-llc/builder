@@ -362,16 +362,14 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-1",
-				Objective: "ship feature",
-				Status:    clientui.RuntimeGoalStatusActive,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-1",
+			Objective: "ship feature",
+			Status:    clientui.RuntimeGoalStatusActive,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(
@@ -381,16 +379,14 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
 	)
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-1",
-				Objective: "ship feature",
-				Status:    clientui.RuntimeGoalStatusPaused,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-1",
+			Objective: "ship feature",
+			Status:    clientui.RuntimeGoalStatusPaused,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit paused goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(
@@ -400,10 +396,7 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
 	)
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{}))); err != nil {
 		t.Fatalf("admit cleared goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(t, runtimeClient, nil, nil)
@@ -421,16 +414,14 @@ func TestRuntimeClientCanonicalGoalStatusReplacesCachedGoal(t *testing.T) {
 		}},
 	})
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-new",
-				Objective: "new",
-				Status:    clientui.RuntimeGoalStatusActive,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-new",
+			Objective: "new",
+			Status:    clientui.RuntimeGoalStatusActive,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit replacement goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(

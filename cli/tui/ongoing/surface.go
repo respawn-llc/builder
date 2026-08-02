@@ -183,17 +183,20 @@ func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "apply_terminal_message")
-	if message.Kind == clientui.TranscriptMessageHydration {
+	if message.Kind() == clientui.TranscriptMessageHydration {
 		return s.applyHydration(message, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.Payload.AssistantDelta != nil {
-		return s.applyAssistantDelta(message.Payload.AssistantDelta.StreamID, message.Payload.AssistantDelta.Delta, message.Payload.AssistantDelta.Phase, frame)
+	if message.Kind() == clientui.TranscriptMessageAssistantDelta {
+		payload := message.Payload().(clientui.TranscriptAssistantDelta)
+		return s.applyAssistantDelta(payload.StreamID, payload.Delta, payload.Phase, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantStreamAbort && message.Payload.AssistantStreamAbort != nil {
-		return s.abortAssistantStream(message.Payload.AssistantStreamAbort.StreamID, frame)
+	if message.Kind() == clientui.TranscriptMessageAssistantStreamAbort {
+		payload := message.Payload().(clientui.TranscriptAssistantStreamAbort)
+		return s.abortAssistantStream(payload.StreamID, frame)
 	}
 	if isAssistantFinalization(message) {
-		return s.finalizeAssistantStream(*message.Payload.CommittedRow.Assistant.StreamID, message.Payload.CommittedRow.Assistant.Text, frame)
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		return s.finalizeAssistantStream(*row.Assistant.StreamID, row.Assistant.Text, frame)
 	}
 	lines := s.immutableLines(message, frame.Size.Width, frame.Theme)
 	if len(lines) == 0 {
@@ -203,11 +206,9 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 }
 
 func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
-	if message.Payload.Hydration == nil {
-		return Result{}, nil
-	}
-	lines := s.hydrationImmutableLines(*message.Payload.Hydration, frame.Size.Width, frame.Theme)
-	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Payload.Hydration.ActiveAssistant)
+	hydration := message.Payload().(clientui.TranscriptHydration)
+	lines := s.hydrationImmutableLines(hydration, frame.Size.Width, frame.Theme)
+	activeStreamHydrated := s.hydrateActiveAssistantStream(hydration.ActiveAssistant)
 	if activeStreamHydrated && !s.activeAssistantPromotionDeferred() {
 		projection := newMarkdownProjector(nil, frame.Theme, s.markdownLinks).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
@@ -351,10 +352,11 @@ func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame Fra
 }
 
 func isAssistantFinalization(message clientui.TranscriptMessage) bool {
-	return message.Kind == clientui.TranscriptMessageCommittedRow &&
-		message.Payload.CommittedRow != nil &&
-		message.Payload.CommittedRow.Assistant != nil &&
-		message.Payload.CommittedRow.Assistant.StreamID != nil
+	if message.Kind() != clientui.TranscriptMessageCommittedRow {
+		return false
+	}
+	row := message.Payload().(clientui.TranscriptCommittedRow)
+	return row.Assistant != nil && row.Assistant.StreamID != nil
 }
 
 func (s *Surface) Render(frame FrameInput) (Result, error) {
@@ -421,20 +423,15 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 }
 
 func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, themeName string) []string {
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		if message.Payload.Hydration == nil {
-			return nil
-		}
-		return s.hydrationImmutableLines(*message.Payload.Hydration, width, themeName)
+		return s.hydrationImmutableLines(message.Payload().(clientui.TranscriptHydration), width, themeName)
 	case clientui.TranscriptMessageCommittedRow:
-		if message.Payload.CommittedRow == nil {
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		if !committedRowVisibleInOngoing(row) {
 			return nil
 		}
-		if !committedRowVisibleInOngoing(*message.Payload.CommittedRow) {
-			return nil
-		}
-		return s.renderCommittedRow(*message.Payload.CommittedRow, width, themeName)
+		return s.renderCommittedRow(row, width, themeName)
 	default:
 		return nil
 	}

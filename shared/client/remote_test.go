@@ -733,14 +733,10 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
 			t.Fatalf("send subscribe response: %v", err)
 		}
-		event := protocol.SessionTranscriptEventParams{Message: clientui.TranscriptMessage{
-			Sequence: 2,
-			Kind:     clientui.TranscriptMessageOperationalDiagnostic,
-			Payload: clientui.TranscriptPayload{OperationalDiagnostic: &clientui.TranscriptOperationalDiagnostic{
-				Code:   clientui.OperationalDiagnosticSleepGuardFailed,
-				Detail: "sleep prevention failed",
-			}},
-		}}
+		event := protocol.SessionTranscriptEventParams{Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+			Code:   clientui.OperationalDiagnosticSleepGuardFailed,
+			Detail: "sleep prevention failed",
+		}))}
 		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionTranscriptEvent, Params: mustJSON(t, event)}); err != nil {
 			t.Fatalf("send transcript event: %v", err)
 		}
@@ -762,7 +758,7 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if message.Sequence != 2 || message.Kind != clientui.TranscriptMessageOperationalDiagnostic || message.Payload.OperationalDiagnostic == nil {
+	if message.Sequence != 2 || message.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("transcript message = %+v, want seq=2 operational diagnostic", message)
 	}
 }
