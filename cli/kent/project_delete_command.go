@@ -55,7 +55,7 @@ type projectDeleteJSONEnvelope struct {
 }
 
 func projectDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" project delete", stderr, projectUsage)
+	fs := newCommandFlagSet(config.Command+" project delete", stderr, projectDeleteUsage)
 	confirm := fs.Bool("confirm", false, "confirm project deletion")
 	jsonOut := fs.Bool("json", false, "write a stable JSON envelope")
 	positionals, ok, exitCode := parseInterspersedPositionals(fs, args)
