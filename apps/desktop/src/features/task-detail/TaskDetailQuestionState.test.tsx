@@ -6,8 +6,9 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { PendingAsk, QuestionAnswerInput, QuestionAttentionItem } from "@/api";
-import { queryKeys } from "@/app-facade";
+import { AppServicesProvider, queryKeys } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
+import { createTestServices } from "@/test-support/app-services";
 import { QuestionBox } from "./TaskDetailQuestionForm";
 import {
   anchorQuestionSelection,
@@ -24,19 +25,25 @@ type FixtureQuestionAttention = QuestionAttentionItem & Readonly<{ sessionID: st
 let questionAnswerMutation: QuestionAnswerMutation;
 let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
 
-vi.mock("@/app-facade", () => ({
-  queryKeys: {
-    pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
-  },
-  useAppServices: () => ({
-    api: { listPendingAsks },
-  }),
-  useOpenExternalLink: () => {
-    return () => {
-      return;
-    };
-  },
-}));
+vi.mock("@/app-facade", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    queryKeys: {
+      pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
+    },
+    useAppServices: () => ({
+      api: { listPendingAsks },
+    }),
+    useOpenExternalLink: () => {
+      return () => {
+        return;
+      };
+    },
+  };
+});
+
+const shortcutServices = createTestServices([], undefined, { platform: "macos" });
 
 beforeAll(async () => {
   await initializeI18n();
@@ -640,12 +647,14 @@ function questionFormTree(
 ) {
   return (
     <I18nextProvider i18n={appI18n}>
-      <QuestionFormHarness
-        answerQuestion={answerQuestion}
-        attention={attention}
-        initialSelection={selection}
-        presentation={presentation}
-      />
+      <AppServicesProvider services={shortcutServices}>
+        <QuestionFormHarness
+          answerQuestion={answerQuestion}
+          attention={attention}
+          initialSelection={selection}
+          presentation={presentation}
+        />
+      </AppServicesProvider>
     </I18nextProvider>
   );
 }
@@ -658,7 +667,9 @@ function questionBoxTree(
   return (
     <I18nextProvider i18n={appI18n}>
       <QueryClientProvider client={queryClient}>
-        <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+        <AppServicesProvider services={shortcutServices}>
+          <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+        </AppServicesProvider>
       </QueryClientProvider>
     </I18nextProvider>
   );

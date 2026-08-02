@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { PlusIcon, SearchIcon } from "lucide-react";
 
 import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { isTextFieldSubmitShortcut, useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import {
   Button,
   IconTooltipButton,
@@ -57,6 +58,7 @@ type LabelChooserChoice = Readonly<{ kind: "unlabeled" }> | Readonly<{ kind: "la
 
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
+  const { nativeBridge } = useAppServices();
   const catalog = useProjectLabelCatalog();
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
@@ -135,8 +137,31 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     const selection = labelResultRowSelection(invocation, choice.label.id);
     selectLabel(invocation, choice.label.id, selection.kind === "binary" ? !selection.selected : true);
   };
+  const hasSearchAction =
+    choiceCount > 0 || (canCreate && !catalogAtLimit && !mutations.create.isPending);
+  const runSearchAction = () => {
+    if (choiceCount > 0) {
+      activateChoice(Math.min(keyboardHighlightedIndex ?? 0, choiceCount - 1));
+      return;
+    }
+    if (canCreate && !catalogAtLimit && !mutations.create.isPending) {
+      void createLabel();
+    }
+  };
+  const searchShortcut = useTextFieldSubmitShortcut({
+    action: runSearchAction,
+    available: hasSearchAction,
+    kind: "direct",
+  });
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (handleLabelChoiceNavigation(event, choiceCount, setKeyboardHighlightedIndex)) {
+      return;
+    }
+    if (isTextFieldSubmitShortcut(event, nativeBridge.capabilities.platform)) {
+      searchShortcut(event);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
       return;
     }
     if (event.key !== "Enter") {
@@ -144,12 +169,12 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     }
     if (choiceCount > 0) {
       event.preventDefault();
-      activateChoice(Math.min(keyboardHighlightedIndex ?? 0, choiceCount - 1));
+      runSearchAction();
       return;
     }
     if (canCreate && !catalogAtLimit && !mutations.create.isPending) {
       event.preventDefault();
-      void createLabel();
+      runSearchAction();
     }
   };
   const commitRename = async () => {

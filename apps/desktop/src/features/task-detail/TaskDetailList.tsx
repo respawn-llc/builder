@@ -95,6 +95,7 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
+  const canSaveDraft = !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
     () => activity.data?.pages.flatMap((page) => page.items) ?? [],
     [activity.data],
@@ -183,6 +184,7 @@ export function TaskDetailList({
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
           commentCount={commentItems.length}
+          canSaveDraft={canSaveDraft}
           detail={detail}
           disabled={disabled}
           draft={draft}
@@ -222,6 +224,7 @@ type TaskDetailListRowProps = Readonly<{
   activityCount: number;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
+  canSaveDraft: boolean;
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
@@ -283,6 +286,7 @@ function TaskDetailListRow(props: TaskDetailListRowProps): ReactNode {
 }
 
 function HeaderRow({
+  canSaveDraft,
   detail,
   disabled,
   draft,
@@ -292,6 +296,7 @@ function HeaderRow({
 }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskHeaderIsland
+      canSaveDraft={canSaveDraft}
       detail={detail}
       disabled={disabled || updatePending}
       draft={draft}
@@ -302,12 +307,14 @@ function HeaderRow({
 }
 
 function BodyRow({
+  canSaveDraft,
   detail,
   disabled,
   draft,
   mutations,
   onDraftChange,
   onDescriptionPresentationChange,
+  onSaveDraft,
   descriptionPresentation,
   updateError,
   updatePending,
@@ -318,11 +325,13 @@ function BodyRow({
       data-testid="task-detail-body-split"
     >
       <DescriptionIsland
+        canSaveDraft={canSaveDraft}
         disabled={disabled || updatePending}
         draft={draft}
         error={updateError}
         onDraftChange={onDraftChange}
         onPresentationChange={onDescriptionPresentationChange}
+        onSave={onSaveDraft}
         presentation={descriptionPresentation}
       />
       <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />

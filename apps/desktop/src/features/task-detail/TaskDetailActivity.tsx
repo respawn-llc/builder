@@ -3,8 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import type { ActivityItem, TaskComment } from "@/api";
 import { errorMessage } from "@/api";
-import { formatRelativeTime } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { formatRelativeTime, useStatusController, useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, homeListCardMaxWidthClassName, IslandSurface, MarkdownText } from "@/ui";
 import { cx, fieldIslandInputClassName } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -30,6 +29,7 @@ export function CommentComposer({
   const pending =
     mutations.addComment.isPending || mutations.replaceComment.isPending || mutations.deleteComment.isPending;
   const interactionDisabled = disabled || pending;
+  const canSubmit = !interactionDisabled && commentBody.trim().length > 0;
 
   async function submit(): Promise<void> {
     if (interactionDisabled || commentBody.trim().length === 0) {
@@ -52,6 +52,13 @@ export function CommentComposer({
       });
     }
   }
+  const submitShortcut = useTextFieldSubmitShortcut({
+    action: () => {
+      void submit();
+    },
+    available: canSubmit,
+    kind: "direct",
+  });
 
   return (
     <section className="grid gap-[var(--space-2)]">
@@ -74,6 +81,7 @@ export function CommentComposer({
             }
             onEditingChange({ id: editing.id, body: event.target.value });
           }}
+          onKeyDown={submitShortcut}
           placeholder={editing === null ? `${t("task.addComment")}...` : `${t("task.editComment")}...`}
           value={commentBody}
         />
@@ -81,7 +89,7 @@ export function CommentComposer({
           aria-label={editing === null ? t("task.submitComment") : t("task.saveComment")}
           className="relative z-10 col-start-1 row-start-1 self-end justify-self-end"
           data-testid="task-comment-save"
-          disabled={interactionDisabled || commentBody.trim().length === 0}
+          disabled={!canSubmit}
           onClick={() => void submit()}
           size="icon"
           style={{ marginBottom: "var(--space-2)", marginRight: "var(--space-2)" }}

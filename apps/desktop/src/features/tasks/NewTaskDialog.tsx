@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
-import { useConnectionSnapshot } from "@/app-facade";
+import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
@@ -184,6 +184,8 @@ function NewTaskFormContent({
       sourceWorkspaceID: initialWorkspaceID,
     },
   });
+  const canSubmit =
+    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID.length > 0;
 
   useEffect(() => {
     if (!initializedRef.current && initialWorkspaceID.length > 0) {
@@ -192,6 +194,9 @@ function NewTaskFormContent({
     }
   }, [form, initialWorkspaceID]);
   async function submit(values: NewTaskFormValues): Promise<void> {
+    if (!canSubmit) {
+      return;
+    }
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     if (sourceWorkspaceID.length === 0) {
       return;
@@ -226,12 +231,15 @@ function NewTaskFormContent({
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
   const displayedWorkspaceID =
     selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
-  const disabled =
-    connection.phase !== "connected" || createTask.isPending || initialWorkspaceID.length === 0;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
 
   return (
     <form
       className={cx("grid gap-[var(--space-3)]", className)}
+      onKeyDown={formShortcut}
       onSubmit={(event) => void form.handleSubmit(submit)(event)}
     >
       <TextInput
@@ -288,7 +296,7 @@ function NewTaskFormContent({
       {createTask.error !== null ? (
         <p className="m-0 text-[var(--color-error)]">{errorMessage(createTask.error)}</p>
       ) : null}
-      <Button className="mx-auto w-full max-w-[400px]" disabled={disabled} type="submit" variant="primary">
+      <Button className="mx-auto w-full max-w-[400px]" disabled={!canSubmit} type="submit" variant="primary">
         {t("task.create")}
       </Button>
     </form>
