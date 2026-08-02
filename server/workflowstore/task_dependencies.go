@@ -99,7 +99,7 @@ func (s *Store) AddTaskDependency(ctx context.Context, req TaskDependencyAddRequ
 	}
 	nowUnixMs := s.now().UnixMilli()
 	for _, taskID := range []workflow.TaskID{req.BlockerTaskID, req.BlockedTaskID} {
-		if err := touchTaskUpdatedAt(ctx, q, string(taskID), nowUnixMs); err != nil {
+		if err := advanceTaskUpdatedAt(ctx, q, string(taskID), nowUnixMs); err != nil {
 			return TaskDependencyAddResult{}, fmt.Errorf("touch task %q after dependency add: %w", taskID, err)
 		}
 	}
@@ -186,7 +186,7 @@ func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemo
 		result.Outcome = TaskDependencyRemoved
 		nowUnixMs := s.now().UnixMilli()
 		for _, taskID := range []workflow.TaskID{req.BlockerTaskID, req.BlockedTaskID} {
-			if err := touchTaskUpdatedAt(ctx, q, string(taskID), nowUnixMs); err != nil {
+			if err := advanceTaskUpdatedAt(ctx, q, string(taskID), nowUnixMs); err != nil {
 				return TaskDependencyRemoveResult{}, fmt.Errorf("touch task %q after dependency removal: %w", taskID, err)
 			}
 		}

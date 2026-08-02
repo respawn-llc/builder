@@ -2,6 +2,7 @@ Usage of kent project:
   kent project [path]
   kent project list
   kent project create --path <server-path> --name <project-name>
+  kent project delete <project-id> [--confirm] [--json]
 
 Find or create projects and their workspace attachments.
 
@@ -22,6 +23,9 @@ Commands:
   kent project detach --project <project-id> [path]
   kent project detach --project <project-id> --workspace <workspace-id>
     Alias for `kent detach`.
+
+  kent project delete <project-id> [--confirm] [--json]
+    Delete a Project by canonical ID. Requires `--confirm`; workspace files are not deleted.
 
 Examples:
   kent project

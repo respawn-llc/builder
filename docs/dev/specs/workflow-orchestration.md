@@ -24,6 +24,29 @@
 - A Project owns one shared Label catalog for every linked Workflow board. Tasks can use only Labels from their Project.
 - Labels are many-to-many organizational metadata on tasks. They never affect workflow state, scheduling, prompts, task status, or execution.
 
+## Task Mutation Authority
+
+- Users may Start, Interrupt, Resume, approve, or manually move any otherwise
+  eligible Task.
+- A Session associated with a Task may Start, Interrupt, Resume, approve, or
+  manually move a different Task.
+- A Session associated with a Task must not Start, Interrupt, Resume, approve,
+  or manually move its own Task.
+- Kent derives the invoking Session's Task from the Session's direct durable
+  Task ownership.
+- The server trusts the optional invoking-Session identity supplied by the
+  client. A request that omits it is treated as user-originated.
+- This restriction is a cooperative agent policy, not an authentication
+  boundary against a modified client or direct RPC caller.
+- The restriction does not depend on the invoking Session's Current Node or
+  live execution state.
+- A persisted Session with no Task ownership may Start, Interrupt, Resume,
+  approve, or manually move any otherwise eligible Task.
+- If the supplied invoking Session does not exist, Kent rejects the operation
+  and changes nothing.
+- A self-target rejection changes no Task, Approval, execution-target, live
+  execution, or scheduling state.
+
 ## Task Labels And Filtering
 
 - Each label has an immutable UUID v4 identity. Its mutable name is trimmed, 1–64 characters, preserves display capitalization, and permits Unicode letters and numbers, spaces, and `: & * % $ # @ ! ? . , / \ + | - _ ~ '`.
@@ -96,7 +119,7 @@
 - Task detail exposes both complete directions, canonical related-Task status,
   Blocker satisfaction, and direct aggregate counts from one authoritative
   server projection.
-- Task Start and human Manual Move to an executable Node check the Blocked
+- Task Start and Manual Move to an executable Node check the Blocked
   Task's current direct unsatisfied dependencies.
 - Kent performs the dependency check after it validates that the requested
   action is otherwise available and before Execution Target selection or
@@ -167,7 +190,7 @@
 - Workflows can contain Start, Agent, Script, Join, and Terminal Nodes. Approval is a Transition Branch property.
 - Each Workflow has exactly one Start Node. It is non-executable and has no inputs.
 - For Task Start, the Start Node must have exactly one outgoing Transition with exactly one branch that targets an executable Node.
-- Terminal Nodes are strict sinks. Manual reopen or rework is a user override, not retained Workflow history.
+- Terminal Nodes are strict sinks. Manual reopen or rework is an explicit override, not retained Workflow history.
 - Draft validation reports semantic errors but does not block save/link/default selection.
 - Task creation and execution validation accumulate all safe actionable errors and reject invalid graph/role/input configurations.
 - Execution-valid graphs reject detached islands: every node reachable from start, every non-terminal can reach terminal, terminal cannot auto-run.
@@ -198,7 +221,7 @@
 - Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same Current Node. The interactive activation does not create a second Transition authority.
 - Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
-- `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
+- `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, the command resolves the assigned Task and Current Node from the current Session. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
 - Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
 - `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
@@ -270,7 +293,7 @@
 - Approval is a Transition Branch property.
 - If any branch of a selected Transition requires Approval, the complete Transition waits for one Approval before any target becomes current or begins work.
 - A pending Approval freezes the selected Transition, its branches, Workflow Version, source and target Nodes, effective branch configuration, display details, and Context Source.
-- Later graph edits do not change what a user approves.
+- Later graph edits do not change what the approving caller approves.
 - Applied and rejected Transitions are not retained as workflow movement history. Pending Approval state is removed when the Approval applies or a manual move supersedes it.
 - A Task awaiting Approval remains at the source current Node and exposes `waiting_approval` status; target Nodes are not current.
 - Pending Approvals occur only after a Task has reached an executable Node and therefore always reuse the Task's locked Execution Target.

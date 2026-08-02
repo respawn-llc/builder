@@ -581,6 +581,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 		t.Fatalf("append user message: %v", err)
 	}
 
+	completeManualEligibilityAgentStep(t, eng)
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
 	}

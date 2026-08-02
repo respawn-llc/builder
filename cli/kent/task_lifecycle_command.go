@@ -303,7 +303,9 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "task start requires <short-id-or-task-id>")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
+	invokingSessionID, err := workflowTaskInvokingSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
@@ -321,12 +323,14 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 				SetupOperationID:           setupOperationID,
 				TaskID:                     taskID,
+				InvokingSessionID:          invokingSessionID,
 				ExecutionTarget:            executionTarget,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
+			if !writeWorkflowExecutionTargetError(stderr, err) &&
+				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
 			return 1
@@ -470,7 +474,9 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, "task resume requires <short-id-or-task-id>")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
+	invokingSessionID, err := workflowTaskInvokingSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -481,8 +487,14 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID})
+		resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+			TaskID:            taskID,
+			InvokingSessionID: invokingSessionID,
+		})
 		if err != nil {
+			if writeWorkflowTaskMutationSelfTargetError(stderr, err) {
+				return 1
+			}
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -514,7 +526,9 @@ func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "--session requires a non-blank session ID")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
+	invokingSessionID, err := workflowTaskInvokingSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -526,10 +540,14 @@ func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		if _, err := remote.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{
-			TaskID:    taskID,
-			SessionID: strings.TrimSpace(*sessionID),
-			Reason:    *reason,
+			TaskID:            taskID,
+			InvokingSessionID: invokingSessionID,
+			SessionID:         strings.TrimSpace(*sessionID),
+			Reason:            *reason,
 		}); err != nil {
+			if writeWorkflowTaskMutationSelfTargetError(stderr, err) {
+				return 1
+			}
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -554,15 +572,22 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, "task approve requires <approval-id>")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
+	invokingSessionID, err := workflowTaskInvokingSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{ApprovalID: positionals[0]})
+		resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+			ApprovalID:        positionals[0],
+			InvokingSessionID: invokingSessionID,
+		})
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			if !writeWorkflowTaskMutationSelfTargetError(stderr, err) {
+				fmt.Fprintln(stderr, err)
+			}
 			return 1
 		}
 		if err := resp.Validate(); err != nil {
@@ -607,7 +632,9 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task move requires <short-id-or-task-id> <target-node-id>")
 		return 2
 	}
-	if denyAgentHumanOnlyTaskAction(stderr) {
+	invokingSessionID, err := workflowTaskInvokingSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
@@ -706,6 +733,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 				TaskID:                     taskID,
+				InvokingSessionID:          invokingSessionID,
 				TargetNodeID:               positionals[1],
 				TransitionKey:              transitionKey,
 				Values:                     values,
@@ -716,7 +744,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
+			if !writeWorkflowExecutionTargetError(stderr, err) &&
+				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
 			return 1

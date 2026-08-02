@@ -15,6 +15,7 @@ import (
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
@@ -102,6 +103,41 @@ func TestNativeOngoingHydrationWaitsForWindowSize(t *testing.T) {
 	}
 	if got := spySurface.calls[1].frame.Size.Width; got != 80 {
 		t.Fatalf("hydration frame width = %d, want 80", got)
+	}
+}
+
+func TestNativeOngoingFirstWindowSizeSuppressesDelayedRendererClearAfterHydration(t *testing.T) {
+	var out bytes.Buffer
+	gate := newUIRendererOutputGateState()
+	surface := ongoing.NewSurface(&out)
+	m := newProjectedStaticUIModel(
+		WithUIRendererOutputGateState(gate),
+		WithUIOngoingSurface(surface),
+	)
+	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
+
+	_ = m.Init()
+	hydration := ongoingHydrationMessage(1)
+	hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
+		*ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload.CommittedRow,
+	}
+	_, _ = m.Update(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: hydration,
+	})
+	beforeHydration := append([]byte(nil), out.Bytes()...)
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	afterHydration := append([]byte(nil), out.Bytes()...)
+	if bytes.Equal(afterHydration, beforeHydration) {
+		t.Fatal("first window size did not emit queued hydration")
+	}
+
+	renderer := newUIRendererOutputGateWriter(&out, gate)
+	if _, err := renderer.Write([]byte(xansi.EraseEntireScreen)); err != nil {
+		t.Fatalf("write delayed renderer clear: %v", err)
+	}
+	if got := out.Bytes(); !bytes.Equal(got, afterHydration) {
+		t.Fatalf("delayed renderer clear changed hydrated normal buffer: before=%q after=%q", afterHydration, got)
 	}
 }
 

@@ -426,6 +426,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 					t.Fatalf("append message: %v", err)
 				}
 			}
+			completeManualEligibilityAgentStep(t, eng)
 			if err := eng.CompactContext(context.Background(), ""); err != nil {
 				t.Fatalf("compact: %v", err)
 			}

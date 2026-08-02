@@ -238,7 +238,10 @@ WHERE blocker_task_id = sqlc.arg(task_id)
 
 -- name: TouchTasksUpdatedAt :execrows
 UPDATE tasks
-SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    sqlc.arg(updated_at_unix_ms)
+)
 WHERE id IN (sqlc.slice('task_ids'));
 
 -- name: DeleteTaskLabelAssignment :execrows
@@ -3057,6 +3060,14 @@ WHERE id = sqlc.arg(task_id)
 -- name: TouchTaskUpdatedAt :execrows
 UPDATE tasks
 SET updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id);
+
+-- name: AdvanceTaskUpdatedAt :execrows
+UPDATE tasks
+SET updated_at_unix_ms = MAX(
+    updated_at_unix_ms + 1,
+    sqlc.arg(updated_at_unix_ms)
+)
 WHERE id = sqlc.arg(task_id);
 
 -- name: GetTaskProjectWorkflowIDs :one

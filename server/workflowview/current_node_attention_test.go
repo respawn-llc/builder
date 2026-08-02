@@ -19,6 +19,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 	completed, err := approvalFixture.store.CompleteCurrentNode(approvalFixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalStarted.currentNode,
 		TransitionID: "done",
+		Commentary:   "Ready to merge.",
 	})
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode: %v", err)
@@ -52,6 +53,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		approval.ApprovalID == nil ||
 		*approval.ApprovalID != completed.PendingApproval.ID.String() ||
 		approval.ApprovalSnapshot == nil ||
+		approval.ApprovalSnapshot.Commentary != "Ready to merge." ||
 		approval.CurrentNode != nil {
 		t.Fatalf("approval attention item = %+v, want pending Approval identity", approval)
 	}

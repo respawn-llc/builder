@@ -14,10 +14,12 @@ import (
 type taskDependencyLifecycleRemote struct {
 	apicontract.WorkflowService
 
-	startResponse serverapi.WorkflowTaskStartResponse
-	moveResponse  serverapi.WorkflowTaskMoveResponse
-	startRequests []serverapi.WorkflowTaskStartRequest
-	moveRequests  []serverapi.WorkflowTaskMoveRequest
+	startResponse   serverapi.WorkflowTaskStartResponse
+	moveResponse    serverapi.WorkflowTaskMoveResponse
+	approveResponse serverapi.WorkflowTaskApproveResponse
+	startRequests   []serverapi.WorkflowTaskStartRequest
+	moveRequests    []serverapi.WorkflowTaskMoveRequest
+	approveRequests []serverapi.WorkflowTaskApproveRequest
 }
 
 func (r *taskDependencyLifecycleRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
@@ -43,6 +45,11 @@ func (r *taskDependencyLifecycleRemote) PreviewWorkflowTaskMove(_ context.Contex
 		Outcome: serverapi.WorkflowTaskMovePreviewOutcomeDirect,
 		Direct:  &serverapi.WorkflowTaskMovePreviewDirect{},
 	}, nil
+}
+
+func (r *taskDependencyLifecycleRemote) ApproveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+	r.approveRequests = append(r.approveRequests, req)
+	return r.approveResponse, nil
 }
 
 func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
@@ -115,6 +122,90 @@ func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *tes
 	}
 }
 
+func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	remote := &taskDependencyLifecycleRemote{
+		startResponse: serverapi.WorkflowTaskStartResponse{
+			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskStartApplied{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskStartSubcommand([]string{"task-1", "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.startRequests) != 1 ||
+		remote.startRequests[0].InvokingSessionID == nil ||
+		remote.startRequests[0].InvokingSessionID.String() != "agent-session" {
+		t.Fatalf("start requests=%+v, want invoking Session agent-session", remote.startRequests)
+	}
+}
+
+func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "")
+	count := 1
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome:                    serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired,
+			UnsatisfiedDependencyCount: &count,
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand(
+		[]string{"task-1", "node-2", "--ignore-dependencies", "--json"},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode != 1 || stderr.Len() != 0 || len(remote.moveRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	if !remote.moveRequests[0].ProceedDespiteDependencies {
+		t.Fatalf("move request=%+v", remote.moveRequests[0])
+	}
+	var output serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired ||
+		output.UnsatisfiedDependencyCount == nil || *output.UnsatisfiedDependencyCount != 1 {
+		t.Fatalf("JSON output=%+v", output)
+	}
+}
+
+func TestTaskMoveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	remote := &taskDependencyLifecycleRemote{
+		moveResponse: serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskMoveApplied{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskMoveSubcommand([]string{"task-1", "node-2", "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.moveRequests) != 1 ||
+		remote.moveRequests[0].InvokingSessionID == nil ||
+		remote.moveRequests[0].InvokingSessionID.String() != "agent-session" {
+		t.Fatalf("move requests=%+v, want invoking Session agent-session", remote.moveRequests)
+	}
+}
+
 func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")
 	remote := &taskDependencyLifecycleRemote{
@@ -142,7 +233,6 @@ func TestTaskMoveJSONWritesAppliedTypedOutcome(t *testing.T) {
 		t.Fatalf("JSON output=%+v", output)
 	}
 }
-
 func TestTaskMoveDependencyConfirmationMapsIgnoreFlag(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")
 	count := 2
@@ -198,5 +288,30 @@ func TestTaskMoveJSONWritesSubmittedNoOpTypedOutcome(t *testing.T) {
 	if output.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
 		output.NoOp == nil || len(output.NoOp.CurrentNodes) != 1 {
 		t.Fatalf("JSON output=%+v", output)
+	}
+}
+func TestTaskApproveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	remote := &taskDependencyLifecycleRemote{
+		approveResponse: serverapi.WorkflowTaskApproveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskApproveApplied{
+				TaskID:       "task-1",
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskApproveSubcommand([]string{"approval-1"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.approveRequests) != 1 ||
+		remote.approveRequests[0].InvokingSessionID == nil ||
+		remote.approveRequests[0].InvokingSessionID.String() != "agent-session" {
+		t.Fatalf("approve requests=%+v, want invoking Session agent-session", remote.approveRequests)
 	}
 }

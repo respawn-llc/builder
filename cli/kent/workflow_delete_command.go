@@ -87,7 +87,7 @@ func workflowDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 				writeWorkflowDeleteImpact(stdout, output.Impact)
 				fmt.Fprintln(stderr, "Workflow was not deleted; resolve these blockers first:")
 				for _, blocker := range output.Blockers {
-					writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, blocker.Count)
+					writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, workflowBlockerCount(blocker.Count))
 				}
 			}
 			return 1

@@ -177,14 +177,14 @@ var (
 	taskUsage               = commandUsage{helpFile: "task.txt"}
 	taskCreateUsage         = leafCommandUsage(config.Command+" task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [flags]", "Create a task in a project.")
 	taskEditUsage           = leafCommandUsage(config.Command+" task edit <task> [flags]", "Change a task's title, body, or source workspace.")
-	taskStartUsage          = leafCommandUsage(config.Command+" task start <task> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a new task from the start node into its first executable workflow node.", "", "User-only; unavailable inside Kent shell commands.")
-	taskInterruptUsage      = leafCommandUsage(config.Command+" task interrupt <task> [--project <project>] [--session <session-id>] [--reason <text>]", "Interrupt live workflow work on a task.", "", "User-only; unavailable inside Kent shell commands.")
-	taskResumeUsage         = leafCommandUsage(config.Command+" task resume <task> [--project <project>]", "Resume interrupted work on a task.", "", "User-only; unavailable inside Kent shell commands.")
-	taskApproveUsage        = leafCommandUsage(config.Command+" task approve <approval-id>", "Approve a pending workflow transition.", "", "User-only; unavailable inside Kent shell commands.")
-	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--transition <key>] [--values-json <json>|--values-file <path>] [--commentary <text>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a task to a workflow node.", "", "User-only; unavailable inside Kent shell commands.")
+	taskStartUsage          = leafCommandUsage(config.Command+" task start <task> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a new task from the start node into its first executable workflow node.", "", "A workflow Session may start another Task, but not its own.")
+	taskInterruptUsage      = leafCommandUsage(config.Command+" task interrupt <task> [--project <project>] [--session <session-id>] [--reason <text>]", "Interrupt live workflow work on a task.", "", "A workflow Session may interrupt another Task, but not its own.")
+	taskResumeUsage         = leafCommandUsage(config.Command+" task resume <task> [--project <project>]", "Resume interrupted work on a task.", "", "A workflow Session may resume another Task, but not its own.")
+	taskApproveUsage        = leafCommandUsage(config.Command+" task approve <approval-id>", "Approve a pending workflow transition.", "", "A workflow Session may approve another Task, but not its own.")
+	taskMoveUsage           = leafCommandUsage(config.Command+" task move <task> <target-node-id> [--project <project>] [--transition <key>] [--values-json <json>|--values-file <path>] [--commentary <text>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]", "Move a task to a workflow node.", "", "A workflow Session may move another Task, but not its own.")
 	taskCompleteUsage       = leafCommandUsage(config.Command+" task complete [--transition <key>] [--commentary <text>] [--param name=value] [--session <session-id>|--task <task> [--project <project>]] [--force]", "Submit your task result.", "", "Use this to submit your task and end your turn. This is the only way to end your turn during a workflow.", "Use `--json` or `--json-file` instead of field flags to submit a JSON transition result.", "Positional arguments are not accepted.", "If you're stuck for any reason, use ask_question to ask for help instead of attempting to submit a final_answer. Invoke this command exactly as is described in the workflow instructions you received in a developer reminder.")
 	taskListUsage           = leafCommandUsage(config.Command+" task list [--workflow <uuid>] [flags]", "List and filter tasks in a project.")
-	taskSearchUsage         = leafCommandUsage(config.Command+" task search <query> [flags]", "Search task titles, bodies, and optionally comments.")
+	taskSearchUsage         = commandUsage{helpFile: "task_search.txt", includeEmbeddedFlags: true}
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
@@ -204,14 +204,24 @@ var (
 	detachUsage             = commandUsage{helpFile: "detach.txt", includeEmbeddedFlags: true}
 	projectListUsage        = commandUsage{helpFile: "project_list.txt"}
 	projectCreateUsage      = commandUsage{helpFile: "project_create.txt", includeEmbeddedFlags: true}
-	attachUsage             = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}
-	rebindUsage             = commandUsage{helpFile: "rebind.txt"}
-	serveUsage              = commandUsage{helpFile: "serve.txt", includeEmbeddedFlags: true}
-	serviceUsage            = commandUsage{helpFile: "service.txt"}
-	serviceStatusUsage      = commandUsage{helpFile: "service_status.txt", includeEmbeddedFlags: true}
-	serviceInstallUsage     = commandUsage{helpFile: "service_install.txt", includeEmbeddedFlags: true}
-	serviceUninstallUsage   = commandUsage{helpFile: "service_uninstall.txt", includeEmbeddedFlags: true}
-	serviceRestartUsage     = commandUsage{helpFile: "service_restart.txt", includeEmbeddedFlags: true}
+	projectDeleteUsage      = leafCommandUsage(
+		config.Command+" project delete <project-id> [--confirm] [--json]",
+		"Delete a Project by canonical ID.",
+		"",
+		"Deletion is non-interactive and requires --confirm.",
+		"Selection accepts only the canonical Project ID; --json emits one stable result envelope.",
+		"Agent shells are denied only when the Project contains unfinished work, including Backlog Tasks.",
+		"Task state may change before deletion is processed; server blockers remain authoritative.",
+		"Workspace files are never deleted.",
+	)
+	attachUsage           = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}
+	rebindUsage           = commandUsage{helpFile: "rebind.txt"}
+	serveUsage            = commandUsage{helpFile: "serve.txt", includeEmbeddedFlags: true}
+	serviceUsage          = commandUsage{helpFile: "service.txt"}
+	serviceStatusUsage    = commandUsage{helpFile: "service_status.txt", includeEmbeddedFlags: true}
+	serviceInstallUsage   = commandUsage{helpFile: "service_install.txt", includeEmbeddedFlags: true}
+	serviceUninstallUsage = commandUsage{helpFile: "service_uninstall.txt", includeEmbeddedFlags: true}
+	serviceRestartUsage   = commandUsage{helpFile: "service_restart.txt", includeEmbeddedFlags: true}
 )
 
 var (

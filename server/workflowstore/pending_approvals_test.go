@@ -2,11 +2,70 @@ package workflowstore
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"core/server/workflow"
 )
+
+func TestPendingApprovalReloadDefaultsMissingCommentaryToEmpty(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID).RequiresApproval = true
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "ready"},
+		Commentary:   "New snapshot commentary",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("CompleteCurrentNode did not create a pending Approval")
+	}
+
+	row, err := store.queries.GetTaskPendingApproval(ctx, completed.PendingApproval.ID.String())
+	if err != nil {
+		t.Fatalf("GetTaskPendingApproval: %v", err)
+	}
+	var legacySnapshot map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(row.TransitionSnapshotJson), &legacySnapshot); err != nil {
+		t.Fatalf("decode transition snapshot: %v", err)
+	}
+	delete(legacySnapshot, "commentary")
+	legacyJSON, err := json.Marshal(legacySnapshot)
+	if err != nil {
+		t.Fatalf("encode legacy transition snapshot: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_pending_approvals SET transition_snapshot_json = ? WHERE id = ?`,
+		string(legacyJSON),
+		completed.PendingApproval.ID.String(),
+	); err != nil {
+		t.Fatalf("write legacy transition snapshot: %v", err)
+	}
+
+	reloaded, err := store.PendingApproval(ctx, completed.PendingApproval.ID)
+	if err != nil {
+		t.Fatalf("PendingApproval: %v", err)
+	}
+	if reloaded.Commentary != "" {
+		t.Fatalf("legacy pending Approval commentary = %q, want empty", reloaded.Commentary)
+	}
+}
 
 func TestListPendingApprovalsKeepsParallelSourcesIndependent(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -80,6 +139,7 @@ func TestListPendingApprovalsKeepsParallelSourcesIndependent(t *testing.T) {
 		joinAEdge,
 		join,
 		targetA,
+		"Branch A is ready.",
 		map[string]string{"joined": "A"},
 		time.UnixMilli(1_700_000_000_001).UTC(),
 	)
@@ -94,6 +154,7 @@ func TestListPendingApprovalsKeepsParallelSourcesIndependent(t *testing.T) {
 		joinBEdge,
 		join,
 		targetB,
+		"Branch B is ready.",
 		map[string]string{"joined": "B"},
 		time.UnixMilli(1_700_000_000_002).UTC(),
 	)

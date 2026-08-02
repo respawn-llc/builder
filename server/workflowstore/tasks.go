@@ -552,6 +552,17 @@ func touchTaskUpdatedAt(ctx context.Context, q *sqlitegen.Queries, taskID string
 	return nil
 }
 
+func advanceTaskUpdatedAt(ctx context.Context, q *sqlitegen.Queries, taskID string, now int64) error {
+	updated, err := q.AdvanceTaskUpdatedAt(ctx, sqlitegen.AdvanceTaskUpdatedAtParams{UpdatedAtUnixMs: now, TaskID: taskID})
+	if err != nil {
+		return fmt.Errorf("advance task timestamp: %w", err)
+	}
+	if updated != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 	target, err := executionTargetSnapshotFromTask(row)
 	if err != nil {

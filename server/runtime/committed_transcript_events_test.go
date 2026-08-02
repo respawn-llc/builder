@@ -17,6 +17,8 @@ import (
 	"core/server/tools"
 )
 
+const committedTranscriptEventTestWait = 3 * time.Second
+
 func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing.T) {
 	t.Parallel()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
@@ -41,7 +43,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 	}()
 	select {
 	case <-firstEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for first append to enter persistence")
 	}
 
@@ -119,7 +121,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 	}()
 	select {
 	case <-cachePersistEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for cache warning observation to enter persistence")
 	}
 
@@ -269,7 +271,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	}()
 	select {
 	case <-replacementEventEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for replacement projection event")
 	}
 

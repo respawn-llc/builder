@@ -29,6 +29,7 @@ type pendingApprovalTransitionSnapshot struct {
 	DisplayName       string                     `json:"display_name"`
 	Description       string                     `json:"description"`
 	SourceDisplayName string                     `json:"source_display_name"`
+	Commentary        string                     `json:"commentary,omitempty"`
 }
 
 type pendingApprovalTargetSnapshot struct {
@@ -271,6 +272,7 @@ func newPendingApproval(
 	edge workflow.Edge,
 	target workflow.Node,
 	targetCurrentNode workflow.CurrentNode,
+	commentary string,
 	outputValues map[string]string,
 	createdAt time.Time,
 ) (workflow.PendingApproval, error) {
@@ -279,6 +281,7 @@ func newPendingApproval(
 		workflowVersion,
 		group,
 		sourceDisplayName,
+		commentary,
 		outputValues,
 		[]workflow.PendingApprovalBranch{{
 			TransitionBranchKey: workflow.TransitionBranchKey(edge.Key),
@@ -300,6 +303,7 @@ func newPendingApprovalWithBranches(
 	workflowVersion int64,
 	group workflow.TransitionGroup,
 	sourceDisplayName string,
+	commentary string,
 	outputValues map[string]string,
 	branches []workflow.PendingApprovalBranch,
 	createdAt time.Time,
@@ -345,6 +349,7 @@ func newPendingApprovalWithBranches(
 			Group:             group,
 			SourceDisplayName: sourceDisplayName,
 		},
+		Commentary:   commentary,
 		OutputValues: cloneCurrentNodeOutputValues(outputValues),
 		Branches:     append([]workflow.PendingApprovalBranch(nil), branches...),
 		CreatedAt:    createdAt.UTC().Truncate(time.Millisecond),
@@ -361,6 +366,7 @@ func insertPendingApproval(ctx context.Context, q *sqlitegen.Queries, approval w
 		DisplayName:       approval.Transition.Group.DisplayName,
 		Description:       approval.Transition.Group.Description,
 		SourceDisplayName: approval.Transition.SourceDisplayName,
+		Commentary:        approval.Commentary,
 	})
 	if err != nil {
 		return fmt.Errorf("encode pending approval transition snapshot: %w", err)
@@ -500,6 +506,7 @@ func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlit
 			},
 			SourceDisplayName: transitionSnapshot.SourceDisplayName,
 		},
+		Commentary:   transitionSnapshot.Commentary,
 		OutputValues: outputValues,
 		Branches:     branches,
 		CreatedAt:    time.UnixMilli(row.CreatedAtUnixMs).UTC(),

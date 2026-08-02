@@ -18,7 +18,10 @@ type exclusiveStepReservationKind uint8
 
 const exclusiveStepReservationManualCompaction exclusiveStepReservationKind = 1
 
-type exclusiveStepReservation = struct{ Kind exclusiveStepReservationKind }
+type exclusiveStepReservation = struct {
+	Kind      exclusiveStepReservationKind
+	queueable bool
+}
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
@@ -31,6 +34,8 @@ type exclusiveStepLifecycle interface {
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
+	DrainAgentStepBoundary(ctx context.Context) error
+	EndAgentStepBoundary()
 }
 
 type backgroundNoticeScheduler interface {

@@ -6,6 +6,25 @@ type compactionRuntimeState struct {
 	mu                 sync.Mutex
 	count              int
 	soonReminderIssued bool
+	manualEligible     bool
+}
+
+func (s *compactionRuntimeState) ManualCompactionEligible() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.manualEligible
+}
+
+func (s *compactionRuntimeState) SetManualCompactionEligible(eligible bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.manualEligible = eligible
+	s.mu.Unlock()
 }
 
 func newCompactionRuntimeState() *compactionRuntimeState {

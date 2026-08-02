@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 
 	"core/cli/tui/ongoing"
 
@@ -59,6 +60,10 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
 		result = m.ongoingTranscript.HandleSubscriptionLoss()
+	case ongoingTranscriptEventFailure:
+		err = fmt.Errorf("open transcript subscription: %w", event.Err)
+		m.logf("ongoing.transcript.open.error err=%q", err.Error())
+		return m.handleFatalUIError(fmt.Sprintf("ongoing transcript failed: %v", err), err)
 	default:
 		if m.debugMode {
 			panic("unknown ongoing transcript event kind")

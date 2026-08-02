@@ -18,6 +18,7 @@ import (
 type taskInterruptCommandRemote struct {
 	apicontract.WorkflowService
 	interruptRequests []serverapi.WorkflowTaskInterruptRequest
+	resumeRequests    []serverapi.WorkflowTaskResumeRequest
 	moveRequests      []serverapi.WorkflowTaskMoveRequest
 	previewResponse   *serverapi.WorkflowTaskMovePreviewResponse
 	moveResponse      *serverapi.WorkflowTaskMoveResponse
@@ -39,6 +40,11 @@ func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serv
 func (r *taskInterruptCommandRemote) InterruptWorkflowTask(_ context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
 	r.interruptRequests = append(r.interruptRequests, req)
 	return serverapi.WorkflowTaskInterruptResponse{}, nil
+}
+
+func (r *taskInterruptCommandRemote) ResumeWorkflowTask(_ context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
+	r.resumeRequests = append(r.resumeRequests, req)
+	return serverapi.WorkflowTaskResumeResponse{}, nil
 }
 
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
@@ -391,6 +397,56 @@ func TestTaskInterruptTargetsTheResolvedTask(t *testing.T) {
 	}
 	if got := stdout.String(); got != "Interrupted KENT-1.\n" {
 		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestTaskInterruptFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	remote := &taskInterruptCommandRemote{}
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, remote, nil
+	}
+	t.Cleanup(func() {
+		workflowCommandRemoteOpener = previous
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"interrupt", "task-1"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.interruptRequests) != 1 ||
+		remote.interruptRequests[0].InvokingSessionID == nil ||
+		remote.interruptRequests[0].InvokingSessionID.String() != "agent-session" {
+		t.Fatalf("interrupt requests = %+v, want invoking Session agent-session", remote.interruptRequests)
+	}
+}
+
+func TestTaskResumeFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	remote := &taskInterruptCommandRemote{}
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, remote, nil
+	}
+	t.Cleanup(func() {
+		workflowCommandRemoteOpener = previous
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := taskSubcommand([]string{"resume", "task-1"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.resumeRequests) != 1 ||
+		remote.resumeRequests[0].InvokingSessionID == nil ||
+		remote.resumeRequests[0].InvokingSessionID.String() != "agent-session" {
+		t.Fatalf("resume requests = %+v, want invoking Session agent-session", remote.resumeRequests)
 	}
 }
 

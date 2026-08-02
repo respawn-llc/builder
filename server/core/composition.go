@@ -554,11 +554,11 @@ type authorityStepLifecycle struct {
 	registry *registry.RuntimeRegistry
 }
 
-func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
 	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepBegan(ctx, snapshot)
 }
 
-func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
 	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
 }
 

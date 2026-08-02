@@ -35,6 +35,12 @@ func (m *Manager) applyPostprocessing(ctx context.Context, entry *processEntry, 
 	})
 }
 
+func limitModelVisibleFallbackOutput(output string, preservesRaw bool) string {
+	if preservesRaw {
+		return output
+	}
+	return postprocess.LimitOutputLines(output)
+}
 func mergeOperationalWarning(existing postprocess.Warning, message string) (postprocess.Warning, error) {
 	warning, err := postprocess.NewWarning(message)
 	if err != nil {

@@ -58,7 +58,6 @@ type currentNodeRunnerStepLifecycle struct {
 func (s currentNodeRunnerStepLifecycle) StepBegan(
 	ctx context.Context,
 	resource sessionruntime.AgentResourceDescriptor,
-	_ sessionruntime.ExecutionScope,
 	snapshot agentruntime.StepLifecycleSnapshot,
 ) error {
 	return runtimewire.NewStepLifecycleSink(
@@ -70,7 +69,6 @@ func (s currentNodeRunnerStepLifecycle) StepBegan(
 func (s currentNodeRunnerStepLifecycle) StepEnded(
 	ctx context.Context,
 	resource sessionruntime.AgentResourceDescriptor,
-	_ sessionruntime.ExecutionScope,
 	snapshot agentruntime.StepLifecycleSnapshot,
 ) error {
 	return runtimewire.NewStepLifecycleSink(

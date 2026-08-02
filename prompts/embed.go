@@ -310,6 +310,7 @@ var (
 	WorkflowFinalAnswerNudgePrompt                   = mustPrompt("workflow/final_answer_nudge.md")
 	WorkflowHumanOnlyTaskActionDeniedPrompt          = mustPrompt("workflow/human_only_task_action_denied.md")
 	WorkflowLiveControlSelfTargetDeniedPrompt        = mustPrompt("workflow/live_control_self_target_denied.md")
+	WorkflowTaskMutationSelfTargetDeniedPrompt       = mustPrompt("workflow/task_mutation_self_target_denied.md")
 	WorkflowTaskCompleteAgentOwnershipErrorPrompt    = strings.TrimSpace(mustPrompt("workflow/task_complete_agent_ownership_error.md"))
 	WorkflowTaskCompleteHumanSafetyWarningPrompt     = strings.TrimSpace(mustPrompt("workflow/task_complete_human_safety_warning.md"))
 	WorktreeModePrompt                               = mustPrompt("worktree_mode_prompt.md")

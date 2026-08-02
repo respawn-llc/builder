@@ -547,6 +547,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskCreateConflict && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskCreateConflictError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskMutationSelfTarget && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskMutationSelfTargetError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
 	}
@@ -614,6 +617,12 @@ func protocolError(resp *protocol.ResponseError) error {
 		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoActiveRun, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
 		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoFinalAnswer, message, protocol.SentinelErrorJoined)
+	case protocol.ErrCodeManualCompactionTooSoon:
+		return serverapi.ErrManualCompactionTooSoon
+	case protocol.ErrCodeManualCompactionDisabled:
+		return serverapi.ErrManualCompactionDisabled
+	case protocol.ErrCodeManualCompactionActive:
+		return serverapi.ErrManualCompactionActive
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
