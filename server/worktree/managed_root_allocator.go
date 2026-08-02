@@ -149,8 +149,7 @@ func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (stri
 	if !sameOrDescendantPath(base, parent) {
 		return "", fmt.Errorf("managed workspace parent %q escapes base %q", parent, base)
 	}
-	if sameOrDescendantPath(canonicalWorkspaceRoot, parent) ||
-		sameOrDescendantPath(parent, canonicalWorkspaceRoot) {
+	if sameOrDescendantPath(canonicalWorkspaceRoot, parent) {
 		return "", fmt.Errorf(
 			"managed workspace parent %q overlaps source workspace %q: %w",
 			parent,

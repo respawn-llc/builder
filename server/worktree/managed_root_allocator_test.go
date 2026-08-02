@@ -93,6 +93,32 @@ func TestManagedRootAllocatorRejectsAutomaticParentOverlappingSourceWorkspace(t 
 	}
 }
 
+func TestManagedRootAllocatorAllowsParentContainingSourceWorkspace(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "app", "app")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(bytes.Repeat([]byte{4}, 16)))
+	regularRoot, err := allocator.reserveRegularRoot(workspace)
+	if err != nil {
+		t.Fatalf("reserve regular root: %v", err)
+	}
+	taskRoot, err := allocator.reserveTaskRoot(workspace, "KENT-335")
+	if err != nil {
+		t.Fatalf("reserve Task root: %v", err)
+	}
+	wantParent := filepath.Join(allocator.base.path, "app")
+	for _, root := range []string{regularRoot, taskRoot} {
+		if filepath.Dir(root) != wantParent {
+			t.Fatalf("allocated root = %q, want parent %q", root, wantParent)
+		}
+		if sameOrDescendantPath(workspace, root) {
+			t.Fatalf("allocated root %q is inside source workspace %q", root, workspace)
+		}
+	}
+}
+
 func TestManagedRootAllocatorReservesRegularAndTaskLeaves(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "worktrees")
 	workspace := filepath.Join(t.TempDir(), "Builder CLI")
