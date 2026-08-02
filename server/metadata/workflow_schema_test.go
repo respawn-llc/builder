@@ -604,6 +604,7 @@ func TestTaskManagedWorktreeSchemaRejectsCrossProjectReferences(t *testing.T) {
 	}
 	now := time.Now().UTC().UnixMilli()
 	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	seedWorkflowGraphForProject(t, store.db, binding.ProjectID, now, "2")
 
 	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-valid-worktree', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
@@ -634,6 +635,9 @@ WHERE id = 'task-atomic-lock'`, sameProjectWorkspace.WorkspaceID); err != nil {
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
 SET execution_target_requested_ref = 'refs/heads/changed'
+WHERE id = 'task-atomic-lock'`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
+SET project_workflow_link_id = 'link-2'
 WHERE id = 'task-atomic-lock'`)
 }
 

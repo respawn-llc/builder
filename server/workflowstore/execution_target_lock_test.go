@@ -270,6 +270,16 @@ func TestManagedTargetLockUsesCapturedWorkspaceAfterSourceRebind(t *testing.T) {
 	if targetContext.SourceWorkspaceID != binding.WorkspaceID {
 		t.Fatalf("locked source workspace = %q, want captured workspace %q", targetContext.SourceWorkspaceID, binding.WorkspaceID)
 	}
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:              worktreeID,
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   worktreeRecord.CanonicalRootPath,
+		Managed:         true,
+		CreatedBranch:   true,
+		GitMetadataJSON: `{"head_oid":"updated-after-lock"}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord after target lock: %v", err)
+	}
 	editedAfterLockTitle := "edited after lock"
 	editedAfterLockBody := "body edited after lock"
 	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{

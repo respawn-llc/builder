@@ -5,6 +5,7 @@
 -- atomic target-lock update that establishes the locked target facts.
 DROP TRIGGER IF EXISTS tasks_managed_worktree_context_insert;
 DROP TRIGGER IF EXISTS tasks_managed_worktree_context_update;
+DROP TRIGGER IF EXISTS worktrees_managed_task_workspace_update;
 
 -- +goose StatementBegin
 CREATE TRIGGER tasks_managed_worktree_context_insert
@@ -61,7 +62,8 @@ WHEN NEW.managed_worktree_id IS NOT NULL
               AND NEW.execution_target_provenance IN ('resolved', 'legacy_observed')
           )
           OR (
-              OLD.source_workspace_id IS NEW.source_workspace_id
+              OLD.project_workflow_link_id IS NEW.project_workflow_link_id
+              AND OLD.source_workspace_id IS NEW.source_workspace_id
               AND OLD.managed_worktree_id IS NEW.managed_worktree_id
               AND OLD.execution_target_mode IS NEW.execution_target_mode
               AND OLD.execution_target_requested_ref IS NEW.execution_target_requested_ref
@@ -71,6 +73,31 @@ WHEN NEW.managed_worktree_id IS NOT NULL
           )
       )
  )
+BEGIN
+    SELECT RAISE(ABORT, 'managed worktree must belong to task source workspace');
+END;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE TRIGGER worktrees_managed_task_workspace_update
+BEFORE UPDATE OF id, workspace_id ON worktrees
+FOR EACH ROW
+WHEN EXISTS (
+    SELECT 1
+    FROM tasks t
+    WHERE t.managed_worktree_id = OLD.id
+      AND (
+          OLD.id != NEW.id
+          OR OLD.workspace_id != NEW.workspace_id
+          OR (
+              t.execution_target_mode IS NULL
+              AND (
+                  t.source_workspace_id IS NULL
+                  OR t.source_workspace_id != NEW.workspace_id
+              )
+          )
+      )
+)
 BEGIN
     SELECT RAISE(ABORT, 'managed worktree must belong to task source workspace');
 END;
