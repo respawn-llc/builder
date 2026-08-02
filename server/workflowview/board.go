@@ -135,11 +135,15 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	cursorSortValue := sql.NullString{}
 	cursorTaskSeq := sql.NullInt64{}
 	cursorUnlabeled := sql.NullInt64{}
+	cursorUpdatedAtUnixMs := sql.NullInt64{}
 	if cursor.anchor != nil {
 		if sort.Field != serverapi.WorkflowBoardNodeCardsSortFieldLabels || cursor.anchor.labelOrdinals != nil {
 			cursorSortValue = sql.NullString{String: cursor.anchor.sortValue(sort), Valid: true}
 		}
 		cursorTaskSeq = sql.NullInt64{Int64: cursor.anchor.taskSeq, Valid: true}
+		if cursor.anchor.updatedAtUnixMs != nil {
+			cursorUpdatedAtUnixMs = sql.NullInt64{Int64: *cursor.anchor.updatedAtUnixMs, Valid: true}
+		}
 		if cursor.anchor.unlabeled != nil {
 			cursorUnlabeled = sql.NullInt64{Int64: boolInt64(*cursor.anchor.unlabeled), Valid: true}
 		}
@@ -160,26 +164,59 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		if _, ok := workflowNodesByID(definition.api)[nodeID]; !ok {
 			return errors.New("node_id is invalid for workflow")
 		}
-		rows, err := b.queries.ListBoardNodeTasksGeneralized(ctx, sqlitegen.ListBoardNodeTasksGeneralizedParams{
-			ProjectID:            projectID,
-			WorkflowID:           workflowID,
-			NodeID:               nodeID,
-			LabelFilterKind:      labelFilterArgs.kind,
-			LabelFilterMode:      labelFilterArgs.mode,
-			LabelIdsJson:         labelFilterArgs.labelIDsJSON,
-			ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
-			SortField:            string(sort.Field),
-			SortDescending:       boolInt64(sort.Direction == serverapi.WorkflowTaskListSortDirectionDesc),
-			CursorDirection:      string(cursor.direction),
-			CursorSortValue:      cursorSortValue,
-			CursorTaskSeq:        cursorTaskSeq,
-			CursorUnlabeled:      cursorUnlabeled,
-			LimitRows:            int64(pageSize + 1),
-		})
-		if err != nil {
-			return err
+		if sort.Field == serverapi.WorkflowBoardNodeCardsSortFieldUpdated {
+			projectWorkflowLinkID, err := b.projectWorkflowLinkID(ctx, projectID, workflowID)
+			if err != nil {
+				return err
+			}
+			workflowIDValue, err := workflowID.Value()
+			if err != nil {
+				return err
+			}
+			workflowIDBlob, ok := workflowIDValue.([]byte)
+			if !ok {
+				return fmt.Errorf("workflow_id value has unexpected type %T", workflowIDValue)
+			}
+			pageTasks, err = b.listUpdatedNodeTasks(ctx, boardUpdatedNodeTasksArgs{
+				projectID:             projectID,
+				workflowID:            workflowIDBlob,
+				projectWorkflowLinkID: projectWorkflowLinkID,
+				nodeID:                nodeID,
+				labelFilterKind:       labelFilterArgs.kind,
+				labelFilterMode:       labelFilterArgs.mode,
+				labelIDsJSON:          labelFilterArgs.labelIDsJSON,
+				excludedLabelIDsJSON:  labelFilterArgs.excludedLabelIDsJSON,
+				sortDirection:         sort.Direction,
+				cursor:                cursor,
+				cursorTaskSeq:         cursorTaskSeq,
+				cursorUpdatedAtUnixMs: cursorUpdatedAtUnixMs,
+				limitRows:             int64(pageSize + 1),
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			rows, err := b.queries.ListBoardNodeTasksGeneralized(ctx, sqlitegen.ListBoardNodeTasksGeneralizedParams{
+				ProjectID:            projectID,
+				WorkflowID:           workflowID,
+				NodeID:               nodeID,
+				LabelFilterKind:      labelFilterArgs.kind,
+				LabelFilterMode:      labelFilterArgs.mode,
+				LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+				ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+				SortField:            string(sort.Field),
+				SortDescending:       boolInt64(sort.Direction == serverapi.WorkflowTaskListSortDirectionDesc),
+				CursorDirection:      string(cursor.direction),
+				CursorSortValue:      cursorSortValue,
+				CursorTaskSeq:        cursorTaskSeq,
+				CursorUnlabeled:      cursorUnlabeled,
+				LimitRows:            int64(pageSize + 1),
+			})
+			if err != nil {
+				return err
+			}
+			pageTasks = boardNodeTaskRecordsGeneralized(rows)
 		}
-		pageTasks = boardNodeTaskRecordsGeneralized(rows)
 		hasExtra = len(pageTasks) > pageSize
 		if hasExtra {
 			pageTasks = pageTasks[:pageSize]
@@ -383,6 +420,105 @@ func boardNodeTaskRecordsUpdated[T boardUpdatedTaskRow](rows []T) ([]boardNodeCa
 		tasks = append(tasks, boardNodeCardsPageTask{task: task})
 	}
 	return tasks, nil
+}
+
+type boardUpdatedNodeTasksArgs struct {
+	projectID             string
+	workflowID            []byte
+	projectWorkflowLinkID string
+	nodeID                string
+	labelFilterKind       interface{}
+	labelFilterMode       interface{}
+	labelIDsJSON          interface{}
+	excludedLabelIDsJSON  interface{}
+	sortDirection         serverapi.WorkflowTaskListSortDirection
+	cursor                boardNodeCardsPageCursor
+	cursorTaskSeq         sql.NullInt64
+	cursorUpdatedAtUnixMs sql.NullInt64
+	limitRows             int64
+}
+
+func (b *Board) listUpdatedNodeTasks(ctx context.Context, args boardUpdatedNodeTasksArgs) ([]boardNodeCardsPageTask, error) {
+	switch {
+	case args.sortDirection == serverapi.WorkflowTaskListSortDirectionAsc &&
+		args.cursor.direction == boardNodeCardsPageDirectionNewer:
+		rows, err := b.queries.ListBoardNodeTasksUpdatedAscPrevious(ctx, sqlitegen.ListBoardNodeTasksUpdatedAscPreviousParams{
+			ProjectID:             args.projectID,
+			WorkflowID:            args.workflowID,
+			ProjectWorkflowLinkID: args.projectWorkflowLinkID,
+			LabelFilterKind:       args.labelFilterKind,
+			LabelFilterMode:       args.labelFilterMode,
+			LabelIdsJson:          args.labelIDsJSON,
+			ExcludedLabelIdsJson:  args.excludedLabelIDsJSON,
+			NodeID:                args.nodeID,
+			CursorTaskSeq:         args.cursorTaskSeq,
+			CursorUpdatedAtUnixMs: args.cursorUpdatedAtUnixMs,
+			LimitRows:             args.limitRows,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return boardNodeTaskRecordsUpdated(rows)
+	case args.sortDirection == serverapi.WorkflowTaskListSortDirectionAsc:
+		rows, err := b.queries.ListBoardNodeTasksUpdatedAsc(ctx, sqlitegen.ListBoardNodeTasksUpdatedAscParams{
+			ProjectID:             args.projectID,
+			WorkflowID:            args.workflowID,
+			ProjectWorkflowLinkID: args.projectWorkflowLinkID,
+			LabelFilterKind:       args.labelFilterKind,
+			LabelFilterMode:       args.labelFilterMode,
+			LabelIdsJson:          args.labelIDsJSON,
+			ExcludedLabelIdsJson:  args.excludedLabelIDsJSON,
+			NodeID:                args.nodeID,
+			CursorTaskSeq:         args.cursorTaskSeq,
+			CursorDirection:       string(args.cursor.direction),
+			CursorUpdatedAtUnixMs: args.cursorUpdatedAtUnixMs,
+			LimitRows:             args.limitRows,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return boardNodeTaskRecordsUpdated(rows)
+	case args.sortDirection == serverapi.WorkflowTaskListSortDirectionDesc &&
+		args.cursor.direction == boardNodeCardsPageDirectionNewer:
+		rows, err := b.queries.ListBoardNodeTasksUpdatedDescPrevious(ctx, sqlitegen.ListBoardNodeTasksUpdatedDescPreviousParams{
+			ProjectID:             args.projectID,
+			WorkflowID:            args.workflowID,
+			ProjectWorkflowLinkID: args.projectWorkflowLinkID,
+			LabelFilterKind:       args.labelFilterKind,
+			LabelFilterMode:       args.labelFilterMode,
+			LabelIdsJson:          args.labelIDsJSON,
+			ExcludedLabelIdsJson:  args.excludedLabelIDsJSON,
+			NodeID:                args.nodeID,
+			CursorTaskSeq:         args.cursorTaskSeq,
+			CursorUpdatedAtUnixMs: args.cursorUpdatedAtUnixMs,
+			LimitRows:             args.limitRows,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return boardNodeTaskRecordsUpdated(rows)
+	case args.sortDirection == serverapi.WorkflowTaskListSortDirectionDesc:
+		rows, err := b.queries.ListBoardNodeTasksUpdatedDesc(ctx, sqlitegen.ListBoardNodeTasksUpdatedDescParams{
+			ProjectID:             args.projectID,
+			WorkflowID:            args.workflowID,
+			ProjectWorkflowLinkID: args.projectWorkflowLinkID,
+			LabelFilterKind:       args.labelFilterKind,
+			LabelFilterMode:       args.labelFilterMode,
+			LabelIdsJson:          args.labelIDsJSON,
+			ExcludedLabelIdsJson:  args.excludedLabelIDsJSON,
+			NodeID:                args.nodeID,
+			CursorTaskSeq:         args.cursorTaskSeq,
+			CursorDirection:       string(args.cursor.direction),
+			CursorUpdatedAtUnixMs: args.cursorUpdatedAtUnixMs,
+			LimitRows:             args.limitRows,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return boardNodeTaskRecordsUpdated(rows)
+	default:
+		return nil, fmt.Errorf("board updated sort invariant violated: direction %q", args.sortDirection)
+	}
 }
 
 func labelOrdinalKey(value sql.NullString) *string {
