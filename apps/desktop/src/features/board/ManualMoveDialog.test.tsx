@@ -1,9 +1,9 @@
-import { I18nextProvider } from "react-i18next";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { TaskMovePreviewResponse } from "@/api";
+import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { appI18n, initializeI18n } from "@/i18n";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 
@@ -11,11 +11,13 @@ beforeAll(async () => {
   await initializeI18n();
 });
 
+const appServices = createTestServices([], undefined, { platform: "macos" });
+
 function renderDialog(preview: TaskMovePreviewResponse, onSubmit = vi.fn(), onCancel = vi.fn()) {
   render(
-    <I18nextProvider i18n={appI18n}>
+    <TestAppProviders services={appServices}>
       <ManualMoveDialog onCancel={onCancel} onSubmit={onSubmit} preview={preview} />
-    </I18nextProvider>,
+    </TestAppProviders>,
   );
   return { onCancel, onSubmit };
 }
@@ -110,5 +112,40 @@ describe("ManualMoveDialog", () => {
 
     await user.click(screen.getByRole("button", { name: appI18n.t("app.cancel") }));
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("submits valid required values with the desktop text shortcut", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({
+      outcome: "transition",
+      transition: {
+        choices: [
+          {
+            transitionKey: "transition-0",
+            label: "Implement",
+            sourceNodeDisplayName: "Plan",
+            requiredValues: [
+              {
+                nodeKey: "plan",
+                outputName: "summary",
+                description: "The plan summary.",
+                resolvedValue: null,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const field = screen.getByLabelText("summary");
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.type(field, "A plan");
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledWith({
+      transitionKey: "transition-0",
+      values: { plan: { summary: "A plan" } },
+    });
   });
 });
