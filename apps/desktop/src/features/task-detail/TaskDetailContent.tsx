@@ -27,12 +27,6 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
-function taskDetailSidebarSnapshot(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): SidebarTaskDetailSnapshot | undefined {
-  return snapshot?.kind === "taskDetail" ? snapshot : undefined;
-}
-
 function relatedNewTaskDestination(
   detail: TaskDetail,
   direction: "blocked-by" | "blocks",
@@ -141,12 +135,14 @@ function useTaskDetailSidebarCapture({
 function useTaskDetailNavigation({
   activeDestination,
   detail,
+  isSidebarSurface,
   navigation,
   openSidebar,
   pushSidebar,
 }: Readonly<{
   activeDestination: SidebarDestination | null;
   detail: TaskDetail;
+  isSidebarSurface: boolean;
   navigation: ReturnType<typeof useAppNavigation>;
   openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
   pushSidebar: ReturnType<typeof useSidebar>["pushSidebar"];
@@ -154,20 +150,20 @@ function useTaskDetailNavigation({
   const addDependency = useCallback(
     (direction: "blocked-by" | "blocks") => {
       const destination = relatedNewTaskDestination(detail, direction);
-      if (activeDestination?.kind === "taskDetail") pushSidebar(destination);
+      if (isSidebarSurface && activeDestination?.kind === "taskDetail") pushSidebar(destination);
       else void openSidebar(destination);
     },
-    [activeDestination, detail, openSidebar, pushSidebar],
+    [activeDestination, detail, isSidebarSurface, openSidebar, pushSidebar],
   );
   const selectDependencyTask = useCallback(
     (taskID: string) => {
-      if (activeDestination?.kind === "taskDetail") {
+      if (isSidebarSurface && activeDestination?.kind === "taskDetail") {
         pushSidebar(relatedTaskDestination(activeDestination, taskID));
         return;
       }
       void navigation.replaceTask(taskID);
     },
-    [activeDestination, navigation, pushSidebar],
+    [activeDestination, isSidebarSurface, navigation, pushSidebar],
   );
   return { addDependency, selectDependencyTask };
 }
@@ -205,12 +201,12 @@ function useTaskDetailLocalState(
   const [draftState, setDraftState] = useState<TaskDraftState>(() =>
     initialTaskDraftState(detail.id, serverDraft, snapshot),
   );
-  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(
-    () => restoredEditingComment(snapshot),
+  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(() =>
+    restoredEditingComment(snapshot),
   );
   const [newCommentBody, setNewCommentBody] = useState(snapshot?.newCommentDraft ?? "");
-  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
-    () => restoredDescriptionPresentation(snapshot),
+  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(() =>
+    restoredDescriptionPresentation(snapshot),
   );
   const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(
     snapshot?.selectedTab ?? "comments",
@@ -281,13 +277,15 @@ export function TaskDetailContent({
   const navigation = useAppNavigation();
   const {
     activeDestination,
-    activeToken,
+    activeToken: sidebarActiveToken,
     pushSidebar,
     registerSidebarStateCapture,
     openSidebar,
   } = useSidebar();
+  const isSidebarSurface = sidebarActivationID !== null && sidebarActivationID !== undefined;
+  const activeToken = isSidebarSurface ? sidebarActiveToken : null;
   const serverDraft = taskDraft(detail);
-  const restoredSnapshot = taskDetailSidebarSnapshot(sidebarSnapshot);
+  const restoredSnapshot = sidebarSnapshot;
   const scrollElementRef = useRef<HTMLDivElement | null>(null);
   const {
     draft,
@@ -368,6 +366,7 @@ export function TaskDetailContent({
   const { addDependency, selectDependencyTask } = useTaskDetailNavigation({
     activeDestination,
     detail,
+    isSidebarSurface,
     navigation,
     openSidebar,
     pushSidebar,

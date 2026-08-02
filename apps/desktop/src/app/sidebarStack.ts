@@ -73,23 +73,33 @@ export function sidebarStackReducer(
   action: SidebarStackAction,
 ): SidebarStackState | null {
   switch (action.type) {
-    case "open": return reduceOpen(action);
-    case "replace": return reduceReplace(state, action);
-    case "push": return reducePush(state, action);
-    case "back": return reduceBack(state, action);
-    case "remove": return reduceRemove(state, action);
-    case "capture": return reduceCapture(state, action);
+    case "open":
+      return reduceOpen(action);
+    case "replace":
+      return reduceReplace(state, action);
+    case "push":
+      return reducePush(state, action);
+    case "back":
+      return reduceBack(state, action);
+    case "remove":
+      return reduceRemove(state, action);
+    case "capture":
+      return reduceCapture(state, action);
     case "close":
       return state?.lifecycleID === action.lifecycleID ? null : state;
   }
 }
 
 function reduceOpen(action: Extract<SidebarStackAction, { type: "open" }>): SidebarStackState {
-  return createSidebarStack(action.lifecycleID, {
-    entryID: action.entryID,
-    destination: action.destination,
-    ...(action.snapshot === undefined ? {} : { snapshot: action.snapshot }),
-  }, action.activationID);
+  return createSidebarStack(
+    action.lifecycleID,
+    {
+      entryID: action.entryID,
+      destination: action.destination,
+      ...(action.snapshot === undefined ? {} : { snapshot: action.snapshot }),
+    },
+    action.activationID,
+  );
 }
 
 function reduceReplace(
@@ -128,7 +138,8 @@ function reducePush(
   }
   const root = state.entries[0];
   if (root === undefined) return state;
-  const entries = state.entries.length >= sidebarStackCapacity ? [root, ...state.entries.slice(2)] : state.entries;
+  const entries =
+    state.entries.length >= sidebarStackCapacity ? [root, ...state.entries.slice(2)] : state.entries;
   return {
     ...state,
     activationID: action.activationID ?? state.activationID,
@@ -159,15 +170,17 @@ function reduceRemove(
   action: Extract<SidebarStackAction, { type: "remove" }>,
 ): SidebarStackState | null {
   if (state?.lifecycleID !== action.lifecycleID) return state;
-  const index = state.entries.findIndex((entry) => entry.entryID === action.entryID);
-  return index < 0
+  const index = sidebarEntryIndex(state.entries, action.entryID);
+  return index === undefined
     ? state
     : state.entries.length === 1
       ? null
       : {
           ...state,
           activationID:
-            index === state.entries.length - 1 ? action.activationID ?? state.activationID : state.activationID,
+            index === state.entries.length - 1
+              ? (action.activationID ?? state.activationID)
+              : state.activationID,
           entries: state.entries.filter((_, i) => i !== index),
         };
 }
@@ -177,10 +190,24 @@ function reduceCapture(
   action: Extract<SidebarStackAction, { type: "capture" }>,
 ): SidebarStackState | null {
   if (state?.lifecycleID !== action.lifecycleID) return state;
-  const index = state.entries.findIndex((entry) => entry.entryID === action.entryID);
-  return index < 0
+  const index = sidebarEntryIndex(state.entries, action.entryID);
+  return index === undefined
     ? state
-    : { ...state, entries: state.entries.map((entry, i) => (i === index ? { ...entry, snapshot: action.snapshot } : entry)) };
+    : {
+        ...state,
+        entries: state.entries.map((entry, i) =>
+          i === index ? { ...entry, snapshot: action.snapshot } : entry,
+        ),
+      };
+}
+
+function sidebarEntryIndex(entries: readonly SidebarStackEntry[], entryID: string): number | undefined {
+  for (const [index, entry] of entries.entries()) {
+    if (entry.entryID === entryID) {
+      return index;
+    }
+  }
+  return undefined;
 }
 
 function deactivateEntry(entry: SidebarStackEntry): SidebarStackEntry {
@@ -199,8 +226,8 @@ export function findTaskDetailIndex(
   if (destination.kind !== "taskDetail") {
     return undefined;
   }
-  const index = entries.findIndex(
-    (entry) => sidebarDestinationMatchesTask(entry.destination, destination.taskID),
+  const index = entries.findIndex((entry) =>
+    sidebarDestinationMatchesTask(entry.destination, destination.taskID),
   );
   return index === -1 ? undefined : index;
 }
