@@ -59,7 +59,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Expansion is row-local presentation state and resets whenever virtualization unmounts the row. Chat has no separate stable-ID expansion registry or persisted expansion marker.
 - Assistant messages remain fully expanded and have no collapse action.
 - Each conversational island has an external footer matching its measured width and role edge. The muted timestamp and all footer actions are always visible.
-- User-message footers contain Copy and one Edit action. Edit forks on submission without rewriting the original session; there is no separate Fork action.
+- Eligible user-message footers contain Copy and one Edit action. Edit immediately creates and opens the TUI-compatible fork child with the selected message as its composer draft; there is no separate Fork action.
 - Assistant-message footers contain Copy only.
 - Message Copy writes the original Markdown source to the clipboard.
 - Footer actions are always-visible icon-only Lucide buttons with accessible names and hover/focus tooltips.
@@ -445,11 +445,13 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 10. Forking And Lineage
 
-- Eligibility rules for user-message Edit.
-- Edit-and-fork composer behavior.
-- Confirmation and naming.
-- Destination transition.
-- Parent/previous-session navigation and lineage presentation.
+- Edit replaces the TUI rollback picker and appears only for a committed user row carrying a typed rollback target.
+- Edit is unavailable while runtime input is blocked or the ordinary composer draft is nonblank; the server owns active-work admission.
+- Edit immediately creates the durable main child with history ending before the selected message. There is no confirmation or naming form.
+- The child uses the existing server name, inherits execution/continuation/locked/worktree context, preserves lineage, and leaves the parent unchanged.
+- Chat opens the child at latest with the selected original text in the focused composer draft.
+- Failure keeps the parent open and unchanged and uses Sonner.
+- `To parent chat` follows previous-Session lineage to the parent at latest. Ordinary Chat continues to omit parent-agent lineage.
 
 ## 11. Failure And Recovery
 

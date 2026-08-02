@@ -103,12 +103,25 @@
 - User messages, assistant commentary, and assistant final answers are the only durable transcript islands. Tools, Reasoning Traces, context, diagnostics, notices, and every other durable non-conversational item use borderless inline disclosure or tool-row presentation.
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
-- Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. User messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Editing is the only fork action: submitting an edit creates a new Session branch and leaves the original Session unchanged.
+- Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. Eligible user messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Edit is the only fork action.
 - A live assistant message has no footer. The committed message receives timestamp and Copy together when it resolves.
 - Committed-message time uses the server's durable timestamp: relative age for 24 hours, then localized compact date and time, including the year only when different from the current year. Full date, time, and time zone are available on focus or hover.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
 - Contextual destinations adapt between shifted and overlay presentation. Processes and Goal are the defined Chat destinations. Session settings use a non-modal popover under the composer, not a contextual destination.
+
+## Edit And Fork
+
+- Desktop replaces the TUI rollback picker with the Edit action in an eligible committed user-message footer. It adds no global rollback picker, double-Escape shortcut, separate Fork action, or confirmation dialog.
+- A user message is eligible only when the server supplies its typed rollback target. Desktop never derives eligibility from role, text, position, timestamp, or another row.
+- Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
+- Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
+- The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
+- The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry.
+- The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
+- After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.
+- Fork failure leaves the operator in the unchanged parent Session and surfaces the authoritative diagnostic through Sonner. Desktop creates no optimistic child route or local fork state.
+- `To parent chat` follows the child's previous-Session lineage and opens the parent at latest. Parent-agent lineage remains omitted from ordinary Chat.
 
 ## Session Settings And Drafts
 

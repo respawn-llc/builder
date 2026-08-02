@@ -20,7 +20,7 @@
 - A Compaction-Preserved User Message does not become a new user turn in Ongoing Mode.
 - Transcript display reads bounded pages or a recent tail. Neither the TUI nor Kent keeps the complete transcript in memory for display.
 - Detail Mode can page across compaction boundaries.
-- Rollback/fork is navigation or attachment to a different session target, not same-session transcript mutation.
+- Rollback/fork immediately materializes and opens a durable child Session whose copied history ends before the selected user message. The selected message becomes the child composer draft, and the parent Session remains unchanged; rollback is never a same-session transcript mutation.
 - **Assistant streaming in ongoing mode uses source-backed Markdown promotion. Stable rendered assistant lines append during streaming after being styled as markdown; the volatile tail that cannot be styled deterministically stays in the mutable area until it can be promoted into immutable scrollback.**
 - Kent commits every control-feedback transcript row. The TUI does not show an optimistic copy or create a local fallback row.
 - A failed commit surfaces as an error.
