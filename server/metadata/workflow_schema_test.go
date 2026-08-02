@@ -570,13 +570,17 @@ VALUES ('session-valid-worktree', ?, ?, 'worktree-valid', 'projects/project/sess
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE sessions SET workspace_id = NULL WHERE id = 'session-valid-worktree'`)
 }
 
-func TestTaskManagedWorktreeSchemaRejectsCrossWorkspaceReferences(t *testing.T) {
+func TestTaskManagedWorktreeSchemaRejectsCrossProjectReferences(t *testing.T) {
 	t.Parallel()
 	store, _, binding := newMetadataTestStore(t)
 	ctx := t.Context()
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
 	if err != nil {
 		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	sameProjectWorkspace, err := store.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
 	}
 	if err := store.UpsertWorktreeRecord(ctx, WorktreeRecord{
 		ID:              "worktree-valid",
@@ -605,11 +609,22 @@ func TestTaskManagedWorktreeSchemaRejectsCrossWorkspaceReferences(t *testing.T) 
 VALUES ('task-valid-worktree', 'link-1', 1, 1, 'BLD-1', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
 		t.Fatalf("valid managed worktree should be allowed: %v", err)
 	}
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`)
+	if _, err := store.db.Exec(`UPDATE tasks SET source_workspace_id = ? WHERE id = 'task-valid-worktree'`, sameProjectWorkspace.WorkspaceID); err != nil {
+		t.Fatalf("same-project source workspace rebind should be allowed: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE tasks SET source_workspace_id = NULL WHERE id = 'task-valid-worktree'`); err != nil {
+		t.Fatalf("managed worktree without current source workspace should be allowed: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-same-project-workspace', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree-valid', ?, ?, '{}')`, sameProjectWorkspace.WorkspaceID, now, now); err != nil {
+		t.Fatalf("same-project managed worktree should be allowed: %v", err)
+	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-cross-worktree', 'link-1', 1, 2, 'BLD-2', 'Task', '', ?, 'worktree-other', ?, ?, '{}')`, binding.WorkspaceID, now, now)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('task-missing-source-workspace', 'link-1', 1, 3, 'BLD-3', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now)
+VALUES ('task-cross-worktree', 'link-1', 1, 3, 'BLD-3', 'Task', '', ?, 'worktree-other', ?, ?, '{}')`, binding.WorkspaceID, now, now)
+	if _, err := store.db.Exec(`INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, managed_worktree_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('task-missing-source-workspace', 'link-1', 1, 4, 'BLD-4', 'Task', '', 'worktree-valid', ?, ?, '{}')`, now, now); err != nil {
+		t.Fatalf("managed worktree without current source workspace should be allowed: %v", err)
+	}
 }
 
 func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {

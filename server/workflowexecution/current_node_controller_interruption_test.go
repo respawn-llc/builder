@@ -618,7 +618,7 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRunningScope(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptFailsWhilePreparationGateActive(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -692,32 +692,31 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID})
 	}()
 	select {
+	case err := <-interruptDone:
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("Task Interrupt while preparation gate active = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Task Interrupt waited for active preparation gate")
+	}
+	select {
 	case <-store.interruptStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not drain the queued Authority gate")
+		t.Fatal("Task Interrupt persisted an interruption despite the active preparation gate")
+	default:
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), running) {
+		t.Fatalf("running current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
 	}
 	releaseQueued()
-	close(store.interruptRelease)
-	select {
-	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("Task Interrupt: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not finish after queued gate retired")
-	}
 	for _, reference := range []workflow.CurrentNodeReference{running, queued} {
 		interruption, interrupted := store.interruption(reference)
-		if !interrupted {
-			t.Fatalf("current node %v was not durably interrupted", reference)
-		}
-		if interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
-			t.Fatalf("current node %v interruption reason = %q, want user interrupt", reference, interruption.reason)
+		if interrupted {
+			t.Fatalf("current node %v interruption = %+v after rejected Task Interrupt", reference, interruption)
 		}
 	}
 }
 
-func TestCurrentNodeControllerInterruptReturnsWhilePreparationContinues(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptFailsWhileBlockedPreparationContinues(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -738,6 +737,7 @@ func TestCurrentNodeControllerInterruptReturnsWhilePreparationContinues(t *testi
 		liveStarted: make(chan struct{}),
 		entered:     make(chan struct{}),
 		released:    make(chan struct{}),
+		finished:    make(chan struct{}),
 		canceled:    make(chan struct{}),
 	}
 	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
@@ -781,16 +781,25 @@ func TestCurrentNodeControllerInterruptReturnsWhilePreparationContinues(t *testi
 	}()
 	select {
 	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("Task Interrupt: %v", err)
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("Task Interrupt while blocked preparation = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Task Interrupt waited for blocked preparation")
+		t.Fatal("Task Interrupt waited for blocked preparation gate")
 	}
 	select {
 	case <-runner.canceled:
 		t.Fatal("Task Interrupt canceled preparation")
 	default:
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), live) {
+		t.Fatalf("live current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
+	}
+	close(runner.released)
+	select {
+	case <-runner.finished:
+	case <-time.After(time.Second):
+		t.Fatal("blocked preparation did not continue to completion")
 	}
 }
 

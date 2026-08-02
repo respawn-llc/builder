@@ -728,6 +728,7 @@ type liveAndBlockedPreparationRunner struct {
 	liveStarted chan struct{}
 	entered     chan struct{}
 	released    chan struct{}
+	finished    chan struct{}
 	canceled    chan struct{}
 }
 
@@ -754,6 +755,7 @@ func (r *liveAndBlockedPreparationRunner) StartCurrentNodeWithPreparation(
 	close(r.entered)
 	select {
 	case <-r.released:
+		close(r.finished)
 		return errors.New("preparation released")
 	case <-ctx.Done():
 		close(r.canceled)

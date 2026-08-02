@@ -142,32 +142,6 @@ func (s *Store) prepareExecutionTargetMutation(ctx context.Context, task sqliteg
 
 func applyPreparedExecutionTargetMutation(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord, prepared preparedExecutionTargetMutation, now int64) error {
 	if prepared.candidateToLock != nil {
-		candidate := prepared.candidateToLock
-		if candidate.Snapshot.Mode != workflow.ExecutionTargetModeNone {
-			capturedWorkspaceID := strings.TrimSpace(candidate.Root.SourceWorkspaceID)
-			currentWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
-			if capturedWorkspaceID != currentWorkspaceID {
-				metadataJSON, err := taskMetadataWithSourceWorkspaceSnapshot(ctx, q, task.MetadataJson, capturedWorkspaceID)
-				if err != nil {
-					return err
-				}
-				updated, err := q.UpdateTaskEditableFields(ctx, sqlitegen.UpdateTaskEditableFieldsParams{
-					Title:             task.Title,
-					Body:              task.Body,
-					SourceWorkspaceID: nullableString(capturedWorkspaceID),
-					MetadataJson:      metadataJSON,
-					UpdatedAtUnixMs:   now,
-					ID:                task.ID,
-				})
-				if err != nil {
-					return err
-				}
-				if updated != 1 {
-					return sql.ErrNoRows
-				}
-				task.SourceWorkspaceID = nullableString(capturedWorkspaceID)
-			}
-		}
 		locked, err := q.LockTaskExecutionTarget(ctx, executionTargetLockParams(task, *prepared.candidateToLock, now))
 		if err != nil {
 			return err

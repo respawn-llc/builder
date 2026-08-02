@@ -32,7 +32,6 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		stopHandles    []sessionruntime.ExecutionHandle
 		waitHandles    []sessionruntime.ExecutionHandle
 		references     []workflow.CurrentNodeReference
-		drainedGates   []currentNodeAdmissionGate
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
@@ -76,6 +75,11 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				gate, gated := c.gates[key]
 				if !gated || gate.lease.ScopeID() != scopeID {
 					return errors.New("authority interrupt selection does not match workflow execution ownership")
+				}
+			}
+			for _, gate := range c.gates {
+				if gate.reference.TaskID == selector.TaskID {
+					return ErrTaskExecutionNotQuiescent
 				}
 			}
 
@@ -173,15 +177,6 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, start.reference)
 				admissionWaits = appendAdmissionWait(admissionWaits, key, start.done)
 			}
-			for key, gate := range c.gates {
-				if gate.reference.TaskID != selector.TaskID {
-					continue
-				}
-				c.stopping[gate.lease.ScopeID()] = struct{}{}
-				c.interrupts.addCurrentNode(taskFence, key)
-				drainedGates = append(drainedGates, gate)
-				references = append(references, gate.reference)
-			}
 			return nil
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
@@ -196,9 +191,6 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cleanupCancel()
-	for _, gate := range drainedGates {
-		gate.lease.Cancel()
-	}
 	c.wakeAdmissionWorker()
 	for _, handle := range stopHandles {
 		handle.RequestStop()
@@ -243,7 +235,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				return errors.New("workflow interrupt left an affected exact execution scope")
 			}
 		}
-		if len(drainedGates) == 0 && taskFence != nil && c.interrupts.fenceActive(taskFence) {
+		if taskFence != nil && c.interrupts.fenceActive(taskFence) {
 			return errors.New("workflow task interrupt fence remains active")
 		}
 		return nil

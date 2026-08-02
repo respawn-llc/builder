@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -229,14 +230,38 @@ func TestManagedTargetLockUsesCapturedWorkspaceAfterSourceRebind(t *testing.T) {
 			Managed:             &ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRecord.CanonicalRootPath},
 		},
 	}
+	title := "edited after preparation"
+	body := "body edited after preparation"
 	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
 		TaskID:            task.ID,
+		Title:             &title,
+		Body:              &body,
 		SourceWorkspaceID: newBinding.WorkspaceID,
 	}); err != nil {
-		t.Fatalf("UpdateTask source workspace: %v", err)
+		t.Fatalf("UpdateTask after preparation: %v", err)
 	}
 	if _, err := store.LockTaskExecutionTarget(ctx, task.ID, candidate); err != nil {
 		t.Fatalf("LockTaskExecutionTarget after source workspace rebind: %v", err)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after target lock: %v", err)
+	}
+	if row.Title != title || row.Body != body || row.SourceWorkspaceID.String != newBinding.WorkspaceID {
+		t.Fatalf("task after target lock = title %q, body %q, workspace %q; want edited fields and workspace %q",
+			row.Title, row.Body, row.SourceWorkspaceID.String, newBinding.WorkspaceID)
+	}
+	var metadataSnapshot struct {
+		SourceWorkspaceSnapshot struct {
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"source_workspace_snapshot"`
+	}
+	if err := json.Unmarshal([]byte(row.MetadataJson), &metadataSnapshot); err != nil {
+		t.Fatalf("unmarshal task metadata after target lock: %v", err)
+	}
+	if metadataSnapshot.SourceWorkspaceSnapshot.WorkspaceID != newBinding.WorkspaceID {
+		t.Fatalf("task metadata workspace snapshot = %q, want %q",
+			metadataSnapshot.SourceWorkspaceSnapshot.WorkspaceID, newBinding.WorkspaceID)
 	}
 	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
 	if err != nil {
