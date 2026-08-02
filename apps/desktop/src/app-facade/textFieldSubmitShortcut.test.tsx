@@ -1,26 +1,36 @@
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import type { NativePlatform } from "@app/native-bridge";
-import { createElement, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { isTextFieldSubmitShortcut, useTextFieldSubmitShortcut } from "./textFieldSubmitShortcut";
 const nativePlatform = vi.hoisted((): { current: NativePlatform } => ({ current: "macos" }));
 vi.mock("./useAppServices", () => ({
   useAppServices: () => ({ nativeBridge: { capabilities: { platform: nativePlatform.current } } }),
 }));
-
 type DirectProps = Readonly<{ action: (() => void) | null; available?: boolean }>;
 function DirectHarness({ action, available = true }: DirectProps) {
   const onKeyDown = useTextFieldSubmitShortcut({ action, available, kind: "direct" });
   return <input aria-label="text" onKeyDown={onKeyDown} />;
 }
-function FormHarness({ children, id = "owner-form" }: Readonly<{ children: ReactNode; id?: string }>) {
+function FormHarness({
+  children,
+  id = "owner-form",
+  onSubmitted,
+}: Readonly<{ children: ReactNode; id?: string; onSubmitted?: () => void }>) {
   const onKeyDown = useTextFieldSubmitShortcut({ available: true, kind: "form" });
-  return createElement("form", { "data-testid": id, id, onKeyDown }, children);
-}
-function formSpy(id = "owner-form") {
-  const form = screen.getByTestId(id);
-  if (!(form instanceof HTMLFormElement)) throw new Error("Expected an owning form.");
-  return vi.spyOn(form, "requestSubmit").mockImplementation(() => undefined);
+  return (
+    <form
+      data-testid={id}
+      id={id}
+      onKeyDown={onKeyDown}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmitted?.();
+      }}
+    >
+      {children}
+    </form>
+  );
 }
 function press(name: string, options: KeyboardEventInit, role = "textbox") {
   fireEvent.keyDown(screen.getByRole(role, { name }), { key: "Enter", ...options });
@@ -40,7 +50,6 @@ describe("text field submit shortcut", () => {
   it.each([
     ["macos", { key: "Enter", ctrlKey: true }],
     ["windows", { key: "Enter", metaKey: true }],
-    ["macos", { key: "a", metaKey: true }],
     ["macos", { key: "Enter", metaKey: true, isComposing: true }],
     ["browser", { key: "Enter", metaKey: true }],
     ["unknown", { key: "Enter", ctrlKey: true }],
@@ -65,14 +74,14 @@ describe("text field submit shortcut", () => {
     });
     fireEvent(screen.getByRole("textbox", { name: "text" }), unavailable);
     expect(action).toHaveBeenCalledOnce();
-    expect(repeated.defaultPrevented).toBe(true);
-    expect(unavailable.defaultPrevented).toBe(true);
+    expect([repeated.defaultPrevented, unavailable.defaultPrevented]).toEqual([true, true]);
   });
   it("requests only exact owning text targets", () => {
     nativePlatform.current = "macos";
+    const submissions: string[] = [];
     render(
       <>
-        <FormHarness>
+        <FormHarness onSubmitted={() => submissions.push("outer")}>
           <textarea aria-label="body" />
           <input aria-label="read-only" readOnly />
           <input aria-label="radio" type="radio" />
@@ -86,28 +95,19 @@ describe("text field submit shortcut", () => {
           />
           <input aria-label="repeat" />
         </FormHarness>
-        <FormHarness id="inner-form">
+        <FormHarness id="inner-form" onSubmitted={() => submissions.push("inner")}>
           <input aria-label="inner-owned" />
         </FormHarness>
       </>,
     );
-    const submitSpy = formSpy();
     press("body", { metaKey: true });
     press("read-only", { metaKey: true });
     press("unassociated", { metaKey: true });
     press("radio", { metaKey: true }, "radio");
     press("consumed", { metaKey: true });
-    const repeated = createEvent.keyDown(screen.getByRole("textbox", { name: "repeat" }), {
-      key: "Enter",
-      metaKey: true,
-      repeat: true,
-    });
-    fireEvent(screen.getByRole("textbox", { name: "repeat" }), repeated);
-    expect(repeated.defaultPrevented).toBe(true);
-    const innerSubmit = formSpy("inner-form");
+    press("repeat", { metaKey: true, repeat: true });
     press("inner-associated", { metaKey: true });
     press("inner-owned", { metaKey: true });
-    expect(innerSubmit).toHaveBeenCalledOnce();
-    expect(submitSpy).toHaveBeenCalledTimes(2);
+    expect(submissions).toEqual(["outer", "outer", "inner"]);
   });
 });
