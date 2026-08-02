@@ -721,6 +721,46 @@ type interruptiblePreparationRunner struct {
 	released chan struct{}
 }
 
+type liveAndBlockedPreparationRunner struct {
+	authority   *sessionruntime.Authority
+	shellPath   string
+	live        workflow.CurrentNodeReference
+	liveStarted chan struct{}
+	entered     chan struct{}
+	released    chan struct{}
+	canceled    chan struct{}
+}
+
+func (r *liveAndBlockedPreparationRunner) StartCurrentNodeWithPreparation(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ LaunchPreparation,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	if reference.Equal(r.live) {
+		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+			Workflow: &lease,
+			Command: sessionruntime.ScriptCommand{
+				Path: r.shellPath,
+				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+			},
+		})
+		close(r.liveStarted)
+		return err
+	}
+	close(r.entered)
+	select {
+	case <-r.released:
+		return errors.New("preparation released")
+	case <-ctx.Done():
+		close(r.canceled)
+		return context.Cause(ctx)
+	}
+}
+
 func (r *interruptiblePreparationRunner) StartCurrentNodeWithPreparation(
 	ctx context.Context,
 	_ workflow.CurrentNodeReference,

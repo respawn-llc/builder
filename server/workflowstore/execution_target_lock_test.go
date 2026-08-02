@@ -189,7 +189,7 @@ func TestExecutionTargetLockUsesCapturedWorkspaceAfterRebind(t *testing.T) {
 	}
 }
 
-func TestManagedTargetLockRejectsSourceWorkspaceRebind(t *testing.T) {
+func TestManagedTargetLockUsesCapturedWorkspaceAfterSourceRebind(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -235,13 +235,29 @@ func TestManagedTargetLockRejectsSourceWorkspaceRebind(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpdateTask source workspace: %v", err)
 	}
-	if _, err := store.LockTaskExecutionTarget(ctx, task.ID, candidate); err == nil {
-		t.Fatal("LockTaskExecutionTarget after source workspace rebind succeeded")
+	if _, err := store.LockTaskExecutionTarget(ctx, task.ID, candidate); err != nil {
+		t.Fatalf("LockTaskExecutionTarget after source workspace rebind: %v", err)
 	}
-	if targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID); err != nil {
-		t.Fatalf("GetTaskExecutionTargetContext after rejected rebind: %v", err)
-	} else if targetContext.Task.ExecutionTarget != nil {
-		t.Fatalf("target locked after rejected rebind: %+v", targetContext.Task.ExecutionTarget)
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext after rebind: %v", err)
+	}
+	if targetContext.SourceWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("locked source workspace = %q, want captured workspace %q", targetContext.SourceWorkspaceID, binding.WorkspaceID)
+	}
+	laterTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID:            laterTask.ID,
+		SourceWorkspaceID: newBinding.WorkspaceID,
+	}); err != nil {
+		t.Fatalf("UpdateTask later attempt source workspace: %v", err)
+	}
+	laterContext, err := store.GetTaskExecutionTargetContext(ctx, laterTask.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext later attempt: %v", err)
+	}
+	if laterContext.SourceWorkspaceID != newBinding.WorkspaceID {
+		t.Fatalf("later unlocked source workspace = %q, want rebound workspace %q", laterContext.SourceWorkspaceID, newBinding.WorkspaceID)
 	}
 }
 

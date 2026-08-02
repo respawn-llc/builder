@@ -181,7 +181,6 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				c.interrupts.addCurrentNode(taskFence, key)
 				drainedGates = append(drainedGates, gate)
 				references = append(references, gate.reference)
-				admissionWaits = appendAdmissionWait(admissionWaits, key, gate.done)
 			}
 			return nil
 		})
@@ -244,7 +243,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				return errors.New("workflow interrupt left an affected exact execution scope")
 			}
 		}
-		if taskFence != nil && c.interrupts.fenceActive(taskFence) {
+		if len(drainedGates) == 0 && taskFence != nil && c.interrupts.fenceActive(taskFence) {
 			return errors.New("workflow task interrupt fence remains active")
 		}
 		return nil
