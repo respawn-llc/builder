@@ -33,6 +33,7 @@ const approvalAttentionItem = {
   task_short_id: "KT-1",
   task_title: "Task",
   approval_id: "approval-1",
+  session_name: null,
   message: "Approval required",
   approval_snapshot: approvalSnapshot,
   occurred_at_unix_ms: 1,
@@ -48,11 +49,29 @@ const interruptedCurrentNodeAttentionItem = {
   task_title: "Task",
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_id: null,
+  session_name: null,
   message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
 
 describe("attentionItemSchema", () => {
+  it("requires nullable session names for every attention variant", () => {
+    const nullableItems = [
+      { ...baseAttentionItem, session_name: null },
+      approvalAttentionItem,
+      interruptedCurrentNodeAttentionItem,
+    ];
+    for (const item of nullableItems) {
+      expect(() => attentionItemSchema.parse(item)).not.toThrow();
+    }
+
+    for (const item of nullableItems) {
+      const omitted = { ...item };
+      Reflect.deleteProperty(omitted, "session_name");
+      expect(() => attentionItemSchema.parse(omitted)).toThrow();
+    }
+  });
+
   it("decodes only the task-scoped discriminated attention variants", () => {
     const question = attentionItemSchema.parse(baseAttentionItem);
     const approval = attentionItemSchema.parse(approvalAttentionItem);

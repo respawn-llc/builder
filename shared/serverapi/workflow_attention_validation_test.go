@@ -1,12 +1,31 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
+
+func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
+	encoded, err := json.Marshal(validWorkflowAttentionApproval())
+	if err != nil {
+		t.Fatalf("marshal attention item: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode attention item: %v", err)
+	}
+	sessionName, present := fields["session_name"]
+	if !present {
+		t.Fatal("session_name was omitted")
+	}
+	if string(sessionName) != "null" {
+		t.Fatalf("session_name = %s, want null", sessionName)
+	}
+}
 
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {

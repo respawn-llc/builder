@@ -1039,7 +1039,7 @@ type WorkflowAttentionItem struct {
 	ApprovalID             *string                            `json:"approval_id,omitempty"`
 	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
 	SessionID              *string                            `json:"session_id,omitempty"`
-	SessionName            *string                            `json:"session_name,omitempty"`
+	SessionName            *string                            `json:"session_name"`
 	DetailJSON             *string                            `json:"detail_json,omitempty"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
