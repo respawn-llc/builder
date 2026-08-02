@@ -61,7 +61,8 @@
 - A Project Label catalog has one authoritative order. New Labels append to the catalog. Deleting a Label preserves the relative order of the remaining Labels.
 - `kent task label move` changes the authoritative catalog order and accepts exactly one placement: first, last, before another Label, or after another Label.
 - Label catalogs and task assignments use the authoritative Project Label order.
-- Kent does not sort Tasks by Label.
+- Kent sorts Tasks by Label only when the caller explicitly supplies the
+  `labels` sort selector.
 - Kent applies Label filters before pagination for Workflow boards and Task lists.
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.

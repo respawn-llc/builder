@@ -113,14 +113,6 @@ func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverap
 			Labels:    labels,
 		},
 	}
-	if result.Outcome == workflowstore.ProjectLabelReorderApplied {
-		s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
-			ProjectID:       &req.ProjectID,
-			Resource:        serverapi.WorkflowProjectEventResourceLabelCatalog,
-			Action:          serverapi.WorkflowProjectEventActionReordered,
-			PrimaryEntityID: req.ProjectID,
-		})
-	}
 	return response, nil
 }
 

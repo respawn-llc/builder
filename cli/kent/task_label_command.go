@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,8 +32,9 @@ const (
 )
 
 type taskLabelMovePlacement struct {
-	Kind     taskLabelMovePlacementKind
-	Relative string
+	Kind             taskLabelMovePlacementKind
+	RelativeSelector *string
+	RelativeID       *string
 }
 
 type taskLabelAssignmentOperation uint8
@@ -90,11 +92,13 @@ func taskLabelMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 	}
 	if flagExplicit(fs, "before") {
 		placementCount++
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementBefore, Relative: *before}
+		relativeSelector := *before
+		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementBefore, RelativeSelector: &relativeSelector}
 	}
 	if flagExplicit(fs, "after") {
 		placementCount++
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementAfter, Relative: *after}
+		relativeSelector := *after
+		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementAfter, RelativeSelector: &relativeSelector}
 	}
 	if placementCount == 0 {
 		fmt.Fprintln(stderr, "task label move requires exactly one of --first, --last, --before, or --after")
@@ -117,16 +121,16 @@ func taskLabelMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		}
 		groups := [][]string{{*selector}}
 		if placement.Kind == taskLabelMovePlacementBefore || placement.Kind == taskLabelMovePlacementAfter {
-			groups = append(groups, []string{placement.Relative})
+			groups = append(groups, []string{*placement.RelativeSelector})
 		}
 		resolved, err := resolveWorkflowProjectLabelSelectorGroups(snapshot, groups)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		placement.Relative = ""
 		if len(resolved) > 1 {
-			placement.Relative = resolved[1].IDs[0]
+			relativeID := resolved[1].IDs[0]
+			placement.RelativeID = &relativeID
 		}
 		labelIDs := workflowProjectLabelMovePermutation(catalog.Catalog.Labels, resolved[0].IDs[0], placement)
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
@@ -147,7 +151,7 @@ func taskLabelMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		for index, record := range response.Catalog.Labels {
 			responseIDs[index] = record.ID
 		}
-		if !sameStringSequence(responseIDs, labelIDs) {
+		if !slices.Equal(responseIDs, labelIDs) {
 			fmt.Fprintln(stderr, "Project label reorder response does not match the requested order")
 			return 1
 		}
@@ -164,8 +168,8 @@ func workflowProjectLabelMovePermutation(labels []serverapi.WorkflowProjectLabel
 	for index, label := range labels {
 		original[index] = label.ID
 	}
-	if placement.Kind == taskLabelMovePlacementBefore || placement.Kind == taskLabelMovePlacementAfter {
-		if placement.Relative == movedID {
+	if placement.RelativeID != nil {
+		if *placement.RelativeID == movedID {
 			return original
 		}
 	}
@@ -181,14 +185,14 @@ func workflowProjectLabelMovePermutation(labels []serverapi.WorkflowProjectLabel
 		position = 0
 	case taskLabelMovePlacementBefore:
 		for index, id := range remaining {
-			if id == placement.Relative {
+			if placement.RelativeID != nil && id == *placement.RelativeID {
 				position = index
 				break
 			}
 		}
 	case taskLabelMovePlacementAfter:
 		for index, id := range remaining {
-			if id == placement.Relative {
+			if placement.RelativeID != nil && id == *placement.RelativeID {
 				position = index + 1
 				break
 			}
@@ -199,18 +203,6 @@ func workflowProjectLabelMovePermutation(labels []serverapi.WorkflowProjectLabel
 	result = append(result, movedID)
 	result = append(result, remaining[position:]...)
 	return result
-}
-
-func sameStringSequence(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func taskLabelAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

@@ -2798,16 +2798,20 @@ INSERT INTO project_labels (
     ?1,
     ?2,
     ?3,
+    (
+        SELECT COALESCE(MAX(project_labels.ordinal), 0) + 1
+        FROM project_labels
+        WHERE project_labels.project_id = ?2
+    ),
     ?4,
-    ?5,
-    ?6
+    ?5
 FROM projects
 WHERE projects.id = ?2
   AND (
       SELECT COUNT(*)
       FROM project_labels
       WHERE project_labels.project_id = ?2
-  ) < CAST(?7 AS INTEGER)
+  ) < CAST(?6 AS INTEGER)
 RETURNING id, project_id, name, ordinal
 `
 
@@ -2815,7 +2819,6 @@ type InsertProjectLabelParams struct {
 	ID              string
 	ProjectID       string
 	Name            string
-	Ordinal         int64
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
 	CatalogLimit    int64
@@ -2833,7 +2836,6 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		arg.ID,
 		arg.ProjectID,
 		arg.Name,
-		arg.Ordinal,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 		arg.CatalogLimit,
@@ -2844,7 +2846,7 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		&i.ProjectID,
 		&i.Name,
 		&i.Ordinal,
-	), insertProjectLabel, 7)
+	), insertProjectLabel, 6)
 
 	return i, err
 }

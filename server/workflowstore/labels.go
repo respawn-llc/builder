@@ -53,25 +53,10 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 	id := label.NewID()
 	now := s.now().UnixMilli()
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
-		if err := acquireProjectLabelWriteLock(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		labels, err := listProjectLabelCatalog(ctx, q, trimmedProjectID)
-		if err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		ordinal := len(labels) + 1
-		if ordinal > label.MaxProjectLabels {
-			return ProjectLabelRecord{}, ProjectLabelLimitError{
-				ProjectID: trimmedProjectID,
-				Limit:     label.MaxProjectLabels,
-			}
-		}
 		row, err := q.InsertProjectLabel(ctx, sqlitegen.InsertProjectLabelParams{
 			ID:              id.String(),
 			ProjectID:       trimmedProjectID,
 			Name:            name.String(),
-			Ordinal:         int64(ordinal),
 			CreatedAtUnixMs: now,
 			UpdatedAtUnixMs: now,
 			CatalogLimit:    label.MaxProjectLabels,
@@ -83,13 +68,19 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 					Name:      name.String(),
 				}
 			}
+			if errors.Is(err, sql.ErrNoRows) {
+				if err := requireProjectForLabels(ctx, q, trimmedProjectID); err != nil {
+					return ProjectLabelRecord{}, err
+				}
+				return ProjectLabelRecord{}, ProjectLabelLimitError{
+					ProjectID: trimmedProjectID,
+					Limit:     label.MaxProjectLabels,
+				}
+			}
 			return ProjectLabelRecord{}, err
 		}
 		record, err := projectLabelRecord(row.ID, row.ProjectID, row.Name)
 		if err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		if _, err := listProjectLabelCatalog(ctx, q, trimmedProjectID); err != nil {
 			return ProjectLabelRecord{}, err
 		}
 		return record, nil
@@ -113,12 +104,6 @@ func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id lab
 		return ProjectLabelRecord{}, err
 	}
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
-		if err := acquireProjectLabelWriteLock(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		if _, err := listProjectLabelCatalog(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
 		row, err := q.RenameProjectLabel(ctx, sqlitegen.RenameProjectLabelParams{
 			Name:            name.String(),
 			UpdatedAtUnixMs: s.now().UnixMilli(),
@@ -147,9 +132,6 @@ func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id lab
 		if err != nil {
 			return ProjectLabelRecord{}, err
 		}
-		if _, err := listProjectLabelCatalog(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
 		return record, nil
 	})
 }
@@ -157,12 +139,6 @@ func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id lab
 func (s *Store) DeleteProjectLabel(ctx context.Context, projectID string, id label.ID) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
-		if err := acquireProjectLabelWriteLock(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		if _, err := listProjectLabelCatalog(ctx, q, trimmedProjectID); err != nil {
-			return ProjectLabelRecord{}, err
-		}
 		row, err := q.DeleteProjectLabel(ctx, sqlitegen.DeleteProjectLabelParams{
 			ID:        id.String(),
 			ProjectID: trimmedProjectID,

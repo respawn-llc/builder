@@ -1464,7 +1464,6 @@ const (
 	WorkflowProjectEventResourceWorkflowLink = protocol.WorkflowProjectEventResourceWorkflowLink
 	WorkflowProjectEventResourceTask         = protocol.WorkflowProjectEventResourceTask
 	WorkflowProjectEventResourceLabel        = protocol.WorkflowProjectEventResourceLabel
-	WorkflowProjectEventResourceLabelCatalog = protocol.WorkflowProjectEventResourceLabelCatalog
 )
 
 type WorkflowProjectEventAction = protocol.WorkflowProjectEventAction
@@ -1501,7 +1500,6 @@ const (
 	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
 	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
-	WorkflowProjectEventActionReordered              = protocol.WorkflowProjectEventActionReordered
 )
 
 type WorkflowProjectEvent struct {

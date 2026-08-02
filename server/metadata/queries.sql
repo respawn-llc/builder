@@ -89,7 +89,11 @@ INSERT INTO project_labels (
     sqlc.arg(id),
     sqlc.arg(project_id),
     sqlc.arg(name),
-    sqlc.arg(ordinal),
+    (
+        SELECT COALESCE(MAX(project_labels.ordinal), 0) + 1
+        FROM project_labels
+        WHERE project_labels.project_id = sqlc.arg(project_id)
+    ),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
 FROM projects

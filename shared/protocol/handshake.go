@@ -844,7 +844,6 @@ const (
 	WorkflowProjectEventResourceWorkflowLink WorkflowProjectEventResource = "workflow_link"
 	WorkflowProjectEventResourceTask         WorkflowProjectEventResource = "task"
 	WorkflowProjectEventResourceLabel        WorkflowProjectEventResource = "label"
-	WorkflowProjectEventResourceLabelCatalog WorkflowProjectEventResource = "label_catalog"
 )
 
 type WorkflowProjectEventAction string
@@ -882,7 +881,6 @@ const (
 	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
 	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
-	WorkflowProjectEventActionReordered              WorkflowProjectEventAction = "reordered"
 )
 
 type WorkflowProjectEvent struct {
