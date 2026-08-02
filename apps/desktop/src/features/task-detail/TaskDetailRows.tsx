@@ -1,10 +1,10 @@
-import { useEffect, useId, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEventHandler, type RefObject } from "react";
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { useAppServices } from "@/app-facade";
+import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import {
@@ -30,12 +30,14 @@ export type TaskDraft = Readonly<{
 }>;
 
 export function TaskHeaderIsland({
+  canSaveDraft,
   detail,
   disabled,
   draft,
   onDraftChange,
   onSave,
 }: Readonly<{
+  canSaveDraft: boolean;
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
@@ -45,6 +47,10 @@ export function TaskHeaderIsland({
   const { t } = useTranslation();
   const title = draft.title;
   const dirty = draft.title !== detail.title || draft.body !== detail.body;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSaveDraft,
+    kind: "form",
+  });
 
   function nextTitle(value: string): TaskDraft {
     return { ...draft, title: value.replaceAll("\n", " ") };
@@ -54,9 +60,12 @@ export function TaskHeaderIsland({
     <form
       className="flex min-w-0 items-center gap-[var(--space-2)]"
       data-testid="task-detail-title-island"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave();
+        if (canSaveDraft) {
+          void onSave();
+        }
       }}
     >
       <input
@@ -70,7 +79,7 @@ export function TaskHeaderIsland({
           onDraftChange(nextTitle(event.target.value));
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
             event.preventDefault();
             event.currentTarget.form?.requestSubmit();
           }
@@ -83,7 +92,7 @@ export function TaskHeaderIsland({
           aria-label={t("task.save")}
           className="shrink-0"
           data-testid="task-detail-save"
-          disabled={disabled || title.trim().length === 0}
+          disabled={!canSaveDraft}
           size="icon"
           type="submit"
           variant="primary"
@@ -98,21 +107,38 @@ export function TaskHeaderIsland({
 export function DescriptionIsland({
   disabled,
   draft,
+  draftDirty,
   error,
   onDraftChange,
   onPresentationChange,
+  onSave,
   presentation,
 }: Readonly<{
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   error: unknown;
   onDraftChange: (draft: TaskDraft) => void;
   onPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onSave: (draft?: TaskDraft) => Promise<void>;
   presentation: DescriptionPresentationState;
 }>) {
   const descriptionId = useId();
   const descriptionErrorId = `${descriptionId}-error`;
   const descriptionError = error == null ? "" : errorMessage(error);
+  const descriptionShortcut = useTextFieldSubmitShortcut({
+    action: () => {
+      if (!draftDirty) {
+        onPresentationChange({ ...presentation, editing: false });
+        return;
+      }
+      void onSave(draft).then(() => {
+        onPresentationChange({ ...presentation, editing: false });
+      });
+    },
+    available: !disabled && draft.title.trim().length > 0 && presentation.editing,
+    kind: "direct",
+  });
 
   return (
     <div className="grid min-h-0 min-w-0 gap-[var(--space-2)]" data-testid="task-description-input-frame">
@@ -127,6 +153,7 @@ export function DescriptionIsland({
           onChange={(body) => {
             onDraftChange({ ...draft, body });
           }}
+          onKeyDown={descriptionShortcut}
           value={draft.body}
         />
       ) : (
@@ -160,6 +187,7 @@ function DescriptionEditor({
   id,
   onBlur,
   onChange,
+  onKeyDown,
   value,
 }: Readonly<{
   describedBy: string | undefined;
@@ -167,6 +195,7 @@ function DescriptionEditor({
   id: string;
   onBlur: () => void;
   onChange: (value: string) => void;
+  onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   value: string;
 }>) {
   const { t } = useTranslation();
@@ -185,6 +214,7 @@ function DescriptionEditor({
       onChange={(event) => {
         onChange(event.target.value);
       }}
+      onKeyDown={onKeyDown}
       placeholder={t("task.bodyPlaceholder")}
       value={value}
     />
@@ -361,10 +391,7 @@ export function PropertiesIsland({
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-        <TaskPropertyLine
-          label={t("task.sessions")}
-          value={detail.retainedSessionCount.toString()}
-        />
+        <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
@@ -466,9 +493,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
             </Button>
           ))
         : null}
-      {openError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p>
-      ) : null}
+      {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>
   );
 }

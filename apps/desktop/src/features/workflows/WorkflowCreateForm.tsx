@@ -4,8 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
 import { errorMessage } from "@/api";
-import { queryKeys } from "@/app-facade";
-import { useAppServices } from "@/app-facade";
+import { queryKeys, useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, ErrorState, TextArea, TextInput } from "@/ui";
 
 export type WorkflowCreateResult = Readonly<{
@@ -43,17 +42,22 @@ export function WorkflowCreateForm({
       onCreated(result);
     },
   });
+  const canSubmit = name.trim().length > 0 && !create.isPending;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
 
   function submit(event: SyntheticEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (name.trim().length === 0 || create.isPending) {
+    if (!canSubmit) {
       return;
     }
     void create.mutateAsync();
   }
 
   return (
-    <form className="grid gap-[var(--space-4)]" onSubmit={submit}>
+    <form className="grid gap-[var(--space-4)]" onKeyDown={formShortcut} onSubmit={submit}>
       {create.isError ? (
         <ErrorState
           body={errorMessage(create.error)}
@@ -80,7 +84,7 @@ export function WorkflowCreateForm({
         value={description}
       />
       <div className="flex justify-end gap-[var(--space-2)]">
-        <Button disabled={name.trim().length === 0 || create.isPending} type="submit" variant="primary">
+        <Button disabled={!canSubmit} type="submit" variant="primary">
           {create.isPending ? t("workflowLibrary.creating") : t("workflowLibrary.createWorkflow")}
         </Button>
       </div>

@@ -5,6 +5,7 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
 import {
   executionTargetSelectionFromDraft,
@@ -140,12 +141,18 @@ function ExecutionTargetForm({
 }>) {
   const { t } = useTranslation();
   const selectedTarget = executionTargetSelectionFromDraft(pending.selection);
+  const canSubmit = selectedTarget !== null;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
   return (
     <form
       className="grid gap-[var(--space-4)]"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        if (selectedTarget === null) {
+        if (!canSubmit) {
           return;
         }
         onResult({
@@ -159,12 +166,7 @@ function ExecutionTargetForm({
       <ExecutionTargetChoices continuation={continuation} pending={pending} />
       <div className="flex justify-end gap-[var(--space-2)]">
         <Button onClick={continuation.close}>{t("app.cancel")}</Button>
-        <Button
-          data-testid="execution-target-submit"
-          disabled={selectedTarget === null}
-          type="submit"
-          variant="primary"
-        >
+        <Button data-testid="execution-target-submit" disabled={!canSubmit} type="submit" variant="primary">
           {t("executionTargetContinuation.continue")}
         </Button>
       </div>

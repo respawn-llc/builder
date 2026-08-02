@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { TaskMovePreviewChoice, TaskMovePreviewResponse } from "@/api";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import {
   Button,
   Dialog,
@@ -112,8 +113,12 @@ function ManualMoveDialogContent({
   values: ManualMoveValues;
 }>) {
   const { t } = useTranslation();
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLFormElement | null>(null);
   const [contentHeight, setContentHeight] = useState<number | null>(null);
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: phase === "details" && canSubmit,
+    kind: "form",
+  });
   useLayoutEffect(() => {
     if (contentRef.current !== null) {
       setContentHeight(contentRef.current.scrollHeight);
@@ -129,42 +134,52 @@ function ManualMoveDialogContent({
           : `max-height ${String(motionDurationFromCSSVar("--motion-morph", 220))}ms ease`,
       }}
     >
-      <div className="grid gap-[var(--space-4)]" ref={contentRef}>
-      <div className="manual-move-dialog-phase" key={phase}>
-      {phase === "choices" && choices.length > 1 ? (
-        <ManualMoveChoicePhase
-          choices={choices}
-          onSelect={onSelect}
-          selectedTransitionKey={selectedTransitionKey}
-        />
-      ) : (
-        <ManualMoveDetailsPhase
-          onValueChange={onValueChange}
-          requiredValues={requiredValues}
-          selectedChoice={selectedChoice}
-          values={values}
-        />
-      )}
-      </div>
-      <div className="flex justify-end gap-[var(--space-2)]">
-        <Button onClick={onCancel}>{t("app.cancel")}</Button>
-        {phase === "choices" ? (
-          <Button
-            disabled={!canAdvance}
-            onClick={() => {
-              setPhase("details");
-            }}
-            variant="primary"
-          >
-            {t("app.continue")}
-          </Button>
-        ) : (
-          <Button disabled={!canSubmit} onClick={onSubmit} variant="primary">
-            {t("board.manualMoveConfirm")}
-          </Button>
-        )}
-      </div>
-      </div>
+      <form
+        className="grid gap-[var(--space-4)]"
+        onKeyDown={formShortcut}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (phase === "details" && canSubmit) {
+            onSubmit();
+          }
+        }}
+        ref={contentRef}
+      >
+        <div className="manual-move-dialog-phase" key={phase}>
+          {phase === "choices" && choices.length > 1 ? (
+            <ManualMoveChoicePhase
+              choices={choices}
+              onSelect={onSelect}
+              selectedTransitionKey={selectedTransitionKey}
+            />
+          ) : (
+            <ManualMoveDetailsPhase
+              onValueChange={onValueChange}
+              requiredValues={requiredValues}
+              selectedChoice={selectedChoice}
+              values={values}
+            />
+          )}
+        </div>
+        <div className="flex justify-end gap-[var(--space-2)]">
+          <Button onClick={onCancel}>{t("app.cancel")}</Button>
+          {phase === "choices" ? (
+            <Button
+              disabled={!canAdvance}
+              onClick={() => {
+                setPhase("details");
+              }}
+              variant="primary"
+            >
+              {t("app.continue")}
+            </Button>
+          ) : (
+            <Button disabled={!canSubmit} type="submit" variant="primary">
+              {t("board.manualMoveConfirm")}
+            </Button>
+          )}
+        </div>
+      </form>
     </div>
   );
 }

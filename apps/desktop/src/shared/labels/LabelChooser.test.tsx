@@ -4,6 +4,9 @@ import { vi } from "vitest";
 
 import { createLabelFilterState, type LabelFilterAction } from "./labelFilterState";
 import { LabelChooser } from "./LabelChooser";
+import { TestAppProviders, createTestServices } from "@/test-support/app-services";
+
+const appServices = createTestServices([], undefined, { platform: "macos" });
 
 const createdLabelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 
@@ -49,16 +52,18 @@ describe("LabelChooser", () => {
     const user = userEvent.setup();
     const actions: LabelFilterAction[] = [];
     render(
-      <LabelChooser
-        invocation={{
-          kind: "filter",
-          onAction(action) {
-            actions.push(action);
-          },
-          state: createLabelFilterState(),
-        }}
-        trigger={<button type="button">Open label chooser</button>}
-      />,
+      <TestAppProviders services={appServices}>
+        <LabelChooser
+          invocation={{
+            kind: "filter",
+            onAction(action) {
+              actions.push(action);
+            },
+            state: createLabelFilterState(),
+          }}
+          trigger={<button type="button">Open label chooser</button>}
+        />
+      </TestAppProviders>,
     );
 
     await user.click(screen.getByRole("button", { name: "Open label chooser" }));

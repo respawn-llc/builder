@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from "@/api";
 import type { QuestionAnswerInput } from "@/api";
+import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
@@ -250,10 +251,7 @@ function ApprovalQuestionForm({
       }}
       onRadioValueChange={(value) => {
         onSelectionStateChange(
-          withApprovalQuestionDecision(
-            selection,
-            approvalDecisionForValue(approvalDecisions, value),
-          ),
+          withApprovalQuestionDecision(selection, approvalDecisionForValue(approvalDecisions, value)),
         );
       }}
       onSubmit={submit}
@@ -303,9 +301,14 @@ function QuestionFormFrame({
 }>) {
   const { t } = useTranslation();
   const submitDisabled = interactionDisabled || !canSubmit;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: !submitDisabled,
+    kind: "form",
+  });
   return (
     <form
       className="grid gap-[var(--space-2)]"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit && !interactionDisabled) {
