@@ -28,6 +28,7 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
+	engine.compactionRuntimeState().SetManualCompactionEligible(false)
 
 	err := engine.CompactContext(context.Background(), "")
 	if !errors.Is(err, ErrManualCompactionTooSoon) {
