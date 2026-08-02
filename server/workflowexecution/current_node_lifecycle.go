@@ -106,7 +106,7 @@ func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 		starts, err := c.steerAndWaitStarts(ctx, []currentNodeQueuedStart{{
 			reference:          started.Mutation.Created[0].Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
-		}})
+		}}, recoverCommittedCurrentNodeStarts)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
@@ -217,7 +217,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
-			starts, err = c.steerAndWaitStarts(ctx, starts)
+			starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
@@ -283,7 +283,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		starts, err = c.steerAndWaitStarts(ctx, starts)
+		starts, err = c.steerAndWaitStarts(ctx, starts, recoverAllCurrentNodeStarts)
 		if err != nil {
 			return moved, err
 		}
