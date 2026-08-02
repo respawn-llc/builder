@@ -455,15 +455,17 @@ Questions are resolved in dependency order. Later branches should not be specifi
 
 ## 11. Failure And Recovery
 
-- Disconnect presentation and action blocking.
-- Transcript sequence-gap recovery.
-- Runtime activation/release failure.
-- Draft persistence failure.
-- Page-load failure at either history edge.
-- Prompt-answer races.
-- Queue/steer/interrupt operation failures.
-- Workspace-target mismatch and unavailable worktrees.
-- Debug fail-fast versus release recovery.
+- Reuse the existing persistent global disconnect/reconnect notice; Chat adds no connection surface. Server mutations are unavailable while disconnected and visible input remains.
+- Reconnect refreshes visible authoritative state, recreates the subscription, and Scratch Rehydrates without replaying ambiguous mutations or showing success feedback.
+- Sequence/subscription continuity loss discards provisional live state and Scratch Rehydrates. Committed content never becomes fake empty/idle state.
+- Initial Retry repeats the complete ordinary Session open path. Missing/inaccessible targets receive no Desktop-specific repair path.
+- A hydrated refresh failure preserves the last authoritative visible state.
+- Transcript edge failure owns only its boundary Retry for the same cursor.
+- Mutation failures preserve the operation's initiating state and use shared status/Sonner feedback without optimistic transcript rows or client replay.
+- Draft-load failure is an initial-open failure. Draft-write or runtime-release failure prevents a controlled navigation/detach/pop-out transition from silently completing.
+- Native pop-out open failure leaves main-window Chat unchanged and uses the existing native-window failure notice.
+- Prompt races and stale results follow the locked picker contract.
+- Impossible states fail fast in development; production uses the owning failure path without placeholders, swallowed errors, or fake success.
 
 ## 12. Accessibility And Input
 

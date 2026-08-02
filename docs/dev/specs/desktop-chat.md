@@ -425,6 +425,26 @@
 - After preliminary QA passes, the agent opens the fixture for the user and asks for an explicit Approve or Reject decision with concrete findings. Silence, indirect feedback, screenshots, and agent judgment are not acceptance.
 - A rejection keeps the implementation work incomplete. The findings are addressed, preliminary QA is repeated, and the browser acceptance request is presented again. The complete Questions/Approvals work cannot pass its acceptance gate without explicit user approval.
 
+## Failure And Recovery
+
+- Desktop's existing global connection state owns server disconnection. Chat adds no banner, card, modal, or second reconnect indicator.
+- While disconnected, the existing persistent warning notice remains visible, Chat keeps its last committed authoritative content, and every server mutation is unavailable. Composer and form text remain present.
+- Reconnection dismisses the global warning, refreshes visible authoritative queries, recreates the transcript subscription, and performs Scratch Rehydration. Success adds no notification.
+- Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect refreshes transcript, Pending Work, draft, runtime, prompt, Goal, Process, and Worktree state from their owners.
+- A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
+- Scratch Rehydration uses the ordinary authoritative hydration projection. It adds no client transcript repair, duplicate suppression, history rewrite, or global snapshot/replay mechanism.
+- Initial existing-Session loading uses the compact centered Chat loading state already specified. Initial inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
+- Initial Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
+- A failed refresh after Chat is already hydrated preserves the last authoritative visible state. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
+- Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
+- A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to that operation's existing contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
+- Mutation controls prevent duplicate activation while their request is pending. This is request presentation, not client-owned replay, reconciliation, or a second authoritative operation state.
+- If a server-owned Chat draft cannot load, existing-Session opening fails through the initial Error state. If a draft write fails while Chat is open, Desktop preserves the visible unsent text and settings and surfaces the failure.
+- An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence or runtime release does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
+- Opening a native Chat pop-out failure leaves Chat in the main window and uses the existing native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
+- Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
+- Impossible typed payloads, transcript integrity violations, and reducer/lifecycle states fail immediately in development. Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
+
 ## Desktop Exceptions
 
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
