@@ -1,5 +1,5 @@
-import { CheckCircle2, Circle, CircleDot, Plus, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { Plus, X } from "lucide-react";
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
 import type {
@@ -7,14 +7,14 @@ import type {
   TaskDependencyDirection,
   TaskDependencyDirectionProjection,
   TaskDependencyItem,
-  TaskStatusKind,
 } from "@/api";
 import {
   requiredTaskDependencyDirection,
   TaskDependencyProgressChip,
   type TaskDependencyPair,
 } from "@/shared/task-dependencies";
-import { ActionableListRow, Button, Island, Spinner } from "@/ui";
+import { TaskStatusIcon } from "@/shared/task-status";
+import { ActionableListRow, Button, Island } from "@/ui";
 
 export function TaskDependenciesArea({
   dependencies,
@@ -180,29 +180,10 @@ function DependencyRow({
         className="flex min-w-0 items-center gap-[var(--space-2)]"
         data-testid={`dependency-row-${item.taskID}`}
       >
-        <TaskDependencyStatusIcon status={item.status.kind} />
+        <TaskStatusIcon status={item.status.kind} />
         <span className="shrink-0 font-mono text-xs text-[var(--color-muted)]">{item.shortID}</span>
         <span className="min-w-0 truncate">{item.title}</span>
       </span>
     </ActionableListRow>
   );
-}
-
-function TaskDependencyStatusIcon({ status }: Readonly<{ status: TaskStatusKind }>): ReactNode {
-  switch (status) {
-    case "done":
-      return <CheckCircle2 aria-hidden="true" className="text-[var(--color-success)]" size={15} />;
-    case "backlog":
-      return <Circle aria-hidden="true" size={15} />;
-    case "active":
-      return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
-    case "queued":
-    case "running":
-      return <Spinner className="size-[15px]" size="sm" strokeWidth={2} />;
-    case "waiting_approval":
-    case "interrupted":
-      return <CircleDot aria-hidden="true" className="text-[var(--color-secondary)]" size={15} />;
-    case "waiting_question":
-      return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
-  }
 }

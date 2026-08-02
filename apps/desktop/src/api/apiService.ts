@@ -67,6 +67,7 @@ import type {
 import type { SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
+import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
 
 export type ApiConnectionSource = Readonly<{
   snapshot(): ConnectionSnapshot;
@@ -142,6 +143,7 @@ export interface ApiService {
     direction?: TaskDependencyDirection,
   ): Promise<TaskDependencyListResponse>;
   listTasks(input: TaskListInput): Promise<TaskListPage>;
+  searchTasks(input: TaskSearchInput): Promise<TaskSearchResponse>;
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(input: TaskStartInput): Promise<TaskStartResponse>;
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;

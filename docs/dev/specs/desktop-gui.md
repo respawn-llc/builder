@@ -105,6 +105,90 @@
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
 
+## Board Task Search
+
+- A board has a `Search` chip immediately after the Labels chip. It uses the
+  same visual treatment and height as the Labels chip.
+- Selecting Search opens one centered command-palette dialog over a blurred
+  backdrop. The dialog uses a frosted-glass surface.
+- Opening Search animates the backdrop from unblurred to blurred. Its island
+  fades in while moving upward by 30 pixels into place.
+- Closing Search reverses that motion: the backdrop unblurs while the island
+  fades and moves 30 pixels downward. Search remains mounted until the complete
+  exit finishes. Search uses the fast motion duration. These motions are subject
+  to reduced-motion preference.
+- Search and its blurred backdrop appear above an open Task sidebar. Opening
+  Search does not close or otherwise change the sidebar.
+- The search input is an inline top row separated from the results by one thin
+  divider. The input is not a nested island.
+- The dialog focuses the input when it opens.
+- `Command-S`, `Control-S`, and `Alt-Space` open Search from a board. These
+  shortcuts suppress their platform or browser default action while the board
+  is open.
+- Search uses the existing case-insensitive literal Task Search contract.
+- Search includes Task titles, complete bodies, and Comments.
+- Search is scoped to the board's Project and spans every Workflow linked to
+  that Project.
+- Desktop submits a nonblank searchable query 300 milliseconds after the last
+  edit.
+- A blank query, a literal query without a searchable trigram, or a searchable
+  query with no matching Tasks collapses the dialog to the Search field without
+  explanatory copy.
+- Initial Search loading expands a centered loading indicator beneath the
+  input. Replacement loading keeps prior results visible without adding a
+  loading indicator to the input.
+- The dialog grows downward from a stable top edge as results appear and
+  shrinks back to the Search field as they disappear. Size changes animate
+  subject to reduced-motion preference.
+- While a replacement query is debouncing or loading, the prior results remain
+  visible and usable.
+- Desktop retains one search query in process memory across Projects. Opening a
+  different Project reruns that query with the new Project scope. Restarting
+  Desktop clears the query.
+- Closing and reopening Search retains the selected Task group while its result
+  set remains current.
+- Results use infinite scroll and preserve the server's Task grouping, hit
+  pagination, and ordering. Desktop does not deduplicate repeated Task groups
+  across pages.
+- Each selectable result represents one returned Task group. It shows a status
+  icon, Task Short ID, and title.
+- Search uses the same status-icon mapping and semantics as related-Task rows
+  in Task Dependencies. The status icon appears immediately before Task Short
+  ID.
+- Hovering a Search status icon shows its expanded localized status name.
+- Task Search does not return Node or column display names. Desktop uses the
+  localized status kind, such as `Done` or `Running`, and does not derive a
+  display name from Node IDs.
+- Task Short ID uses the ordinary foreground color. The title uses the same
+  typographic hierarchy as a Task card.
+- A result previews at most the first three hits in their server-provided
+  order. Desktop does not rerank hits.
+- Each hit preview shows the server-provided matching fragment and emphasizes
+  the matching text. It does not show a text source-kind label or a general
+  horizontal inset.
+- Comment-hit previews use a message-bubble icon in the same muted foreground
+  color as the surrounding hit text. They have no connector bar or additional
+  horizontal inset.
+- When the Task has undisplayed hits after the last preview, the result shows a
+  plain muted `…N more hits` line using the server-provided total hit count and
+  hit ordinals.
+- When a result set arrives, its first Task group is selected unless a retained
+  selection still identifies a group in that result set.
+- Up Arrow and Down Arrow move selection without moving focus from the input.
+- Actual pointer movement over a result moves selection without moving input
+  focus or scrolling the result list. Results moving beneath a stationary
+  pointer do not change selection.
+- Arrow navigation preserves the list position while the selected result
+  remains visible. When selection crosses a visible edge, the list scrolls only
+  enough to reveal that result and animates the scroll smoothly, subject to
+  reduced-motion preference.
+- At the last loaded result, Down Arrow is a no-op until another result arrives.
+  At either loaded boundary, repeated navigation never wraps or resets
+  selection to the first result.
+- Selecting a row with the pointer or pressing Enter for the selected row
+  closes Search and opens that Task in the board's Task Detail sidebar.
+- Escape and backdrop selection close Search without opening a Task.
+
 ## Labels
 
 - Boards have one transparent label-filter row. It provides no status, attention, column, or sort filter.

@@ -5,6 +5,7 @@ import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
+import * as taskSearch from "./clientTaskSearch";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -110,6 +111,7 @@ import {
 } from "./schemas/workflow";
 import type { RpcTransport } from "./transport";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
+import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 import * as workflowBoard from "./clientWorkflowBoard";
 import * as workflowLabels from "./clientWorkflowLabels";
@@ -359,7 +361,10 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
+      await this.#transport.call("workflow.validate", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+        mode,
+      }),
     );
   }
 
@@ -447,7 +452,9 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
+      await this.#transport.call("workflow.deletePreview", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+      }),
     );
   }
 
@@ -527,6 +534,10 @@ export class ApiClient implements ApiService {
 
   async listTasks(input: TaskListInput): Promise<TaskListPage> {
     return workflowLabels.listTasks(this.#transport, input);
+  }
+
+  async searchTasks(input: TaskSearchInput): Promise<TaskSearchResponse> {
+    return taskSearch.searchTasks(this.#transport, input);
   }
 
   async updateTask(input: TaskEditInput): Promise<string> {

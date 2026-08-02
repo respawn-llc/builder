@@ -62,52 +62,50 @@ export function BoardLabelFilterChrome() {
     [filter, generation.controller],
   );
   return (
-    <div className="flex shrink-0 items-center px-[var(--space-2)] pt-[var(--space-2)]">
-      <span className="relative inline-flex">
-        <LabelChooser
-          invocation={{
-            kind: "filter",
-            state: filter.state,
-            onAction: dispatch,
-          }}
-          trigger={
-            <InteractiveChip
-              className="board-label-filter-trigger"
-              selected={active}
-              style={{
-                paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
-                paddingInlineStart: "var(--space-3)",
-              }}
-              tone={active ? "primary" : "neutral"}
-            >
-              <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-              <AnimatedFilterSummary text={summary} />
-            </InteractiveChip>
-          }
-        />
-        <span
-          aria-hidden={active ? undefined : true}
-          className={cx(
-            "board-label-filter-clear absolute inset-y-0 right-0 z-10 grid overflow-hidden",
-            active ? "w-7 scale-100 opacity-100" : "w-0 scale-90 opacity-0",
-          )}
-          inert={active ? undefined : true}
-        >
-          <Button
-            aria-label={t("labels.clearFilter")}
-            className="h-full w-7"
-            onClick={() => {
-              dispatch({ type: "clear" });
+    <span className="relative inline-flex">
+      <LabelChooser
+        invocation={{
+          kind: "filter",
+          state: filter.state,
+          onAction: dispatch,
+        }}
+        trigger={
+          <InteractiveChip
+            className="board-label-filter-trigger"
+            selected={active}
+            style={{
+              paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
+              paddingInlineStart: "var(--space-3)",
             }}
-            size="icon-sm"
-            style={{ color: "var(--color-primary)" }}
-            variant="ghost"
+            tone={active ? "primary" : "neutral"}
           >
-            <XIcon aria-hidden="true" size={15} strokeWidth={1.75} />
-          </Button>
-        </span>
+            <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
+            <AnimatedFilterSummary text={summary} />
+          </InteractiveChip>
+        }
+      />
+      <span
+        aria-hidden={active ? undefined : true}
+        className={cx(
+          "board-label-filter-clear absolute inset-y-0 right-0 z-10 grid overflow-hidden",
+          active ? "w-7 scale-100 opacity-100" : "w-0 scale-90 opacity-0",
+        )}
+        inert={active ? undefined : true}
+      >
+        <Button
+          aria-label={t("labels.clearFilter")}
+          className="h-full w-7"
+          onClick={() => {
+            dispatch({ type: "clear" });
+          }}
+          size="icon-sm"
+          style={{ color: "var(--color-primary)" }}
+          variant="ghost"
+        >
+          <XIcon aria-hidden="true" size={15} strokeWidth={1.75} />
+        </Button>
       </span>
-    </div>
+    </span>
   );
 }
 

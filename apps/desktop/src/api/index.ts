@@ -40,6 +40,8 @@ export {
   RpcError,
   WorkflowLabelError,
   WorkflowTaskDependencyError,
+  TaskSearchError,
+  decodeTaskSearchError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
   ServerRootMismatchError,
@@ -49,6 +51,7 @@ export {
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
+export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
@@ -166,6 +169,17 @@ export type {
   TaskListItem,
   TaskListPage,
 } from "./workflowLabels";
+export type {
+  TaskSearchFTS5Hit,
+  TaskSearchGroup,
+  TaskSearchHit,
+  TaskSearchInput,
+  TaskSearchLiteralHit,
+  TaskSearchLiteralMatch,
+  TaskSearchMode,
+  TaskSearchResponse,
+  TaskSearchSource,
+} from "./taskSearch";
 export {
   canonicalTaskLabelFilter,
   labelIDListsEqual,
