@@ -14,7 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
-import { errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
 import { useStatusController } from "@/app-facade";
 import {
   Button,
@@ -38,6 +38,8 @@ import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
 import {
   handleLabelChooserSearchKeyDown,
   labelResultRowSelection,
+  projectLabelReorderFailureNotice,
+  submitProjectLabelReorder,
   selectLabel,
   selectUnlabeled,
   useLabelChooserMutationActions,
@@ -319,17 +321,13 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           unlabeledName,
           labels,
           onReorder(nextLabels) {
-            void mutations.reorder
-              .mutateAsync(nextLabels.map((label) => label.id))
-              .catch((error: unknown) => {
-                push({
-                  body: errorMessage(error),
-                  durationMs: Infinity,
-                  id: "project-label-reorder-error",
-                  title: t("labels.reorderFailed"),
-                  tone: "danger",
-                });
-              });
+            void submitProjectLabelReorder({
+              labelIDs: nextLabels.map((label) => label.id),
+              mutateAsync: mutations.reorder.mutateAsync,
+              onError: (error) => {
+                push(projectLabelReorderFailureNotice(error, t));
+              },
+            });
           },
           reorderEnabled,
           catalogMutationPending,

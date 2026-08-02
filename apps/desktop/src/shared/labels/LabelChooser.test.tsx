@@ -7,9 +7,11 @@ import type * as AppFacade from "@/app-facade";
 import { createLabelFilterState, type LabelFilterAction } from "./labelFilterState";
 import { LabelChooser } from "./LabelChooser";
 import type * as ProjectLabelHooks from "./projectLabelHooks";
+import { projectLabelReorderFailureNotice, submitProjectLabelReorder } from "./projectLabelHooks";
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 
 const createdLabelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
+const testT = (key: string) => key;
 
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   configurable: true,
@@ -104,7 +106,6 @@ vi.mock("react-i18next", () => {
     "labels.filterConditionNeutral": () => "Neutral label condition",
     "labels.rename": (values) => `Rename ${values?.name ?? ""}`.trim(),
     "labels.reorder": (values) => `Reorder ${values?.name ?? ""}`.trim(),
-    "labels.reorderFailed": () => "Label order failed",
     "labels.search": () => "Search or create labels",
     "labels.unlabeled": () => "No labels",
     "workflowEditor.deleteParameter": () => "Delete parameter",
@@ -120,6 +121,13 @@ vi.mock("react-i18next", () => {
 });
 
 beforeEach(() => {
+  hooks.catalog.data = {
+    projectID: "project-1",
+    labels: [
+      { id: "38bf0da7-a3f7-4c15-bc5f-c8fca538e667", name: "Alpha" },
+      { id: "942495c2-5958-4959-8445-94046ad74fbd", name: "Beta" },
+    ],
+  };
   hooks.createPending = false;
   hooks.reorderPending = false;
   hooks.reorder.mockClear();
@@ -227,6 +235,74 @@ describe("LabelChooser", () => {
     await waitFor(() => {
       expect(onSelectionChange).toHaveBeenCalledWith(createdLabelID, true);
     });
+  });
+
+  it("omits reorder handles outside an eligible filter catalog", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <LabelChooser
+        invocation={{ kind: "assignment", onSelectionChange: vi.fn(), selectedLabelIDs: [] }}
+        trigger={<button type="button">Open assignment chooser</button>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Open assignment chooser" }));
+    expect(screen.queryByRole("button", { name: "Reorder Alpha" })).not.toBeInTheDocument();
+    view.unmount();
+    hooks.catalog.data = {
+      projectID: "project-1",
+      labels: [{ id: "38bf0da7-a3f7-4c15-bc5f-c8fca538e667", name: "Alpha" }],
+    };
+    render(
+      <LabelChooser
+        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        trigger={<button type="button">Open one-label chooser</button>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Open one-label chooser" }));
+    expect(screen.queryByRole("button", { name: "Reorder Alpha" })).not.toBeInTheDocument();
+  });
+
+  it("builds the visible reorder failure notice", () => {
+    statusPush(projectLabelReorderFailureNotice(new Error("save failed"), testT));
+    expect(statusPush).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "save failed", tone: "danger" }),
+    );
+  });
+
+  it("submits the complete chooser sequence and receives the authoritative catalog", async () => {
+    const authoritative = {
+      projectID: "project-1",
+      labels: [...hooks.catalog.data.labels].reverse(),
+    };
+    const mutateAsync = vi.fn(async (labelIDs: readonly string[]) => {
+      expect(labelIDs).toEqual(authoritative.labels.map((label) => label.id));
+      return authoritative;
+    });
+
+    await expect(
+      submitProjectLabelReorder({
+        labelIDs: authoritative.labels.map((label) => label.id),
+        mutateAsync,
+        onError: statusPush,
+      }),
+    ).resolves.toEqual(authoritative);
+    expect(statusPush).not.toHaveBeenCalled();
+  });
+
+  it("routes chooser reorder failure to its visible error callback", async () => {
+    const error = new Error("save failed");
+    await expect(
+      submitProjectLabelReorder({
+        labelIDs: ["label-1", "label-2"],
+        mutateAsync: async () => {
+          throw error;
+        },
+        onError: (failure) => {
+          statusPush(projectLabelReorderFailureNotice(failure, testT));
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(statusPush).toHaveBeenCalledWith(expect.objectContaining({ body: "save failed", tone: "danger" }));
   });
 
 });

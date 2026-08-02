@@ -109,7 +109,7 @@ export function createProjectLabelEffects({
           await deleteLabel(event.primaryEntityID);
           return;
         }
-        await authority.requestRefresh();
+        authority.requestRefresh();
         return;
       }
       if (event.resource !== "task" || event.workflowID === null) {
@@ -138,7 +138,7 @@ export function createProjectLabelEffects({
       });
     },
     async refreshAfterSubscriptionBoundary() {
-      await authority.requestRefresh();
+      authority.requestRefresh();
       await refreshMembership({
         kind: "subscription.refresh",
         projectID,

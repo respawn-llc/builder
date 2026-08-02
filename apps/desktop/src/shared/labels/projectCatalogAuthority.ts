@@ -11,7 +11,7 @@ export type ProjectCatalogAuthority = Readonly<{
   applyDelete(labelID: string): void;
   acceptCatalog(catalog: ProjectLabelCatalog): void;
   restoreCatalog(catalog: ProjectLabelCatalog): void;
-  requestRefresh(): Promise<void>;
+  requestRefresh(): void;
 }>;
 
 export function createProjectCatalogAuthority({
@@ -39,7 +39,6 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   readonly #deletedLabelIDs = new Set<string>();
   #generation = 0;
   #activeRead: ActiveCatalogRead | null = null;
-  #refreshPromise: Promise<void> | null = null;
   #refreshNeeded = false;
 
   constructor(projectID: string, queryClient: QueryClient, listCatalog: () => Promise<ProjectLabelCatalog>) {
@@ -114,18 +113,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
-  async requestRefresh(): Promise<void> {
+  requestRefresh(): void {
     this.#advance(true);
     this.#startRefreshIfIdle();
-    const activeRead = this.#activeRead;
-    if (activeRead !== null) {
-      await activeRead.promise.catch(() => undefined);
-    }
-    this.#startRefreshIfIdle();
-    const refresh = this.#refreshPromise;
-    if (refresh !== null) {
-      await refresh;
-    }
   }
 
   acceptCatalog(catalog: ProjectLabelCatalog): void {
@@ -229,14 +219,6 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
         staleTime: 0,
       })
       .then(() => undefined);
-    this.#refreshPromise = refresh;
     void refresh.catch(() => undefined);
-    void refresh
-      .finally(() => {
-        if (this.#refreshPromise === refresh) {
-          this.#refreshPromise = null;
-        }
-      })
-      .catch(() => undefined);
   }
 }

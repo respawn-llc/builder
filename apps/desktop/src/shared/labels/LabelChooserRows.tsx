@@ -172,7 +172,7 @@ export function LabelResultRow({
   return (
     <LabelSelectionRow
       contextualActions={
-        <>
+        <div className={reorder === undefined ? undefined : "mr-[var(--space-7)]"}>
           {deleteAction}
           <IconTooltipButton
             disabled={catalogMutationPending}
@@ -182,7 +182,7 @@ export function LabelResultRow({
           >
             <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
           </IconTooltipButton>
-        </>
+        </div>
       }
       highlighted={highlighted}
       name={label.name}

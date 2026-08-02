@@ -18,6 +18,7 @@ import type {
   RenameState,
 } from "./LabelChooserRows";
 import type { LabelFilterState } from "./labelFilterState";
+import type { StatusNotice } from "@/ui";
 
 export function useProjectLabelCatalog() {
   return useProjectLabelData().catalog;
@@ -54,7 +55,7 @@ export function useProjectLabelCatalogMutations() {
         if (previous !== undefined) {
           authority.restoreCatalog(previous);
         }
-        void authority.requestRefresh();
+        authority.requestRefresh();
       },
       onSuccess(catalog) {
         authority.acceptCatalog(catalog);
@@ -96,6 +97,33 @@ export function labelMutationErrorMessage(error: unknown, t: TFunction): string 
     case "invalid_filter":
     case "invalid_mutation":
       return t("labels.mutationFailed");
+  }
+}
+
+export function projectLabelReorderFailureNotice(error: unknown, t: (key: string) => string): StatusNotice {
+  return {
+    body: errorMessage(error),
+    durationMs: Infinity,
+    id: "project-label-reorder-error",
+    title: t("labels.mutationFailed"),
+    tone: "danger",
+  };
+}
+
+export async function submitProjectLabelReorder({
+  labelIDs,
+  mutateAsync,
+  onError,
+}: Readonly<{
+  labelIDs: readonly string[];
+  mutateAsync(labelIDs: readonly string[]): Promise<ProjectLabelCatalog>;
+  onError(error: unknown): void;
+}>): Promise<ProjectLabelCatalog | null> {
+  try {
+    return await mutateAsync(labelIDs);
+  } catch (error) {
+    onError(error);
+    return null;
   }
 }
 
