@@ -144,6 +144,10 @@ func SteerPersistedWorkflowAssignment(
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
+	// Dormant admission must call this before appending any other event. A
+	// pre-existing record is the durable witness that base meta context has
+	// already been seeded; unrelated callback writes would invalidate that
+	// freshness test.
 	if len(recent.Records) == 0 {
 		builder := newActiveMetaContextBuilder(
 			engine.store.Meta(),
