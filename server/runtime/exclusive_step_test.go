@@ -141,6 +141,7 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(context.Context) error {
 	return nil
 }
+func (s *stubExclusiveStepLifecycle) EndAgentStepBoundary() {}
 
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 	s.mu.Lock()

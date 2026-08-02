@@ -62,6 +62,7 @@ func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() erro
 func (s *blockingBackgroundStepLifecycle) DrainAgentStepBoundary(context.Context) error {
 	return nil
 }
+func (s *blockingBackgroundStepLifecycle) EndAgentStepBoundary() {}
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
 	t.Parallel()

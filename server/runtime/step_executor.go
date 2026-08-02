@@ -66,6 +66,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		e.stepLifecycle.EndAgentStepBoundary()
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		} else if terminal {
@@ -171,13 +172,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
-			e.compactionRuntimeState().SetManualCompactionEligible(true)
-			if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 		}
 
 		if responseOutputIsReasoningOnly(resp.OutputItems) {
+			if err := s.completeAgentStepBoundary(ctx); err != nil {
+				return stepLoopResult{}, err
+			}
 			continue
 		}
 
@@ -356,8 +359,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
-		e.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+		if err := s.completeAgentStepBoundary(ctx); err != nil {
 			return stepLoopResult{}, err
 		}
 		patchEditsApplied = patchEditsApplied || applied
@@ -587,8 +589,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
 			return false, false, err
 		}
-		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := s.engine.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+		if err := s.completeAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
 		return patchEditsApplied, true, nil
@@ -597,12 +598,16 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if len(localToolCalls) > 0 || len(hostedToolExecutions) > 0 {
-		s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-		if err := s.engine.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
+		if err := s.completeAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
+}
+
+func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) error {
+	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 
 func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.Context, stepID string, localToolCalls []llm.ToolCall) (bool, bool, error) {

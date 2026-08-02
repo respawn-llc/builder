@@ -559,7 +559,7 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 	for {
 		s.mu.Lock()
 		if s.active == nil || !isAgentStepCapable(s.active.activeKind) ||
-			len(s.nextWaiters) == 0 {
+			len(s.nextWaiters) == 0 || s.nextWaiters[0].reservation == nil {
 			s.mu.Unlock()
 			return nil
 		}
@@ -577,17 +577,27 @@ func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Conte
 	}
 }
 
+func (s *defaultExclusiveStepLifecycle) EndAgentStepBoundary() {
+	s.mu.Lock()
+	s.boundaryReady = false
+	s.mu.Unlock()
+}
+
 func (s *defaultExclusiveStepLifecycle) snapshotLocked() *RunSnapshot {
-	if s.active == nil || s.active.runID == "" {
+	active := s.active
+	if active == nil {
+		active = s.suspended
+	}
+	if active == nil || active.runID == "" {
 		return nil
 	}
 	return &RunSnapshot{
-		RunID:      s.active.runID,
-		StepID:     s.active.stepID,
+		RunID:      active.runID,
+		StepID:     active.stepID,
 		Status:     RunStatusRunning,
-		ActiveKind: s.active.activeKind,
-		GoalLoop:   s.active.activeKind == ActiveKindGoalLoop,
-		StartedAt:  s.active.startedAt,
+		ActiveKind: active.activeKind,
+		GoalLoop:   active.activeKind == ActiveKindGoalLoop,
+		StartedAt:  active.startedAt,
 	}
 }
 

@@ -35,6 +35,7 @@ type exclusiveStepLifecycle interface {
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
 	DrainAgentStepBoundary(ctx context.Context) error
+	EndAgentStepBoundary()
 }
 
 type backgroundNoticeScheduler interface {
