@@ -14,7 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { TaskSearchError, errorMessage, type TaskSearchGroup, type TaskSearchResponse } from "@/api";
-import { queryKeys, useAppServices } from "@/app-facade";
+import { queryKeys, useAppServices, useTaskSearchMemory } from "@/app-facade";
 import {
   Button,
   CommandPaletteDialog,
@@ -50,8 +50,6 @@ type SearchPage = Readonly<{
   response: TaskSearchResponse;
 }>;
 
-let rememberedTaskSearchQuery = "";
-
 export function BoardTaskSearchChrome({
   projectID,
   onOpenTask,
@@ -60,18 +58,15 @@ export function BoardTaskSearchChrome({
   onOpenTask(taskID: string): void;
 }>) {
   const { t } = useTranslation();
+  const memory = useTaskSearchMemory();
   const [open, setOpen] = useState(false);
   const pendingTaskIDRef = useRef<string | null>(null);
-  const [query, setQueryState] = useState(rememberedTaskSearchQuery);
+  const query = memory.query;
   const debouncedQuery = useDebouncedText(query, searchDebounceMs);
   const search = useBoardTaskSearch(projectID, open, debouncedQuery);
   const selection = useTaskSearchSelection(projectID, search.displayedQuery, search.results);
   const revealActiveSelection = selection.revealActive;
 
-  const setQuery = useCallback((value: string): void => {
-    rememberedTaskSearchQuery = value;
-    setQueryState(value);
-  }, []);
   const close = useCallback((): void => {
     setOpen(false);
   }, []);
@@ -90,15 +85,13 @@ export function BoardTaskSearchChrome({
     }
   }, [onOpenTask]);
   const openSearch = useCallback((): void => {
+    pendingTaskIDRef.current = null;
     revealActiveSelection();
     setOpen(true);
   }, [revealActiveSelection]);
   useTaskSearchShortcuts(openSearch);
   const moveSelection = useCallback(
     (direction: -1 | 1): void => {
-      if (selection.navigationBlocked) {
-        return;
-      }
       const next = adjacentSearchResult(search.results, selection.activeKey, direction);
       if (next !== null) {
         selection.selectAndReveal(next.key);
@@ -124,7 +117,7 @@ export function BoardTaskSearchChrome({
         onClose={close}
         onExitComplete={completeClose}
         onMoveSelection={moveSelection}
-        onQueryChange={setQuery}
+        onQueryChange={memory.setQuery}
         open={open}
         query={query}
         search={search}
@@ -209,10 +202,12 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
   const retainedData = useRetainedQueryData({ projectID }, request.data, sameTaskSearchProject);
   const normalizedTooShort = request.error instanceof TaskSearchError;
   const visibleData = searchable && !normalizedTooShort ? retainedData : undefined;
+  const paginationUsesVisibleData = visibleData !== undefined && visibleData === request.data;
   const results = useMemo(() => flattenSearchResults(visibleData), [visibleData]);
   return {
-    displayedQuery: visibleData?.pages[0]?.query ?? "",
+    displayedQuery: visibleData?.pages[0]?.query ?? null,
     normalizedTooShort,
+    paginationUsesVisibleData,
     request,
     results,
     searchable,
@@ -476,8 +471,7 @@ function TaskSearchResultList({
       const previous = lastPointerPositionRef.current;
       lastPointerPositionRef.current = current;
       if (
-        previous === null ||
-        (previous.x === current.x && previous.y === current.y) ||
+        (previous !== null && previous.x === current.x && previous.y === current.y) ||
         key === selectedKey
       ) {
         return;
@@ -493,19 +487,25 @@ function TaskSearchResultList({
       className="h-full min-h-0 overflow-y-auto px-[var(--space-2)]"
       estimateSize={() => taskSearchResultEstimatedHeight}
       getItemKey={(result) => result.key}
-      hasNextPage={search.request.hasNextPage}
+      hasNextPage={search.paginationUsesVisibleData && search.request.hasNextPage}
       header={listHeader}
       id={listID}
       initialScrollAlign="auto"
       initialScrollKey={immediateScrollRequest?.key}
       initialScrollRequestKey={immediateScrollRequest?.requestID.toString()}
-      isFetchingNextPage={search.request.isFetchingNextPage}
+      isFetchingNextPage={search.paginationUsesVisibleData && search.request.isFetchingNextPage}
       items={search.results}
-      loadMoreKey={search.request.data?.pages.at(-1)?.response.nextOffset?.toString()}
+      loadMoreKey={
+        search.paginationUsesVisibleData
+          ? search.request.data?.pages.at(-1)?.response.nextOffset?.toString()
+          : undefined
+      }
       loadingLabel={t("taskSearch.searching")}
       nextBoundary={searchBoundaryState(search, boundaryCopy)}
       onLoadMore={() => {
-        void search.request.fetchNextPage();
+        if (search.paginationUsesVisibleData) {
+          void search.request.fetchNextPage();
+        }
       }}
       paddingEnd={8}
       paddingStart={8}
@@ -619,6 +619,9 @@ function searchBoundaryState(
     retryLabel: string;
   }>,
 ): VirtualizedInfiniteListBoundaryState | undefined {
+  if (!search.paginationUsesVisibleData) {
+    return undefined;
+  }
   return taskSearchBoundaryState({
     error: search.request.isFetchNextPageError ? search.request.error : null,
     loading: search.request.isFetchingNextPage,

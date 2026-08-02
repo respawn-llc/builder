@@ -1,13 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 
+import { useTaskSearchMemory, type TaskSearchMemorySelection } from "@/app-facade";
 import { prefersReducedMotion } from "@/ui";
 import type { TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
-
-type RememberedSelection = Readonly<{
-  key: string;
-  projectID: string;
-  query: string;
-}>;
 
 export type TaskSearchScrollRequest = Readonly<{
   behavior: "auto" | "smooth";
@@ -15,33 +10,34 @@ export type TaskSearchScrollRequest = Readonly<{
   requestID: number;
 }>;
 
-let rememberedTaskSearchSelection: RememberedSelection | null = null;
-
 export function useTaskSearchSelection(
   projectID: string,
-  displayedQuery: string,
+  displayedQuery: string | null,
   results: readonly SearchResult[],
 ) {
-  const [selected, setSelected] = useState<RememberedSelection | null>(() =>
-    rememberedTaskSearchSelection?.projectID === projectID ? rememberedTaskSearchSelection : null,
-  );
+  const memory = useTaskSearchMemory();
+  const selected = memory.selectionFor(projectID);
   const [scrollRequest, setScrollRequest] = useState<TaskSearchScrollRequest | null>(null);
   const nextScrollRequestIDRef = useRef(1);
-  const activeSelection = resolveActiveSearchResult(results, selected, projectID, displayedQuery);
-  const activeKey = activeSelection.key;
+  const activeKey = resolveActiveSearchResult(results, selected, projectID, displayedQuery);
   const select = useCallback(
     (key: string): void => {
+      if (displayedQuery === null) {
+        throw new Error("Task Search result selection requires a displayed query.");
+      }
       const next = { key, projectID, query: displayedQuery };
-      setSelected(next);
-      rememberedTaskSearchSelection = next;
+      memory.rememberSelection(next);
     },
-    [displayedQuery, projectID],
+    [displayedQuery, memory, projectID],
   );
-  const requestReveal = useCallback((key: string, behavior: "auto" | "smooth"): void => {
-    const requestID = nextScrollRequestIDRef.current;
-    nextScrollRequestIDRef.current += 1;
-    setScrollRequest({ behavior, key, requestID });
-  }, []);
+  const requestReveal = useCallback(
+    (key: string, behavior: "auto" | "smooth"): void => {
+      const requestID = nextScrollRequestIDRef.current;
+      nextScrollRequestIDRef.current += 1;
+      setScrollRequest({ behavior, key, requestID });
+    },
+    [setScrollRequest],
+  );
   const selectAndReveal = useCallback(
     (key: string): void => {
       select(key);
@@ -63,7 +59,6 @@ export function useTaskSearchSelection(
   return {
     activeKey,
     activeResult: results.find((result) => result.key === activeKey) ?? null,
-    navigationBlocked: activeSelection.navigationBlocked,
     revealActive,
     revealImmediately,
     scrollRequest,
@@ -96,14 +91,12 @@ export function adjacentSearchResult(
 
 function resolveActiveSearchResult(
   results: readonly SearchResult[],
-  selected: RememberedSelection | null,
+  selected: TaskSearchMemorySelection | null,
   projectID: string,
-  displayedQuery: string,
-): Readonly<{ key: string | null; navigationBlocked: boolean }> {
-  if (selected?.projectID === projectID && selected.query === displayedQuery) {
-    return results.some((result) => result.key === selected.key)
-      ? { key: selected.key, navigationBlocked: false }
-      : { key: null, navigationBlocked: true };
+  displayedQuery: string | null,
+): string | null {
+  if (displayedQuery !== null && selected?.projectID === projectID && selected.query === displayedQuery) {
+    return results.some((result) => result.key === selected.key) ? selected.key : (results[0]?.key ?? null);
   }
-  return { key: results[0]?.key ?? null, navigationBlocked: false };
+  return results[0]?.key ?? null;
 }

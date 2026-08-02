@@ -167,6 +167,32 @@ describe("Board Task Search", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("retains one query while rerunning Search in the next Project scope", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const view = renderSearch(services, "project-first");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    await waitFor(() => {
+      expect(services.transport.calls).toHaveLength(1);
+    });
+
+    view.rerender(
+      <TestAppProviders services={services}>
+        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-second" />
+      </TestAppProviders>,
+    );
+
+    expect(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") })).toHaveValue("search");
+    await waitFor(() => {
+      expect(services.transport.calls.at(-1)?.params).toMatchObject({
+        project_ids: ["project-second"],
+        query: "search",
+      });
+    });
+  });
+
   it("keeps the prior Task result actionable while a replacement query debounces", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
@@ -187,7 +213,60 @@ describe("Board Task Search", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("ignores stationary pointer events after keyboard selection", async () => {
+  it("falls back to the first result when a refresh removes the remembered selection", async () => {
+    vi.useRealTimers();
+    const refreshedResponse = { ...searchResponse, groups: searchResponse.groups.slice(0, 1) };
+    const services = createTestServices([
+      {
+        method: "workflow.task.search",
+        handler: (_params, callIndex) => (callIndex === 0 ? searchResponse : refreshedResponse),
+      },
+    ]);
+
+    renderSearch(services, "project-refresh");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+
+    await waitFor(() => {
+      expect(services.transport.calls).toHaveLength(2);
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+    });
+    expect(screen.getByRole("option")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("cancels a pending Task activation when Search reopens during exit", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const onOpenTask = vi.fn();
+
+    renderSearch(services, "project-reopen", onOpenTask);
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(onOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("selects on pointer movement but ignores stationary pointer events after keyboard selection", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
 
@@ -202,15 +281,17 @@ describe("Board Task Search", () => {
       throw new Error("Task Search pointer test requires two results.");
     }
 
-    fireEvent.pointerMove(first, { pointerType: "mouse", clientX: 10, clientY: 10 });
-    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 10, clientY: 10 });
     expect(second).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.pointerMove(first, { pointerType: "mouse", clientX: 10, clientY: 10 });
-    expect(second).toHaveAttribute("aria-selected", "true");
-
-    fireEvent.pointerMove(first, { pointerType: "mouse", clientX: 11, clientY: 10 });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(first).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 10, clientY: 10 });
+    expect(first).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 11, clientY: 10 });
+    expect(second).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -218,8 +299,8 @@ function renderSearch(
   services: ReturnType<typeof createTestServices>,
   projectID: string,
   onOpenTask = vi.fn(),
-): void {
-  render(
+): ReturnType<typeof render> {
+  return render(
     <TestAppProviders services={services}>
       <BoardTaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />
     </TestAppProviders>,
