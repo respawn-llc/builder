@@ -13,6 +13,14 @@ func TestPromptCommandCatalogResponseValidatesNamesAndUnicodePreviewLimit(t *tes
 	if err := response.Validate(); err == nil {
 		t.Fatal("duplicate catalog entry validated")
 	}
+	for _, preview := range []string{"", " leading", "trailing ", "two  spaces", "line\nbreak", "tab\tbreak"} {
+		t.Run("invalid preview "+preview, func(t *testing.T) {
+			invalid := PromptCommandCatalogResponse{Commands: []PromptCommandCatalogEntry{{Name: "prompt:preview", Preview: preview}}}
+			if err := invalid.Validate(); err == nil {
+				t.Fatalf("preview %q validated", preview)
+			}
+		})
+	}
 }
 
 func TestPromptCommandErrorValidation(t *testing.T) {

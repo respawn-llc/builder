@@ -1,12 +1,15 @@
 package promptcommands
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"core/shared/runtimeinput"
 )
@@ -16,9 +19,9 @@ type candidate struct {
 	content string
 }
 
-func (s Service) scan() ([]candidate, error) {
+func (s Service) scan() ([]CatalogEntry, error) {
 	seen := make(map[string]struct{})
-	result := make([]candidate, 0)
+	result := make([]CatalogEntry, 0)
 	for _, dir := range s.searchDirs() {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -38,16 +41,17 @@ func (s Service) scan() ([]candidate, error) {
 			if _, ok := seen[name]; ok {
 				continue
 			}
-			content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			path := filepath.Join(dir, entry.Name())
+			preview, err := previewFile(path)
 			if err != nil {
 				commandName := name
-				return nil, &Error{Kind: ErrorKindCatalogRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", filepath.Join(dir, entry.Name()), err)}
+				return nil, &Error{Kind: ErrorKindCatalogRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", path, err)}
 			}
-			if strings.TrimSpace(string(content)) == "" {
+			if preview == "" {
 				continue
 			}
 			seen[name] = struct{}{}
-			result = append(result, candidate{name: name, content: string(content)})
+			result = append(result, CatalogEntry{Name: name, Preview: preview})
 		}
 	}
 	return result, nil
@@ -98,6 +102,58 @@ func commandNameForEntry(entryName string, directory bool) (string, bool) {
 		return "", false
 	}
 	return "prompt:" + identifier, true
+}
+
+func previewFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	return previewReader(file)
+}
+
+func preview(content string) string {
+	preview, _ := previewReader(strings.NewReader(content))
+	return preview
+}
+
+func previewReader(reader io.Reader) (string, error) {
+	buffered := bufio.NewReader(reader)
+	var result strings.Builder
+	outputRunes := 0
+	pendingSpace := false
+	for {
+		r, _, err := buffered.ReadRune()
+		if err == io.EOF {
+			return result.String(), nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if unicode.IsSpace(r) {
+			if outputRunes > 0 {
+				pendingSpace = true
+			}
+			continue
+		}
+		if pendingSpace {
+			if outputRunes == 256 {
+				return result.String(), nil
+			}
+			result.WriteByte(' ')
+			outputRunes++
+			pendingSpace = false
+		}
+		if outputRunes == 256 {
+			return result.String(), nil
+		}
+		result.WriteRune(r)
+		outputRunes++
+		if outputRunes == 256 {
+			return result.String(), nil
+		}
+	}
 }
 
 func (s Service) searchDirs() []string {

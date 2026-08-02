@@ -325,6 +325,7 @@ func (c uiInputController) resumeQueuedInputsAfterIdleRuntime() tea.Cmd {
 func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 	m := c.model
 	text := item.Text
+	_, reservedPrompt := promptCommandToken(text)
 	if m.commandRegistry != nil {
 		if _, knownCommand := m.commandRegistry.Command(text); knownCommand {
 			if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
@@ -339,6 +340,9 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 				return finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 			}
 		}
+	}
+	if reservedPrompt {
+		return m.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(item.Text, preSubmitQueueFront, item.ID, activeSubmitOriginQueued)
 }

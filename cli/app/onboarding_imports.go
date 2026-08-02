@@ -354,22 +354,18 @@ func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
 	if !containsOnboardingOption(options, defaultID) {
 		defaultID = options[0].ID
 	}
-	return onboardingScreen{
+	screen := onboardingScreen{
 		ID:              "commands_import",
 		Kind:            onboardingScreenChoice,
 		Title:           "Import slash commands?",
 		Body:            "Kent found importable slash commands. Would you like to import them?",
 		Options:         options,
 		DefaultOptionID: defaultID,
-		ErrorText:       errorText(state.imports.commandErr),
 	}
-}
-
-func errorText(err error) string {
-	if err == nil {
-		return ""
+	if state.imports.commandErr != nil {
+		screen.ErrorText = state.imports.commandErr.Error()
 	}
-	return err.Error()
+	return screen
 }
 
 func importSkillsBody(discovery onboardingImportDiscovery) string {

@@ -37,6 +37,10 @@ func (r PromptCommandCatalogResponse) Validate() error {
 			return fmt.Errorf("prompt command %q is duplicated", name)
 		}
 		seen[name] = struct{}{}
+		if strings.TrimSpace(command.Preview) == "" ||
+			strings.Join(strings.Fields(command.Preview), " ") != command.Preview {
+			return fmt.Errorf("prompt command %q preview must be one-line whitespace-collapsed text", name)
+		}
 		if len([]rune(command.Preview)) > 256 {
 			return fmt.Errorf("prompt command %q preview exceeds 256 characters", name)
 		}
