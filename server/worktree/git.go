@@ -1106,30 +1106,6 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 	return err
 }
 
-func defaultWorktreeRoot(baseDir string, workspaceID string, pathSeed string) (string, error) {
-	trimmedBaseDir := strings.TrimSpace(baseDir)
-	if trimmedBaseDir == "" {
-		return "", fmt.Errorf("worktree base dir is required")
-	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedWorkspaceID == "" {
-		return "", fmt.Errorf("workspace id is required")
-	}
-	trimmedSeed := strings.TrimSpace(pathSeed)
-	if trimmedSeed == "" {
-		return "", fmt.Errorf("worktree path seed is required")
-	}
-	canonicalBaseDir, err := config.CanonicalWorkspaceRoot(trimmedBaseDir)
-	if err != nil {
-		return "", err
-	}
-	relativeBranchPath := filepath.Clean(filepath.FromSlash(trimmedSeed))
-	if relativeBranchPath == "." || filepath.IsAbs(relativeBranchPath) || relativeBranchPath == ".." || strings.HasPrefix(relativeBranchPath, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("worktree path seed %q cannot be mapped to worktree path", trimmedSeed)
-	}
-	return config.CanonicalWorkspaceRoot(filepath.Join(canonicalBaseDir, trimmedWorkspaceID, relativeBranchPath))
-}
-
 func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
 	baseRef := strings.TrimSpace(spec.BaseRef)
 	branchName := strings.TrimSpace(spec.BranchName)
