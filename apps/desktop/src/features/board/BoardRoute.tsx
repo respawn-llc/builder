@@ -397,9 +397,6 @@ function BoardContent({
       runCardAction(startTaskInitiatingAction(dragPayload.taskID), pendingMove);
       return;
     }
-    if (dropAction.kind === "no_op") {
-      return;
-    }
     if (dropAction.kind === "move") {
       manualMove.preview(dragPayload.taskID, column.id);
       return;

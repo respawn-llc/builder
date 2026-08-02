@@ -4,7 +4,6 @@ import type { BoardCardDragPayload } from "./BoardDragTypes";
 export type BoardDropAction =
   | Readonly<{ kind: "start" }>
   | Readonly<{ kind: "move" }>
-  | Readonly<{ kind: "no_op" }>
   | Readonly<{ kind: "reject" }>;
 
 export function classifyDrop(
@@ -14,9 +13,6 @@ export function classifyDrop(
 ): BoardDropAction {
   if (dragPayload.canStart && column.id === firstActiveColumnID) {
     return { kind: "start" };
-  }
-  if (dragPayload.activeNodeIDs.includes(column.id)) {
-    return { kind: "no_op" };
   }
   if (column.kind === "join" && dragPayload.activeNodeIDs.length === 0) {
     return { kind: "reject" };

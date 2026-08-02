@@ -5,14 +5,14 @@ import type { BoardCardDragPayload } from "./BoardDragTypes";
 import { classifyDrop } from "./BoardDropActions";
 
 describe("classifyDrop", () => {
-  it("classifies a same-current destination as a no-op", () => {
+  it("routes a same-current destination through authoritative preview", () => {
     expect(
       classifyDrop(
         baseColumn,
         { ...baseDragPayload, activeNodeIDs: ["node-target"] },
         undefined,
       ),
-    ).toEqual({ kind: "no_op" });
+    ).toEqual({ kind: "move" });
   });
 
   it("rejects source-less moves into join columns", () => {

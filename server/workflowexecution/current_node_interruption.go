@@ -19,6 +19,78 @@ type currentNodeAdmissionWait struct {
 	done <-chan struct{}
 }
 
+type currentNodeInterruptCleanupState struct {
+	stopHandles    []sessionruntime.ExecutionHandle
+	waitHandles    []sessionruntime.ExecutionHandle
+	references     []workflow.CurrentNodeReference
+	drainedGates   []currentNodeAdmissionGate
+	admissionWaits []currentNodeAdmissionWait
+	taskFence      *currentNodeInterruptFence
+}
+
+func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
+	if len(state.stopHandles) == 0 &&
+		len(state.drainedGates) == 0 &&
+		len(state.admissionWaits) == 0 {
+		return nil
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cleanupCancel()
+	for _, gate := range state.drainedGates {
+		gate.lease.Cancel()
+	}
+	c.wakeAdmissionWorker()
+	for _, handle := range state.stopHandles {
+		handle.RequestStop()
+	}
+	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+		_, err := interruptCurrentNodeReferences(
+			ctx,
+			c.store.InterruptCurrentNode,
+			state.references,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.CurrentNodeInterruptionDetail{
+				Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+			},
+		)
+		return err
+	})
+	var waitErrs []error
+	for _, handle := range state.waitHandles {
+		if _, err := handle.Wait(cleanupCtx); err != nil &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
+			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			waitErrs = append(waitErrs, err)
+		}
+	}
+	for _, wait := range state.admissionWaits {
+		if wait.done != nil {
+			select {
+			case <-wait.done:
+			case <-cleanupCtx.Done():
+				waitErrs = append(waitErrs, context.Cause(cleanupCtx))
+				continue
+			}
+		}
+		c.finishTaskInterruptAdmissionKey(wait.key)
+	}
+	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, handle := range state.waitHandles {
+			if _, live := c.live[handle.Scope().ID()]; live {
+				return errors.New("workflow interruption left an affected exact execution scope")
+			}
+		}
+		if state.taskFence != nil && c.interrupts.fenceActive(state.taskFence) {
+			return errors.New("workflow interruption fence remains active")
+		}
+		return nil
+	})
+	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
+}
+
 // Interrupt stops the exact live workflow scope selected by the caller. A
 // Task-wide interrupt also drains controller-owned automatic work for that
 // Task so a successor cannot start after the interrupt returns.
@@ -123,61 +195,14 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	}); err != nil {
 		return err
 	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cleanupCancel()
-	for _, gate := range drainedGates {
-		gate.lease.Cancel()
-	}
-	c.wakeAdmissionWorker()
-	for _, handle := range stopHandles {
-		handle.RequestStop()
-	}
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		_, err := interruptCurrentNodeReferences(
-			ctx,
-			c.store.InterruptCurrentNode,
-			references,
-			workflow.CurrentNodeInterruptionReasonUserInterrupt,
-			workflow.CurrentNodeInterruptionDetail{
-				Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
-			},
-		)
-		return err
+	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		stopHandles:    stopHandles,
+		waitHandles:    waitHandles,
+		references:     references,
+		drainedGates:   drainedGates,
+		admissionWaits: admissionWaits,
+		taskFence:      taskFence,
 	})
-	var waitErrs []error
-	for _, handle := range waitHandles {
-		if _, err := handle.Wait(cleanupCtx); err != nil &&
-			!errors.Is(err, context.Canceled) &&
-			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
-			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			waitErrs = append(waitErrs, err)
-		}
-	}
-	for _, wait := range admissionWaits {
-		if wait.done != nil {
-			select {
-			case <-wait.done:
-			case <-cleanupCtx.Done():
-				waitErrs = append(waitErrs, context.Cause(cleanupCtx))
-				continue
-			}
-		}
-		c.finishTaskInterruptAdmissionKey(wait.key)
-	}
-	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, handle := range waitHandles {
-			if _, live := c.live[handle.Scope().ID()]; live {
-				return errors.New("workflow interrupt left an affected exact execution scope")
-			}
-		}
-		if taskFence != nil && c.interrupts.fenceActive(taskFence) {
-			return errors.New("workflow task interrupt fence remains active")
-		}
-		return nil
-	})
-	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
 }
 
 // InterruptForManualMove atomically fences all currently running, pending-free
@@ -310,65 +335,14 @@ func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, task
 		}
 		return err
 	}
-	if len(stopHandles) == 0 {
-		if len(drainedGates) == 0 && len(admissionWaits) == 0 {
-			return nil
-		}
-	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cleanupCancel()
-	for _, gate := range drainedGates {
-		gate.lease.Cancel()
-	}
-	c.wakeAdmissionWorker()
-	for _, handle := range stopHandles {
-		handle.RequestStop()
-	}
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		_, err := interruptCurrentNodeReferences(
-			ctx,
-			c.store.InterruptCurrentNode,
-			references,
-			workflow.CurrentNodeInterruptionReasonUserInterrupt,
-			workflow.CurrentNodeInterruptionDetail{
-				Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
-			},
-		)
-		return err
+	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		stopHandles:    stopHandles,
+		waitHandles:    waitHandles,
+		references:     references,
+		drainedGates:   drainedGates,
+		admissionWaits: admissionWaits,
+		taskFence:      taskFence,
 	})
-	var waitErrs []error
-	for _, handle := range waitHandles {
-		if _, err := handle.Wait(cleanupCtx); err != nil &&
-			!errors.Is(err, context.Canceled) &&
-			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
-			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			waitErrs = append(waitErrs, err)
-		}
-	}
-	for _, wait := range admissionWaits {
-		if wait.done != nil {
-			select {
-			case <-wait.done:
-			case <-cleanupCtx.Done():
-				waitErrs = append(waitErrs, context.Cause(cleanupCtx))
-			}
-		}
-		c.finishTaskInterruptAdmissionKey(wait.key)
-	}
-	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, handle := range waitHandles {
-			if _, live := c.live[handle.Scope().ID()]; live {
-				return errors.New("manual move interruption left an affected exact execution scope")
-			}
-		}
-		if taskFence != nil && c.interrupts.fenceActive(taskFence) {
-			return errors.New("manual move interruption fence remains active")
-		}
-		return nil
-	})
-	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
 }
 
 func appendAdmissionWait(
