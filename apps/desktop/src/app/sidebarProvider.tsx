@@ -47,7 +47,6 @@ type PendingSidebarRoutePreservation = Readonly<{
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [stackState, setStackState] = useState<SidebarStackState | null>(null);
-  const [activeActivationID, setActiveActivationID] = useState<string | null>(null);
   const [activeWidthProfile, setActiveWidthProfile] =
     useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
   const [phase, setPhase] = useState<SidebarPhase>("open");
@@ -132,7 +131,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const pending = pendingRef.current;
       pendingRef.current = null;
       preserveRouteChangeRef.current = null;
-      setActiveActivationID(null);
       clearAllCaptures();
       pending?.resolve({ status: "canceled", reason });
       if (state !== null) {
@@ -190,7 +188,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const lifecycleID = nextID("lifecycle");
       const entryID = nextID("entry");
       const activationID = nextID("activation");
-      setActiveActivationID(activationID);
       const nextProfile = sidebarWidthProfile(destination);
       setActiveWidthProfile(nextProfile);
       setSidebarWidths((current) => {
@@ -202,6 +199,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       setPhase("open");
       dispatchStack({
         type: "open",
+        activationID,
         lifecycleID,
         entryID,
         destination,
@@ -227,7 +225,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
       const nextProfile = sidebarWidthProfile(destination);
-      setActiveActivationID(nextID("activation"));
       setActiveWidthProfile(nextProfile);
       setSidebarWidths((current) =>
         sidebarWidthForProfile(current, nextProfile) === undefined
@@ -237,6 +234,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       setPhase("open");
       dispatchStack({
         type: "replace",
+        activationID: nextID("activation"),
         entryID: nextID("entry"),
         destination,
       });
@@ -296,9 +294,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       void runViewTransition({
         scope: "sidebar-push",
         update: () => {
-          setActiveActivationID(activationID);
           dispatchStack({
             type: "push",
+            activationID,
             lifecycleID: state.lifecycleID,
             entryID: nextID("entry"),
             sourceEntryID: activeEntry.entryID,
@@ -328,9 +326,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     void runViewTransition({
       scope: "sidebar-back",
       update: () => {
-        setActiveActivationID(activationID);
         dispatchStack({
           type: "back",
+          activationID,
           lifecycleID: state.lifecycleID,
           entryID: activeEntry.entryID,
         });
@@ -344,7 +342,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const pending = pendingRef.current;
       pendingRef.current = null;
       preserveRouteChangeRef.current = null;
-      setActiveActivationID(null);
       clearAllCaptures();
       pending?.resolve(result);
       if (state !== null) {
@@ -396,11 +393,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         closeSidebar("closed");
         return;
       }
-      if (state.entries.at(-1)?.entryID === token.entryID) {
-        setActiveActivationID(nextID("activation"));
-      }
       dispatchStack({
         type: "remove",
+        ...(state.entries.at(-1)?.entryID === token.entryID
+          ? { activationID: nextID("activation") }
+          : {}),
         lifecycleID: token.lifecycleID,
         entryID: token.entryID,
       });
@@ -447,6 +444,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   }, [clearAllCaptures, clearCloseTimeout]);
 
   const activeDestination = stackState?.entries.at(-1)?.destination ?? null;
+  const activeActivationID = phase === "closing" ? null : (stackState?.activationID ?? null);
   const activeSnapshot = stackState?.entries.at(-1)?.snapshot ?? null;
   const activeToken = activeTokenForState(stackState);
   const stackDestinations = useMemo(

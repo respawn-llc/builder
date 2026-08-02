@@ -9,6 +9,7 @@ export type SidebarStackEntry = Readonly<{
 }>;
 
 export type SidebarStackState = Readonly<{
+  activationID: string;
   lifecycleID: string;
   entries: readonly SidebarStackEntry[];
 }>;
@@ -16,6 +17,7 @@ export type SidebarStackState = Readonly<{
 export type SidebarStackAction =
   | Readonly<{
       type: "open";
+      activationID?: string;
       lifecycleID: string;
       entryID: string;
       destination: SidebarDestination;
@@ -23,19 +25,22 @@ export type SidebarStackAction =
     }>
   | Readonly<{
       type: "replace";
+      activationID?: string;
       entryID: string;
       destination: SidebarDestination;
     }>
   | Readonly<{
       type: "push";
+      activationID?: string;
       entryID: string;
       lifecycleID?: string;
       sourceEntryID?: string;
       destination: SidebarDestination;
     }>
-  | Readonly<{ type: "back"; lifecycleID: string; entryID: string }>
+  | Readonly<{ type: "back"; activationID?: string; lifecycleID: string; entryID: string }>
   | Readonly<{
       type: "remove";
+      activationID?: string;
       lifecycleID: string;
       entryID: string;
     }>
@@ -50,8 +55,10 @@ export type SidebarStackAction =
 export function createSidebarStack(
   lifecycleID: string,
   root: SidebarStackEntry,
+  activationID = lifecycleID,
 ): SidebarStackState {
   return {
+    activationID,
     lifecycleID,
     entries: [root],
   };
@@ -78,7 +85,7 @@ function reduceOpen(action: Extract<SidebarStackAction, { type: "open" }>): Side
     entryID: action.entryID,
     destination: action.destination,
     ...(action.snapshot === undefined ? {} : { snapshot: action.snapshot }),
-  });
+  }, action.activationID);
 }
 
 function reduceReplace(
@@ -89,6 +96,7 @@ function reduceReplace(
     ? state
     : {
         ...state,
+        activationID: action.activationID ?? state.activationID,
         entries: [
           ...state.entries.slice(0, -1),
           { entryID: action.entryID, destination: action.destination },
@@ -107,12 +115,19 @@ function reducePush(
   )
     return state;
   const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
-  if (existingTaskIndex !== undefined) return { ...state, entries: state.entries.slice(0, existingTaskIndex + 1) };
+  if (existingTaskIndex !== undefined) {
+    return {
+      ...state,
+      activationID: action.activationID ?? state.activationID,
+      entries: state.entries.slice(0, existingTaskIndex + 1),
+    };
+  }
   const root = state.entries[0];
   if (root === undefined) return state;
   const entries = state.entries.length >= sidebarStackCapacity ? [root, ...state.entries.slice(2)] : state.entries;
   return {
     ...state,
+    activationID: action.activationID ?? state.activationID,
     entries: [
       ...entries.map((entry, index) => (index === entries.length - 1 ? deactivateEntry(entry) : entry)),
       { entryID: action.entryID, destination: action.destination },
@@ -128,7 +143,11 @@ function reduceBack(
     state.entries.length <= 1 ||
     state.entries.at(-1)?.entryID !== action.entryID
     ? state
-    : { ...state, entries: state.entries.slice(0, -1) };
+    : {
+        ...state,
+        activationID: action.activationID ?? state.activationID,
+        entries: state.entries.slice(0, -1),
+      };
 }
 
 function reduceRemove(
@@ -137,7 +156,16 @@ function reduceRemove(
 ): SidebarStackState | null {
   if (state?.lifecycleID !== action.lifecycleID) return state;
   const index = state.entries.findIndex((entry) => entry.entryID === action.entryID);
-  return index < 0 ? state : state.entries.length === 1 ? null : { ...state, entries: state.entries.filter((_, i) => i !== index) };
+  return index < 0
+    ? state
+    : state.entries.length === 1
+      ? null
+      : {
+          ...state,
+          activationID:
+            index === state.entries.length - 1 ? action.activationID ?? state.activationID : state.activationID,
+          entries: state.entries.filter((_, i) => i !== index),
+        };
 }
 
 function reduceCapture(

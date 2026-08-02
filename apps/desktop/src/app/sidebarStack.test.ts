@@ -35,6 +35,7 @@ describe("sidebarStackReducer", () => {
       null,
       {
         type: "open",
+        activationID: "activation-1",
         lifecycleID: "lifecycle-1",
         entryID: "entry-1",
         destination: task("task-1"),
@@ -42,6 +43,7 @@ describe("sidebarStackReducer", () => {
     );
 
     expect(state).toEqual({
+      activationID: "activation-1",
       lifecycleID: "lifecycle-1",
       entries: [
         {
@@ -103,12 +105,14 @@ describe("sidebarStackReducer", () => {
     });
     const replaced = apply(pushed, {
       type: "replace",
+      activationID: "activation-3",
       entryID: "entry-3",
       destination: task("task-3"),
     });
     expect(
       apply(replaced, {
         type: "back",
+        activationID: "activation-stale-back",
         lifecycleID: "lifecycle-1",
         entryID: "entry-2",
       }),
@@ -116,12 +120,14 @@ describe("sidebarStackReducer", () => {
     expect(
       apply(replaced, {
         type: "push",
+        activationID: "activation-stale-push",
         lifecycleID: "lifecycle-1",
         sourceEntryID: "entry-2",
         entryID: "entry-4",
         destination: task("task-4"),
       }),
     ).toBe(replaced);
+    expect(replaced?.activationID).toBe("activation-3");
   });
 
   it("pushes a destination and Back removes the current entry", () => {
@@ -131,6 +137,7 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(opened, {
       type: "push",
+      activationID: "activation-2",
       entryID: "entry-2",
       destination: task("task-2"),
     });
@@ -140,10 +147,12 @@ describe("sidebarStackReducer", () => {
 
     const backed = apply(pushed, {
       type: "back",
+      activationID: "activation-3",
       lifecycleID: "lifecycle-1",
       entryID: "entry-2",
     });
     expect(entryIDs(backed?.entries ?? [])).toEqual(["entry-1"]);
+    expect(backed?.activationID).toBe("activation-3");
   });
 
   it("truncates to an earlier Task Detail instead of creating a duplicate", () => {
