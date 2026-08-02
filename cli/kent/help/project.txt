@@ -28,7 +28,7 @@ Commands:
     Delete a Project by canonical ID. Requires `--confirm`; workspace files are not deleted.
     Selection accepts only the canonical Project ID. Use `--json` for one stable result envelope.
     Agent shells are denied only when unfinished work exists, including Backlog Tasks.
-    The unfinished-work check is a best-effort command-time snapshot; server blockers remain authoritative.
+    Task state may change before deletion is processed; server blockers remain authoritative.
 
 Examples:
   kent project

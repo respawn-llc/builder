@@ -211,7 +211,7 @@ var (
 		"Deletion is non-interactive and requires --confirm.",
 		"Selection accepts only the canonical Project ID; --json emits one stable result envelope.",
 		"Agent shells are denied only when the Project contains unfinished work, including Backlog Tasks.",
-		"The unfinished-work check is a best-effort command-time snapshot; server blockers remain authoritative.",
+		"Task state may change before deletion is processed; server blockers remain authoritative.",
 		"Workspace files are never deleted.",
 	)
 	attachUsage           = commandUsage{helpFile: "attach.txt", includeEmbeddedFlags: true}

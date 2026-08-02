@@ -130,7 +130,7 @@ Delete a Project by its canonical Project ID:
 kent project delete <project-id> --confirm
 ```
 
-Project deletion is non-interactive and does not accept a path, name, default Project, or workspace binding as a selector. The command always checks for unfinished Tasks before checking `--confirm`. An agent-shell invocation is human-only when the Project contains any non-terminal Task, including a Backlog Task; the command reports the Project ID and does not request deletion. This policy check is a best-effort command-time snapshot, so a Task can change between the check and the server request. The server's deletion blockers remain authoritative.
+Project deletion is non-interactive and does not accept a path, name, default Project, or workspace binding as a selector. The command always checks for unfinished Tasks before checking `--confirm`. An agent-shell invocation is human-only when the Project contains any non-terminal Task, including a Backlog Task; the command reports the Project ID and does not request deletion. Task state may change before deletion is processed, and the server's deletion blockers remain authoritative.
 
 Without `--confirm`, the command makes no deletion request. Use `--json` for automation; it emits exactly one `status` envelope on `stdout`, with the canonical Project ID in `result.project_id` on success or `error.project_id` on operational failure. Blocked deletion preserves the server's blocker codes, messages, order, and positive counts. Blockers and other operational failures exit nonzero.
 
