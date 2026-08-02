@@ -384,7 +384,8 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - `status` opens the list. `new` and `create` open the create state and accept no branch/path arguments.
 - `switch <target>` uses the ordinary Switch action directly without opening the sidebar.
 - `delete [target]`, `remove [target]`, and `rm [target]` open the ordinary delete flow. Omitted target means current Worktree; a supplied selector resolves authoritatively before preview.
-- Malformed or unsupported arguments surface localized usage and change nothing.
+- Malformed or unsupported arguments clear from the composer, change nothing, and use one localized error Sonner. They never create a transcript row or reach the model.
+- Recognized Worktree commands in lazy New Chat follow the same clear + error-Sonner path and never materialize a Session.
 - Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
 - Task-owned Workflow Sessions use the same Worktree controls and mutations as ordinary Sessions. A Session Switch does not rewrite the Task's locked Execution Target, and existing Task/worktree safety blockers remain authoritative.
 - The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
@@ -406,6 +407,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses Sonner for the typed diagnostic and preserves the existing model-visible failure Steer.
 - The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
 - Rows use display name as the title. A second line shows branch/ref only when it differs from the title. Rows show no path.
+- At narrow widths, text stays above a separate action line. Rows have no horizontal scroll, overflow menu, hidden actions, or card conversion; long text end-truncates without dropping actions.
 - Before adoption, an External row uses branch name as its title or the final path component when detached. It never shows the full path; ordinary Kent display-name rules apply after adoption.
 - External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
 - Every deletable row has an icon-only trash action. Opening its popup performs one typed target-local delete preview with a loading state.

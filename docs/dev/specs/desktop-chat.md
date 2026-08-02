@@ -228,7 +228,10 @@
 - `/worktree delete [target]`, `/worktree remove [target]`, `/worktree rm [target]`, and their `/wt` forms open the ordinary delete flow.
 - A delete command without a target selects the Session's current Worktree. A delete command with a target resolves that selector authoritatively before it opens the preview popup.
 - Delete commands accept at most one target selector.
-- Malformed or unsupported Worktree command arguments change no state and surface the localized Worktree usage error.
+- Malformed or unsupported Worktree command arguments change no state and show one error Sonner with localized Worktree usage.
+- Submitting a rejected Worktree command clears that command from the composer. Desktop does not create a transcript row or send it to the model.
+- In untouched lazy New Chat, every recognized Worktree command clears from the composer and shows one error Sonner explaining that a Session is required.
+- A Worktree slash command never materializes lazy New Chat.
 - Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
 - Worktree management never materializes a lazy Session and is not a first-agentic trigger.
 - A Session owned by a Workflow Task uses the same Worktree affordance, sidebar, and mutations as an ordinary Session.
@@ -274,6 +277,9 @@
 - The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.
 - When the branch or ref differs from the display name, the row shows that branch or ref on a second line. It omits the second line when it would repeat the title.
 - Worktree rows never show a path.
+- At narrow sidebar widths, a row keeps its title and optional branch/ref above a separate action line.
+- Worktree rows use no horizontal scrolling, overflow-action menu, hidden action, or card conversion.
+- Long row text end-truncates without removing an available action.
 - An External row places an `External` warning-colored chip after its title.
 - A Missing row places a `Missing` error-colored chip after its title.
 - Every deletable row has an icon-only trash action. Activating it opens the delete popup in a loading state and requests an authoritative typed deletion preview for that target.
