@@ -377,6 +377,14 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
 - Worktree is a first-class Session execution-target control in the under-composer row.
+- Desktop supports both `/worktree` and `/wt` aliases.
+- Worktree has no `ls` subcommand.
+- Bare `/worktree` and `/wt` open the Worktree list.
+- The picker lists `/worktree` once and keeps `/wt` as an executable hidden alias.
+- `status` opens the list. `new` and `create` open the create state and accept no branch/path arguments.
+- `switch <target>` uses the ordinary Switch action directly without opening the sidebar.
+- `delete [target]`, `remove [target]`, and `rm [target]` open the ordinary delete flow. Omitted target means current Worktree; a supplied selector resolves authoritatively before preview.
+- Malformed or unsupported arguments surface localized usage and change nothing.
 - Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
 - Task-owned Workflow Sessions use the same Worktree controls and mutations as ordinary Sessions. A Session Switch does not rewrite the Task's locked Execution Target, and existing Task/worktree safety blockers remain authoritative.
 - The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
@@ -386,6 +394,8 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The sidebar opens directly to a simple complete authoritative topology list. A primary icon-only `+` action in the header opens worktree creation; creation is not a list row.
 - A secondary icon-only Refresh action sits beside `+`. Open performs one fresh list read, successful mutations refresh, and manual Refresh catches out-of-band Git changes. No poll or timer exists.
 - Initial list loading/error uses standard compact Loading and Error + Retry.
+- Reconnection refreshes the authoritative current target and any open Worktree list. Desktop retains no pending Worktree operation to reconstruct or retry and shows no speculative lost-operation warning.
+- Connection loss during Create/setup stops waiting for that request and never retries it. After reconnection, an open Worktree surface returns to a fresh list; retained worktrees appear there, and automatic Switch requires an actual successful Create result.
 - The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
 - Switch copies TUI lifecycle: request-scoped pending only until scheduling acknowledgement, then close the sidebar immediately. Never wait through the Agent Step, never optimistically move selection, and let authoritative target/outcome updates refresh state.
@@ -420,6 +430,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Setup failure returns to the refreshed list only while the sidebar remains open. A dismissed sidebar stays closed; Sonner surfaces the diagnostic, and the next open performs its ordinary fresh list read.
 - Preserve the setup-failed worktree; no inline Error, Retry, or automatic deletion.
 - Successful creation completes optional setup and then automatically uses the ordinary Switch operation. If Switch fails, preserve the created worktree, refresh the list, keep the prior Session target, and surface failure without rollback.
+- Worktree remains fully available during Question/Approval pickers and never changes the pending prompt. Target changes use the ordinary server lifecycle before later model work.
 - Review/init/file-backed prompt entry points.
 - Login/logout and account state.
 

@@ -217,6 +217,18 @@
 ## Worktree
 
 - Worktree is a Session execution-target control, not a Session setting.
+- Desktop recognizes both `/worktree` and `/wt` as Worktree slash-command aliases.
+- Desktop does not recognize an `ls` Worktree subcommand.
+- Bare `/worktree` and `/wt` open the Worktree sidebar list.
+- The slash-command picker lists `/worktree` once. `/wt` remains an executable hidden alias and does not create a duplicate picker item.
+- `/worktree status` and `/wt status` open the Worktree sidebar list.
+- `/worktree new`, `/worktree create`, `/wt new`, and `/wt create` open the Worktree sidebar directly in its creation state.
+- `new` and `create` accept no arguments. Desktop does not support a raw branch or path bypass.
+- `/worktree switch <target>` and `/wt switch <target>` apply the ordinary Switch action directly without opening the sidebar. They require exactly one target selector.
+- `/worktree delete [target]`, `/worktree remove [target]`, `/worktree rm [target]`, and their `/wt` forms open the ordinary delete flow.
+- A delete command without a target selects the Session's current Worktree. A delete command with a target resolves that selector authoritatively before it opens the preview popup.
+- Delete commands accept at most one target selector.
+- Malformed or unsupported Worktree command arguments change no state and surface the localized Worktree usage error.
 - Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
 - Worktree management never materializes a lazy Session and is not a first-agentic trigger.
 - A Session owned by a Workflow Task uses the same Worktree affordance, sidebar, and mutations as an ordinary Session.
@@ -234,6 +246,12 @@
 - Opening the Worktree sidebar performs one fresh authoritative list read. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
 - Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
 - Desktop adds no Worktree-list polling loop or timer-based refresh.
+- After reconnection, Desktop refreshes the authoritative current target and any open Worktree list.
+- Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
+- Reconnection shows no speculative warning for an absent pending Worktree operation. The refreshed server state is authoritative.
+- If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
+- After reconnection, an open Worktree surface returns to its list and performs a fresh authoritative read. Any worktree retained by the interrupted operation appears through that read.
+- Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
@@ -309,6 +327,9 @@
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
 - If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
 - Desktop does not delete or otherwise roll back a successfully created worktree because its automatic Switch failed.
+- Worktree remains fully available in the bottom control row while a Question or Approval picker replaces the editor.
+- Opening or mutating Worktree does not answer, dismiss, hide, or otherwise change the pending prompt.
+- Any Worktree target change applies through the ordinary server lifecycle before later model work.
 
 ## Questions And Approvals
 
