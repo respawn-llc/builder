@@ -79,10 +79,11 @@ export function CommentComposer({
         />
         <Button
           aria-label={editing === null ? t("task.submitComment") : t("task.saveComment")}
-          className="relative z-10 col-start-1 row-start-1 grid h-9 w-9 place-items-center self-end justify-self-end rounded-full !p-0"
+          className="relative z-10 col-start-1 row-start-1 self-end justify-self-end"
           data-testid="task-comment-save"
           disabled={interactionDisabled || commentBody.trim().length === 0}
           onClick={() => void submit()}
+          size="icon"
           style={{ marginBottom: "var(--space-2)", marginRight: "var(--space-2)" }}
           variant="primary"
         >
