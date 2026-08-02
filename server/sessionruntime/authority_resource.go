@@ -53,8 +53,8 @@ type AgentResourceLifecycle interface {
 }
 
 type AgentResourceStepLifecycle interface {
-	StepBegan(context.Context, AgentResourceDescriptor, ExecutionScope, runtime.StepLifecycleSnapshot) error
-	StepEnded(context.Context, AgentResourceDescriptor, ExecutionScope, runtime.StepLifecycleSnapshot) error
+	StepBegan(context.Context, AgentResourceDescriptor, runtime.StepLifecycleSnapshot) error
+	StepEnded(context.Context, AgentResourceDescriptor, runtime.StepLifecycleSnapshot) error
 }
 
 type AgentResourceSelection interface {
@@ -399,13 +399,12 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 	}
 	r.steps++
 	r.signalLocked()
-	current := r.current
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
-	if current == nil || r.authority.options.stepLifecycle == nil {
+	if r.authority.options.stepLifecycle == nil {
 		return nil
 	}
-	return r.authority.options.stepLifecycle.StepBegan(ctx, descriptor, current.scope, snapshot)
+	return r.authority.options.stepLifecycle.StepBegan(ctx, descriptor, snapshot)
 }
 
 func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
@@ -418,12 +417,11 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 		}
 		panic(fmt.Sprintf("agent resource %s generation %d engine step underflow", r.ref.SessionID(), r.ref.Generation()))
 	}
-	current := r.current
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
 	var publishErr error
-	if current != nil && r.authority.options.stepLifecycle != nil {
-		publishErr = r.authority.options.stepLifecycle.StepEnded(ctx, descriptor, current.scope, snapshot)
+	if r.authority.options.stepLifecycle != nil {
+		publishErr = r.authority.options.stepLifecycle.StepEnded(ctx, descriptor, snapshot)
 	}
 	r.mu.Lock()
 	if r.steps != 1 {

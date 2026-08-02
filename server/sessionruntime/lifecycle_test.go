@@ -72,6 +72,29 @@ type lifecycleReminderQueueObserver struct {
 	once  sync.Once
 }
 
+type lifecycleStepProbe struct {
+	began chan runtime.StepLifecycleSnapshot
+	ended chan runtime.StepLifecycleSnapshot
+}
+
+func (p *lifecycleStepProbe) StepBegan(
+	_ context.Context,
+	_ AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	p.began <- snapshot
+	return nil
+}
+
+func (p *lifecycleStepProbe) StepEnded(
+	_ context.Context,
+	_ AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	p.ended <- snapshot
+	return nil
+}
+
 func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if snapshot.Meta.WorktreeReminder != nil {
 		o.once.Do(o.queue)
@@ -97,6 +120,65 @@ func (c lifecycleRequestCaptureClient) await(t *testing.T) llm.Request {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for queued user work to reach the model")
 		return llm.Request{}
+	}
+}
+
+func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := &ownerlessRetirementLLMClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	probe := &lifecycleStepProbe{
+		began: make(chan runtime.StepLifecycleSnapshot, 1),
+		ended: make(chan runtime.StepLifecycleSnapshot, 1),
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		StepLifecycle:   probe,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
+			_, err := engine.SubmitUserMessage(ctx, "ownerless step")
+			return err
+		})
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ownerless runtime step")
+	}
+	select {
+	case snapshot := <-probe.began:
+		if snapshot.Transition != runtime.StepLifecycleTransitionBegan {
+			t.Fatalf("began snapshot transition = %q", snapshot.Transition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ownerless runtime step did not publish began lifecycle")
+	}
+
+	close(client.releaseFirst)
+	if err := <-done; err != nil {
+		t.Fatalf("ownerless runtime step: %v", err)
+	}
+	select {
+	case snapshot := <-probe.ended:
+		if snapshot.Transition != runtime.StepLifecycleTransitionEnded {
+			t.Fatalf("ended snapshot transition = %q", snapshot.Transition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ownerless runtime step did not publish ended lifecycle")
 	}
 }
 
