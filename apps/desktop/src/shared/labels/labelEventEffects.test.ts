@@ -404,7 +404,7 @@ describe("Project catalog authority projections", () => {
 
     authority.applyReorder([betaID, alphaID]);
     authority.restoreCatalog(original);
-    void authority.requestRefresh();
+    authority.requestRefresh();
 
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)).toEqual(original);
     await waitFor(() => {
