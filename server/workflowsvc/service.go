@@ -40,7 +40,7 @@ type Service struct {
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
-		InterruptForManualMove(context.Context, workflow.TaskID) error
+		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -82,6 +82,14 @@ type manualMovePreflight struct {
 	preparation                workflowstore.ManualMovePreparation
 	unsatisfiedDependencyCount int
 	target                     initiatingActionTargetPreflight
+}
+
+type manualMoveNoOpBeforeInterruptError struct {
+	currentNodes []workflow.CurrentNode
+}
+
+func (e *manualMoveNoOpBeforeInterruptError) Error() string {
+	return "manual move became a no-op before interruption"
 }
 
 type executionTargetInfrastructure interface {
@@ -141,7 +149,7 @@ func WithCurrentNodeExecution(execution interface {
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 	ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
-	InterruptForManualMove(context.Context, workflow.TaskID) error
+	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
@@ -1440,7 +1448,18 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
 		targetPreflight:         targetPreflight,
 		afterTargetResolution: func() error {
-			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID)
+			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
+				preview, err := s.store.PreviewManualMove(ctx, moveRequest)
+				if err != nil {
+					return err
+				}
+				if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+					return &manualMoveNoOpBeforeInterruptError{
+						currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+					}
+				}
+				return nil
+			})
 		},
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
 		moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
@@ -1450,6 +1469,15 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		}
 		return &moved, err
 	})
+	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
+	if errors.As(err, &noOpBeforeInterrupt) {
+		return serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMoveNoOp{
+				CurrentNodes: workflowCurrentNodes(noOpBeforeInterrupt.currentNodes),
+			},
+		}, nil
+	}
 	if err != nil && coordinated.applied == nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}

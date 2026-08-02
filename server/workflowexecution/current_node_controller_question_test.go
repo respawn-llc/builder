@@ -133,7 +133,7 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
-	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
+	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
 		t.Fatalf("InterruptForManualMove error = %v, want pending-question blocker", err)
 	}
 	if _, live := fixture.authority.ExecutionByScope(runningHandle.Scope().ID()); !live {

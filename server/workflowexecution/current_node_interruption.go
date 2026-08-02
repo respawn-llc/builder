@@ -205,11 +205,15 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	})
 }
 
-// InterruptForManualMove atomically fences all currently running, pending-free
-// workflow scopes for a Task before closing their canonical prompt stores.
-// It intentionally rejects queued, finalizing, and waiting-Question work
-// before requesting any stop.
-func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, taskID workflow.TaskID) error {
+// InterruptForManualMove atomically revalidates the mutation, then fences all
+// currently running, pending-free workflow scopes for a Task before closing
+// their canonical prompt stores. It intentionally rejects queued, finalizing,
+// and waiting-Question work before requesting any stop.
+func (c *CurrentNodeController) InterruptForManualMove(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	beforeSelection func() error,
+) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
@@ -225,6 +229,11 @@ func (c *CurrentNodeController) InterruptForManualMove(ctx context.Context, task
 		taskFence      *currentNodeInterruptFence
 	)
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+		if beforeSelection != nil {
+			if err := beforeSelection(); err != nil {
+				return err
+			}
+		}
 		return c.authority.WithWorkflowManualMoveSelection(taskID, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			if len(selection.Queued) != 0 || len(selection.Finalizing) != 0 {
 				return ErrManualMoveLifecycleConflict

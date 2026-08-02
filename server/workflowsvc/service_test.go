@@ -535,6 +535,9 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 	if len(execution.started) != 0 {
 		t.Fatalf("stale no-op explicit starts = %v, want none", execution.started)
 	}
+	if len(execution.interruptTaskIDs) != 0 {
+		t.Fatalf("stale no-op interruption calls = %v, want none", execution.interruptTaskIDs)
+	}
 	if len(recorder.resolutions) != 0 {
 		t.Fatalf("stale no-op attention resolutions = %+v, want none", recorder.resolutions)
 	}
@@ -1479,11 +1482,16 @@ func (s *manualMoveExecutionStub) ManualMoveDisposition(workflow.TaskID) (workfl
 	return s.disposition, nil
 }
 
-func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, taskID workflow.TaskID) error {
-	s.interruptTaskIDs = append(s.interruptTaskIDs, taskID)
+func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
 	if s.interruptHook != nil {
 		s.interruptHook()
 	}
+	if beforeSelection != nil {
+		if err := beforeSelection(); err != nil {
+			return err
+		}
+	}
+	s.interruptTaskIDs = append(s.interruptTaskIDs, taskID)
 	return s.interruptErr
 }
 
