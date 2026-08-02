@@ -49,6 +49,7 @@ func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (M
 	if err := validateCommentarySize(req.Commentary); err != nil {
 		return ManualMovePreparation{}, err
 	}
+	req.Commentary = strings.TrimSpace(req.Commentary)
 	preview, err := s.resolveManualMove(ctx, s.queries, req)
 	if err != nil {
 		return ManualMovePreparation{}, err
@@ -193,6 +194,14 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		targets[0], err = newNonExecutableCurrentNode(prepared.request.TaskID, workflow.NodeIDOf(targetDefinition))
 		if err != nil {
 			return ManualMoveResult{}, err
+		}
+	}
+	if commentary := prepared.request.Commentary; commentary != "" {
+		for index := range targets {
+			if targets[index].CurrentInputValues == nil {
+				targets[index].CurrentInputValues = make(map[string]string)
+			}
+			targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
 		}
 	}
 	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)

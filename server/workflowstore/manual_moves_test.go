@@ -42,6 +42,7 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  manual note  ",
 		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
 	})
 	if err != nil {
@@ -75,7 +76,8 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 		*moved.Mutation.Created[0].EnteredByEdgeID != edge.ID ||
 		moved.Mutation.Created[0].Scheduling == nil ||
 		moved.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady ||
-		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual plan" {
+		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual plan" ||
+		moved.Mutation.Created[0].CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "manual note" {
 		t.Fatalf("manual move created = %+v, want ready materialized target", moved.Mutation.Created)
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -182,6 +184,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  Manual proposal is ready.  ",
 		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual proposal"}},
 	})
 	if err != nil {
@@ -210,7 +213,8 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if len(moved.Mutation.Removed) != 1 || !moved.Mutation.Removed[0].Equal(source.Reference) ||
 		len(moved.Mutation.Created) != 1 ||
 		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) ||
-		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual proposal" {
+		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual proposal" ||
+		moved.Mutation.Created[0].CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "Manual proposal is ready." {
 		t.Fatalf("manual move mutation = %+v, want immediate approved replacement", moved.Mutation)
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
