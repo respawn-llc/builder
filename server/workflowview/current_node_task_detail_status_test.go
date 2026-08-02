@@ -363,6 +363,9 @@ func assertRealTaskStatusAcrossSurfaces(
 	if err != nil {
 		t.Fatalf("TaskDetail.GetTask: %v", err)
 	}
+	if err := (serverapi.WorkflowTaskGetResponse{Task: detail}).Validate(); err != nil {
+		t.Fatalf("Task Detail API response validation: %v", err)
+	}
 	projectID := surfaces.fixture.binding.ProjectID
 	workflowID := surfaces.fixture.workflowID
 	limit := 20
