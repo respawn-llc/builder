@@ -64,11 +64,13 @@ func (s *sessionFeedSequencer) Publish(events []clientui.TranscriptEvent) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	published := make([]clientui.TranscriptEvent, 0, len(events))
 	for _, event := range events {
 		if err := event.Validate(); err != nil {
-			panic(fmt.Sprintf("publish invalid canonical transcript event before drop/snapshot: %v", err))
+			panic(fmt.Sprintf("publish invalid canonical transcript event before batch mutation: %v", err))
 		}
+	}
+	published := make([]clientui.TranscriptEvent, 0, len(events))
+	for _, event := range events {
 		if s.snapshot.shouldDrop(event) {
 			continue
 		}

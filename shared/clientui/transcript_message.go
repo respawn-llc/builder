@@ -41,9 +41,7 @@ type transcriptEventPayload interface {
 
 // TranscriptEventPayload is the closed set of payloads that may be published
 // on the session transcript feed.
-type TranscriptEventPayload interface {
-	transcriptEventPayload
-}
+type TranscriptEventPayload interface{ transcriptEventPayload }
 
 type transcriptEventPayloadValue interface {
 	transcriptEventPayload
@@ -257,30 +255,6 @@ func decodeTranscriptPayload[T transcriptEventPayloadValue](data []byte) (Transc
 	}
 	return NewTranscriptEvent(payload), nil
 }
-
-func (TranscriptHydration) transcriptEventPayload()                 {}
-func (TranscriptCommittedRow) transcriptEventPayload()              {}
-func (TranscriptAssistantDelta) transcriptEventPayload()            {}
-func (TranscriptAssistantStreamAbort) transcriptEventPayload()      {}
-func (TranscriptReasoningUpdate) transcriptEventPayload()           {}
-func (TranscriptReasoningReset) transcriptEventPayload()            {}
-func (TranscriptToolStart) transcriptEventPayload()                 {}
-func (TranscriptToolAbort) transcriptEventPayload()                 {}
-func (TranscriptUserMessageFlushed) transcriptEventPayload()        {}
-func (TranscriptQueuedMessageState) transcriptEventPayload()        {}
-func (TranscriptStepState) transcriptEventPayload()                 {}
-func (TranscriptReviewerState) transcriptEventPayload()             {}
-func (RuntimeReadModelUpdate) transcriptEventPayload()              {}
-func (TranscriptSessionStatus) transcriptEventPayload()             {}
-func (TranscriptSessionIdentity) transcriptEventPayload()           {}
-func (TranscriptCompactionStatus) transcriptEventPayload()          {}
-func (TranscriptContextUsage) transcriptEventPayload()              {}
-func (TranscriptGoalStatus) transcriptEventPayload()                {}
-func (TranscriptBackgroundActivity) transcriptEventPayload()        {}
-func (TranscriptPrompt) transcriptEventPayload()                    {}
-func (TranscriptWorktreeTransitionOutcome) transcriptEventPayload() {}
-func (TranscriptOperationalDiagnostic) transcriptEventPayload()     {}
-func (TranscriptLiveRunResult) transcriptEventPayload()             {}
 
 func (TranscriptHydration) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessageHydration

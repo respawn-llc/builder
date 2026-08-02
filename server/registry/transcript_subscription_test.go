@@ -177,6 +177,35 @@ func TestSessionFeedSequencerRejectsUninitializedEventBeforeMutation(t *testing.
 	sequencer.Publish([]clientui.TranscriptEvent{{}})
 }
 
+func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.T) {
+	broker := newTranscriptSubscriptionBroker()
+	sequencer := newSessionFeedSequencer(broker)
+	hydration := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
+	sequencer.snapshot.runtimeReadModel = &hydration.RuntimeReadModelUpdate
+	sub, err := sequencer.Subscribe(hydration)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+	before := sequencer.snapshot
+	valid := clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+		Code:   clientui.OperationalDiagnosticSleepGuardFailed,
+		Detail: "sleep guard failed",
+	})
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("invalid batch did not fail fast")
+		}
+		if !reflect.DeepEqual(sequencer.snapshot, before) {
+			t.Fatalf("sequencer snapshot mutated by invalid batch: before=%+v after=%+v", before, sequencer.snapshot)
+		}
+		if _, err := nextTranscriptMessageTimeout(sub, 20*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("valid prefix was delivered after invalid batch: %v", err)
+		}
+	}()
+	sequencer.Publish([]clientui.TranscriptEvent{valid, {}})
+}
+
 func TestTranscriptBrokerRejectsUninitializedEventWithoutSequenceOrDelivery(t *testing.T) {
 	restore := withTranscriptContractViolationPanic(false)
 	defer restore()
