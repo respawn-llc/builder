@@ -137,8 +137,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     const selection = labelResultRowSelection(invocation, choice.label.id);
     selectLabel(invocation, choice.label.id, selection.kind === "binary" ? !selection.selected : true);
   };
-  const hasSearchAction =
-    choiceCount > 0 || (canCreate && !catalogAtLimit && !mutations.create.isPending);
+  const hasSearchAction = choiceCount > 0 || (canCreate && !catalogAtLimit && !mutations.create.isPending);
   const runSearchAction = () => {
     if (choiceCount > 0) {
       activateChoice(Math.min(keyboardHighlightedIndex ?? 0, choiceCount - 1));

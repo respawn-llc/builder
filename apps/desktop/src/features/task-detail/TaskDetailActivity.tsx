@@ -197,9 +197,7 @@ function CommentAuthorIcon({ authorKind }: Readonly<{ authorKind: TaskComment["a
 }
 
 function AuthorText({ author }: Readonly<{ author: string }>) {
-  return (
-    <EllipsisText className="font-bold text-[var(--color-on-island)]" text={author} />
-  );
+  return <EllipsisText className="font-bold text-[var(--color-on-island)]" text={author} />;
 }
 
 function EllipsisText({ className, text }: Readonly<{ className?: string | undefined; text: string }>) {
@@ -210,9 +208,7 @@ function EllipsisText({ className, text }: Readonly<{ className?: string | undef
   );
 }
 
-export function ActivityRow({
-  item,
-}: Readonly<{ item: ActivityItem }>) {
+export function ActivityRow({ item }: Readonly<{ item: ActivityItem }>) {
   const { t } = useTranslation();
   const summary = item.type === "comment" ? item.comment.body : t("task.sessionStarted");
   return (

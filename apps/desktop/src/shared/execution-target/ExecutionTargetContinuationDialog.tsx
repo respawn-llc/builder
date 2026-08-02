@@ -166,12 +166,7 @@ function ExecutionTargetForm({
       <ExecutionTargetChoices continuation={continuation} pending={pending} />
       <div className="flex justify-end gap-[var(--space-2)]">
         <Button onClick={continuation.close}>{t("app.cancel")}</Button>
-        <Button
-          data-testid="execution-target-submit"
-          disabled={!canSubmit}
-          type="submit"
-          variant="primary"
-        >
+        <Button data-testid="execution-target-submit" disabled={!canSubmit} type="submit" variant="primary">
           {t("executionTargetContinuation.continue")}
         </Button>
       </div>

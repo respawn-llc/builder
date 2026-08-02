@@ -210,11 +210,8 @@ describe("questionPresentation", () => {
     expect(
       anchorQuestionSelection(
         emptyQuestionSelection("ask-1"),
-        questionPresentation(
-          approvalAttention(["deny", "allow_session", "allow_once"]),
-          undefined,
-          false,
-        ).defaultSelection,
+        questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
+          .defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_once",
@@ -223,8 +220,7 @@ describe("questionPresentation", () => {
     expect(
       anchorQuestionSelection(
         emptyQuestionSelection("ask-1"),
-        questionPresentation(approvalAttention(["allow_session", "deny"]), undefined, false)
-          .defaultSelection,
+        questionPresentation(approvalAttention(["allow_session", "deny"]), undefined, false).defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_session",
@@ -235,8 +231,7 @@ describe("questionPresentation", () => {
   it("does not rederive an anchored or explicit choice on refresh", () => {
     const ordinarySelection = anchorQuestionSelection(
       emptyQuestionSelection("ask-1"),
-      questionPresentation(ordinaryAttention(["one", "two", "three"], 2), undefined, false)
-        .defaultSelection,
+      questionPresentation(ordinaryAttention(["one", "two", "three"], 2), undefined, false).defaultSelection,
     );
     const refreshedOrdinary = questionPresentation(
       ordinaryAttention(["three", "one", "two"], 1),
@@ -245,10 +240,7 @@ describe("questionPresentation", () => {
     ).defaultSelection;
     expect(anchorQuestionSelection(ordinarySelection, refreshedOrdinary)).toBe(ordinarySelection);
     expect(
-      anchorQuestionSelection(
-        withOrdinaryQuestionOption(ordinarySelection, 3),
-        refreshedOrdinary,
-      ),
+      anchorQuestionSelection(withOrdinaryQuestionOption(ordinarySelection, 3), refreshedOrdinary),
     ).toMatchObject({
       provenance: "explicit",
       selectedOption: 3,
@@ -256,11 +248,8 @@ describe("questionPresentation", () => {
 
     const approvalSelection = anchorQuestionSelection(
       emptyQuestionSelection("ask-1"),
-      questionPresentation(
-        approvalAttention(["deny", "allow_session", "allow_once"]),
-        undefined,
-        false,
-      ).defaultSelection,
+      questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
+        .defaultSelection,
     );
     const refreshedApproval = questionPresentation(
       approvalAttention(["deny", "allow_once", "allow_session"]),
@@ -269,10 +258,7 @@ describe("questionPresentation", () => {
     ).defaultSelection;
     expect(anchorQuestionSelection(approvalSelection, refreshedApproval)).toBe(approvalSelection);
     expect(
-      anchorQuestionSelection(
-        withApprovalQuestionDecision(approvalSelection, "deny"),
-        refreshedApproval,
-      ),
+      anchorQuestionSelection(withApprovalQuestionDecision(approvalSelection, "deny"), refreshedApproval),
     ).toMatchObject({
       approvalDecision: "deny",
       provenance: "explicit",
@@ -599,9 +585,7 @@ function QuestionFormHarness({
   );
 }
 
-function recordingQuestionAnswerMutation(
-  inputs: QuestionAnswerInput[],
-): QuestionAnswerMutation {
+function recordingQuestionAnswerMutation(inputs: QuestionAnswerInput[]): QuestionAnswerMutation {
   return {
     isPending: false,
     async mutateAsync(input: QuestionAnswerInput): Promise<void> {

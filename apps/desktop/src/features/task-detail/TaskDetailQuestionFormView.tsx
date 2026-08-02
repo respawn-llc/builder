@@ -251,10 +251,7 @@ function ApprovalQuestionForm({
       }}
       onRadioValueChange={(value) => {
         onSelectionStateChange(
-          withApprovalQuestionDecision(
-            selection,
-            approvalDecisionForValue(approvalDecisions, value),
-          ),
+          withApprovalQuestionDecision(selection, approvalDecisionForValue(approvalDecisions, value)),
         );
       }}
       onSubmit={submit}
