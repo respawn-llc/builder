@@ -128,8 +128,9 @@ export function DescriptionIsland({
   const descriptionError = error == null ? "" : errorMessage(error);
   const descriptionShortcut = useTextFieldSubmitShortcut({
     action: () => {
-      onPresentationChange({ ...presentation, editing: false });
-      void onSave(draft);
+      void onSave(draft).then(() => {
+        onPresentationChange({ ...presentation, editing: false });
+      });
     },
     available: canSaveDraft && presentation.editing,
     kind: "direct",

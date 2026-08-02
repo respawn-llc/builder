@@ -95,7 +95,11 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
-  const canSaveDraft = !disabled && !updatePending && draft.title.trim().length > 0;
+  const canSaveDraft =
+    (draft.title !== detail.title || draft.body !== detail.body) &&
+    !disabled &&
+    !updatePending &&
+    draft.title.trim().length > 0;
   const activityItems = useMemo(
     () => activity.data?.pages.flatMap((page) => page.items) ?? [],
     [activity.data],

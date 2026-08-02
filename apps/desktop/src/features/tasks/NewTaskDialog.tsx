@@ -168,7 +168,7 @@ function NewTaskFormContent({
     const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
     return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
   }, [catalog.data, selectedLabelIDs]);
-  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
+  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID;
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
   const initialWorkspaceID = resolveInitialSourceWorkspaceID(
     initialSourceWorkspaceID,
@@ -181,14 +181,14 @@ function NewTaskFormContent({
     defaultValues: {
       title: "",
       body: "",
-      sourceWorkspaceID: initialWorkspaceID,
+      sourceWorkspaceID: initialWorkspaceID ?? "",
     },
   });
   const canSubmit =
-    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID.length > 0;
+    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID !== undefined;
 
   useEffect(() => {
-    if (!initializedRef.current && initialWorkspaceID.length > 0) {
+    if (!initializedRef.current && initialWorkspaceID !== undefined) {
       form.reset({ title: "", body: "", sourceWorkspaceID: initialWorkspaceID });
       initializedRef.current = true;
     }
@@ -198,9 +198,6 @@ function NewTaskFormContent({
       return;
     }
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
-    if (sourceWorkspaceID.length === 0) {
-      return;
-    }
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
       await createTask.mutateAsync({
@@ -230,7 +227,7 @@ function NewTaskFormContent({
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
   const displayedWorkspaceID =
-    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
+    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : (initialWorkspaceID ?? "");
   const formShortcut = useTextFieldSubmitShortcut({
     available: canSubmit,
     kind: "form",
@@ -360,17 +357,17 @@ function NewTaskLabels({
 
 function resolveInitialSourceWorkspaceID(
   requestedWorkspaceID: string | undefined,
-  defaultWorkspaceID: string,
+  defaultWorkspaceID: string | undefined,
   workspaceItems: readonly { id: string }[],
-): string {
+): string | undefined {
   if (
     requestedWorkspaceID !== undefined &&
     workspaceItems.some((workspace) => workspace.id === requestedWorkspaceID)
   ) {
     return requestedWorkspaceID;
   }
-  if (defaultWorkspaceID.length > 0) {
+  if (defaultWorkspaceID !== undefined) {
     return defaultWorkspaceID;
   }
-  return workspaceItems[0]?.id ?? "";
+  return workspaceItems[0]?.id;
 }

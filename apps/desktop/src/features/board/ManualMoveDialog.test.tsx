@@ -67,9 +67,11 @@ describe("ManualMoveDialog", () => {
     const confirmButton = screen.getByRole("button", { name: appI18n.t("board.manualMoveConfirm") });
     expect(confirmButton).toBeDisabled();
 
+    fireEvent.keyDown(screen.getByLabelText("summary"), { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("summary"), "A plan");
     expect(confirmButton).toBeEnabled();
-    await user.click(confirmButton);
+    fireEvent.keyDown(screen.getByLabelText("summary"), { key: "Enter", metaKey: true });
 
     expect(onSubmit).toHaveBeenCalledWith({
       transitionKey: "transition-0",
@@ -114,38 +116,4 @@ describe("ManualMoveDialog", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
-  it("submits valid required values with the desktop text shortcut", async () => {
-    const user = userEvent.setup();
-    const { onSubmit } = renderDialog({
-      outcome: "transition",
-      transition: {
-        choices: [
-          {
-            transitionKey: "transition-0",
-            label: "Implement",
-            sourceNodeDisplayName: "Plan",
-            requiredValues: [
-              {
-                nodeKey: "plan",
-                outputName: "summary",
-                description: "The plan summary.",
-                resolvedValue: null,
-              },
-            ],
-          },
-        ],
-      },
-    });
-
-    const field = screen.getByLabelText("summary");
-    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
-    expect(onSubmit).not.toHaveBeenCalled();
-
-    await user.type(field, "A plan");
-    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
-    expect(onSubmit).toHaveBeenCalledWith({
-      transitionKey: "transition-0",
-      values: { plan: { summary: "A plan" } },
-    });
-  });
 });
