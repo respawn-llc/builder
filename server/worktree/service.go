@@ -106,6 +106,13 @@ type failedCreateCleanup struct {
 	createdBranch bool
 }
 
+type managedRootKind uint8
+
+const (
+	managedRootKindExplicit managedRootKind = iota + 1
+	managedRootKindAutomatic
+)
+
 type setupScriptPayload struct {
 	SourceWorkspaceRoot string  `json:"source_workspace_root"`
 	BranchName          string  `json:"branch_name"`
@@ -579,11 +586,13 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		return TaskWorktreeMaterialization{}, err
 	}
 	var worktreeRoot string
+	rootKind := managedRootKindExplicit
 	if req.RequestedRoot == nil {
 		worktreeRoot, err = s.managedRoots.reserveTaskRoot(req.Workspace.RootPath, req.Task.ShortID)
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
+		rootKind = managedRootKindAutomatic
 	} else {
 		requestedRoot := strings.TrimSpace(*req.RequestedRoot)
 		if requestedRoot == "" {
@@ -609,7 +618,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	createdBranch, err := s.git.Add(ctx, req.Workspace.RootPath, worktreeRoot, createSpec)
+	createdBranch, err := s.addManagedWorktree(ctx, req.Workspace.RootPath, worktreeRoot, createSpec, rootKind)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
@@ -1045,18 +1054,20 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 	}()
 	var worktreeRoot string
+	rootKind := managedRootKindExplicit
 	if strings.TrimSpace(req.RootPath) == "" {
 		worktreeRoot, err = s.managedRoots.reserveRegularRoot(workspaceCtx.workspaceRoot)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
+		rootKind = managedRootKindAutomatic
 	} else {
 		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
 	}
-	createdBranch, err := s.git.Add(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec)
+	createdBranch, err := s.addManagedWorktree(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec, rootKind)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
@@ -1121,6 +1132,23 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	return serverapi.WorktreeCreateResponse{Target: workspaceCtx.target, Worktree: createdEntry}, nil
+}
+
+func (s *Service) addManagedWorktree(
+	ctx context.Context,
+	workspaceRoot string,
+	worktreeRoot string,
+	createSpec CreateSpec,
+	rootKind managedRootKind,
+) (bool, error) {
+	createdBranch, err := s.git.Add(ctx, workspaceRoot, worktreeRoot, createSpec)
+	if err == nil || rootKind != managedRootKindAutomatic {
+		return createdBranch, err
+	}
+	if cleanupErr := removeEmptyManagedRootAfterAddFailure(worktreeRoot); cleanupErr != nil {
+		return false, errors.Join(err, cleanupErr)
+	}
+	return false, err
 }
 
 func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx sessionWorkspaceContext, worktreeID string) (serverapi.WorktreeListEntry, error) {

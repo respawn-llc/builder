@@ -61,6 +61,64 @@ func TestManagedRootAllocatorUsesSharedNormalizedWorkspaceParent(t *testing.T) {
 	}
 }
 
+func TestManagedRootAllocatorRejectsAutomaticParentOverlappingSourceWorkspace(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      func(root string) string
+		workspace func(root string) string
+	}{
+		{
+			name:      "parent equals source workspace",
+			base:      func(root string) string { return root },
+			workspace: func(root string) string { return filepath.Join(root, "app") },
+		},
+		{
+			name:      "parent is inside source workspace",
+			base:      func(root string) string { return filepath.Join(root, "app", "worktrees") },
+			workspace: func(root string) string { return filepath.Join(root, "app") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := tt.workspace(root)
+			if err := os.MkdirAll(workspace, 0o755); err != nil {
+				t.Fatalf("create workspace: %v", err)
+			}
+			allocator := newManagedRootAllocator(tt.base(root), strings.NewReader("entropy"))
+			if _, err := allocator.reserveRegularRoot(workspace); !errors.Is(err, errManagedRootOverlapsSourceWorkspace) {
+				t.Fatalf("reserve overlapping automatic root error = %v, want overlap error", err)
+			}
+		})
+	}
+}
+
+func TestManagedRootAllocatorAllowsParentContainingSourceWorkspace(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "app", "app")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(bytes.Repeat([]byte{4}, 16)))
+	regularRoot, err := allocator.reserveRegularRoot(workspace)
+	if err != nil {
+		t.Fatalf("reserve regular root: %v", err)
+	}
+	taskRoot, err := allocator.reserveTaskRoot(workspace, "KENT-335")
+	if err != nil {
+		t.Fatalf("reserve Task root: %v", err)
+	}
+	wantParent := filepath.Join(allocator.base.path, "app")
+	for _, root := range []string{regularRoot, taskRoot} {
+		if filepath.Dir(root) != wantParent {
+			t.Fatalf("allocated root = %q, want parent %q", root, wantParent)
+		}
+		if sameOrDescendantPath(workspace, root) {
+			t.Fatalf("allocated root %q is inside source workspace %q", root, workspace)
+		}
+	}
+}
+
 func TestManagedRootAllocatorReservesRegularAndTaskLeaves(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "worktrees")
 	workspace := filepath.Join(t.TempDir(), "Builder CLI")
@@ -81,6 +139,35 @@ func TestManagedRootAllocatorReservesRegularAndTaskLeaves(t *testing.T) {
 	}
 	if filepath.Base(task) != "KENT-335" {
 		t.Fatalf("Task root = %q, want KENT-335", task)
+	}
+}
+
+func TestRemoveEmptyManagedRootAfterAddFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "reserved")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("create reserved root: %v", err)
+	}
+	if err := removeEmptyManagedRootAfterAddFailure(root); err != nil {
+		t.Fatalf("remove empty reserved root: %v", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reserved root still exists: %v", err)
+	}
+	if err := removeEmptyManagedRootAfterAddFailure(root); err != nil {
+		t.Fatalf("repeat absent cleanup: %v", err)
+	}
+
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("recreate reserved root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "partial"), nil, 0o600); err != nil {
+		t.Fatalf("write partial Git state: %v", err)
+	}
+	if err := removeEmptyManagedRootAfterAddFailure(root); err == nil {
+		t.Fatal("removed non-empty reserved root")
+	}
+	if _, err := os.Lstat(root); err != nil {
+		t.Fatalf("non-empty reserved root was removed: %v", err)
 	}
 }
 
