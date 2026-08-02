@@ -428,9 +428,6 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 			}
 			return nil, err
 		}
-		if _, err := listProjectLabelCatalog(ctx, q, taskProjectID); err != nil {
-			return nil, err
-		}
 		referenced := make([]label.ID, 0, len(addIDs)+len(removeIDs))
 		referenced = append(referenced, addIDs...)
 		referenced = append(referenced, removeIDs...)

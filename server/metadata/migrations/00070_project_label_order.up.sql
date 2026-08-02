@@ -28,4 +28,4 @@ CREATE UNIQUE INDEX project_labels_project_ordinal_idx
 DROP INDEX IF EXISTS tasks_project_workflow_link_updated_idx;
 
 CREATE INDEX tasks_project_workflow_link_updated_idx
-    ON tasks(project_workflow_link_id, updated_at_unix_ms DESC, task_seq DESC);
+    ON tasks(project_workflow_link_id, updated_at_unix_ms DESC, id DESC);
