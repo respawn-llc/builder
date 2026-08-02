@@ -493,15 +493,14 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		if item.State == injectedRuntimeQueuePendingCreate {
 			c.restoreInjectedTextIntoInput(item.Text)
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
-			m.activity = uiActivityError
-			appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
+			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)
 			m.removeInjectedQueueItemAt(index)
 			m.layout().syncViewport()
 			if approvalCommentaryAnswer != nil {
-				return m, sequenceCmds(appendCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
+				return m, batchCmds(statusCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
 			}
-			return m, appendCmd
+			return m, statusCmd
 		}
 		m.removeInjectedQueueItemAt(index)
 		return m, nil
