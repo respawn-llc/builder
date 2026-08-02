@@ -153,14 +153,14 @@ function ProjectDeletionEventHandler() {
   const queryClient = useQueryClient();
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
-  const { activeDestination, closeSidebar } = useSidebar();
+  const { closeSidebar, stackDestinations } = useSidebar();
   const { push } = useStatusController();
   useProjectDeletedEvents(
     nativeBridge,
     useCallback(
       (event) => {
         const routeMatches = routeReferencesProject(location.pathname, event.projectID);
-        const sidebarMatches = sidebarReferencesProject(activeDestination, event.projectID);
+        const sidebarMatches = sidebarReferencesProject(stackDestinations, event.projectID);
         void completeProjectDeletion({
           closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
           navigateHome: routeMatches ? navigation.openHome : noopNavigation,
@@ -175,7 +175,7 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [activeDestination, closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
+      [closeSidebar, location.pathname, navigation.openHome, push, queryClient, stackDestinations, t],
     ),
   );
   return null;
@@ -186,14 +186,16 @@ function routeReferencesProject(pathname: string, projectID: string): boolean {
   return segments[0] === "projects" && segments[1] === projectID;
 }
 
-function sidebarReferencesProject(destination: SidebarDestination | null, projectID: string): boolean {
-  if (destination === null) {
-    return false;
-  }
-  if ("projectID" in destination && destination.projectID === projectID) {
-    return true;
-  }
-  return destination.kind === "linkWorkflow" && destination.projectID === projectID;
+function sidebarReferencesProject(
+  destinations: readonly SidebarDestination[],
+  projectID: string,
+): boolean {
+  return destinations.some((destination) => {
+    if ("projectID" in destination && destination.projectID === projectID) {
+      return true;
+    }
+    return destination.kind === "linkWorkflow" && destination.projectID === projectID;
+  });
 }
 
 function noopCloseSidebar(): void {

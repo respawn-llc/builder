@@ -28,6 +28,8 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   testId?: string | undefined;
   initialScrollKey?: string | undefined;
   initialScrollRequestKey?: string | undefined;
+  initialScrollOffset?: number | undefined;
+  initialScrollOffsetRequestKey?: string | undefined;
   paddingEnd?: number | undefined;
   paddingStart?: number | undefined;
   className?: string | undefined;
@@ -59,6 +61,8 @@ export function VirtualizedInfiniteList<TItem>({
   testId,
   initialScrollKey,
   initialScrollRequestKey,
+  initialScrollOffset,
+  initialScrollOffsetRequestKey,
   paddingEnd = 0,
   paddingStart = 0,
   className,
@@ -81,6 +85,7 @@ export function VirtualizedInfiniteList<TItem>({
     [onScrollElementChange],
   );
   const lastInitialScrollKeyRef = useRef<string | null>(null);
+  const lastInitialScrollOffsetRequestKeyRef = useRef<string | null>(null);
   const lastLoadPreviousKeyRef = useRef<string | null>(null);
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
@@ -231,6 +236,23 @@ export function VirtualizedInfiniteList<TItem>({
     lastInitialScrollKeyRef.current = scroll.requestKey;
     virtualizer.scrollToIndex(scroll.scrollIndex, { align: "start", behavior: "auto" });
   }, [getItemKey, initialScrollKey, initialScrollRequestKey, itemStartIndex, items, virtualizer]);
+
+  useLayoutEffect(() => {
+    if (initialScrollOffset === undefined || initialScrollOffsetRequestKey === undefined) {
+      return;
+    }
+    if (lastInitialScrollOffsetRequestKeyRef.current === initialScrollOffsetRequestKey) {
+      return;
+    }
+    const element = scrollRef.current;
+    if (element === null) {
+      return;
+    }
+    lastInitialScrollOffsetRequestKeyRef.current = initialScrollOffsetRequestKey;
+    const offset = Math.max(0, initialScrollOffset);
+    element.scrollTop = offset;
+    virtualizer.scrollToOffset(offset, { behavior: "auto" });
+  }, [initialScrollOffset, initialScrollOffsetRequestKey, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);

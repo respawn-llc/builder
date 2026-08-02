@@ -1,6 +1,6 @@
 import { useLocation } from "@tanstack/react-router";
 import type { NativeDialogWindowOptions } from "@app/native-bridge";
-import { PictureInPicture, Plus, X } from "lucide-react";
+import { ChevronLeft, PictureInPicture, Plus, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -25,7 +25,7 @@ import { useStatusController } from "@/app-facade";
 import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-facade";
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { SidebarHeaderOffsetContext } from "@/app-facade";
-import { sidebarPopOutOptions } from "./sidebarPopOut";
+import { sidebarPopOutOptions, shouldCloseSidebarAfterPopOut } from "./sidebarPopOut";
 import { sidebarTitle } from "@/app-facade";
 import { sidebarSizePreference } from "@/app-facade";
 import { useSidebar, type SidebarDestination } from "@/app-facade";
@@ -40,25 +40,44 @@ import {
 
 export function SidebarRouteChangeCloser() {
   const location = useLocation();
-  const { activeDestination, closeSidebar } = useSidebar();
+  const {
+    closeSidebar,
+    consumeSidebarRouteChangePreservation,
+    stackDestinations,
+  } = useSidebar();
   const routeKey = `${location.pathname}?${location.searchStr}`;
   const previousRouteKeyRef = useRef(routeKey);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previousRouteKeyRef.current !== routeKey) {
       previousRouteKeyRef.current = routeKey;
-      if (activeDestination !== null) {
+      if (stackDestinations.length > 0 && !consumeSidebarRouteChangePreservation()) {
         closeSidebar("route_change");
       }
     }
-  }, [activeDestination, closeSidebar, routeKey]);
+  }, [
+    closeSidebar,
+    consumeSidebarRouteChangePreservation,
+    routeKey,
+    stackDestinations.length,
+  ]);
 
   return null;
 }
 
 export function SidebarHost() {
   const { t } = useTranslation();
-  const { activeDestination, closeSidebar, phase, resizeSidebar, resolveSidebar, sidebarWidthPx } =
+  const {
+    activeDestination,
+    activeSnapshot,
+    backSidebar,
+    canGoBack,
+    closeSidebar,
+    phase,
+    resizeSidebar,
+    resolveSidebar,
+    sidebarWidthPx,
+  } =
     useSidebar();
   const sizePreference = useMemo(() => sidebarSizePreference(activeDestination), [activeDestination]);
   const titleId = useId();
@@ -275,6 +294,16 @@ export function SidebarHost() {
           >
             <X aria-hidden="true" size={18} strokeWidth={1.5} />
           </IconTooltipButton>
+          {canGoBack ? (
+            <IconTooltipButton
+              label={t("app.back")}
+              onClick={() => {
+                backSidebar();
+              }}
+            >
+              <ChevronLeft aria-hidden="true" size={18} strokeWidth={1.5} />
+            </IconTooltipButton>
+          ) : null}
           <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
             {title}
           </h2>
@@ -294,9 +323,11 @@ export function SidebarHost() {
                 ? "top-0 overflow-hidden"
                 : "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]",
           )}
+          style={{ viewTransitionName: "sidebar-destination" }}
         >
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView
+              activeSnapshot={activeSnapshot}
               closeSidebar={closeSidebar}
               destination={activeDestination}
               resolveSidebar={resolveSidebar}
@@ -329,8 +360,12 @@ function SidebarPopOutSlot({
 function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindowOptions }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const { closeSidebar } = useSidebar();
+  const { activeToken, closeSidebarIfCurrent } = useSidebar();
   const { push } = useStatusController();
+  const activeTokenRef = useRef(activeToken);
+  useEffect(() => {
+    activeTokenRef.current = activeToken;
+  }, [activeToken]);
   if (!nativeBridge.capabilities.dialogWindows) {
     return null;
   }
@@ -338,10 +373,16 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
     <IconTooltipButton
       label={t("app.popOut")}
       onClick={() => {
+        const openedToken = activeToken;
+        if (openedToken === null) {
+          return;
+        }
         void nativeBridge.dialogs
           .openWindow(options)
           .then(() => {
-            closeSidebar("closed");
+            if (shouldCloseSidebarAfterPopOut(openedToken, activeTokenRef.current)) {
+              closeSidebarIfCurrent(openedToken, "closed");
+            }
           })
           .catch((error: unknown) => {
             push({
