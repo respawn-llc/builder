@@ -175,7 +175,19 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	var steer runtime.WorkflowAssignmentSteer
 	admission, steerErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var err error
-		steer, err = runtime.SteerPersistedWorkflowAssignment(store, assignment)
+		steer, err = runtime.SteerPersistedWorkflowAssignment(
+			store,
+			assignment,
+			runtime.PersistedWorkflowAssignmentContext{
+				Workdir:                 prepared.root.EffectiveRoot(),
+				GlobalConfigDir:         s.cfg.PersistenceRoot,
+				Model:                   prepared.plan.ActiveSettings.Model,
+				ThinkingLevel:           prepared.plan.ActiveSettings.ThinkingLevel,
+				SkillPolicy:             config.ResolveSkillPolicy(prepared.plan.ActiveSettings),
+				SubagentCatalogSettings: prepared.plan.ActiveSettings,
+				EnabledTools:            workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
+			},
+		)
 		return err
 	})
 	if steerErr == nil && admission.RuntimeAvailable {

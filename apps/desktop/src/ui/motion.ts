@@ -5,7 +5,16 @@ const fallbackMotionFastMs = 140;
 
 export type OpacityExitPhase = "hidden" | "visible" | "exiting";
 
-export function useOpacityExit(visible: boolean): OpacityExitPhase {
+export function useOpacityExit(
+  visible: boolean,
+  {
+    durationVarName = motionFastVarName,
+    fallbackDurationMs = fallbackMotionFastMs,
+  }: Readonly<{
+    durationVarName?: string | undefined;
+    fallbackDurationMs?: number | undefined;
+  }> = {},
+): OpacityExitPhase {
   const [phase, setPhase] = useState<OpacityExitPhase>(() => (visible ? "visible" : "hidden"));
   const [previousVisible, setPreviousVisible] = useState(visible);
   if (previousVisible !== visible) {
@@ -20,12 +29,12 @@ export function useOpacityExit(visible: boolean): OpacityExitPhase {
       () => {
         setPhase("hidden");
       },
-      motionDurationFromCSSVar(motionFastVarName, fallbackMotionFastMs),
+      motionDurationFromCSSVar(durationVarName, fallbackDurationMs),
     );
     return () => {
       window.clearTimeout(timer);
     };
-  }, [phase]);
+  }, [durationVarName, fallbackDurationMs, phase]);
   return phase;
 }
 

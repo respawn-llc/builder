@@ -373,7 +373,60 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			}
 		}
 	}
+	if err := a.attachLiveQuestionSessionNames(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func (a *Attention) attachLiveQuestionSessionNames(ctx context.Context, candidates []attentionCandidate) error {
+	sessionIDs := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.item.SessionID == nil {
+			return fmt.Errorf("live question attention %q has no session id", candidate.item.ID)
+		}
+		sessionID := strings.TrimSpace(*candidate.item.SessionID)
+		if sessionID == "" {
+			return fmt.Errorf("live question attention %q has a blank session id", candidate.item.ID)
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+	rows, err := a.queries.ListSessionNamesByIDs(ctx, sessionIDs)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]*string, len(rows))
+	for _, row := range rows {
+		sessionID := strings.TrimSpace(row.ID)
+		if sessionID == "" {
+			return errors.New("session name lookup returned a blank session id")
+		}
+		if _, exists := names[sessionID]; exists {
+			return fmt.Errorf("session name lookup returned duplicate session %q", sessionID)
+		}
+		var name *string
+		if trimmed := strings.TrimSpace(row.Name); trimmed != "" {
+			name = &trimmed
+		}
+		names[sessionID] = name
+	}
+	for index := range candidates {
+		sessionID := strings.TrimSpace(*candidates[index].item.SessionID)
+		name, exists := names[sessionID]
+		if !exists {
+			return fmt.Errorf("live question session %q has no persisted metadata", sessionID)
+		}
+		candidates[index].item.SessionName = name
+	}
+	return nil
 }
 
 func mergeAttentionCandidates(cursor attentionPageCursor, groups ...[]attentionCandidate) []serverapi.WorkflowAttentionItem {

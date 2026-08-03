@@ -48,11 +48,148 @@ type authorityPromptEvent struct {
 
 type authorityPromptFeed chan authorityPromptEvent
 
+type admissionObservationContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *admissionObservationContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.observed)
+	})
+	return c.Context.Done()
+}
+
 type ownerlessRetirementLLMClient struct {
 	mu           sync.Mutex
 	calls        int
 	firstStarted chan struct{}
 	releaseFirst chan struct{}
+}
+
+func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	if !authority.launchLifecycleTask(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	}) {
+		t.Fatal("authority rejected lifecycle task before close")
+	}
+	<-started
+
+	if err := authority.Close(context.Background()); err != nil {
+		t.Fatalf("close authority: %v", err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Authority.Close returned before its lifecycle task stopped")
+	}
+	if authority.launchLifecycleTask(func(context.Context) {}) {
+		t.Fatal("closed authority accepted another lifecycle task")
+	}
+}
+
+func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	descriptor := mustOpenSessionDescriptor(t, sessionID)
+
+	admissionHeld := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	storeDone := make(chan error, 1)
+	go func() {
+		storeDone <- authority.WithSessionStore(
+			context.Background(),
+			descriptor,
+			func(context.Context, *session.Store) error {
+				close(admissionHeld)
+				<-releaseAdmission
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-admissionHeld:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Session admission holder")
+	}
+
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	admissionWaitObserved := make(chan struct{})
+	startDone := make(chan error, 1)
+	lifecycleFinished := make(chan struct{})
+	if !authority.launchLifecycleTask(func(ctx context.Context) {
+		defer close(lifecycleFinished)
+		observedCtx := &admissionObservationContext{
+			Context:  ctx,
+			observed: admissionWaitObserved,
+		}
+		_, err := authority.StartAgentExecution(observedCtx, AgentExecutionRequest{
+			Descriptor: descriptor,
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		startDone <- err
+	}) {
+		close(releaseAdmission)
+		t.Fatal("authority rejected lifecycle task before close")
+	}
+	select {
+	case <-admissionWaitObserved:
+	case <-time.After(3 * time.Second):
+		close(releaseAdmission)
+		<-storeDone
+		_ = authority.Close(context.Background())
+		t.Fatal("lifecycle start did not reach context-aware Session admission")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- authority.Close(context.Background())
+	}()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			close(releaseAdmission)
+			t.Fatalf("close authority: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		close(releaseAdmission)
+		<-closeDone
+		t.Fatal("Authority.Close did not cancel a lifecycle start waiting for Session admission")
+	}
+
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, context.Canceled) {
+			close(releaseAdmission)
+			t.Fatalf("lifecycle start error = %v, want context canceled", err)
+		}
+	default:
+		close(releaseAdmission)
+		t.Fatal("Authority.Close returned before the blocked lifecycle start stopped")
+	}
+	select {
+	case <-lifecycleFinished:
+	default:
+		close(releaseAdmission)
+		t.Fatal("Authority.Close returned before its lifecycle task finished")
+	}
+
+	close(releaseAdmission)
+	if err := <-storeDone; err != nil {
+		t.Fatalf("Session admission holder: %v", err)
+	}
 }
 
 func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
@@ -1836,6 +1973,164 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	}
 	if !foundNotice {
 		t.Fatal("retried terminal event did not steer a developer background notice")
+	}
+}
+
+func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 2)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("I need a decision."),
+				Phase:   textutil.Value(llm.MessagePhaseCommentary),
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-background-question",
+				Name:  string(toolspec.ToolAskQuestion),
+				Input: json.RawMessage(`{"question":"Proceed?"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("done"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.Reviewer.Frequency = "off"
+	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings:     settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		Workdir:      fixture.config.WorkspaceRoot,
+		Client:       client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !authority.routeBackgroundEvent(event) {
+		t.Fatal("terminal background event was not delivered")
+	}
+
+	var pending authorityPromptEvent
+	select {
+	case pending = <-feed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background continuation question was not published from an Exact Execution Scope")
+	}
+	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
+		t.Fatalf("pending background question = %+v", pending)
+	}
+	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
+		RequestID: pending.requestID,
+		Answer:    "yes",
+	}, nil); err != nil {
+		t.Fatalf("submit background question response: %v", err)
+	}
+	select {
+	case resolved := <-feed:
+		if !resolved.resolved ||
+			resolved.resource != pending.resource ||
+			resolved.scopeID != pending.scopeID ||
+			resolved.requestID != pending.requestID {
+			t.Fatalf("resolved background question = %+v, want resolution for %+v", resolved, pending)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("background continuation question was not resolved")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for authority.sessionExecution(sessionID) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("background continuation Exact Execution Scope did not retire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	mode := sessioncontract.WorkflowCompletionModeTool
+	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{
+		Model:                  "gpt-5",
+		Temperature:            1,
+		ContextWindow:          200000,
+		ContextPercent:         95,
+		EnabledTools:           []string{string(toolspec.ToolAskQuestion)},
+		HasEnabledTools:        true,
+		WorkflowCompletionMode: &mode,
+	}); err != nil {
+		t.Fatalf("mark workflow Session contract locked: %v", err)
+	}
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	client := make(lifecycleRequestCaptureClient, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &client, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !fixture.authority.routeBackgroundEvent(event) {
+		t.Fatal("workflow terminal background event was not delivered")
+	}
+
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventCompleted ||
+			update.ID != event.Snapshot.ID ||
+			update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("workflow background completion update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("workflow background completion was not appended to the Session")
+	}
+	select {
+	case request := <-client:
+		t.Fatalf("completed Workflow Session started another model turn: %+v", request)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if execution := fixture.authority.sessionExecution(sessionID); execution != nil {
+		t.Fatalf("completed Workflow Session started Exact Execution Scope %s", execution.scope.ID())
 	}
 }
 

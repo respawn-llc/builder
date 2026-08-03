@@ -433,6 +433,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: z.literal("question"),
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
+      session_name: nonBlankString.nullable(),
       question_id: nonBlankString,
       message: nonBlankString,
       suggestions: stringList,
@@ -445,6 +446,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: value.kind,
       currentNode: value.current_node,
       sessionID: value.session_id,
+      sessionName: value.session_name,
       questionID: value.question_id,
       message: value.message,
       suggestions: value.suggestions,
@@ -456,6 +458,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: z.literal("approval"),
       approval_id: nonBlankString,
       approval_snapshot: approvalSnapshotSchema,
+      session_name: z.null(),
       message: nullableNonBlankString,
     })
     .strict()
@@ -471,6 +474,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       kind: z.literal("interrupted_current_node"),
       current_node: currentNodeSchema,
       session_id: nullableNonBlankString,
+      session_name: z.null(),
       detail_json: nullableNonBlankString,
       message: nullableNonBlankString,
     })

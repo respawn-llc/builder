@@ -7,6 +7,6 @@ type PendingAsk struct {
 	SessionID              string
 	Question               string
 	Suggestions            []string
-	RecommendedOptionIndex int
+	RecommendedOptionIndex *int
 	CreatedAt              time.Time
 }

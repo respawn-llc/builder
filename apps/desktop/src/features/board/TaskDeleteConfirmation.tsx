@@ -1,7 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
+import { invalidateAllTaskSearches } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { NativeDialogWindow } from "@/shared/native-dialog";
@@ -34,6 +36,7 @@ export function TaskDeleteConfirmationFallbackDialog({
 export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
   const { t } = useTranslation();
   const { api, nativeBridge } = useAppServices();
+  const queryClient = useQueryClient();
   const { push } = useStatusController();
   const [actionError, setActionError] = useState("");
   const [pending, setPending] = useState(false);
@@ -48,6 +51,7 @@ export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
     setActionError("");
     try {
       await api.deleteTask(taskID);
+      await invalidateAllTaskSearches(queryClient);
     } catch (error) {
       // Deletion itself failed: allow the operator to retry.
       submittedRef.current = false;

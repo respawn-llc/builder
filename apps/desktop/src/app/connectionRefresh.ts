@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import { queryKeys } from "@/app-facade";
+import { invalidateAllTaskSearches, queryKeys } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 
 export function useReconnectRefresh() {
@@ -31,6 +31,7 @@ async function refreshVisibleQueries(queryClient: ReturnType<typeof useQueryClie
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allWorkspaces }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
+    invalidateAllTaskSearches(queryClient),
     queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks }),
   ]);

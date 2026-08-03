@@ -7,6 +7,7 @@ import { ApiClient, protocolVersion } from "@/api/composition";
 import {
   AppServicesProvider,
   StatusProvider,
+  TaskSearchMemoryProvider,
   WindowChromeTitleProvider,
   type AppLogger,
   type AppLogLevel,
@@ -68,7 +69,9 @@ export function TestAppProviders({
       createElement(AppServicesProvider, {
         services,
         children: createElement(WindowChromeTitleProvider, {
-          children: createElement(StatusProvider, { children }),
+          children: createElement(StatusProvider, {
+            children: createElement(TaskSearchMemoryProvider, { children }),
+          }),
         }),
       }),
     ),

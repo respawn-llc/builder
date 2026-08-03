@@ -2,11 +2,7 @@ import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  hasSelectedWorkflow,
-  type BoardColumn,
-  type SelectedWorkflowBoard,
-} from "@/api";
+import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -42,6 +38,7 @@ import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
+import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
@@ -239,7 +236,7 @@ function BoardContent({
   }, [stopDragAutoScroll]);
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
-  const actions = useBoardTaskActions();
+  const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
       const body = errorMessage(error);
@@ -479,7 +476,6 @@ function BoardContent({
     });
   }
 
-
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {
       openTaskDependencies(result.taskID);
@@ -555,7 +551,10 @@ function BoardContent({
 
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
-      <BoardLabelFilterChrome />
+      <div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
+        <BoardLabelFilterChrome />
+        <BoardTaskSearchChrome onOpenTask={openTask} projectID={board.projectID} />
+      </div>
       <div className="relative min-h-0 min-w-0 flex-1">
         <div
           className="h-full min-h-0 min-w-0 w-full overflow-x-auto hide-scrollbar"

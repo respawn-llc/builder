@@ -27,6 +27,17 @@ kent run stop <session-id> # gracefully interrupt the run
 kent run wait <session-id> # wait for the model's turn to end
 ```
 
+Headless `kent run` Sessions cannot create Questions. To inspect or answer a pending Question from an interactive or Workflow Session:
+
+```bash
+kent question --session <session-id>
+kent question answer --session <session-id> --option 1 --commentary "Additional context"
+kent questions --task KENT-335
+kent questions answer --task KENT-335 --commentary "Freeform answer"
+```
+
+Use exactly one of `--session` or `--task`. Task short IDs resolve in the current workspace's Project unless `--project` selects another Project. A Task with pending Questions in several Sessions is ambiguous; Kent answers nothing and lists each candidate Session name and ID.
+
 :::tip
 `kent run` needs a server connection to keep long-running shells and agents properly orchestrated. If you want to script kent runs, make sure the [Server](../server/) is running.
 :::

@@ -160,7 +160,7 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			executableCall.Input = executorInputForCustomTool(toolID, customInput)
 		}
 		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
-		if !knownTool || toolID != toolspec.ToolAskQuestion || !workflowActive || !askQuestionMaterializable(engine) {
+		if !knownTool || toolID != toolspec.ToolAskQuestion || !askQuestionMaterializable(engine) {
 			continue
 		}
 		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {

@@ -420,6 +420,12 @@
     cursor: pointer;
   }
 
+  .dialog-placement-command-palette {
+    align-items: start;
+    justify-items: center;
+    padding-top: max(var(--space-4), calc((100vh - min(560px, calc(100vh - 48px))) / 2));
+  }
+
   a {
     color: inherit;
     text-decoration: none;
@@ -557,6 +563,10 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .command-palette-size-motion {
+    transition: height var(--motion-morph);
+  }
+
   .floating-notice-morph {
     contain: layout paint;
     transform-origin: right bottom;
@@ -580,6 +590,50 @@
   .route-transition-frame {
     animation: route-fade-scale var(--motion-fast) both;
     transform-origin: center;
+  }
+
+  .dialog-backdrop-motion-enter {
+    opacity: 1;
+    backdrop-filter: blur(6px);
+    transition:
+      opacity var(--motion-fast),
+      backdrop-filter var(--motion-fast);
+  }
+
+  .dialog-surface-motion-enter {
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity var(--motion-fast),
+      transform var(--motion-fast);
+  }
+
+  .dialog-backdrop-motion-exit {
+    opacity: 0;
+    backdrop-filter: blur(0);
+    transition:
+      opacity var(--motion-fast),
+      backdrop-filter var(--motion-fast);
+  }
+
+  .dialog-surface-motion-exit {
+    opacity: 0;
+    transform: translateY(30px);
+    transition:
+      opacity var(--motion-fast),
+      transform var(--motion-fast);
+  }
+
+  @starting-style {
+    .dialog-backdrop-motion-enter {
+      opacity: 0;
+      backdrop-filter: blur(0);
+    }
+
+    .dialog-surface-motion-enter {
+      opacity: 0;
+      transform: translateY(30px);
+    }
   }
 
   .task-detail-feed-row {
