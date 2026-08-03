@@ -11,6 +11,7 @@ import {
   type DraggableSyntheticListeners,
   type DragEndEvent,
   type KeyboardCoordinateGetter,
+  type DropAnimationFunction,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
@@ -53,6 +54,11 @@ export type ReorderableListProps<Item, ID extends UniqueIdentifier = UniqueIdent
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>;
 
+type DropDestination = Readonly<{
+  left: number;
+  top: number;
+}>;
+
 export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdentifier>({
   disabled = false,
   getItemID,
@@ -64,9 +70,14 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   const itemNodes = useRef(new Map<ID, HTMLElement>());
   const reducedMotion = useReducedMotion();
   const [dragMode, setDragMode] = useState<"keyboard" | "pointer" | null>(null);
+  const [pointerActiveID, setPointerActiveID] = useState<ID | null>(null);
   const [overlayItem, setOverlayItem] = useState<Item | null>(null);
-  const clearOverlayItem = useCallback(() => {
+  const [dropDestination, setDropDestination] = useState<DropDestination | null>(null);
+  const clearDropState = useCallback(() => {
+    setDragMode(null);
+    setPointerActiveID(null);
     setOverlayItem(null);
+    setDropDestination(null);
   }, []);
   const keyboardCoordinates = useCallback<KeyboardCoordinateGetter>(
     (event, args) => {
@@ -125,22 +136,37 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       autoScroll
       collisionDetection={closestCenter}
       onDragCancel={() => {
-        setDragMode(null);
-        setOverlayItem(null);
+        clearDropState();
       }}
       onDragEnd={(event) => {
+        const activeIndex = itemIDs.findIndex((id) => id === event.active.id);
+        const activeID = itemIDs[activeIndex];
+        const activeNode = activeID === undefined ? undefined : itemNodes.current.get(activeID);
+        const destination =
+          event.over?.id === undefined || event.over.id === event.active.id || activeNode === undefined
+            ? null
+            : {
+                left: activeNode.getBoundingClientRect().left,
+                top: activeNode.getBoundingClientRect().top,
+              };
+        setDropDestination(destination);
         handleDragEnd(event);
-        setDragMode(null);
+        if (event.activatorEvent instanceof KeyboardEvent || destination === null) {
+          clearDropState();
+        }
       }}
       onDragStart={({ active, activatorEvent }) => {
         if (activatorEvent instanceof KeyboardEvent) {
           setDragMode("keyboard");
+          setPointerActiveID(null);
           setOverlayItem(null);
+          setDropDestination(null);
           return;
         }
         setDragMode("pointer");
-        const activeItem = items.find((item) => getItemID(item) === active.id);
-        setOverlayItem(activeItem ?? null);
+        setPointerActiveID(itemIDs.find((id) => id === active.id) ?? null);
+        setOverlayItem(items.find((item) => getItemID(item) === active.id) ?? null);
+        setDropDestination(null);
       }}
       sensors={sensors}
     >
@@ -149,6 +175,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
           <ReorderableListItem
             disabled={disabled}
             hideActiveItem={dragMode === "pointer"}
+            hiddenItemID={pointerActiveID}
             item={item}
             itemID={getItemID(item)}
             itemNodes={itemNodes}
@@ -158,60 +185,88 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
           />
         ))}
       </SortableContext>
-      {dragMode === "pointer" || overlayItem !== null ? (
-        <ReorderableListDragOverlay
-          dragMode={dragMode}
-          item={overlayItem}
-          onDropAnimationEnd={clearOverlayItem}
-          reducedMotion={reducedMotion}
-          renderItem={renderItem}
-        />
-      ) : null}
+      <ReorderableListDragOverlay
+        dragMode={dragMode}
+        dropDestination={dropDestination}
+        getItemID={getItemID}
+        items={items}
+        onDropAnimationEnd={clearDropState}
+        overlayItem={overlayItem}
+        reducedMotion={reducedMotion}
+        renderItem={renderItem}
+      />
     </DndContext>
   );
 }
 
 function ReorderableListDragOverlay<Item>({
   dragMode,
-  item,
+  dropDestination,
+  getItemID,
+  items,
   onDropAnimationEnd,
+  overlayItem,
   reducedMotion,
   renderItem,
 }: Readonly<{
   dragMode: "keyboard" | "pointer" | null;
-  item: Item | null;
+  dropDestination: DropDestination | null;
+  getItemID: (item: Item) => UniqueIdentifier;
+  items: readonly Item[];
   onDropAnimationEnd(): void;
+  overlayItem: Item | null;
   reducedMotion: boolean;
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>) {
   const { active } = useDndContext();
-  useEffect(() => {
-    if (item === null || dragMode !== null || active !== null) {
-      return undefined;
-    }
-    if (reducedMotion) {
-      onDropAnimationEnd();
-      return undefined;
-    }
-    const timeoutID = window.setTimeout(onDropAnimationEnd, DROP_ANIMATION_DURATION_MS);
-    return () => {
-      window.clearTimeout(timeoutID);
-    };
-  }, [active, dragMode, item, onDropAnimationEnd, reducedMotion]);
-  return createPortal(
-    <DragOverlay
-      dropAnimation={
-        reducedMotion
-          ? null
-          : {
-              duration: DROP_ANIMATION_DURATION_MS,
-            }
+  const activeItem = active === null ? undefined : items.find((item) => getItemID(item) === active.id);
+  const dropAnimation = useCallback<DropAnimationFunction>(
+    async ({ dragOverlay, transform }) => {
+      if (dropDestination === null || reducedMotion) {
+        onDropAnimationEnd();
+        return;
       }
-    >
+      const overlayRect = dragOverlay.node.getBoundingClientRect();
+      const overlayBaseLeft = overlayRect.left - transform.x;
+      const overlayBaseTop = overlayRect.top - transform.y;
+      const animation = dragOverlay.node.animate(
+        [
+          { transform: formatTransform(transform) },
+          {
+            transform: formatTransform({
+              x: dropDestination.left - overlayBaseLeft,
+              y: dropDestination.top - overlayBaseTop,
+              scaleX: 1,
+              scaleY: 1,
+            }),
+          },
+        ],
+        {
+          duration: DROP_ANIMATION_DURATION_MS,
+          easing: "ease-out",
+          fill: "forwards",
+        },
+      );
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          onDropAnimationEnd();
+          resolve();
+        };
+        animation.onfinish = finish;
+        animation.oncancel = finish;
+      });
+    },
+    [dropDestination, onDropAnimationEnd, reducedMotion],
+  );
+  if (dragMode !== "pointer" && overlayItem === null) {
+    return null;
+  }
+  return createPortal(
+    <DragOverlay dropAnimation={dragMode === "pointer" ? dropAnimation : null}>
       <div aria-hidden="true" className="pointer-events-none" inert>
-        {item === null
+        {activeItem == null
           ? null
-          : renderItem(item, {
+          : renderItem(activeItem, {
               activatorAttributes: {},
               activatorListeners: undefined,
               activatorRef: noopRef,
@@ -227,6 +282,7 @@ function ReorderableListDragOverlay<Item>({
 function ReorderableListItem<Item, ID extends UniqueIdentifier>({
   disabled,
   hideActiveItem,
+  hiddenItemID,
   item,
   itemID,
   itemNodes,
@@ -235,6 +291,7 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
 }: Readonly<{
   disabled: boolean;
   hideActiveItem: boolean;
+  hiddenItemID: ID | null;
   item: Item;
   itemID: ID;
   itemNodes: RefObject<Map<ID, HTMLElement>>;
@@ -262,7 +319,8 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
       transform === null
         ? undefined
         : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
-    opacity: hideActiveItem && isDragging ? 0 : undefined,
+    opacity: hideActiveItem && (isDragging || hiddenItemID === itemID) ? 0 : undefined,
+    pointerEvents: hideActiveItem && (isDragging || hiddenItemID === itemID) ? "none" : undefined,
     transition: reducedMotion ? undefined : transition,
   };
   return renderItem(item, {
@@ -277,6 +335,10 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
 const DROP_ANIMATION_DURATION_MS = 250;
 
 const noopRef = (): void => undefined;
+
+function formatTransform(transform: Readonly<{ x: number; y: number; scaleX: number; scaleY: number }>): string {
+  return `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0) scale(${transform.scaleX.toString()}, ${transform.scaleY.toString()})`;
+}
 
 function useReducedMotion(): boolean {
   const [reducedMotion, setReducedMotion] = useState(
