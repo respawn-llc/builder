@@ -58,6 +58,36 @@ Do not write:
 - `Reserved a write transaction before interruption.` — implementation mechanics do not state the user outcome.
 - `Improved Task Search selection stability.` — stabilization of a capability first shipped in this release is not a separate release item.
 
+### Kent Implementation-Detail Examples
+
+These 25 examples came from the `v2.4.0...v2.5.0` source diff. Do not copy them into curated notes. Apply the stated rewrite or omit the item.
+
+1. `centralize metadata SQLite extensions` — omit; storage composition is not a user outcome.
+2. `add task search index schema foundation` — fold into `Added Task Search`; do not announce index structure.
+3. `add task search index creation triggers` — fold into `Added Task Search`; do not announce database triggers.
+4. `synchronize task search source edits` — write `Task and Comment edits appear in search immediately` only when public behavior requires that guarantee.
+5. `add task search RPC` — announce the released Desktop or CLI search surface, not its transport.
+6. `bump task search protocol version` — state the coordinated client/server upgrade action without naming protocol generations.
+7. `expose revisioned workflow observations` — translate to the visible Task-status behavior or omit.
+8. `capture stable workflow status snapshots` — combine with the same Task-status outcome; do not add a second entry.
+9. `reserve manual move write transaction` — fold into the final Manual Move capability or omit as same-release stabilization.
+10. `serialize manual move previews` — fold into the final Manual Move capability or omit as same-release stabilization.
+11. `defer workflow successors until scope retirement` — write the prior-release workflow-overlap defect only when users could encounter it; otherwise omit.
+12. `admit workflow runs after runtime preparation` — write the prior-release failure to start work only when users could encounter it; otherwise omit.
+13. `release gate-owned agent capacity` — translate to the documented `workflow.concurrency` behavior.
+14. `share keyed mutation lanes` — write `Concurrent edits do not overwrite newer changes` when that previous-release defect is verified.
+15. `make transcript batch publication atomic` — write the visible partial-transcript defect when users could encounter it; otherwise omit.
+16. `preserve repaired tool step identity` — write `Fixed Sessions with interrupted tool calls reopening with transcript corruption or crashing`.
+17. `deduplicate stream terminal resets` — write `Fixed failed model responses duplicating or leaving partial assistant output`.
+18. `initialize transcript feed before wake` — write the resumed-TUI crash once, in user terms.
+19. `wait for transcript runtime wake` — merge with the same resumed-TUI crash entry; do not duplicate it.
+20. `publish question state before releasing waiters` — write the missing or stale Question behavior when it existed in the previous public release.
+21. `memoize workflow question acceptance` — omit; this is internal stabilization.
+22. `classify local providers as OpenAI compatible` — state the new-Session action for local or custom OpenAI-compatible endpoints without describing provider classification.
+23. `centralize worktree create ownership` — write `Added distinct TUI feedback for Base-ref errors during Worktree Create`.
+24. `add the read-only worktree.deletePreview API/RPC surface` — omit until a released client or public integration exposes it.
+25. `remove workflow identity sentinels` — omit; internal identity cleanup is not a user outcome.
+
 ### Curated Notes And Generated Changelog
 
 The release workflow creates a generated changelog. A rewritten release body has two distinct parts:
