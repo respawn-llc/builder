@@ -7,6 +7,8 @@ import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
 import type { ProjectLabelEffects } from "./labelEventEffects";
 import type { ProjectLabelFilterController } from "./projectLabelFilter";
 
+type ProjectLabelReorderContext = Readonly<{ generation: number; previous: ProjectLabelCatalog | undefined }>;
+
 export function useProjectLabelCatalog() {
   return useProjectLabelData().catalog;
 }
@@ -30,19 +32,12 @@ export function useProjectLabelCatalogMutations() {
       mutationFn: async (labelID: string) => api.deleteProjectLabel(projectID, labelID),
       onSuccess: async (labelID) => effects.applyLocalDelete(labelID),
     }),
-    reorder: useMutation<
-      ProjectLabelCatalog,
-      unknown,
-      readonly string[],
-      Readonly<{ generation: number; previous: ProjectLabelCatalog | undefined }>
-    >({
+    reorder: useMutation<ProjectLabelCatalog, unknown, readonly string[], ProjectLabelReorderContext>({
       mutationFn: async (labelIDs) => api.reorderProjectLabels(projectID, labelIDs),
       onMutate(labelIDs) {
         const generation = authority.supersedeReads();
         const previous = queryClient.getQueryData<ProjectLabelCatalog>(queryKey);
-        if (previous === undefined) {
-          return { generation, previous };
-        }
+        if (previous === undefined) return { generation, previous };
         const labelsByID = new Map(previous.labels.map((label) => [label.id, label]));
         const labels = labelIDs.map((labelID) => {
           const label = labelsByID.get(labelID);
@@ -59,14 +54,10 @@ export function useProjectLabelCatalogMutations() {
         return { generation, previous };
       },
       onError(_error, _labelIDs, context) {
-        if (context?.previous !== undefined) {
-          queryClient.setQueryData(queryKey, context.previous);
-        }
+        if (context?.previous !== undefined) queryClient.setQueryData(queryKey, context.previous);
         authority.requestRefresh();
       },
-      onSuccess(catalog, _labelIDs, context) {
-        authority.installCatalog(catalog, context.generation);
-      },
+      onSuccess(catalog, _labelIDs, context) { authority.installCatalog(catalog, context.generation); },
     }),
   };
 }

@@ -111,8 +111,7 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   #advance(refreshNeeded: boolean): number {
-    this.#generation += 1;
-    this.#refreshNeeded ||= refreshNeeded;
+    this.#generation += 1; this.#refreshNeeded ||= refreshNeeded;
     try {
       void this.#queryClient
         .cancelQueries(
