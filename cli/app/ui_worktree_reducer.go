@@ -289,8 +289,8 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 type worktreeCreateErrorPlacement struct {
-	baseRef string
-	form    string
+	owner      serverapi.WorktreeCreateErrorOwner
+	diagnostic string
 }
 
 func (m *uiModel) applyWorktreeCreateError(err error) {
@@ -298,27 +298,56 @@ func (m *uiModel) applyWorktreeCreateError(err error) {
 		return
 	}
 	placement := classifyWorktreeCreateError(err, worktreeCreateInvariantPolicy(m.debugMode))
-	m.worktrees.create.baseRefErrorText = placement.baseRef
-	m.worktrees.create.errorText = placement.form
+	m.worktrees.create.baseRefErrorText = ""
+	m.worktrees.create.errorText = ""
+	if placement == nil {
+		return
+	}
+	switch placement.owner {
+	case serverapi.WorktreeCreateErrorOwnerBaseRef:
+		m.worktrees.create.baseRefErrorText = placement.diagnostic
+	case serverapi.WorktreeCreateErrorOwnerForm:
+		m.worktrees.create.errorText = placement.diagnostic
+	default:
+		m.worktrees.create.errorText = placement.diagnostic
+	}
 }
 
-func classifyWorktreeCreateError(err error, policy invariant.Policy) worktreeCreateErrorPlacement {
+func classifyWorktreeCreateError(err error, policy invariant.Policy) *worktreeCreateErrorPlacement {
 	if err == nil {
-		return worktreeCreateErrorPlacement{}
+		return nil
 	}
 	if contractErr := serverapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
-		return worktreeCreateErrorPlacement{form: runtimeattach.FormatSubmissionError(contractErr)}
+		return &worktreeCreateErrorPlacement{
+			owner:      serverapi.WorktreeCreateErrorOwnerForm,
+			diagnostic: runtimeattach.FormatSubmissionError(contractErr),
+		}
 	}
 	var typed *serverapi.WorktreeCreateError
 	if errors.As(err, &typed) {
+		if typed == nil {
+			return &worktreeCreateErrorPlacement{
+				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				diagnostic: runtimeattach.FormatSubmissionError(err),
+			}
+		}
 		switch typed.Owner {
 		case serverapi.WorktreeCreateErrorOwnerBaseRef:
-			return worktreeCreateErrorPlacement{baseRef: typed.Diagnostic}
+			return &worktreeCreateErrorPlacement{
+				owner:      serverapi.WorktreeCreateErrorOwnerBaseRef,
+				diagnostic: typed.Diagnostic,
+			}
 		case serverapi.WorktreeCreateErrorOwnerForm:
-			return worktreeCreateErrorPlacement{form: typed.Diagnostic}
+			return &worktreeCreateErrorPlacement{
+				owner:      serverapi.WorktreeCreateErrorOwnerForm,
+				diagnostic: typed.Diagnostic,
+			}
 		}
 	}
-	return worktreeCreateErrorPlacement{form: runtimeattach.FormatSubmissionError(err)}
+	return &worktreeCreateErrorPlacement{
+		owner:      serverapi.WorktreeCreateErrorOwnerForm,
+		diagnostic: runtimeattach.FormatSubmissionError(err),
+	}
 }
 
 func worktreeCreateInvariantPolicy(debugMode bool) invariant.Policy {
