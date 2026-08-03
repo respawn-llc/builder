@@ -140,6 +140,14 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	return c.resumeTask(ctx, taskID, preparation)
 }
 
+type TaskResumeConflictError struct {
+	TaskID workflow.TaskID
+}
+
+func (e *TaskResumeConflictError) Error() string {
+	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
+}
+
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -170,6 +178,9 @@ func (c *CurrentNodeController) resumeTask(
 		selected, err := c.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 		if err != nil {
 			return nil, err
+		}
+		if len(selected) == 0 {
+			return nil, &TaskResumeConflictError{TaskID: taskID}
 		}
 		resumed := make([]workflow.CurrentNode, 0, len(selected))
 		var resumeErrs []error

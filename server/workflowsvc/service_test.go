@@ -1057,6 +1057,29 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	}
 }
 
+func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err == nil {
+		t.Fatalf("ResumeWorkflowTask = %+v, want conflict for no interrupted Current Nodes", response)
+	}
+	var conflict *workflowexecution.TaskResumeConflictError
+	if !errors.As(err, &conflict) || conflict.TaskID != workflow.TaskID(task.Task.ID) {
+		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict for %s", err, err, task.Task.ID)
+	}
+}
+
 func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)

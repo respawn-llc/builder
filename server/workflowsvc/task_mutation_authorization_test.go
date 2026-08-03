@@ -442,7 +442,12 @@ func (s *taskMutationAuthorizationExecutionStub) Interrupt(_ context.Context, se
 
 func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	s.resumedTaskIDs = append(s.resumedTaskIDs, taskID)
-	return nil, nil
+	return []workflow.CurrentNode{{
+		Reference: workflow.CurrentNodeReference{
+			TaskID: taskID,
+			NodeID: workflow.NodeID("authorized-resume"),
+		},
+	}}, nil
 }
 
 func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(

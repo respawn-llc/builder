@@ -932,7 +932,11 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandR
 		for {
 			event, err := subscription.Next(progressCtx)
 			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) || errors.Is(err, io.EOF) {
+				if errors.Is(err, io.EOF) {
+					done <- io.ErrUnexpectedEOF
+					return
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) {
 					done <- nil
 					return
 				}

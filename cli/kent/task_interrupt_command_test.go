@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +24,26 @@ type taskInterruptCommandRemote struct {
 	moveRequests      []serverapi.WorkflowTaskMoveRequest
 	previewResponse   *serverapi.WorkflowTaskMovePreviewResponse
 	moveResponse      *serverapi.WorkflowTaskMoveResponse
+}
+
+type eofWorktreeSetupSubscription struct {
+	returned chan<- struct{}
+}
+
+func (s eofWorktreeSetupSubscription) Next(context.Context) (serverapi.WorktreeSetupEvent, error) {
+	close(s.returned)
+	return serverapi.WorktreeSetupEvent{}, io.EOF
+}
+
+func (eofWorktreeSetupSubscription) Close() error { return nil }
+
+type eofWorktreeSetupRemote struct {
+	*taskInterruptCommandRemote
+	returned chan<- struct{}
+}
+
+func (r eofWorktreeSetupRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	return eofWorktreeSetupSubscription{returned: r.returned}, nil
 }
 
 func allowHumanTaskActionForTest(t *testing.T) {
@@ -472,6 +494,27 @@ func TestTaskResumeFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 		remote.resumeRequests[0].InvokingSessionID.String() != "agent-session" ||
 		remote.resumeRequests[0].SetupOperationID.Validate() != nil {
 		t.Fatalf("resume requests = %+v, want invoking Session agent-session", remote.resumeRequests)
+	}
+}
+
+func TestWorktreeSetupProgressReportsEOFBeforeTerminalEvent(t *testing.T) {
+	returned := make(chan struct{})
+	remote := eofWorktreeSetupRemote{
+		taskInterruptCommandRemote: &taskInterruptCommandRemote{},
+		returned:                   returned,
+	}
+	stop, err := subscribeWorktreeSetupProgress(
+		context.Background(),
+		remote,
+		serverapi.NewWorktreeSetupOperationID(),
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("subscribeWorktreeSetupProgress: %v", err)
+	}
+	<-returned
+	if err := stop(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("setup progress stop error = %v, want unexpected EOF", err)
 	}
 }
 
