@@ -8,6 +8,7 @@ import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
 import { ErrorState, LoadingState } from "@/ui";
 import { AppChrome } from "./AppChrome";
+import { isLegacyEmptyTaskSelectorError } from "./projectRouteErrors";
 import {
   readBrowserStorage,
   readLastProjectRoute,
@@ -119,7 +120,13 @@ export function ProjectRoute() {
 
 export function ProjectRouteError({ error }: { error: Error }) {
   const { t } = useTranslation();
-  return <ErrorState body={error.message} reveal={false} title={t("states.error")} />;
+  return (
+    <ErrorState
+      body={isLegacyEmptyTaskSelectorError(error) ? error.message : t("form.serverError")}
+      reveal={false}
+      title={t("states.error")}
+    />
+  );
 }
 
 export function HomeShellRoute() {

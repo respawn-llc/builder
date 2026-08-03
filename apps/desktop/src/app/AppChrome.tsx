@@ -162,7 +162,11 @@ function ProjectDeletionEventHandler() {
   const navigation = useAppNavigation();
   const { closeSidebar, stackDestinations } = useSidebar();
   const { push } = useStatusController();
+  const pathnameRef = useRef(location.pathname);
   const stackDestinationsRef = useRef(stackDestinations);
+  useLayoutEffect(() => {
+    pathnameRef.current = location.pathname;
+  }, [location.pathname]);
   useLayoutEffect(() => {
     stackDestinationsRef.current = stackDestinations;
   }, [stackDestinations]);
@@ -170,11 +174,9 @@ function ProjectDeletionEventHandler() {
     nativeBridge,
     useCallback(
       (event) => {
-        const routeMatches = routeReferencesProject(location.pathname, event.projectID);
-        const sidebarMatches = sidebarReferencesProject(stackDestinationsRef.current, event.projectID);
         void completeProjectDeletion({
-          closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
-          navigateHome: routeMatches ? navigation.openHome : noopNavigation,
+          closeSidebar,
+          navigateHome: navigation.openHome,
           projectID: event.projectID,
           pushDeletedToast: () => {
             push({
@@ -184,9 +186,11 @@ function ProjectDeletionEventHandler() {
             });
           },
           queryClient,
+          shouldCloseSidebar: () => sidebarReferencesProject(stackDestinationsRef.current, event.projectID),
+          shouldNavigateHome: () => routeReferencesProject(pathnameRef.current, event.projectID),
         });
       },
-      [closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
+      [closeSidebar, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
@@ -204,14 +208,6 @@ function sidebarReferencesProject(destinations: readonly SidebarDestination[], p
     }
     return destination.kind === "linkWorkflow" && destination.projectID === projectID;
   });
-}
-
-function noopCloseSidebar(): void {
-  return;
-}
-
-async function noopNavigation(): Promise<void> {
-  return;
 }
 
 function isPlainPrimaryClick(event: MouseEvent): boolean {

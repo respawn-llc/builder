@@ -12,12 +12,10 @@ import {
   WorkflowEditorShellRoute,
   WorkflowLibraryShellRoute,
 } from "./routeComponents";
+import { LegacyEmptyTaskSelectorError } from "./projectRouteErrors";
 
 const optionalSearchString = z.string().catch("");
 const optionalWorkflowSelector = workflowIDSchema.optional();
-const legacyEmptyTaskSelectorMessage =
-  "This legacy project URL contains an empty task selector. Remove '?taskId=' from the URL and reload the project.";
-
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
   taskId: z.string().min(1).optional(),
@@ -86,7 +84,7 @@ export function shouldSkipNativeDialogStartupGate(pathname: string): boolean {
 
 function validateProjectSearch(search: Record<string, unknown>) {
   if (search.taskId === "") {
-    throw new Error(legacyEmptyTaskSelectorMessage);
+    throw new LegacyEmptyTaskSelectorError();
   }
   return projectSearchSchema.parse(search);
 }
