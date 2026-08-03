@@ -37,8 +37,8 @@ export type SidebarStackAction =
       type: "push";
       activationID?: string;
       entryID: string;
-      lifecycleID?: string;
-      sourceEntryID?: string;
+      lifecycleID: string;
+      sourceEntryID: string;
       destination: SidebarDestination;
     }>
   | Readonly<{ type: "back"; activationID?: string; lifecycleID: string; entryID: string }>
@@ -140,12 +140,10 @@ function reducePush(
   state: SidebarStackState | null,
   action: Extract<SidebarStackAction, { type: "push" }>,
 ): SidebarStackState | null {
-  if (
-    state === null ||
-    (action.lifecycleID !== undefined && action.lifecycleID !== state.lifecycleID) ||
-    (action.sourceEntryID !== undefined && state.entries.at(-1)?.entryID !== action.sourceEntryID)
-  )
+  if (state === null) return state;
+  if (action.lifecycleID !== state.lifecycleID || state.entries.at(-1)?.entryID !== action.sourceEntryID) {
     return state;
+  }
   const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
   if (existingTaskIndex !== undefined) {
     return {
@@ -244,8 +242,10 @@ export function findTaskDetailIndex(
   if (destination.kind !== "taskDetail") {
     return undefined;
   }
-  const index = entries.findIndex((entry) =>
-    sidebarDestinationMatchesTask(entry.destination, destination.taskID),
-  );
-  return index === -1 ? undefined : index;
+  for (const [index, entry] of entries.entries()) {
+    if (sidebarDestinationMatchesTask(entry.destination, destination.taskID)) {
+      return index;
+    }
+  }
+  return undefined;
 }

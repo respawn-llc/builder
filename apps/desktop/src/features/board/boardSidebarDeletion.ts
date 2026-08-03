@@ -9,8 +9,10 @@ export function sidebarEntryTokenForDeletedTask(
   tokens: readonly SidebarEntryToken[],
   taskID: string,
 ): SidebarEntryToken | undefined {
-  const index = destinations.findIndex((destination) =>
-    sidebarDestinationMatchesTask(destination, taskID),
-  );
-  return index < 0 ? undefined : tokens[index];
+  for (const [index, destination] of destinations.entries()) {
+    if (sidebarDestinationMatchesTask(destination, taskID)) {
+      return tokens[index];
+    }
+  }
+  return undefined;
 }

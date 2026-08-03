@@ -71,6 +71,8 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(opened, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-1",
       entryID: "entry-2",
       destination: newTask,
     });
@@ -97,6 +99,8 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(opened, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-1",
       entryID: "entry-2",
       destination: task("task-2"),
     });
@@ -196,6 +200,8 @@ describe("sidebarStackReducer", () => {
     const pushed = apply(opened, {
       type: "push",
       activationID: "activation-2",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-1",
       entryID: "entry-2",
       destination: task("task-2"),
     });
@@ -220,17 +226,23 @@ describe("sidebarStackReducer", () => {
     });
     state = apply(state, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-1",
       entryID: "entry-2",
       destination: task("task-2"),
     });
     state = apply(state, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-2",
       entryID: "entry-3",
       destination: task("task-3"),
     });
 
     const returned = apply(state, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-3",
       entryID: "entry-4",
       destination: task("task-1"),
     });
@@ -248,6 +260,8 @@ describe("sidebarStackReducer", () => {
     for (let index = 1; index < 50; index += 1) {
       state = apply(state, {
         type: "push",
+        lifecycleID: "lifecycle-1",
+        sourceEntryID: `entry-${(index - 1).toString()}`,
         entryID: `entry-${index.toString()}`,
         destination: task(`task-${index.toString()}`),
       });
@@ -259,6 +273,8 @@ describe("sidebarStackReducer", () => {
 
     const bounded = apply(state, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-49",
       entryID: "entry-50",
       destination: task("task-50"),
     });
@@ -276,6 +292,8 @@ describe("sidebarStackReducer", () => {
     });
     state = apply(state, {
       type: "push",
+      lifecycleID: "lifecycle-1",
+      sourceEntryID: "entry-1",
       entryID: "entry-2",
       destination: newTask,
     });
@@ -322,6 +340,7 @@ describe("sidebarStackReducer", () => {
     expect(
       apply(state, {
         type: "push",
+        sourceEntryID: "entry-1",
         entryID: "entry-2",
         destination: task("task-2"),
         lifecycleID: "lifecycle-2",
