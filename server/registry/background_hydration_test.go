@@ -1,9 +1,11 @@
 package registry
+
 import (
 	shelltool "core/server/tools/shell"
 	"github.com/google/uuid"
 	"testing"
 )
+
 func TestBackgroundHydrationFiltersSessionProcessesAndOmitsPreview(t *testing.T) {
 	activities, err := transcriptBackgroundActivitiesFromProcessSnapshots("session-1", []shelltool.Snapshot{
 		{
