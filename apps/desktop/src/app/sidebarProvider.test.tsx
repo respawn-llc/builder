@@ -125,6 +125,29 @@ describe("SidebarProvider replacement", () => {
     expect(result.current.activeActivationID).toBe(activationID);
   });
 
+  it("ignores replacement requests during the close animation", () => {
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+      <SidebarProvider>{children}</SidebarProvider>
+    );
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    act(() => {
+      result.current.closeSidebar();
+    });
+
+    act(() => {
+      result.current.replaceSidebar({ kind: "taskDetail", taskID: "task-2" });
+    });
+
+    expect(result.current.phase).toBe("closing");
+    expect(result.current.activeDestination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-1",
+    });
+  });
+
   it("ignores a pop-out completion from an activation superseded by Back", () => {
     const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
       <SidebarProvider>{children}</SidebarProvider>

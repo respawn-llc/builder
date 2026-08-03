@@ -1,7 +1,14 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Home, SunMoon } from "lucide-react";
-import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
@@ -155,12 +162,16 @@ function ProjectDeletionEventHandler() {
   const navigation = useAppNavigation();
   const { closeSidebar, stackDestinations } = useSidebar();
   const { push } = useStatusController();
+  const stackDestinationsRef = useRef(stackDestinations);
+  useLayoutEffect(() => {
+    stackDestinationsRef.current = stackDestinations;
+  }, [stackDestinations]);
   useProjectDeletedEvents(
     nativeBridge,
     useCallback(
       (event) => {
         const routeMatches = routeReferencesProject(location.pathname, event.projectID);
-        const sidebarMatches = sidebarReferencesProject(stackDestinations, event.projectID);
+        const sidebarMatches = sidebarReferencesProject(stackDestinationsRef.current, event.projectID);
         void completeProjectDeletion({
           closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
           navigateHome: routeMatches ? navigation.openHome : noopNavigation,
@@ -175,7 +186,7 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [closeSidebar, location.pathname, navigation.openHome, push, queryClient, stackDestinations, t],
+      [closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
@@ -186,10 +197,7 @@ function routeReferencesProject(pathname: string, projectID: string): boolean {
   return segments[0] === "projects" && segments[1] === projectID;
 }
 
-function sidebarReferencesProject(
-  destinations: readonly SidebarDestination[],
-  projectID: string,
-): boolean {
+function sidebarReferencesProject(destinations: readonly SidebarDestination[], projectID: string): boolean {
   return destinations.some((destination) => {
     if ("projectID" in destination && destination.projectID === projectID) {
       return true;

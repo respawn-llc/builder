@@ -1,9 +1,9 @@
 import type { SidebarDestination } from "@/app-facade";
 import {
-  createSidebarStack,
   sidebarStackReducer,
   type SidebarStackAction,
   type SidebarStackEntry,
+  type SidebarStackState,
 } from "./sidebarStack";
 
 const task = (taskID: string): SidebarDestination => ({
@@ -20,6 +20,25 @@ const newTask: SidebarDestination = {
 
 function apply(state: ReturnType<typeof createSidebarStack> | null, action: SidebarStackAction) {
   return sidebarStackReducer(state, action);
+}
+
+function createSidebarStack(
+  lifecycleID: string,
+  root: SidebarStackEntry,
+  activationID = lifecycleID,
+): SidebarStackState {
+  const state = sidebarStackReducer(null, {
+    type: "open",
+    activationID,
+    lifecycleID,
+    entryID: root.entryID,
+    destination: root.destination,
+    ...(root.snapshot === undefined ? {} : { snapshot: root.snapshot }),
+  });
+  if (state === null) {
+    throw new Error("Sidebar stack did not open.");
+  }
+  return state;
 }
 
 function entryIDs(entries: readonly SidebarStackEntry[]) {

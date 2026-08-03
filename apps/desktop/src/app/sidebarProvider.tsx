@@ -244,6 +244,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const replaceSidebar = useCallback(
     (destination: SidebarDestination): void => {
       const state = stackStateRef.current;
+      if (phase === "closing") {
+        return;
+      }
       if (state === null || pendingRef.current === null) {
         throw new Error("Sidebar replacement requires an active destination lifecycle.");
       }
@@ -251,13 +254,14 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (currentEntry === undefined) {
         throw new Error("Sidebar replacement requires an active destination.");
       }
+      const currentToken = sidebarEntryToken(state.lifecycleID, currentEntry.entryID);
       if (findTaskDetailIndex([currentEntry], destination) === 0 && !captureCurrentState()) {
         return;
       }
       clearCloseTimeout();
       setExitBlockedToken(null);
       preserveRouteChangeRef.current = null;
-      clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
+      clearCapture(currentToken);
       const nextProfile = sidebarWidthProfile(destination);
       setActiveWidthProfile(nextProfile);
       setSidebarWidths((current) =>
@@ -273,7 +277,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         destination,
       });
     },
-    [captureCurrentState, clearCapture, clearCloseTimeout, dispatchStack, nextID],
+    [captureCurrentState, clearCapture, clearCloseTimeout, dispatchStack, nextID, phase],
   );
 
   const pushSidebar = useCallback(
@@ -290,7 +294,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const existingTaskIndex = findTaskDetailIndex(state.entries, destination);
       clearCloseTimeout();
       setExitBlockedToken(null);
-      clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
+      clearCapture(sidebarEntryToken(state.lifecycleID, activeEntry.entryID));
       const nextDestination =
         existingTaskIndex === undefined
           ? destination
@@ -328,7 +332,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       return;
     }
     setExitBlockedToken(null);
-    clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
+    clearCapture(sidebarEntryToken(state.lifecycleID, activeEntry.entryID));
     const previousEntry = state.entries.at(-2);
     if (previousEntry === undefined) {
       return;
@@ -403,9 +407,10 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         closeSidebar("closed");
         return;
       }
+      const removesCurrentEntry = isCurrentToken(token);
       dispatchStack({
         type: "remove",
-        ...(state.entries.at(-1)?.entryID === token.entryID ? { activationID: nextID("activation") } : {}),
+        ...(removesCurrentEntry ? { activationID: nextID("activation") } : {}),
         lifecycleID: token.lifecycleID,
         entryID: token.entryID,
       });
@@ -415,6 +420,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearSidebarRouteChangePreservation,
       closeSidebar,
       dispatchStack,
+      isCurrentToken,
       isLiveEntryToken,
       nextID,
     ],

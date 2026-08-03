@@ -56,7 +56,7 @@ export type SidebarStackAction =
     }>
   | Readonly<{ type: "close"; lifecycleID: string }>;
 
-export function createSidebarStack(
+function createSidebarStack(
   lifecycleID: string,
   root: SidebarStackEntry,
   activationID = lifecycleID,
