@@ -59,7 +59,7 @@ base_dir = "~/.kent/worktrees"
 - `setup_script` runs after Kent creates a worktree and before the create command or a workflow run uses it. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 
-Direct `kent worktree create` waits for setup to finish. If setup fails, times out, or is canceled, creation fails and the worktree remains available for inspection, repair, or deletion. Workflow-managed worktree preparation locks the task target after the worktree is registered and before setup runs; the durable task movement remains applied while setup or later Session preparation continues. A setup failure retains the locked worktree and exposes the existing interruption diagnostics so Resume can reuse it without rerunning setup.
+Kent waits for setup to finish. If setup fails, times out, or is canceled, creation fails and the worktree remains available for inspection, repair, or deletion.
 
 Kent invokes the script with the new worktree as its cwd and three positional arguments:
 

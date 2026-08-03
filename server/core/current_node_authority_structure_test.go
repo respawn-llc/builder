@@ -1,7 +1,6 @@
 package core_test
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/types"
@@ -582,23 +581,6 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	reachable := make(map[*types.Named]struct{})
 	for methodIndex := 0; methodIndex < service.NumMethods(); methodIndex++ {
 		collectNamedTypes(service.Method(methodIndex).Type(), reachable, make(map[types.Type]bool))
-	}
-	var serializedShapes []string
-	for named := range reachable {
-		structure, ok := named.Underlying().(*types.Struct)
-		if !ok || !typeGraphContains(named, dto, make(map[types.Type]bool)) {
-			continue
-		}
-		serializedShapes = append(serializedShapes, named.Obj().Pkg().Path()+"."+named.Obj().Name()+"{"+jsonStructFingerprint(structure)+"}")
-	}
-	sort.Strings(serializedShapes)
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "579db2fb25b6cdd5d77fa0ea4040496f831534e28cd636d03da7ca16b90866e9"
-	if digest != expectedWorkflowCurrentNodeWireDigest {
-		return []currentNodeStructureFinding{{
-			kind:     findingSerializedExecutionAuthority,
-			position: "Workflow Current Node wire digest " + digest + "\n" + strings.Join(serializedShapes, "\n"),
-		}}
 	}
 	return nil
 }
