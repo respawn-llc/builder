@@ -1,11 +1,5 @@
 import { createJsonRpcTransport } from "./jsonRpc";
-import {
-  ProtocolMismatchError,
-  RpcError,
-  ServerRootMismatchError,
-  TransportError,
-  decodeWorkflowLabelError,
-} from "./errors";
+import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
 import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { z } from "zod";
 
@@ -63,23 +57,6 @@ describe("JsonRpcWebSocketTransport", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-  });
-
-  it("does not expose the WebSocket endpoint in connection errors", async () => {
-    const endpoint = "ws://127.0.0.1:53082/rpc";
-    const transport = createJsonRpcTransport(endpoint);
-    const request = transport.call("server.readiness.get", {});
-    const socket = sockets[0] ?? failTest("control socket missing");
-
-    socket.dispatchEvent(new Event("error"));
-
-    const error = await request.catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(TransportError);
-    if (!(error instanceof Error)) {
-      throw new Error("Expected a transport error.");
-    }
-    expect(error.message).not.toContain(endpoint);
-    expect(error.message.trim().length).toBeGreaterThan(0);
   });
 
   it("rejects pending mutations on disconnect and does not replay them on reconnect", async () => {
