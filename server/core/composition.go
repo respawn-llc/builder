@@ -176,16 +176,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
-	runtimeRegistry.WithExecutionTargetResolver(func(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
-		target, err := metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if clientui.SessionExecutionTargetIsZero(target) {
-			return nil, nil
-		}
-		return &target, nil
-	})
+	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}

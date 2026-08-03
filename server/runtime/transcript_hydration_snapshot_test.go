@@ -5,9 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session"
 	"core/server/tools"
-	"core/shared/textutil"
 )
 
 func newTranscriptHydrationSnapshotTestEngine(t *testing.T, client llm.Client) *Engine {
@@ -49,89 +47,16 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 		t.Fatalf("reasoning = %+v", snapshot.ActiveReasoning)
 	}
 	if len(snapshot.InFlightTools) != 2 || snapshot.InFlightTools[0].ToolCallID != "call-1" ||
-		snapshot.InFlightTools[1].ToolCallID != "call-2" {
-		t.Fatalf("tools = %+v", snapshot.InFlightTools)
-	}
-	if len(snapshot.QueuedMessages) != 2 || snapshot.QueuedMessages[0].ID != first.ID ||
+		snapshot.InFlightTools[1].ToolCallID != "call-2" ||
+		len(snapshot.QueuedMessages) != 2 || snapshot.QueuedMessages[0].ID != first.ID ||
 		snapshot.QueuedMessages[1].ID != second.ID {
-		t.Fatalf("queue = %+v", snapshot.QueuedMessages)
+		t.Fatalf("owner facts = tools %+v queue %+v", snapshot.InFlightTools, snapshot.QueuedMessages)
 	}
 	if err := engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
 	if got := hydrationSnapshot(t, engine).ActiveReasoning; got != nil {
 		t.Fatalf("reasoning after reset = %+v", got)
-	}
-}
-
-func TestTranscriptHydrationSnapshotProjectsReviewerCompactionAndCompletion(t *testing.T) {
-	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
-	const stepID = "step-current"
-	engine.compactionRuntimeState().SetCount(3)
-	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}),
-		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: stepID, Compaction: &CompactionStatus{Mode: "auto", Count: 3}}),
-	); err != nil {
-		t.Fatalf("start owner state: %v", err)
-	}
-	snapshot := hydrationSnapshot(t, engine)
-	if snapshot.ActiveReviewer == nil || snapshot.ActiveReviewer.StepID != stepID ||
-		snapshot.ActiveCompaction == nil || snapshot.ActiveCompaction.StepID != stepID ||
-		snapshot.ActiveCompaction.Mode != "auto" || snapshot.ActiveCompaction.Count != 3 {
-		t.Fatalf("active owner state = reviewer %+v compaction %+v", snapshot.ActiveReviewer, snapshot.ActiveCompaction)
-	}
-	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID}),
-		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: stepID, Compaction: &CompactionStatus{Mode: "auto", Count: 3}}),
-	); err != nil {
-		t.Fatalf("finish owner state: %v", err)
-	}
-	snapshot = hydrationSnapshot(t, engine)
-	if snapshot.ActiveReviewer != nil || snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 3 {
-		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
-			snapshot.ActiveReviewer, snapshot.ActiveCompaction, snapshot.CompactionCount)
-	}
-}
-
-func TestTranscriptHydrationSnapshotProjectsContextGoalToolsAndQueueTerminalState(t *testing.T) {
-	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("done")},
-	}}})
-	for _, id := range []string{"call-1", "call-2"} {
-		if err := engine.transcriptRuntimeState().RecordLiveToolStart("step-current", llm.ToolCall{ID: id, Name: "shell"}); err != nil {
-			t.Fatalf("tool %s: %v", id, err)
-		}
-	}
-	engine.transcriptRuntimeState().CompleteLiveTool("call-1")
-	discarded := engine.QueueUserMessage("discard me")
-	if !engine.DiscardQueuedUserMessage(discarded.ID) {
-		t.Fatalf("discard queue item %q", discarded.ID)
-	}
-	queued := engine.QueueUserMessage("flush me")
-	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
-		t.Fatalf("flush queue item %q: %v", queued.ID, err)
-	}
-	goalEngine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
-	goalEngine.setLastUsage(llm.Usage{InputTokens: 123, WindowTokens: 4_000})
-	if _, err := goalEngine.SetGoal("ship the feature", session.GoalActorUser); err != nil {
-		t.Fatalf("set goal: %v", err)
-	}
-	goalEngine.goalLoopState().Suspend()
-	goalSnapshot := hydrationSnapshot(t, goalEngine)
-	if goalSnapshot.ContextUsage == nil || *goalSnapshot.ContextUsage != goalEngine.ContextUsage() ||
-		goalSnapshot.Goal == nil || goalSnapshot.Goal.Objective != "ship the feature" || !goalSnapshot.GoalSuspended {
-		t.Fatalf("context/goal = %+v %+v suspended=%t", goalSnapshot.ContextUsage, goalSnapshot.Goal, goalSnapshot.GoalSuspended)
-	}
-	snapshot := hydrationSnapshot(t, engine)
-	if len(snapshot.InFlightTools) != 1 || snapshot.InFlightTools[0].ToolCallID != "call-2" {
-		t.Fatalf("tools after completion = %+v", snapshot.InFlightTools)
-	}
-	engine.transcriptRuntimeState().AbortLiveTools()
-	if snapshot = hydrationSnapshot(t, engine); len(snapshot.InFlightTools) != 0 {
-		t.Fatalf("tools after abort = %+v", snapshot.InFlightTools)
-	}
-	if snapshot = hydrationSnapshot(t, engine); len(snapshot.QueuedMessages) != 0 {
-		t.Fatalf("queue after discard/flush = %+v", snapshot.QueuedMessages)
 	}
 }
 

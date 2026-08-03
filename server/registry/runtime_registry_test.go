@@ -215,6 +215,22 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	}
 }
 
+func TestPromptPendingAfterResourceDrainingIsRejected(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerResource(t, registry, ref, engine)
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain resource: %v", err)
+	}
+	registry.PromptPending(ref, runtimeids.NewExecutionScopeID(), askquestion.AskQuestionRequest{
+		ID: "ask-1", StepID: registryTestStepID, Question: "Continue?",
+	}, time.Now().UTC())
+	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
+		t.Fatalf("stale prompt after resource drain = %+v", prompts)
+	}
+}
+
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
 	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"}, func(_ *runtime.Engine, evt runtime.Event) {

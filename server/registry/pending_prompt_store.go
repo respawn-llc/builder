@@ -27,10 +27,10 @@ func newPendingPromptStore() *pendingPromptStore {
 	return &pendingPromptStore{pending: make(map[string]map[string]PendingPromptSnapshot)}
 }
 
-func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time, publish func(PendingPromptSnapshot)) bool {
+func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) (PendingPromptSnapshot, bool) {
 	id, requestID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ID)
 	if id == "" || requestID == "" {
-		return false
+		return PendingPromptSnapshot{}, false
 	}
 	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
 	s.mu.Lock()
@@ -41,10 +41,7 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	}
 	pending[requestID] = snapshot
 	s.mu.Unlock()
-	if publish != nil {
-		publish(snapshot)
-	}
-	return true
+	return snapshot, true
 }
 
 func (s *pendingPromptStore) Complete(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) (PendingPromptSnapshot, bool) {

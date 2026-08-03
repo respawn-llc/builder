@@ -2075,6 +2075,18 @@ func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID str
 	return sessionExecutionTargetFromRow(row), nil
 }
 
+func (s *Store) ResolveOptionalSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !sessionExecutionTargetRowHasBinding(row) {
+		return nil, nil
+	}
+	target := sessionExecutionTargetFromRow(row)
+	return &target, nil
+}
+
 func (s *Store) ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
 	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
 	if err != nil {
@@ -2141,6 +2153,16 @@ func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID 
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
 	return row, nil
+}
+
+func sessionExecutionTargetRowHasBinding(row sqlitegen.GetSessionExecutionTargetByIDRow) bool {
+	return strings.TrimSpace(row.ProjectID) != "" ||
+		strings.TrimSpace(row.WorkspaceID) != "" ||
+		strings.TrimSpace(row.WorkspaceSnapshotName) != "" ||
+		strings.TrimSpace(row.WorkspaceRoot) != "" ||
+		row.WorktreeID.Valid ||
+		row.WorktreeRoot.Valid ||
+		strings.TrimSpace(row.CwdRelpath) != ""
 }
 
 func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
