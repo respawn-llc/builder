@@ -555,6 +555,38 @@ func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
+	source := &serverapi.WorktreeCreateError{
+		Owner: serverapi.WorktreeCreateErrorOwnerBaseRef,
+		Diagnostic: errors.Join(
+			errors.New("base ref object disappeared"),
+			errors.New("cleanup removed no worktree"),
+		).Error(),
+	}
+	response := decodeAndHandle[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](
+		protocol.Request{
+			ID: "worktree-create-error",
+			Params: mustJSON(t, serverapi.WorktreeCreateRequest{
+				ClientRequestID:  "request-1",
+				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				SessionID:        "session",
+				BaseRef:          "HEAD",
+				CreateBranch:     true,
+				BranchName:       "feature",
+			}),
+		},
+		func(serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
+			return serverapi.WorktreeCreateResponse{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorktreeCreate {
+		t.Fatalf("response error = %+v, want worktree create code", response.Error)
+	}
+	if !reflect.DeepEqual(response.Error.Data, source.RPCErrorData()) {
+		t.Fatalf("response data = %s, want %s", response.Error.Data, source.RPCErrorData())
+	}
+}
+
 func TestDecodeAndHandleRejectsInvalidWorkflowActionResponse(t *testing.T) {
 	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskStartResponse](
 		protocol.Request{ID: "invalid-workflow-action-response", Params: mustJSON(t, struct{}{})},

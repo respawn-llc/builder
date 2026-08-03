@@ -1,9 +1,12 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"core/cli/app/internal/worktreeui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -166,5 +169,140 @@ func TestWorktreeCreateCompletionSwitchesByStableWorktreeID(t *testing.T) {
 
 	if len(client.enterRequests) != 1 || client.enterRequests[0].Selector != "wt-created" {
 		t.Fatalf("enter requests = %+v, want created worktree ID", client.enterRequests)
+	}
+}
+
+func TestWorktreeCreateErrorOwnershipStopsSpinnerAndPreservesForm(t *testing.T) {
+	model := newWorktreeCreateControllerTestModel(t, nil)
+	model.worktrees.create.resolution = serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch}
+	model.worktrees.create.branchTarget.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("feature/entered"))
+	model.worktrees.create.baseRef.Replace(strings.NewReplacer("\r", "", "\n", "").Replace("HEAD"))
+	model.worktrees.create.submitting = true
+	model.worktrees.mutationToken = 7
+	baseError := &serverapi.WorktreeCreateError{
+		Owner:      serverapi.WorktreeCreateErrorOwnerBaseRef,
+		Diagnostic: "base ref diagnostic",
+	}
+
+	updated := model.reduceWorktreeMessage(worktreeCreateDoneMsg{token: 7, err: baseError}).model
+
+	if updated.worktrees.create.submitting {
+		t.Fatal("create spinner remained active after failure")
+	}
+	if updated.worktrees.create.baseRefErrorText != baseError.Diagnostic {
+		t.Fatalf("base-ref error = %q, want %q", updated.worktrees.create.baseRefErrorText, baseError.Diagnostic)
+	}
+	if updated.worktrees.create.errorText != "" {
+		t.Fatalf("form error = %q, want empty for Base-ref-owned failure", updated.worktrees.create.errorText)
+	}
+	if updated.worktrees.create.branchTarget.Text() != "feature/entered" || updated.worktrees.create.baseRef.Text() != "HEAD" {
+		t.Fatalf("entered values changed: branch=%q base=%q", updated.worktrees.create.branchTarget.Text(), updated.worktrees.create.baseRef.Text())
+	}
+}
+
+func TestWorktreeCreateFormErrorsUseDialogErrorRegion(t *testing.T) {
+	model := newWorktreeCreateControllerTestModel(t, nil)
+	model.worktrees.create.submitting = true
+	model.worktrees.mutationToken = 7
+	formError := &serverapi.WorktreeCreateError{
+		Owner:      serverapi.WorktreeCreateErrorOwnerForm,
+		Diagnostic: "form diagnostic",
+	}
+
+	updated := model.reduceWorktreeMessage(worktreeCreateDoneMsg{token: 7, err: formError}).model
+
+	if updated.worktrees.create.submitting {
+		t.Fatal("create spinner remained active after failure")
+	}
+	if updated.worktrees.create.errorText != formError.Diagnostic {
+		t.Fatalf("form error = %q, want %q", updated.worktrees.create.errorText, formError.Diagnostic)
+	}
+	if updated.worktrees.create.baseRefErrorText != "" {
+		t.Fatalf("base-ref error = %q, want empty for form-owned failure", updated.worktrees.create.baseRefErrorText)
+	}
+}
+
+func TestWorktreeCreateNonTypedAndSetupRetainedErrorsUseFormRegion(t *testing.T) {
+	for _, source := range []error{
+		errors.New("transport failed"),
+		&serverapi.WorktreeSetupRetainedError{Diagnostic: "setup retained"},
+		&serverapi.WorktreeCreateContractError{Cause: errors.New("invalid contract")},
+	} {
+		model := newWorktreeCreateControllerTestModel(t, nil)
+		model.worktrees.create.submitting = true
+		model.worktrees.mutationToken = 7
+
+		updated := model.reduceWorktreeMessage(worktreeCreateDoneMsg{token: 7, err: source}).model
+
+		if updated.worktrees.create.submitting || updated.worktrees.create.errorText == "" || updated.worktrees.create.baseRefErrorText != "" {
+			t.Fatalf("source %T placed incorrectly: state=%+v", source, updated.worktrees.create)
+		}
+	}
+}
+
+func TestWorktreeCreateFieldErrorClearsWhenBaseRefIsEdited(t *testing.T) {
+	model := newWorktreeCreateControllerTestModel(t, nil)
+	model.worktrees.create.resolution = serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch}
+	model.worktrees.create.focus = uiWorktreeCreateFieldBaseRef
+	model.worktrees.create.baseRefErrorText = "old base ref error"
+
+	updated, _ := applyWorktreeCreateControllerKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+
+	if updated.worktrees.create.baseRefErrorText != "" {
+		t.Fatalf("base-ref error = %q, want cleared after edit", updated.worktrees.create.baseRefErrorText)
+	}
+}
+
+func TestWorktreeCreateFieldErrorClearsWhenBaseRefBecomesHidden(t *testing.T) {
+	model := newWorktreeCreateControllerTestModel(t, nil)
+	model.worktrees.create.baseRefErrorText = "old base ref error"
+	model.worktrees.create.resolution = serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch}
+
+	model.worktrees.create.applyResolveState(worktreeui.State{
+		Resolution: serverapi.WorktreeCreateTargetResolution{Kind: serverapi.WorktreeCreateTargetResolutionKindExistingBranch},
+	})
+
+	if model.worktrees.create.baseRefErrorText != "" {
+		t.Fatalf("base-ref error = %q, want cleared when field is hidden", model.worktrees.create.baseRefErrorText)
+	}
+}
+
+func TestWorktreeCreateInvalidTypedErrorUsesContractPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		invalid *serverapi.WorktreeCreateError
+	}{
+		{name: "invalid owner", invalid: &serverapi.WorktreeCreateError{Owner: "invalid", Diagnostic: "invalid owner"}},
+		{name: "blank diagnostic", invalid: &serverapi.WorktreeCreateError{Owner: serverapi.WorktreeCreateErrorOwnerForm, Diagnostic: ""}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := test.invalid
+			model := newWorktreeCreateControllerTestModel(t, nil)
+			model.worktrees.create.submitting = true
+			model.worktrees.create.baseRefErrorText = "stale"
+
+			model.debugMode = false
+			model.applyWorktreeCreateError(invalid)
+			if model.worktrees.create.errorText == "" || model.worktrees.create.baseRefErrorText != "" {
+				t.Fatalf("release invalid typed state = %+v, want form-level contract error", model.worktrees.create)
+			}
+
+			model.debugMode = true
+			defer func() {
+				recovered := recover()
+				diagnostic, ok := recovered.(invariant.Diagnostic)
+				if !ok {
+					t.Fatalf("panic payload = %T, want invariant.Diagnostic", recovered)
+				}
+				if diagnostic.Fields[invariant.FieldOperation] == "" ||
+					diagnostic.Fields[invariant.FieldRawOwner] == "" ||
+					diagnostic.Fields[invariant.FieldValidationCause] == "" ||
+					diagnostic.Stack == "" {
+					t.Fatalf("invariant diagnostic = %+v, want operation/raw owner/cause/stack", diagnostic)
+				}
+			}()
+			model.applyWorktreeCreateError(invalid)
+		})
 	}
 }

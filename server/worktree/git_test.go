@@ -254,8 +254,9 @@ func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
 
 	_, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{CreateBranch: true, BranchName: "feature/new"})
 
-	if !errors.Is(err, ErrBaseRefRequired) {
-		t.Fatalf("error = %v, want base ref validation", err)
+	var validationErr *serverapi.WorktreeCreateValidationError
+	if !errors.As(err, &validationErr) || validationErr.Kind != serverapi.WorktreeCreateValidationBaseRefRequired {
+		t.Fatalf("error = %T %v, want neutral base ref validation", err, err)
 	}
 	if runner.args != nil {
 		t.Fatalf("expected no git command, got %v", runner.args)
@@ -523,6 +524,26 @@ func TestGitInspectorResolveRevisionPeelsCommitAndReportsCanonicalRef(t *testing
 	}
 	if detached.CommitOID != commitOID || detached.CanonicalRef != nil {
 		t.Fatalf("detached head resolution = %+v, want commit %q without canonical ref", detached, commitOID)
+	}
+}
+
+func TestGitInspectorResolveRevisionCommitStopsAfterCommitOID(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	commitOID := "abc123"
+	runner := &stubGitCommandRunner{results: map[string]stubGitCommandResult{
+		gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{object}"): {output: []byte("object\n")},
+		gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{commit}"): {output: []byte(commitOID + "\n")},
+	}}
+
+	resolved, err := NewGitInspector(runner).ResolveRevisionCommit(context.Background(), workspaceRoot, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRevisionCommit: %v", err)
+	}
+	if resolved.RequestedRef != "HEAD" || resolved.CommitOID != commitOID || resolved.CanonicalRef != nil {
+		t.Fatalf("resolved revision = %+v, want commit-only resolution", resolved)
+	}
+	if slices.Equal(runner.args, []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", "HEAD"}) {
+		t.Fatalf("ResolveRevisionCommit followed moving ref after commit capture: %v", runner.args)
 	}
 }
 

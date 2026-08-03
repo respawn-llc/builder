@@ -7,13 +7,9 @@ import (
 	"core/shared/serverapi"
 )
 
-// ErrBranchTargetRequired and ErrBaseRefRequired guard worktree-create request
-// validation. Callers and tests match these with errors.Is rather than
-// comparing rendered message text.
-var (
-	ErrBranchTargetRequired = errors.New("Branch or ref is required")
-	ErrBaseRefRequired      = errors.New("Base ref is required")
-)
+// ErrBranchTargetRequired guards worktree-create target validation. Callers
+// and tests match it with errors.Is rather than comparing rendered text.
+var ErrBranchTargetRequired = errors.New("Branch or ref is required")
 
 func Request(branchTarget string, baseRef string, kind serverapi.WorktreeCreateTargetResolutionKind) (serverapi.WorktreeCreateRequest, error) {
 	if strings.TrimSpace(branchTarget) == "" {
@@ -24,8 +20,12 @@ func Request(branchTarget string, baseRef string, kind serverapi.WorktreeCreateT
 		return serverapi.WorktreeCreateRequest{BaseRef: target, CreateBranch: false}, nil
 	}
 	trimmedBaseRef := strings.TrimSpace(baseRef)
-	if trimmedBaseRef == "" {
-		return serverapi.WorktreeCreateRequest{}, ErrBaseRefRequired
+	if err := serverapi.ValidateWorktreeCreateSpec(trimmedBaseRef, true, target); err != nil {
+		return serverapi.WorktreeCreateRequest{}, serverapi.NewWorktreeCreateError(
+			serverapi.ProjectWorktreeCreateValidationOwner(err, true),
+			err.Error(),
+			err,
+		)
 	}
 	return serverapi.WorktreeCreateRequest{BaseRef: trimmedBaseRef, CreateBranch: true, BranchName: target}, nil
 }

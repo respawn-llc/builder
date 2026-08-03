@@ -271,10 +271,15 @@
 - Desktop never falls back to the current branch, `main`, or a generated generic Worktree name.
 - Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
 - `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- Before creating a new branch, the server must resolve `Base ref` once to an immutable commit. The server must use that commit for creation.
+- Blank, invalid, and unresolved Base refs must be owned by the `Base ref` field.
+- A failure after successful Base-ref resolution must be owned by the creation form, including a race in which the resolved commit disappears before creation.
+- Desktop must use typed ownership to place creation failures. Desktop must never inspect diagnostic text to choose between the `Base ref` field and the creation form.
 - The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If creation fails before a worktree exists, Desktop must stop the spinner. Desktop must preserve every entered value. Desktop must show the authoritative diagnostic inline at its typed owner.
 - If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
 - Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.

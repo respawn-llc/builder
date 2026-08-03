@@ -1,12 +1,14 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/protocol"
 	"core/shared/worktreecontract"
 )
@@ -163,6 +165,202 @@ func TestWorktreeStructuredErrorsRejectInvalidTypedData(t *testing.T) {
 		PendingOperationID: NewWorktreeOperationID(),
 	}).Validate(); err == nil {
 		t.Fatal("pending transition without session validated")
+	}
+}
+
+func TestWorktreeCreateErrorRoundTripsWithOwnershipOnlyWireData(t *testing.T) {
+	tests := []struct {
+		name  string
+		owner WorktreeCreateErrorOwner
+	}{
+		{name: "base ref", owner: WorktreeCreateErrorOwnerBaseRef},
+		{name: "form", owner: WorktreeCreateErrorOwnerForm},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := &WorktreeCreateError{
+				Owner:      test.owner,
+				Diagnostic: "git create diagnostic",
+			}
+			if err := source.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if source.RPCErrorCode() != protocol.ErrCodeWorktreeCreate {
+				t.Fatalf("RPCErrorCode() = %d, want %d", source.RPCErrorCode(), protocol.ErrCodeWorktreeCreate)
+			}
+
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(source.RPCErrorData(), &wire); err != nil {
+				t.Fatalf("unmarshal RPC data: %v", err)
+			}
+			if len(wire) != 2 {
+				t.Fatalf("RPC data fields = %v, want exactly owner and diagnostic", wire)
+			}
+			if _, ok := wire["owner"]; !ok {
+				t.Fatalf("RPC data omitted owner: %v", wire)
+			}
+			if _, ok := wire["diagnostic"]; !ok {
+				t.Fatalf("RPC data omitted diagnostic: %v", wire)
+			}
+			if _, ok := wire["type"]; ok {
+				t.Fatal("RPC data contains a duplicate type discriminator")
+			}
+
+			decoded := DecodeWorktreeCreateError(source.RPCErrorData(), source.Error())
+			var typed *WorktreeCreateError
+			if !errors.As(decoded, &typed) {
+				t.Fatalf("decoded error = %T %v, want WorktreeCreateError", decoded, decoded)
+			}
+			if typed.Owner != source.Owner || typed.Diagnostic != source.Diagnostic {
+				t.Fatalf("decoded error = %+v, want %+v", typed, source)
+			}
+		})
+	}
+}
+
+func TestWorktreeCreateErrorRejectsMalformedWireDataAsContractError(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "invalid owner", data: `{"owner":"other","diagnostic":"diagnostic"}`},
+		{name: "blank diagnostic", data: `{"owner":"form","diagnostic":"  "}`},
+		{name: "missing owner", data: `{"diagnostic":"diagnostic"}`},
+		{name: "missing diagnostic", data: `{"owner":"form"}`},
+		{name: "unknown field", data: `{"owner":"form","diagnostic":"diagnostic","type":"worktree_create_error"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decoded := DecodeWorktreeCreateError(json.RawMessage(test.data), "wire diagnostic")
+			var contractErr *WorktreeCreateContractError
+			if !errors.As(decoded, &contractErr) {
+				t.Fatalf("decoded error = %T %v, want WorktreeCreateContractError", decoded, decoded)
+			}
+			if test.name == "missing owner" && contractErr.Owner != nil {
+				t.Fatalf("missing owner decoded as %q, want absent owner", *contractErr.Owner)
+			}
+			var typed *WorktreeCreateError
+			if errors.As(decoded, &typed) {
+				t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)
+			}
+		})
+	}
+}
+
+func TestWorktreeCreateErrorBoundaryHandlesTypedNil(t *testing.T) {
+	var source *WorktreeCreateError
+
+	err := ValidateWorktreeCreateErrorBoundary(source, "worktree.create.test", invariant.NewPolicy())
+
+	var contractErr *WorktreeCreateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("boundary error = %T %v, want WorktreeCreateContractError", err, err)
+	}
+	if contractErr.Owner != nil {
+		t.Fatalf("typed-nil owner = %q, want absent owner", *contractErr.Owner)
+	}
+	if strings.TrimSpace(contractErr.Diagnostic) == "" {
+		t.Fatal("typed-nil contract diagnostic is blank")
+	}
+}
+
+func TestWorktreeCreateRequestValidationProjectsNeutralFailures(t *testing.T) {
+	base := WorktreeCreateRequest{
+		ClientRequestID:  "request-1",
+		SetupOperationID: NewWorktreeSetupOperationID(),
+		SessionID:        "session",
+		BranchName:       "feature",
+	}
+	tests := []struct {
+		name  string
+		patch func(*WorktreeCreateRequest)
+		owner WorktreeCreateErrorOwner
+	}{
+		{
+			name: "new branch blank base ref",
+			patch: func(request *WorktreeCreateRequest) {
+				request.CreateBranch = true
+			},
+			owner: WorktreeCreateErrorOwnerBaseRef,
+		},
+		{
+			name: "existing branch blank base ref",
+			patch: func(request *WorktreeCreateRequest) {
+				request.CreateBranch = false
+			},
+			owner: WorktreeCreateErrorOwnerForm,
+		},
+		{
+			name: "new branch blank branch name",
+			patch: func(request *WorktreeCreateRequest) {
+				request.CreateBranch = true
+				request.BaseRef = "HEAD"
+				request.BranchName = ""
+			},
+			owner: WorktreeCreateErrorOwnerForm,
+		},
+		{
+			name: "existing branch with branch name",
+			patch: func(request *WorktreeCreateRequest) {
+				request.CreateBranch = false
+				request.BaseRef = "feature"
+			},
+			owner: WorktreeCreateErrorOwnerForm,
+		},
+		{
+			name: "blank client request id",
+			patch: func(request *WorktreeCreateRequest) {
+				request.ClientRequestID = ""
+				request.CreateBranch = true
+				request.BaseRef = "HEAD"
+			},
+			owner: WorktreeCreateErrorOwnerForm,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			test.patch(&request)
+			err := request.Validate()
+			var typed *WorktreeCreateError
+			if !errors.As(err, &typed) {
+				t.Fatalf("Validate() = %T %v, want WorktreeCreateError", err, err)
+			}
+			if typed.Owner != test.owner {
+				t.Fatalf("owner = %q, want %q", typed.Owner, test.owner)
+			}
+			if strings.TrimSpace(typed.Diagnostic) == "" {
+				t.Fatal("validation error diagnostic is blank")
+			}
+		})
+	}
+}
+
+func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
+	source := &WorktreeSetupRetainedError{
+		Worktree: WorktreeTopologyEntry{
+			Variant: WorktreeTopologyVariantRegistered,
+			Registered: &WorktreeRegisteredFacts{
+				Git: WorktreeGitFacts{CanonicalRoot: "/repo/feature", HeadObject: "abc123", PathAvailable: true},
+				Kent: WorktreeKentFacts{
+					WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+					CanonicalRoot: "/repo/feature",
+					DisplayName:   "feature",
+				},
+			},
+		},
+		Diagnostic: "setup failed",
+	}
+	if source.RPCErrorCode() != protocol.ErrCodeWorktreeSetupRetained {
+		t.Fatalf("setup-retained RPC code = %d, want %d", source.RPCErrorCode(), protocol.ErrCodeWorktreeSetupRetained)
+	}
+	decoded := DecodeWorktreeRPCError(source.RPCErrorData(), source.Error())
+	var retained *WorktreeSetupRetainedError
+	if !errors.As(decoded, &retained) {
+		t.Fatalf("decoded error = %T %v, want WorktreeSetupRetainedError", decoded, decoded)
+	}
+	if !errors.Is(decoded, ErrWorktreeSetupRetained) {
+		t.Fatalf("decoded error does not preserve setup-retained identity: %v", decoded)
 	}
 }
 
