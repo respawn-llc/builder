@@ -38,7 +38,6 @@ export function useTaskInitiatingActionController({
   execute,
   onApplied,
   onAppliedError,
-  onExecuteError,
 }: Readonly<{
   execute: (
     action: TaskInitiatingAction,
@@ -46,7 +45,6 @@ export function useTaskInitiatingActionController({
   ) => Promise<TaskInitiatingActionResult>;
   onApplied: (result: TaskInitiatingActionResult) => void | Promise<void>;
   onAppliedError: (error: unknown) => void;
-  onExecuteError?: (action: TaskInitiatingAction, error: unknown) => void;
 }>): TaskInitiatingActionController {
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
@@ -89,31 +87,8 @@ export function useTaskInitiatingActionController({
       }
       setRunning(true);
       const operation = (async () => {
-        try {
-          const result = await execute(action, selection);
-          await handleResult(result);
-        } catch (error) {
-          if (selection === undefined) {
-            setPending(null);
-          } else {
-            setPending((current) =>
-              current?.kind !== "execution_target"
-                ? current
-                : {
-                    ...current,
-                    selection: {
-                      mode: selection.mode,
-                      customRef: selection.customRef ?? "",
-                    },
-                  },
-            );
-          }
-          if (onExecuteError !== undefined) {
-            onExecuteError(action, error);
-          } else {
-            onAppliedError(error);
-          }
-        }
+        const result = await execute(action, selection);
+        await handleResult(result);
       })();
       initialRunRef.current = operation;
       const settle = () => {
@@ -125,7 +100,7 @@ export function useTaskInitiatingActionController({
       void operation.then(settle, settle);
       await operation;
     },
-    [execute, handleResult, onAppliedError, onExecuteError],
+    [execute, handleResult],
   );
 
   const close = useCallback(() => {

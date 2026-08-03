@@ -81,25 +81,14 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 	return int64(len(recovered)), nil
 }
 
-func (c *CurrentNodeController) StartTaskWithPreparation(
+func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	preparation LaunchPreparation,
+	candidate *workflowstore.ExecutionTargetCandidate,
 ) (workflowstore.StartTaskResult, error) {
 	if c == nil {
 		return workflowstore.StartTaskResult{}, errors.New("current node workflow controller is required")
 	}
-	if err := preparation.Validate(); err != nil {
-		return workflowstore.StartTaskResult{}, err
-	}
-	return c.startTask(ctx, taskID, preparation)
-}
-
-func (c *CurrentNodeController) startTask(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	preparation LaunchPreparation,
-) (workflowstore.StartTaskResult, error) {
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
@@ -107,23 +96,26 @@ func (c *CurrentNodeController) startTask(
 			return workflowstore.StartTaskResult{}, err
 		}
 		c.mu.Unlock()
-		started, err := c.store.StartTask(ctx, taskID)
+		started, err := c.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
 			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
 		}
+		starts, err := c.steerAndWaitStarts(ctx, []currentNodeQueuedStart{{
+			reference:          started.Mutation.Created[0].Reference,
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+		}}, recoverCommittedCurrentNodeStarts)
+		if err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
-			reference:          started.Mutation.Created[0].Reference,
-			launchPreparation:  preparation,
-			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
-		}); err != nil {
+		if err := c.queueExplicitStartLocked(starts[0]); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		return started, nil
@@ -134,17 +126,6 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
 	}
-	return c.resumeTask(ctx, taskID, EstablishedRootLaunchPreparation(), func(workflow.CurrentNode) workflowruntime.TaskPromptDelivery {
-		return workflowruntime.TaskPromptDeliveryResume
-	})
-}
-
-func (c *CurrentNodeController) resumeTask(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	preparation LaunchPreparation,
-	deliveryFor func(workflow.CurrentNode) workflowruntime.TaskPromptDelivery,
-) ([]workflow.CurrentNode, error) {
 	var resolution workflowstore.TaskAttentionResolution
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
 		c.mu.Lock()
@@ -171,8 +152,7 @@ func (c *CurrentNodeController) resumeTask(
 			c.mu.Lock()
 			queueErr := c.queueExplicitStartLocked(currentNodeQueuedStart{
 				reference:          currentNode.Reference,
-				launchPreparation:  preparation,
-				taskPromptDelivery: deliveryFor(currentNode),
+				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 			})
 			c.mu.Unlock()
 			if queueErr != nil {
@@ -187,35 +167,12 @@ func (c *CurrentNodeController) resumeTask(
 	return resumed, err
 }
 
-func (c *CurrentNodeController) ResumeTaskWithPreparation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	preparation LaunchPreparation,
-) ([]workflow.CurrentNode, error) {
-	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
-	}
-	if err := preparation.Validate(); err != nil {
-		return nil, err
-	}
-	return c.resumeTask(ctx, taskID, preparation, func(currentNode workflow.CurrentNode) workflowruntime.TaskPromptDelivery {
-		if currentNode.SessionID == nil {
-			return workflowruntime.TaskPromptDeliveryAssignment
-		}
-		return workflowruntime.TaskPromptDeliveryResume
-	})
-}
-
 func (c *CurrentNodeController) ApplyPendingApproval(
 	ctx context.Context,
 	approvalID workflow.ApprovalID,
-	preparation LaunchPreparation,
 ) (workflowstore.PendingApprovalApplyResult, error) {
 	if c == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("current node workflow controller is required")
-	}
-	if err := preparation.Validate(); err != nil {
-		return workflowstore.PendingApprovalApplyResult{}, err
 	}
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
 		approval, err := c.store.PendingApproval(ctx, approvalID)
@@ -249,7 +206,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, nil, err
 			}
-			starts, err := currentNodeExplicitStarts(applied.Mutation.Created, preparation)
+			starts, err := currentNodeExplicitStarts(applied.Mutation.Created)
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, nil, err
 			}
@@ -260,10 +217,13 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
+			starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
+			if err != nil {
+				return workflowstore.PendingApprovalApplyResult{}, err
+			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			for _, start := range starts {
-				start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryAssignment
 				if err := c.queueExplicitStartLocked(start); err != nil {
 					return workflowstore.PendingApprovalApplyResult{}, err
 				}
@@ -292,16 +252,18 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		c.resolvePendingCurrentNodeAssignmentSteersInBackground(starts, pending)
-		return applied, nil
+		return applied, c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 }
 
-func (c *CurrentNodeController) applyManualMove(
+func (c *CurrentNodeController) ApplyManualMove(
 	ctx context.Context,
 	prepared workflowstore.ManualMovePreparation,
-	preparation LaunchPreparation,
+	candidate *workflowstore.ExecutionTargetCandidate,
 ) (workflowstore.ManualMoveResult, error) {
+	if c == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("current node workflow controller is required")
+	}
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
 		taskID := prepared.TaskID()
 		c.mu.Lock()
@@ -310,42 +272,30 @@ func (c *CurrentNodeController) applyManualMove(
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		moved, err := c.store.ApplyManualMove(ctx, prepared)
+		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
 		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
 			return moved, nil
 		}
-		starts, err := currentNodeExplicitStarts(moved.Mutation.Created, preparation)
+		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
+		if err != nil {
+			return moved, err
+		}
+		starts, err = c.steerAndWaitStarts(ctx, starts, recoverAllCurrentNodeStarts)
 		if err != nil {
 			return moved, err
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, start := range starts {
-			start.launchPreparation = preparation
-			start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryAssignment
 			if err := c.queueExplicitStartLocked(start); err != nil {
 				return moved, err
 			}
 		}
 		return moved, nil
 	})
-}
-
-func (c *CurrentNodeController) ApplyManualMoveWithPreparation(
-	ctx context.Context,
-	prepared workflowstore.ManualMovePreparation,
-	preparation LaunchPreparation,
-) (workflowstore.ManualMoveResult, error) {
-	if c == nil {
-		return workflowstore.ManualMoveResult{}, errors.New("current node workflow controller is required")
-	}
-	if err := preparation.Validate(); err != nil {
-		return workflowstore.ManualMoveResult{}, err
-	}
-	return c.applyManualMove(ctx, prepared, preparation)
 }
 
 // EnsureTaskQuiescent rejects Task-wide state replacement while the

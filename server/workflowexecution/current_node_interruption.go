@@ -19,13 +19,6 @@ type currentNodeAdmissionWait struct {
 	done <-chan struct{}
 }
 
-type currentNodePreparationDrainPolicy string
-
-const (
-	preserveCurrentNodePreparation currentNodePreparationDrainPolicy = "preserve"
-	cancelCurrentNodePreparation   currentNodePreparationDrainPolicy = "cancel"
-)
-
 type currentNodeInterruptCleanupState struct {
 	stopHandles    []sessionruntime.ExecutionHandle
 	waitHandles    []sessionruntime.ExecutionHandle
@@ -44,7 +37,6 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cleanupCancel()
 	for _, gate := range state.drainedGates {
-		cancelAdmission(gate.cancel)
 		gate.lease.Cancel()
 	}
 	c.wakeAdmissionWorker()
@@ -120,6 +112,9 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			selected := append([]sessionruntime.ExecutionHandle(nil), selection.Interruptible...)
+			if selector.SessionID == nil {
+				selected = append(selected, selection.Queued...)
+			}
 			owned := append([]sessionruntime.ExecutionHandle(nil), selected...)
 			if selector.SessionID == nil {
 				owned = append(owned, selection.Finalizing...)
@@ -188,15 +183,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, scopeRef.CurrentNode)
 			}
 
-			return drainTaskControllerWorkLocked(
-				c,
-				selector.TaskID,
-				taskFence,
-				&references,
-				&admissionWaits,
-				&drainedGates,
-				preserveCurrentNodePreparation,
-			)
+			return drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &drainedGates)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			return ErrNoInterruptibleExecution
@@ -342,15 +329,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				references = append(references, scopeRef.CurrentNode)
 			}
 			if taskFence != nil {
-				if err := drainTaskControllerWorkLocked(
-					c,
-					taskID,
-					taskFence,
-					&references,
-					&admissionWaits,
-					&drainedGates,
-					cancelCurrentNodePreparation,
-				); err != nil {
+				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits, &drainedGates); err != nil {
 					return err
 				}
 			}
@@ -486,7 +465,6 @@ func drainTaskControllerWorkLocked(
 	references *[]workflow.CurrentNodeReference,
 	admissionWaits *[]currentNodeAdmissionWait,
 	drainedGates *[]currentNodeAdmissionGate,
-	preparationPolicy currentNodePreparationDrainPolicy,
 ) error {
 	explicitQueue := c.explicitQueue[:0]
 	for _, start := range c.explicitQueue {
@@ -499,7 +477,6 @@ func drainTaskControllerWorkLocked(
 			return fmt.Errorf("drain explicit queue for task %s: %w", taskID, err)
 		}
 		delete(c.explicitQueued, key)
-		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -518,7 +495,6 @@ func drainTaskControllerWorkLocked(
 			return fmt.Errorf("drain automatic queue for task %s: %w", taskID, err)
 		}
 		delete(c.queued, key)
-		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -536,7 +512,6 @@ func drainTaskControllerWorkLocked(
 			if err != nil {
 				return fmt.Errorf("drain held start for task %s: %w", taskID, err)
 			}
-			cancelAdmission(start.cancel)
 			c.interrupts.addCurrentNode(fence, key)
 			*references = append(*references, start.reference)
 			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -553,7 +528,6 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		delete(c.explicitReservations, key)
-		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
@@ -563,7 +537,6 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		delete(c.automaticReservations, key)
-		cancelAdmission(start.cancel)
 		c.releaseAgentCapacityLocked(start.agentCapacityLease)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
@@ -573,11 +546,7 @@ func drainTaskControllerWorkLocked(
 		if gate.reference.TaskID != taskID {
 			continue
 		}
-		if preparationPolicy == preserveCurrentNodePreparation {
-			continue
-		}
 		c.stopping[gate.lease.ScopeID()] = struct{}{}
-		cancelAdmission(gate.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*drainedGates = append(*drainedGates, gate)
 		*references = append(*references, gate.reference)
@@ -587,21 +556,11 @@ func drainTaskControllerWorkLocked(
 		if start.reference.TaskID != taskID {
 			continue
 		}
-		if _, gated := c.gates[key]; preparationPolicy == preserveCurrentNodePreparation && gated {
-			continue
-		}
-		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
 	}
 	return nil
-}
-
-func cancelAdmission(cancel context.CancelFunc) {
-	if cancel != nil {
-		cancel()
-	}
 }
 
 func interruptCurrentNodeReferences(

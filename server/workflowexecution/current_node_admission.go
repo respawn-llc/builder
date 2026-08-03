@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	explicitAdmissionConcurrency        = 8
-	reasonCurrentNodeRuntimeStartFailed = workflow.CurrentNodeInterruptionReason(workflow.CurrentNodeInterruptionCodeRuntimeStartFailed)
+	explicitAdmissionConcurrency                                               = 8
+	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
 )
 
 type currentNodeAdmissionPolicy uint8
@@ -61,12 +61,9 @@ type currentNodeAgentCapacityLease struct {
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
-	launchPreparation  LaunchPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
-	ctx                context.Context
-	cancel             context.CancelFunc
 	done               chan struct{}
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
@@ -75,7 +72,6 @@ type currentNodeAdmissionGate struct {
 	reference          workflow.CurrentNodeReference
 	lease              sessionruntime.WorkflowExecutionLease
 	policy             currentNodeAdmissionPolicy
-	cancel             context.CancelFunc
 	done               <-chan struct{}
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
@@ -170,17 +166,8 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
-	if ctx == nil {
-		ctx = c.workerContext
-	}
-	if start.ctx != nil {
-		ctx = start.ctx
-	}
 	reference := start.reference
 	if err := reference.Validate(); err != nil {
-		return err
-	}
-	if err := start.launchPreparation.Validate(); err != nil {
 		return err
 	}
 	key, err := reference.Key()
@@ -261,7 +248,6 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			reference:          reference,
 			lease:              next,
 			policy:             start.policy,
-			cancel:             start.cancel,
 			done:               start.done,
 			agentCapacityLease: start.agentCapacityLease,
 		}
@@ -277,18 +263,9 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	}); err != nil {
 		return currentNodeAdmissionError{cause: err}
 	}
-	runnerErr := c.runner.StartCurrentNodeWithPreparation(
-		ctx,
-		reference,
-		start.launchPreparation,
-		start.taskPromptDelivery,
-		assignmentSteer,
-		lease,
-		c,
-	)
-	if runnerErr != nil {
+	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
 		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, runnerErr),
+			cause:    c.discardAdmission(reference, key, lease, err),
 			admitted: true,
 		}
 	}
@@ -307,14 +284,8 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		if !exists || gate.lease.ScopeID() != lease.ScopeID() {
 			return errors.New("current node admission gate was replaced before live scope registration")
 		}
-		if c.closed {
-			return errors.New("current node workflow controller is closed")
-		}
-		if c.workerErr != nil {
-			return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
-		}
-		if c.interrupts.currentNodeFenced(key) {
-			return ErrTaskExecutionNotQuiescent
+		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
+			return err
 		}
 		if _, stopping := c.stopping[lease.ScopeID()]; stopping {
 			return sessionruntime.ErrExecutionNoLongerLive
@@ -449,64 +420,6 @@ func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
 	return nil
 }
 
-func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteersInBackground(
-	starts []currentNodeQueuedStart,
-	pending []*pendingCurrentNodeAssignmentSteer,
-) {
-	if len(starts) == 0 && len(pending) == 0 {
-		return
-	}
-	if len(starts) != len(pending) {
-		err := fmt.Errorf("current node assignment steer count mismatch: starts=%d pending=%d", len(starts), len(pending))
-		for _, unresolved := range pending {
-			unresolved.resolve(nil, err)
-		}
-		return
-	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		err := errors.New("current node workflow controller is closed")
-		for _, unresolved := range pending {
-			unresolved.resolve(nil, err)
-		}
-		return
-	}
-	c.workerWG.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.workerWG.Done()
-		if err := c.resolvePendingCurrentNodeAssignmentSteers(c.workerContext, starts, pending); err != nil {
-			c.publishPendingCurrentNodeAssignmentFailure(starts, err)
-		}
-	}()
-}
-
-func (c *CurrentNodeController) publishPendingCurrentNodeAssignmentFailure(
-	starts []currentNodeQueuedStart,
-	err error,
-) {
-	if err == nil {
-		return
-	}
-	detail := workflow.CurrentNodeInterruptionDetail{
-		Code:   string(reasonCurrentNodeRuntimeStartFailed),
-		Fields: map[string]string{"error": err.Error()},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cancel()
-	for _, start := range starts {
-		if persistErr := c.permit.Run(ctx, func(ctx context.Context) error {
-			return c.store.InterruptCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed, detail)
-		}); persistErr != nil {
-			c.mu.Lock()
-			c.workerErr = errors.Join(c.workerErr, err, persistErr)
-			c.mu.Unlock()
-		}
-		c.publishPendingInterruptedCurrentNode(c.workerContext, start.reference, reasonCurrentNodeRuntimeStartFailed)
-	}
-}
-
 func (c *CurrentNodeController) steerAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
@@ -607,7 +520,6 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 		return
 	}
 	for _, start := range starts {
-		c.prepareAdmissionContextLocked(&start)
 		var err error
 		if start.policy.isAutomatic() {
 			err = c.queueAutomaticStartLocked(start)
@@ -633,7 +545,6 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
-	c.prepareAdmissionContextLocked(&start)
 	c.explicitQueue = append(c.explicitQueue, start)
 	c.explicitQueued[key] = struct{}{}
 	c.wakeAdmissionWorker()
@@ -651,7 +562,6 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
-	c.prepareAdmissionContextLocked(&start)
 	c.automaticQueue.append(start)
 	c.queued[key] = struct{}{}
 	c.wakeAdmissionWorker()
@@ -709,10 +619,9 @@ func (c *CurrentNodeController) runAdmissions() {
 func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	defer c.admissionWG.Done()
 	defer close(start.done)
-	defer cancelAdmission(start.cancel)
 	defer c.finishTaskInterruptAdmission(start.reference)
 	defer c.finishAdmissionWorker(start)
-	if err := c.admit(start.ctx, start); err != nil {
+	if err := c.admit(c.workerContext, start); err != nil {
 		key, keyErr := start.reference.Key()
 		if keyErr != nil {
 			panic(fmt.Sprintf("inspect failed current node admission: %v", keyErr))
@@ -731,12 +640,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
 		c.handleAdmissionFailure(start.reference, failure.admitted, failure.cause)
-	}
-}
-
-func (c *CurrentNodeController) prepareAdmissionContextLocked(start *currentNodeQueuedStart) {
-	if start.ctx == nil {
-		start.ctx, start.cancel = context.WithCancel(c.workerContext)
 	}
 }
 
@@ -944,27 +847,18 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if admitted {
 		interrupt = c.store.InterruptAdmittedCurrentNode
 	}
-	reason := reasonCurrentNodeRuntimeStartFailed
-	detail := workflow.CurrentNodeInterruptionDetail{
-		Code:   string(reasonCurrentNodeRuntimeStartFailed),
-		Fields: map[string]string{"error": cause.Error()},
-	}
-	var projected *CurrentNodeStartFailure
-	if errors.As(cause, &projected) {
-		if err := projected.Validate(); err == nil {
-			reason = projected.Reason
-			detail = projected.Detail
-		}
-	}
 	interrupted, err := interruptCurrentNodeReferences(
 		ctx,
 		interrupt,
 		references,
-		reason,
-		detail,
+		reasonCurrentNodeRuntimeStartFailed,
+		workflow.CurrentNodeInterruptionDetail{
+			Code:   string(reasonCurrentNodeRuntimeStartFailed),
+			Fields: map[string]string{"error": cause.Error()},
+		},
 	)
 	for _, reference := range interrupted {
-		c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
 	}
 	return err
 }
@@ -997,15 +891,14 @@ func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQu
 			policy = currentNodeAdmissionAutomaticScript
 		}
 		starts = append(starts, currentNodeQueuedStart{
-			reference:         intent.CurrentNode,
-			launchPreparation: EstablishedRootLaunchPreparation(),
-			policy:            policy,
+			reference: intent.CurrentNode,
+			policy:    policy,
 		})
 	}
 	return starts
 }
 
-func currentNodeExplicitStarts(nodes []workflow.CurrentNode, preparation LaunchPreparation) ([]currentNodeQueuedStart, error) {
+func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueuedStart, error) {
 	starts := make([]currentNodeQueuedStart, 0, len(nodes))
 	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(nodes))
 	for index, currentNode := range nodes {
@@ -1022,7 +915,6 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode, preparation LaunchP
 		seen[key] = struct{}{}
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
-			launchPreparation:  preparation,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 		})
 	}

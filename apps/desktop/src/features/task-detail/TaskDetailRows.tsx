@@ -6,7 +6,6 @@ import type { TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
-import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { taskStatusTone } from "@/shared/task-status";
 import {
@@ -358,12 +357,10 @@ export function PropertiesIsland({
   detail,
   disabled,
   mutations,
-  resumeContinuation,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  resumeContinuation: TaskInitiatingActionController;
 }>) {
   const { t } = useTranslation();
   const openExternalLink = useOpenExternalLink();
@@ -396,12 +393,7 @@ export function PropertiesIsland({
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
         <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
       </dl>
-      <TaskActionPanel
-        detail={detail}
-        disabled={disabled}
-        mutations={mutations}
-        resumeContinuation={resumeContinuation}
-      />
+      <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
   );
 }
@@ -410,12 +402,10 @@ function TaskActionPanel({
   detail,
   disabled,
   mutations,
-  resumeContinuation,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  resumeContinuation: TaskInitiatingActionController;
 }>) {
   const { t } = useTranslation();
   return (
@@ -424,10 +414,9 @@ function TaskActionPanel({
         <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
           <Button
-            data-testid="task-detail-resume"
-            disabled={disabled || resumeContinuation.running}
+            disabled={disabled || mutations.resume.isPending}
             onClick={() => {
-              void resumeContinuation.run(resumeTaskInitiatingAction(detail.id));
+              mutations.resume.mutate();
             }}
             variant="primary"
           >

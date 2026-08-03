@@ -23,10 +23,9 @@ const reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workf
 // controller mutation permit. The runner owns slow launch preparation; the
 // controller owns its gate and live-scope registration.
 type CurrentNodeRunner interface {
-	StartCurrentNodeWithPreparation(
+	StartCurrentNode(
 		context.Context,
 		workflow.CurrentNodeReference,
-		LaunchPreparation,
 		workflowruntime.TaskPromptDelivery,
 		CurrentNodeAssignmentSteer,
 		sessionruntime.WorkflowExecutionLease,
@@ -95,13 +94,13 @@ type CurrentNodeExecutionSnapshot struct {
 // lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
 	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation) (workflowstore.ManualMoveResult, error)
+		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
@@ -147,13 +146,13 @@ type CurrentNodeController struct {
 
 func NewCurrentNodeController(
 	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation) (workflowstore.ManualMoveResult, error)
+		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)

@@ -22,10 +22,7 @@ func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, _
 
 func writeTaskResumeResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, resp serverapi.WorkflowTaskResumeResponse) {
 	fmt.Fprintf(stdout, "Resumed task %s.\n", taskDisplayID(task))
-	if resp.Applied == nil {
-		return
-	}
-	for _, currentNode := range resp.Applied.CurrentNodes {
+	for _, currentNode := range resp.CurrentNodes {
 		if currentNode.SessionID == nil || strings.TrimSpace(*currentNode.SessionID) == "" {
 			fmt.Fprintf(stdout, "Resumed node %s.\n", currentNode.NodeID)
 			continue

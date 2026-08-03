@@ -12,7 +12,6 @@ import type {
   TaskAttention,
   TaskApproveResponse,
   TaskMoveResponse,
-  TaskResumeResponse,
   TaskMovePreviewResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelectionRequirement,
@@ -138,7 +137,6 @@ const configuredTargetSchema = z
 const selectionRequirementSchema: z.ZodType<WorkflowExecutionTargetSelectionRequirement> = z
   .discriminatedUnion("reason", [
     z.object({ reason: z.literal("policy_requires_selection") }).strict(),
-    z.object({ reason: z.literal("unlocked_preparation_failed") }).strict(),
     z
       .object({
         reason: z.literal("configured_target_unavailable"),
@@ -148,7 +146,7 @@ const selectionRequirementSchema: z.ZodType<WorkflowExecutionTargetSelectionRequ
       .strict(),
   ])
   .transform((value): WorkflowExecutionTargetSelectionRequirement => {
-    if (value.reason === "policy_requires_selection" || value.reason === "unlocked_preparation_failed") {
+    if (value.reason === "policy_requires_selection") {
       return { reason: value.reason };
     }
     return {
@@ -186,26 +184,24 @@ const dependencyConfirmationRequiredResponseSchema = z
       }) as const,
   );
 
-const appliedCurrentNodesResponseSchema = z
-  .object({
-    outcome: z.literal("applied"),
-    applied: z
-      .object({
-        current_nodes: z.array(currentNodeSchema).min(1),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform(
-    (value) =>
-      ({
-        outcome: value.outcome,
-        applied: { currentNodes: value.applied.current_nodes },
-      }) as const,
-  );
-
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
-  appliedCurrentNodesResponseSchema,
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z
+        .object({
+          current_nodes: z.array(currentNodeSchema).min(1),
+        })
+        .strict(),
+    })
+    .strict()
+    .transform(
+      (value) =>
+        ({
+          outcome: value.outcome,
+          applied: { currentNodes: value.applied.current_nodes },
+        }) as const,
+    ),
   selectionRequiredResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
 ]);
@@ -222,15 +218,26 @@ const taskMoveNoOpResponseSchema = z
   }));
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  appliedCurrentNodesResponseSchema,
+  z
+    .object({
+      outcome: z.literal("applied"),
+      applied: z
+        .object({
+          current_nodes: z.array(currentNodeSchema).min(1),
+        })
+        .strict(),
+    })
+    .strict()
+    .transform(
+      (value) =>
+        ({
+          outcome: value.outcome,
+          applied: { currentNodes: value.applied.current_nodes },
+        }) as const,
+    ),
   selectionRequiredResponseSchema,
   taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
-]);
-
-export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
-  appliedCurrentNodesResponseSchema,
-  selectionRequiredResponseSchema,
 ]);
 
 const manualMoveBlockerSchema = z.enum([
@@ -274,24 +281,22 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
         outcome: z.literal("transition"),
         transition: z
           .object({
-            choices: z
-              .array(
-                z
-                  .object({
-                    transition_key: z.string().trim().min(1),
-                    label: z.string().trim().min(1),
-                    source_node_display_name: z.string().trim().min(1),
-                    required_values: z.array(manualMoveRequiredValueSchema),
-                  })
-                  .strict()
-                  .transform((value) => ({
-                    transitionKey: value.transition_key,
-                    label: value.label,
-                    sourceNodeDisplayName: value.source_node_display_name,
-                    requiredValues: value.required_values,
-                  })),
-              )
-              .min(1),
+            choices: z.array(
+              z
+                .object({
+                  transition_key: z.string().trim().min(1),
+                  label: z.string().trim().min(1),
+                  source_node_display_name: z.string().trim().min(1),
+                  required_values: z.array(manualMoveRequiredValueSchema),
+                })
+                .strict()
+                .transform((value) => ({
+                  transitionKey: value.transition_key,
+                  label: value.label,
+                  sourceNodeDisplayName: value.source_node_display_name,
+                  requiredValues: value.required_values,
+                })),
+            ).min(1),
           })
           .strict(),
       })
@@ -306,6 +311,7 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
       .transform((value) => ({ outcome: value.outcome, blocked: value.blocked })),
   ],
 );
+
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
   z
     .object({

@@ -67,39 +67,18 @@ func (s *Starter) startCurrentNodeScript(
 			contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
 			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 			if err != nil {
-				return errors.Join(
-					err,
-					s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err),
-				)
+				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
 			}
-			return s.completeCurrentNodeScript(finalizeCtx, controller, workflowruntime.CompletionRequest{
+			_, err = controller.CompleteCurrentNode(finalizeCtx, workflowruntime.CompletionRequest{
 				ScopeID:      scope.ID(),
 				TransitionID: parsed.TransitionID,
 				OutputValues: parsed.OutputValues,
 				Commentary:   parsed.Commentary,
 			})
+			return err
 		},
 	})
 	return err
-}
-
-func (s *Starter) completeCurrentNodeScript(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	req workflowruntime.CompletionRequest,
-) error {
-	_, completionErr := controller.CompleteCurrentNode(ctx, req)
-	if completionErr == nil {
-		return nil
-	}
-	interruptionErr := s.failCurrentNodeScopeID(
-		ctx,
-		controller,
-		req.ScopeID,
-		ReasonScriptCompletionFailed,
-		completionErr,
-	)
-	return errors.Join(completionErr, interruptionErr)
 }
 
 func currentNodeScriptStdin(input workflowstore.CurrentNodeStartContext) ([]byte, error) {
@@ -134,21 +113,11 @@ func (s *Starter) failCurrentNodeScope(
 	reason string,
 	cause error,
 ) error {
-	return s.failCurrentNodeScopeID(ctx, controller, scope.ID(), reason, cause)
-}
-
-func (s *Starter) failCurrentNodeScopeID(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	scopeID runtimeids.ExecutionScopeID,
-	reason string,
-	cause error,
-) error {
 	failureController, ok := controller.(interface {
 		FailCurrentNodeScope(context.Context, runtimeids.ExecutionScopeID, workflow.CurrentNodeInterruptionReason, error) error
 	})
 	if !ok {
 		return errors.New("workflow runtime controller cannot interrupt a failed current node")
 	}
-	return failureController.FailCurrentNodeScope(ctx, scopeID, workflow.CurrentNodeInterruptionReason(reason), cause)
+	return failureController.FailCurrentNodeScope(ctx, scope.ID(), workflow.CurrentNodeInterruptionReason(reason), cause)
 }

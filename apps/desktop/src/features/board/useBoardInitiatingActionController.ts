@@ -18,7 +18,6 @@ type BoardInitiatingActionControllerOptions = Readonly<{
   ): void;
   startErrorTitle: string;
   moveErrorTitle: string;
-  resumeErrorTitle: string;
   refreshErrorTitle: string;
 }>;
 
@@ -30,7 +29,6 @@ export function useBoardInitiatingActionController({
   onPendingMoveChange,
   startErrorTitle,
   moveErrorTitle,
-  resumeErrorTitle,
   refreshErrorTitle,
 }: BoardInitiatingActionControllerOptions) {
   const execute = useCallback(
@@ -48,21 +46,6 @@ export function useBoardInitiatingActionController({
     execute,
     onApplied,
     onAppliedError,
-    onExecuteError: (action, error) => {
-      onActionError(
-        action.kind === "start"
-          ? "board-start-error"
-          : action.kind === "move"
-            ? "board-move-error"
-            : "board-resume-error",
-        action.kind === "start"
-          ? startErrorTitle
-          : action.kind === "move"
-            ? moveErrorTitle
-            : resumeErrorTitle,
-        error,
-      );
-    },
   });
   const { pending, run, running } = initiatingAction;
   const clearPendingMove = useCallback(

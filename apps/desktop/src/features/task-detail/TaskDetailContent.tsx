@@ -3,19 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
-import {
-  useAppNavigation,
-  useAppServices,
-  useConnectionSnapshot,
-  useSidebar,
-  useStatusController,
-} from "@/app-facade";
-import {
-  TaskInitiatingActionDialogs,
-  executeTaskInitiatingAction,
-  type TaskInitiatingActionDialogResult,
-  useTaskInitiatingActionController,
-} from "@/shared/execution-target";
+import { useAppNavigation, useConnectionSnapshot, useSidebar, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
 import {
   initialDescriptionPresentationState,
@@ -38,21 +26,7 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
-type TaskDetailContentProps = Readonly<{
-  activity: ReturnType<typeof useTaskActivity>;
-  attention: ReturnType<typeof useTaskAttention>;
-  comments: ReturnType<typeof useTaskComments>;
-  detail: TaskDetail;
-  initialFocus?: TaskDetailInitialFocus | undefined;
-  onMutated?: (() => void) | undefined;
-  openLink: (url: string) => void;
-}>;
-
-export function TaskDetailContent(props: TaskDetailContentProps) {
-  return <TaskDetailContentState key={props.detail.id} {...props} />;
-}
-
-function TaskDetailContentState({
+export function TaskDetailContent({
   activity,
   attention,
   comments,
@@ -60,10 +34,17 @@ function TaskDetailContentState({
   initialFocus,
   onMutated,
   openLink,
-}: TaskDetailContentProps) {
+}: Readonly<{
+  activity: ReturnType<typeof useTaskActivity>;
+  attention: ReturnType<typeof useTaskAttention>;
+  comments: ReturnType<typeof useTaskComments>;
+  detail: TaskDetail;
+  initialFocus?: TaskDetailInitialFocus | undefined;
+  onMutated?: (() => void) | undefined;
+  openLink: (url: string) => void;
+}>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
-  const { api } = useAppServices();
   const navigation = useAppNavigation();
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const serverDraft = taskDraft(detail);
@@ -81,16 +62,31 @@ function TaskDetailContentState({
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
+  // When the surface switches to a different task, drop the previous task's
+  // in-progress comment edit, new-comment draft, and question selections so they
+  // don't bleed into the newly loaded task. Reset during render (the React
+  // "adjust state on prop change" pattern) rather than in an effect. The
+  // title/body draft is reconciled separately below via reconcileDraftState.
+  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
+  if (loadedTaskID !== detail.id) {
+    setLoadedTaskID(detail.id);
+    setEditingComment(null);
+    setNewCommentBody("");
+    setDescriptionPresentation(initialDescriptionPresentationState);
+    setQuestionSelections(new Map());
+  }
   const update = useUpdateTask(detail.id, detail.projectID);
   const reportActionError = useCallback(
-    (action: "dependency_remove" | "interrupt", error: unknown) => {
+    (action: "dependency_remove" | "interrupt" | "resume", error: unknown) => {
       const notice =
         action === "interrupt"
           ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
-          : {
-              id: "task-dependency-remove-error",
-              title: t("task.dependenciesRemoveFailed"),
-            };
+          : action === "resume"
+            ? { id: "task-resume-error", title: t("board.resumeFailed") }
+            : {
+                id: "task-dependency-remove-error",
+                title: t("task.dependenciesRemoveFailed"),
+              };
       push({
         ...notice,
         body: errorMessage(error),
@@ -103,21 +99,6 @@ function TaskDetailContentState({
   const mutations = useTaskMutations(detail.id, detail.projectID, {
     onActionError: reportActionError,
     onChanged: onMutated,
-  });
-  const resumeContinuation = useTaskInitiatingActionController({
-    execute: async (action, selection) => executeTaskInitiatingAction(api, action, selection),
-    onApplied: async () => {
-      onMutated?.();
-    },
-    onAppliedError: (error) => {
-      push({
-        id: "task-resume-error",
-        title: t("board.resumeFailed"),
-        body: errorMessage(error),
-        durationMs: Infinity,
-        tone: "danger",
-      });
-    },
   });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
@@ -144,82 +125,69 @@ function TaskDetailContentState({
   }
 
   return (
-    <>
-      <TaskDetailList
-        activity={activity}
-        attention={attention}
-        comments={comments}
-        detail={detail}
-        disabled={connection.phase !== "connected"}
-        draft={draft}
-        descriptionPresentation={descriptionPresentation}
-        editingComment={editingComment}
-        initialFocus={initialFocus}
-        mutations={mutations}
-        newCommentBody={newCommentBody}
-        onDraftChange={(nextDraft) => {
-          setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
-        }}
-        onDescriptionPresentationChange={setDescriptionPresentation}
-        onAddDependency={(direction) => {
-          const destination = {
-            boardQueryWorkflowID: detail.workflowID,
-            initialSourceWorkspaceID: detail.sourceWorkspace.id,
-            kind: "newTask" as const,
-            mode: "overlay" as const,
-            pendingRelationship: {
-              originTaskID: detail.id,
-              newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
-            },
-            projectID: detail.projectID,
-            workflowID: detail.workflowID,
-          };
-          if (activeDestination?.kind === "taskDetail") {
-            replaceSidebar(destination);
-          } else {
-            void openSidebar(destination);
-          }
-        }}
-        onRemoveDependency={(pair) => {
-          mutations.removeDependency.mutate(pair);
-        }}
-        onSelectDependencyTask={(taskID) => {
-          if (activeDestination?.kind === "taskDetail") {
-            replaceSidebar({
-              kind: "taskDetail",
-              taskID,
-              ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
-              ...(activeDestination.onMutated === undefined
-                ? {}
-                : { onMutated: activeDestination.onMutated }),
-            });
-            return;
-          }
-          void navigation.replaceTask(taskID);
-        }}
-        onNewCommentBodyChange={setNewCommentBody}
-        onEditingCommentChange={setEditingComment}
-        onQuestionSelectionChange={(askID, selection) => {
-          setQuestionSelections((previous) => new Map(previous).set(askID, selection));
-        }}
-        onSaveDraft={saveDraft}
-        openLink={openLink}
-        questionSelections={questionSelections}
-        resumeContinuation={resumeContinuation}
-        selectedTab={selectedTab}
-        setTab={setSelectedTab}
-        updateError={update.error}
-        updatePending={update.isPending}
-      />
-      <TaskInitiatingActionDialogs
-        continuation={resumeContinuation}
-        onResult={(result: TaskInitiatingActionDialogResult) => {
-          if (result.kind === "continue") {
-            void resumeContinuation.run(result.action, result.selection);
-          }
-        }}
-      />
-    </>
+    <TaskDetailList
+      activity={activity}
+      attention={attention}
+      comments={comments}
+      detail={detail}
+      disabled={connection.phase !== "connected"}
+      draft={draft}
+      descriptionPresentation={descriptionPresentation}
+      editingComment={editingComment}
+      initialFocus={initialFocus}
+      mutations={mutations}
+      newCommentBody={newCommentBody}
+      onDraftChange={(nextDraft) => {
+        setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+      }}
+      onDescriptionPresentationChange={setDescriptionPresentation}
+      onAddDependency={(direction) => {
+        const destination = {
+          boardQueryWorkflowID: detail.workflowID,
+          initialSourceWorkspaceID: detail.sourceWorkspace.id,
+          kind: "newTask" as const,
+          mode: "overlay" as const,
+          pendingRelationship: {
+            originTaskID: detail.id,
+            newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
+          },
+          projectID: detail.projectID,
+          workflowID: detail.workflowID,
+        };
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar(destination);
+        } else {
+          void openSidebar(destination);
+        }
+      }}
+      onRemoveDependency={(pair) => {
+        mutations.removeDependency.mutate(pair);
+      }}
+      onSelectDependencyTask={(taskID) => {
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar({
+            kind: "taskDetail",
+            taskID,
+            ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
+            ...(activeDestination.onMutated === undefined ? {} : { onMutated: activeDestination.onMutated }),
+          });
+          return;
+        }
+        void navigation.replaceTask(taskID);
+      }}
+      onNewCommentBodyChange={setNewCommentBody}
+      onEditingCommentChange={setEditingComment}
+      onQuestionSelectionChange={(askID, selection) => {
+        setQuestionSelections((previous) => new Map(previous).set(askID, selection));
+      }}
+      onSaveDraft={saveDraft}
+      openLink={openLink}
+      questionSelections={questionSelections}
+      selectedTab={selectedTab}
+      setTab={setSelectedTab}
+      updateError={update.error}
+      updatePending={update.isPending}
+    />
   );
 }
 

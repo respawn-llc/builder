@@ -135,12 +135,6 @@ export type TaskStartInput = Readonly<{
   proceedDespiteDependencies?: boolean | undefined;
 }>;
 
-export type TaskResumeInput = Readonly<{
-  taskID: string;
-  setupOperationID?: SetupOperationID | undefined;
-  executionTarget?: WorkflowExecutionTargetSelection | undefined;
-}>;
-
 export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
   clientRequestID: string;

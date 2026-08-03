@@ -42,7 +42,6 @@ import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
-import { useBoardResumeAction } from "./useBoardResumeAction";
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
@@ -282,17 +281,14 @@ function BoardContent({
     onPendingMoveChange: setPendingCardMove,
     refreshErrorTitle: t("board.loadFailed"),
     startErrorTitle: t("board.startFailed"),
-    resumeErrorTitle: t("board.resumeFailed"),
   });
-  const resumeAction = useBoardResumeAction(initiatingAction);
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,
     onPreviewError: reportMoveError,
     runAction: runCardAction,
   });
-  const actionsDisabled =
-    initiatingActionsDisabled || manualMove.actionsDisabled || resumeAction.actionsDisabled;
+  const actionsDisabled = initiatingActionsDisabled || manualMove.actionsDisabled;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -410,7 +406,7 @@ function BoardContent({
   }
 
   function resumeTask(taskID: string): void {
-    resumeAction.execute(taskID);
+    void actions.resume.execute(taskID).catch(reportResumeError);
   }
 
   function deleteTask(taskID: string): void {
@@ -433,6 +429,10 @@ function BoardContent({
 
   function reportInterruptError(error: unknown): void {
     reportActionError("board-interrupt-error", t("board.interruptFailed"), error);
+  }
+
+  function reportResumeError(error: unknown): void {
+    reportActionError("board-resume-error", t("board.resumeFailed"), error);
   }
 
   function reportDeleteError(error: unknown): void {
@@ -479,14 +479,6 @@ function BoardContent({
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {
       openTaskDependencies(result.taskID);
-      return;
-    }
-    if (result.action.kind === "resume") {
-      if (result.selection === undefined) {
-        resumeAction.execute(result.action.taskID);
-      } else {
-        resumeAction.continueExecution(result.action, result.selection);
-      }
       return;
     }
     const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
@@ -593,7 +585,7 @@ function BoardContent({
             pendingCardMove={pendingCardMove}
             onResumeTask={resumeTask}
             pendingInterruptTaskIDs={actions.interrupt.pendingTaskIDs}
-            pendingResumeTaskIDs={resumeAction.pendingTaskIDs}
+            pendingResumeTaskIDs={actions.resume.pendingTaskIDs}
             scrollportRef={scrollportRef}
           />
         </div>

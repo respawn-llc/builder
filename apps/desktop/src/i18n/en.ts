@@ -260,8 +260,6 @@ export const englishResources = {
         "This workflow asks you to choose an execution target the first time automation runs.",
       configuredTargetUnavailable:
         "The workflow's configured target is unavailable. Choose a task-local target to continue.",
-      unlockedPreparationFailed:
-        "The previous execution preparation failed. Choose a task-local target to retry the interrupted work.",
       mode_none: "Source workspace",
       mode_noneHelp: "Run in the task's source workspace without a managed worktree.",
       mode_head: "Current source HEAD",

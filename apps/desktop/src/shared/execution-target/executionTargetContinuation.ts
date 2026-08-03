@@ -2,7 +2,6 @@ import type {
   ApiService,
   TaskMoveInput,
   TaskMoveResponse,
-  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
@@ -20,11 +19,6 @@ export type TaskInitiatingAction =
   | Readonly<{
       kind: "move";
       input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
-    }>
-  | Readonly<{
-      kind: "resume";
-      taskID: string;
-      setupOperationID: SetupOperationID;
     }>;
 
 export type TaskInitiatingActionResult =
@@ -37,11 +31,6 @@ export type TaskInitiatingActionResult =
       kind: "move";
       action: Extract<TaskInitiatingAction, { kind: "move" }>;
       response: TaskMoveResponse;
-    }>
-  | Readonly<{
-      kind: "resume";
-      action: Extract<TaskInitiatingAction, { kind: "resume" }>;
-      response: TaskResumeResponse;
     }>;
 
 export type ExecutionTargetSelectionDraft = Readonly<{
@@ -73,19 +62,9 @@ export function moveTaskInitiatingAction(
   };
 }
 
-export function resumeTaskInitiatingAction(
-  taskID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-): Extract<TaskInitiatingAction, { kind: "resume" }> {
-  return { kind: "resume", taskID, setupOperationID };
-}
-
 export function proceedWithTaskInitiatingAction(action: TaskInitiatingAction): TaskInitiatingAction {
   if (action.kind === "start") {
     return { ...action, proceedDespiteDependencies: true };
-  }
-  if (action.kind === "resume") {
-    return action;
   }
   return {
     ...action,
@@ -141,19 +120,9 @@ export async function executeTaskInitiatingAction(
           executionTarget: selection,
         }),
       };
-    case "resume":
-      return {
-        kind: action.kind,
-        action,
-        response: await api.resumeTask({
-          taskID: action.taskID,
-          setupOperationID: action.setupOperationID,
-          executionTarget: selection,
-        }),
-      };
   }
 }
 
 export function taskInitiatingActionTaskID(action: TaskInitiatingAction): string {
-  return action.kind === "move" ? action.input.taskID : action.taskID;
+  return action.kind === "start" ? action.taskID : action.input.taskID;
 }

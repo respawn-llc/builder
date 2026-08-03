@@ -10,7 +10,6 @@ import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInp
 import {
   executionTargetSelectionFromDraft,
   proceedWithTaskInitiatingAction,
-  taskInitiatingActionTaskID,
   type TaskInitiatingAction,
 } from "./executionTargetContinuation";
 import type {
@@ -62,7 +61,7 @@ function DependencyConfirmationDialog({
   pending: Extract<PendingTaskInitiatingAction, { kind: "dependency_confirmation" }>;
 }>) {
   const { t } = useTranslation();
-  const taskID = taskInitiatingActionTaskID(pending.action);
+  const taskID = pending.action.kind === "start" ? pending.action.taskID : pending.action.input.taskID;
   return (
     <Dialog
       closeLabel={t("app.close")}
@@ -166,15 +165,8 @@ function ExecutionTargetForm({
       <ExecutionTargetRequirementMessage requirement={pending.requirement} />
       <ExecutionTargetChoices continuation={continuation} pending={pending} />
       <div className="flex justify-end gap-[var(--space-2)]">
-        <Button data-testid="execution-target-cancel" onClick={continuation.close}>
-          {t("app.cancel")}
-        </Button>
-        <Button
-          data-testid="execution-target-submit"
-          disabled={selectedTarget === null}
-          type="submit"
-          variant="primary"
-        >
+        <Button onClick={continuation.close}>{t("app.cancel")}</Button>
+        <Button data-testid="execution-target-submit" disabled={!canSubmit} type="submit" variant="primary">
           {t("executionTargetContinuation.continue")}
         </Button>
       </div>
@@ -238,13 +230,6 @@ function ExecutionTargetRequirementMessage({
     return (
       <p className="m-0 text-[var(--color-muted)]">
         {t("executionTargetContinuation.policyRequiresSelection")}
-      </p>
-    );
-  }
-  if (requirement.reason === "unlocked_preparation_failed") {
-    return (
-      <p className="m-0 text-[var(--color-muted)]">
-        {t("executionTargetContinuation.unlockedPreparationFailed")}
       </p>
     );
   }

@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
-import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
@@ -27,14 +26,16 @@ export function ApprovalBox({
   const snapshot = attention.approvalSnapshot;
   const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void mutations.approveApproval.mutateAsync(attention.approvalID).catch((error: unknown) => {
-      showStatusToast({
-        body: errorMessage(error),
-        id: "task-approval-failed",
-        title: t("task.approvalFailed"),
-        tone: "danger",
+    void mutations.approveApproval
+      .mutateAsync(attention.approvalID)
+      .catch((error: unknown) => {
+        showStatusToast({
+          body: errorMessage(error),
+          id: "task-approval-failed",
+          title: t("task.approvalFailed"),
+          tone: "danger",
+        });
       });
-    });
   }
   return (
     <>
@@ -61,7 +62,10 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={disabled || mutations.approveApproval.isPending}
+              disabled={
+                disabled ||
+                mutations.approveApproval.isPending
+              }
               onClick={approve}
               variant="primary"
             >
@@ -86,11 +90,11 @@ export function ApprovalBox({
 export function InterruptedCurrentNodeBox({
   attention,
   disabled,
-  resumeContinuation,
+  mutations,
 }: Readonly<{
   attention: InterruptedCurrentNodeAttentionItem;
   disabled: boolean;
-  resumeContinuation: TaskInitiatingActionController;
+  mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
@@ -134,10 +138,9 @@ export function InterruptedCurrentNodeBox({
         </Button>
       ) : null}
       <Button
-        data-testid="task-detail-attention-resume"
-        disabled={disabled || resumeContinuation.running}
+        disabled={disabled || mutations.resume.isPending}
         onClick={() => {
-          void resumeContinuation.run(resumeTaskInitiatingAction(attention.taskID));
+          mutations.resume.mutate();
         }}
         variant="primary"
       >

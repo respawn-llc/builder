@@ -26,9 +26,7 @@ import (
 	"core/server/workflowattention"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
-	"core/server/workflowscript"
 	"core/server/workflowstore"
-	"core/server/worktree"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -42,7 +40,6 @@ const (
 )
 
 type RuntimeStore interface {
-	executionTargetStore
 	ResolveCurrentNodeStartContext(context.Context, workflow.CurrentNodeReference) (workflowstore.CurrentNodeStartContext, error)
 	BindSessionToCurrentNode(context.Context, workflowstore.CurrentNodeSessionBindingRequest) (workflowstore.TaskSessionAssociation, error)
 	ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
@@ -65,7 +62,6 @@ type Starter struct {
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	mutationPermit       *workflowexecution.MutationPermit
 	taskAwarenessSource  workflowruntime.TaskAwarenessSource
-	executionTarget      workflowexecution.LaunchTargetPreparer
 	closed               atomic.Bool
 }
 
@@ -74,8 +70,6 @@ type StarterOptions struct {
 	RuntimeAuthority     *sessionruntime.Authority
 	MutationPermit       *workflowexecution.MutationPermit
 	TaskDependencies     TaskDependencyCounter
-	WorktreeService      *worktree.Service
-	GitInspector         *worktree.GitInspector
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
@@ -100,218 +94,37 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		mutationPermit:       opts.MutationPermit,
 		taskAwarenessSource:  taskAwarenessSource,
-		executionTarget: newExecutionTargetPreparer(
-			store,
-			opts.MutationPermit,
-			opts.WorktreeService,
-			opts.GitInspector,
-		),
 	}, nil
 }
 
-func (s *Starter) StartCurrentNodeWithPreparation(
+func (s *Starter) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	preparation workflowexecution.LaunchPreparation,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
-) (err error) {
-	defer func() {
-		err = currentNodeStartFailure(err)
-	}()
+) error {
 	if s.closed.Load() {
 		return errors.New("workflow runtime starter closed")
 	}
 	if !lease.Workflow().CurrentNode.Equal(reference) {
 		return errors.New("workflow execution lease does not match current node")
 	}
-	if err := preparation.Validate(); err != nil {
-		return err
-	}
-	var preparedRoot *workflowstore.ExecutionRoot
-	if !preparation.IsEstablishedRoot() {
-		if s.executionTarget == nil {
-			return errors.New("workflow execution target preparer is required")
-		}
-		var root workflowstore.ExecutionRoot
-		var err error
-		if coordinator := preparation.Coordinator(); coordinator != nil {
-			root, err = coordinator.Prepare(ctx, reference, preparation, s.executionTarget)
-		} else {
-			root, err = s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
-		}
-		if err != nil {
-			if _, unlocked := preparation.EstablishUnlockedNone(); unlocked {
-				return &workflowexecution.ExecutionTargetPreparationFailure{
-					Cause:           err,
-					Selection:       workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-					SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
-				}
-			}
-			if unlocked, ok := preparation.EstablishUnlockedManaged(); ok {
-				return &workflowexecution.ExecutionTargetPreparationFailure{
-					Cause:           err,
-					Selection:       unlocked.Selection,
-					SelectionSource: unlocked.SelectionSource,
-				}
-			}
-			return err
-		}
-		preparedRoot = &root
-	}
 	input, err := s.store.ResolveCurrentNodeStartContext(ctx, reference)
 	if err != nil {
 		return err
 	}
-	if preparedRoot != nil {
-		input.ExecutionRoot = preparedRoot
-	}
-	var startErr error
 	switch input.Node.Kind {
 	case workflow.NodeKindScript:
-		startErr = s.startCurrentNodeScript(ctx, input, lease, controller)
+		return s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
 		if err := s.validateRole(input.Node.SubagentRole); err != nil {
-			startErr = err
-			break
+			return err
 		}
-		startErr = s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
 	default:
-		startErr = fmt.Errorf("current node %v is not executable", reference)
-	}
-	return currentNodeStartFailure(startErr)
-}
-
-func currentNodeStartFailure(cause error) error {
-	if cause == nil {
-		return nil
-	}
-	var existing *workflowexecution.CurrentNodeStartFailure
-	if errors.As(cause, &existing) {
-		return cause
-	}
-	reason := workflow.CurrentNodeInterruptionReason(workflow.CurrentNodeInterruptionCodeRuntimeStartFailed)
-	detail := workflow.CurrentNodeInterruptionDetail{
-		Code:   string(reason),
-		Fields: map[string]string{"error": cause.Error()},
-	}
-	var targetPreparation *workflowexecution.ExecutionTargetPreparationFailure
-	if errors.As(cause, &targetPreparation) {
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetPreparationFailed,
-			Fields: map[string]string{"error": targetPreparation.Error()},
-		}
-	}
-	var validation workflowscript.ValidationError
-	if errors.As(cause, &validation) {
-		reason = workflow.CurrentNodeInterruptionReason(workflowscript.ReasonValidationFailed)
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: workflowscript.ReasonValidationFailed,
-			Fields: map[string]string{
-				"code":          validation.Diagnostic.Code,
-				"raw_path":      validation.Diagnostic.RawPath,
-				"resolved_path": validation.Diagnostic.ResolvedPath,
-			},
-		}
-	}
-	var target *serverapi.WorkflowExecutionTargetResolutionError
-	if errors.As(cause, &target) {
-		requestedRef := target.RequestedRef
-		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
-			Cause:           serverapi.WorkflowExecutionTargetUnavailableCause(target.Code),
-			SelectionMode:   workflow.ExecutionTargetModeCustomRef,
-			RequestedRef:    &requestedRef,
-			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
-		}).Fields()
-		if fieldsErr != nil {
-			return errors.Join(cause, fieldsErr)
-		}
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: fields,
-		}
-	}
-	var revisionResolution *worktree.GitRevisionResolutionError
-	if errors.As(cause, &revisionResolution) {
-		requestedRef := revisionResolution.RequestedRef
-		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
-			Cause:           serverapi.WorkflowExecutionTargetUnavailableCause(revisionResolution.Kind),
-			SelectionMode:   workflow.ExecutionTargetModeCustomRef,
-			RequestedRef:    &requestedRef,
-			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
-		}).Fields()
-		if fieldsErr != nil {
-			return errors.Join(cause, fieldsErr)
-		}
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: fields,
-		}
-	}
-	var defaultBranchResolution *worktree.GitDefaultBranchResolutionError
-	if errors.As(cause, &defaultBranchResolution) {
-		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
-			Cause:           defaultBranchResolutionCode(defaultBranchResolution.Kind),
-			SelectionMode:   workflow.ExecutionTargetModeDefaultBranch,
-			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
-		}).Fields()
-		if fieldsErr != nil {
-			return errors.Join(cause, fieldsErr)
-		}
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: fields,
-		}
-	}
-	var locked *worktree.LockedTaskWorktreeError
-	if errors.As(cause, &locked) && targetPreparation == nil {
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   "workflow_locked_execution_target_unavailable",
-			Fields: map[string]string{"cause": string(locked.Cause)},
-		}
-	}
-	var retained *serverapi.WorktreeSetupRetainedError
-	if errors.As(cause, &retained) {
-		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   "workflow_worktree_setup_failed",
-			Fields: map[string]string{"diagnostic": retained.Diagnostic},
-		}
-	}
-	if targetPreparation != nil {
-		var resolutionCause serverapi.WorkflowExecutionTargetUnavailableCause
-		if metadata, metadataErr := workflowexecution.ExecutionTargetResolutionFailureMetadataFromFields(detail.Fields); metadataErr == nil {
-			resolutionCause = metadata.Cause
-		}
-		if resolutionCause != "" {
-			fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
-				Cause:           resolutionCause,
-				SelectionMode:   targetPreparation.Selection.Mode,
-				RequestedRef:    targetPreparation.Selection.CustomRef,
-				SelectionSource: targetPreparation.SelectionSource,
-			}).Fields()
-			if fieldsErr != nil {
-				return errors.Join(cause, fieldsErr)
-			}
-			detail.Fields = fields
-		}
-	}
-	return &workflowexecution.CurrentNodeStartFailure{
-		Cause:  cause,
-		Reason: reason,
-		Detail: detail,
-	}
-}
-
-func defaultBranchResolutionCode(kind worktree.GitDefaultBranchResolutionErrorKind) serverapi.WorkflowExecutionTargetUnavailableCause {
-	switch kind {
-	case worktree.GitDefaultBranchResolutionErrorMissing:
-		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing
-	case worktree.GitDefaultBranchResolutionErrorAmbiguous:
-		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous
-	default:
-		return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure
+		return fmt.Errorf("current node %v is not executable", reference)
 	}
 }
 
@@ -592,7 +405,7 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
 	if assignmentSteer == nil {
-		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, input.CurrentNode.SessionID != nil)
+		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
 	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
