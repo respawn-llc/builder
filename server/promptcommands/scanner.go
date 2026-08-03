@@ -66,11 +66,19 @@ func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, erro
 			if _, builtin := runtimeinput.BuiltinPromptCommandForName(*name); builtin {
 				continue
 			}
+			path := filepath.Join(dir, entry.Name())
+			regular, err := regularPromptFile(path)
+			if err != nil {
+				return &candidateTraversalError{dir: dir, cause: fmt.Errorf("stat prompt file %s: %w", path, err)}
+			}
+			if !regular {
+				continue
+			}
 			command := name.String()
 			if _, ok := seen[command]; ok {
 				continue
 			}
-			decision, err := fn(candidateEntry{name: command, path: filepath.Join(dir, entry.Name())})
+			decision, err := fn(candidateEntry{name: command, path: path})
 			if err != nil {
 				return err
 			}
@@ -83,6 +91,17 @@ func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, erro
 		}
 	}
 	return nil
+}
+
+func regularPromptFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
 }
 
 func (s Service) scan() ([]CatalogEntry, error) {

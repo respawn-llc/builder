@@ -205,6 +205,31 @@ func TestCatalogSkipsBrokenBuiltInShadowFiles(t *testing.T) {
 	}
 }
 
+func TestCatalogSkipsMarkdownSymlinkToDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".kent", "prompts")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "directory")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "directory.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	entries, err := New(t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name == "prompt:directory" {
+			t.Fatalf("catalog included directory symlink: %+v", entries)
+		}
+	}
+}
+
 func TestNilErrorReceiverFailsExplicitly(t *testing.T) {
 	var commandErr *Error
 	defer func() {
