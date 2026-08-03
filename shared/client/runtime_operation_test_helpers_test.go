@@ -3,6 +3,7 @@ package client
 import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -12,7 +13,7 @@ func runtimeSubmitUserTurnRequestForTest(sessionID, text string) serverapi.Runti
 	return serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: submitID.String(),
 		SessionID:       sessionID,
-		Input:           serverapi.NewRuntimeTextInput(text),
+		Input:           runtimeinput.Text(text),
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
 			ClientRequestID: submitID,

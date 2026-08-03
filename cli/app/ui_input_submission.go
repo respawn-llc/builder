@@ -239,12 +239,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		}
 		c.restoreQueuedMessagesIntoInput()
 		c.notifyTurnQueueDrainedIfIdle()
-		if notFound, ok := promptCommandNotFound(msg.err); ok && notFound.Command != nil {
-			if refreshCmd := m.startPromptCatalogRefresh(*notFound.Command); refreshCmd != nil {
-				m.layout().syncViewport()
-				return m, tea.Batch(restoreInjectedCmd, refreshCmd)
-			}
-		}
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
@@ -258,6 +252,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
 		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		if notFound, ok := promptCommandNotFound(msg.err); ok && notFound.Command != nil {
+			if refreshCmd := m.startPromptCatalogRefresh(*notFound.Command); refreshCmd != nil {
+				return m, tea.Batch(restoreInjectedCmd, statusCmd, refreshCmd)
+			}
+		}
 		return m, tea.Batch(restoreInjectedCmd, statusCmd)
 	}
 

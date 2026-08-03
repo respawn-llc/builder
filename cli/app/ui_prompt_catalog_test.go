@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/serverapi"
 )
 
@@ -79,6 +80,7 @@ func TestPromptCatalogRefreshFailureKeepsFilteredSnapshot(t *testing.T) {
 }
 
 func TestMissingPromptCommandSubmissionRefreshesCatalog(t *testing.T) {
+	disableTransientStatusClearForTest(t)
 	command := "prompt:old"
 	service := &promptCatalogTestService{response: serverapi.PromptCommandCatalogResponse{
 		Commands: []serverapi.PromptCommandCatalogEntry{{Name: "prompt:new", Preview: "new"}},
@@ -106,6 +108,9 @@ func TestMissingPromptCommandSubmissionRefreshesCatalog(t *testing.T) {
 
 	if service.calls != 1 {
 		t.Fatalf("catalog calls = %d, want one", service.calls)
+	}
+	if updated.transientStatus != runtimeattach.FormatSubmissionError(commandError) {
+		t.Fatalf("missing-command status = %q, want %q", updated.transientStatus, runtimeattach.FormatSubmissionError(commandError))
 	}
 	if _, ok := updated.commandRegistry.Command("/prompt:new"); !ok {
 		t.Fatal("missing-command submission did not install refreshed command")

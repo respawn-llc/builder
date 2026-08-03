@@ -7,14 +7,15 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 func TestRuntimeUserTurnInputIsAValidatedDiscriminatedUnion(t *testing.T) {
-	text := NewRuntimeTextInput("hello")
+	text := runtimeinput.Text("hello")
 	if err := text.Validate(); err != nil {
 		t.Fatalf("text Validate: %v", err)
 	}
-	prompt := NewRuntimePromptCommandInput("prompt:review", "src")
+	prompt := runtimeinput.Command("prompt:review", "src")
 	if err := prompt.Validate(); err != nil {
 		t.Fatalf("prompt Validate: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestRuntimeSubmitUserTurnRequestUsesInputAndRejectsMissingInput(t *testing.
 	req := RuntimeSubmitUserTurnRequest{
 		ClientRequestID: "request-1",
 		SessionID:       "session-1",
-		Input:           NewRuntimeTextInput("hello"),
+		Input:           runtimeinput.Text("hello"),
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),

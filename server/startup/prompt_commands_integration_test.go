@@ -18,6 +18,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -174,7 +175,7 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: submitID.String(),
 		SessionID:       plan.Plan.SessionID,
-		Input:           serverapi.NewRuntimePromptCommandInput("prompt:remote_demo", "hello world"),
+		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindSubmit,
 			ClientRequestID: submitID,

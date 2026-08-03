@@ -101,18 +101,6 @@ const (
 type RuntimePromptCommandInput = runtimeinput.PromptCommand
 type RuntimeUserTurnInput = runtimeinput.Input
 
-func NewRuntimeTextInput(text string) RuntimeUserTurnInput {
-	return runtimeinput.Text(text)
-}
-
-func NewRuntimePromptCommandInput(name, arguments string) RuntimeUserTurnInput {
-	return runtimeinput.Command(name, arguments)
-}
-
-func NewRuntimeBuiltinPromptCommandInput(command runtimeinput.BuiltinPromptCommand, arguments string) RuntimeUserTurnInput {
-	return runtimeinput.BuiltinCommand(command, arguments)
-}
-
 type RuntimeSubmitUserTurnResponse struct {
 	Message     string `json:"message"`
 	Compacted   bool   `json:"compacted,omitempty"`
