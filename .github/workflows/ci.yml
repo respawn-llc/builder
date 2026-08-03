@@ -175,11 +175,15 @@ jobs:
           VERSION: 0.0.0
         run: |
           mkdir -p dist staging
-          GOOS=windows GOARCH=amd64 KENT_VERSION="$VERSION" \
-            bash scripts/build.sh --output "staging/kent_${VERSION}_windows_amd64.exe"
-          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/kent_${VERSION}_windows_amd64.exe' -DestinationPath 'dist/kent_${VERSION}_windows_amd64.zip' -Force"
-          checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/kent_${VERSION}_windows_amd64.zip').Hash.ToLowerInvariant()")
-          printf '%s  %s\n' "$checksum" "kent_${VERSION}_windows_amd64.zip" > dist/checksums.txt
+          : > dist/checksums.txt
+          for arch in amd64 arm64; do
+            asset="kent_${VERSION}_windows_${arch}"
+            GOOS=windows GOARCH="$arch" KENT_VERSION="$VERSION" \
+              bash scripts/build.sh --output "staging/${asset}.exe"
+            powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/${asset}.exe' -DestinationPath 'dist/${asset}.zip' -Force"
+            checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/${asset}.zip').Hash.ToLowerInvariant()")
+            printf '%s  %s\n' "$checksum" "${asset}.zip" >> dist/checksums.txt
+          done
 
       - name: Smoke test installer
         env:

@@ -310,6 +310,11 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		"",
 		"[subagents.fast]",
 		"provider_override = \"openai\"",
+		"",
+		"[subagents.fast.provider_capabilities]",
+		"provider_id = \"openai\"",
+		"supports_responses_api = true",
+		"is_openai_first_party = true",
 	}, "\n")
 
 	requestBodies := make(chan map[string]any, 1)
