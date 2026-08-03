@@ -172,8 +172,12 @@ describe("LabelChooser", () => {
     await user.click(screen.getByRole("button", { name: "Open label chooser" }));
 
     expect(screen.getByRole("button", { name: "No labels" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reorder Alpha" })).toBeInTheDocument();
+    const reorderAlpha = screen.getByRole("button", { name: "Reorder Alpha" });
+    expect(reorderAlpha).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reorder Beta" })).toBeInTheDocument();
+    expect(reorderAlpha.compareDocumentPosition(screen.getByRole("button", { name: /^Alpha/ }))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
 
     await user.type(screen.getByRole("textbox", { name: "Search or create labels" }), "Beta");
     expect(screen.queryByRole("button", { name: "Reorder Beta" })).not.toBeInTheDocument();
@@ -454,6 +458,7 @@ describe("ReorderableList", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
+    expect(screen.getAllByTestId("row-first")).toHaveLength(2);
     fireEvent.pointerUp(handle, { isPrimary: true, pointerId: 1, pointerType: "mouse" });
 
     await waitFor(() => {
@@ -475,7 +480,7 @@ describe("ReorderableList", () => {
     fireEvent.keyDown(handle, { code: "Escape", key: "Escape" });
 
     expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.getAllByText("First")).toHaveLength(1);
     expect(screen.getByText("Second")).toBeInTheDocument();
   });
 

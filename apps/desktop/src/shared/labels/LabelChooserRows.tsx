@@ -185,23 +185,24 @@ export function LabelResultRow({
         </div>
       }
       highlighted={highlighted}
-      name={label.name}
-      onSelect={onSelect}
-      actions={
+      leadingActions={
         reorder === undefined ? undefined : (
           <Button
             aria-label={t("labels.reorder", { name: label.name })}
+            className="hover:text-[var(--color-on-island)]"
             disabled={catalogMutationPending}
             ref={reorderActivatorRef}
             {...reorderAttributes}
             {...reorderListeners}
             size="icon-sm"
-            variant="ghost"
+            variant="ghost-muted"
           >
             <GripVertical aria-hidden="true" size={15} strokeWidth={1.8} />
           </Button>
         )
       }
+      name={label.name}
+      onSelect={onSelect}
       selection={selection}
     />
   );
@@ -229,16 +230,16 @@ export function UnlabeledResultRow({
 }
 
 function LabelSelectionRow({
-  actions,
   contextualActions,
   highlighted,
+  leadingActions,
   name,
   onSelect,
   selection,
 }: Readonly<{
-  actions?: ReactNode;
   contextualActions?: ReactNode;
   highlighted: boolean;
+  leadingActions?: ReactNode;
   name: string;
   onSelect(): void;
   selection: LabelResultRowSelection;
@@ -265,9 +266,9 @@ function LabelSelectionRow({
         };
   return (
     <ActionableListRow
-      actions={actions}
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
       contextualActions={contextualActions}
+      leadingActions={leadingActions}
       role="listitem"
       selectButtonProps={presentation.selectButtonProps}
       selected={presentation.selected}
