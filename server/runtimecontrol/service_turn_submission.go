@@ -178,11 +178,16 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 			if err != nil {
 				var commandErr *serverapi.PromptCommandError
 				if errors.As(err, &commandErr) &&
-					commandErr.Kind == serverapi.PromptCommandErrorKindCommandNotFound &&
+					(commandErr.Kind == serverapi.PromptCommandErrorKindCommandNotFound ||
+						commandErr.Kind == serverapi.PromptCommandErrorKindCommandRead) &&
 					commandErr.Command != nil {
 					command := *commandErr.Command
+					reason := runtime.QueuedUserMessageFailurePromptCommandRead
+					if commandErr.Kind == serverapi.PromptCommandErrorKindCommandNotFound {
+						reason = runtime.QueuedUserMessageFailurePromptCommandNotFound
+					}
 					return "", &runtime.DeferredUserMessageResolutionError{
-						Reason:        runtime.QueuedUserMessageFailurePromptCommandNotFound,
+						Reason:        reason,
 						PromptCommand: &command,
 						Cause:         err,
 					}

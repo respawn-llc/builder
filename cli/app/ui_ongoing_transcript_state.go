@@ -273,10 +273,15 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 		return cmd
 	}
 	if state.FailureReason != nil &&
-		*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound &&
+		(*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound ||
+			*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandRead) &&
 		state.PromptCommand != nil {
+		kind := serverapi.PromptCommandErrorKindCommandRead
+		if *state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound {
+			kind = serverapi.PromptCommandErrorKindCommandNotFound
+		}
 		commandErr := &serverapi.PromptCommandError{
-			Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+			Kind:    kind,
 			Command: state.PromptCommand,
 		}
 		statusCmd := m.sendTransientStatusWithNoticeID(
@@ -286,7 +291,11 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 			uiStatusNoticeReplace,
 			"",
 		)
-		return tea.Batch(cmd, statusCmd, m.startPromptCatalogRefresh(*state.PromptCommand))
+		refreshCmd := tea.Cmd(nil)
+		if kind == serverapi.PromptCommandErrorKindCommandNotFound {
+			refreshCmd = m.startPromptCatalogRefresh(*state.PromptCommand)
+		}
+		return tea.Batch(cmd, statusCmd, refreshCmd)
 	}
 	m.inputController().restoreInjectedTextIntoInput(*state.Text)
 	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(

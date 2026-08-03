@@ -326,6 +326,18 @@ func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
 	if state.imports.skipCommands {
 		return skippedImportScreen("commands_import", "Import slash commands?", "slash-command import", state.imports.commandChoices, state.imports.commandErr)
 	}
+	if state.imports.commandErr != nil && !hasImportChoices(state.imports.commandChoices) {
+		optionID, _ := noneChoiceID(state.imports.commandChoices)
+		return onboardingScreen{
+			ID:              "commands_import",
+			Kind:            onboardingScreenChoice,
+			Title:           "Import slash commands?",
+			Body:            "Kent could not inspect importable slash commands.",
+			ErrorText:       state.imports.commandErr.Error(),
+			Options:         []onboardingOption{{ID: optionID, Title: "Do not import"}},
+			DefaultOptionID: optionID,
+		}
+	}
 	options := make([]onboardingOption, 0, len(state.imports.commandChoices))
 	for _, choice := range state.imports.commandChoices {
 		switch choice.Mode {

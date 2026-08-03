@@ -80,6 +80,7 @@ const (
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
 	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 	QueuedUserMessageFailurePromptCommandNotFound      QueuedUserMessageFailureReason = "prompt_command_not_found"
+	QueuedUserMessageFailurePromptCommandRead          QueuedUserMessageFailureReason = "prompt_command_read"
 )
 
 type QueuedUserMessageStatusEvent struct {

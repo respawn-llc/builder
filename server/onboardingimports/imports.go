@@ -1,8 +1,10 @@
 package onboardingimports
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"core/server/skillcatalog"
 	brand "core/shared/config"
@@ -351,14 +354,14 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		contents, err := os.ReadFile(sourcePath)
+		hasContent, err := regularCommandFileHasContent(sourcePath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return nil, err
 		}
-		if strings.TrimSpace(string(contents)) == "" {
+		if !hasContent {
 			continue
 		}
 		name := strings.TrimSuffix(target, filepath.Ext(target))
@@ -366,6 +369,27 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Ref.TargetName < items[j].Ref.TargetName })
 	return items, nil
+}
+
+func regularCommandFileHasContent(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	reader := bufio.NewReader(file)
+	for {
+		r, _, readErr := reader.ReadRune()
+		if readErr == io.EOF {
+			return false, file.Close()
+		}
+		if readErr != nil {
+			_ = file.Close()
+			return false, readErr
+		}
+		if !unicode.IsSpace(r) {
+			return true, file.Close()
+		}
+	}
 }
 
 func generatedSkillItems(configRoot string, policy brand.SkillPolicy) ([]Item, error) {
