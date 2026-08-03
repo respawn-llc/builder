@@ -99,6 +99,8 @@ func (m *uiModel) applyTranscriptHydration(
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
+	m.processList.entries = nil
+	m.processList.selection = 0
 	for _, background := range hydration.BackgroundActivities {
 		m.applyTranscriptBackgroundActivity(background)
 	}

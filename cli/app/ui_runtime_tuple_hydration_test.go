@@ -186,6 +186,42 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	}
 }
 
+func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {
+	runtimeClient := newTestSessionRuntimeClient(
+		&countingSessionViewClient{},
+		newUnavailableRuntimeControlService(),
+	)
+	current := runtimeTupleTestView(10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	runtimeClient.storeMainView(current)
+	m := newProjectedTestUIModel(runtimeClient)
+	m.processList.entries = []clientui.BackgroundProcess{{ID: "completed-while-disconnected", Running: true, Backgrounded: true}}
+	m.ongoingTranscript = newOngoingTranscriptController(
+		&ongoingSurfaceSpy{},
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+	payload := hydration.Payload().(clientui.TranscriptHydration)
+	payload.BackgroundActivities = []clientui.TranscriptBackgroundActivity{{
+		ActivityID:  runtimeids.NewBackgroundActivityID(),
+		ProcessID:   "still-running",
+		OwnerRunID:  ongoingTestRunID(),
+		OwnerStepID: ongoingTestStepID(),
+		Lifecycle:   clientui.BackgroundLifecycleBackgrounded,
+		Command:     "sleep 10",
+		Workdir:     "/workspace",
+	}}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
+
+	if _, _, err := m.ongoingTranscript.Accept(hydration); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if len(m.processList.entries) != 1 || m.processList.entries[0].ID != "still-running" {
+		t.Fatalf("hydrated process entries = %+v, want only fresh active process", m.processList.entries)
+	}
+}
+
 func TestHydrationReplacesStaleCompletedCompactionCountWithoutActiveCompaction(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClient(
 		&countingSessionViewClient{},

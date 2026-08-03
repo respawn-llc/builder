@@ -7,6 +7,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -282,31 +283,100 @@ func transcriptGoalStatus(update runtime.GoalStatusUpdate) clientui.TranscriptGo
 	}}
 }
 
-func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.TranscriptBackgroundActivity {
-	background := clientui.TranscriptBackgroundActivity{
-		ActivityID:        mustTranscriptBackgroundActivityID(evt.ActivityID.String(), "background activity"),
-		ProcessID:         clientui.ProcessID(strings.TrimSpace(evt.ID)),
-		OwnerRunID:        mustTranscriptRunID(evt.OwnerRunID, "background activity owner"),
-		OwnerStepID:       mustTranscriptStepID(evt.OwnerStepID, "background activity owner"),
-		Command:           evt.Command,
-		Workdir:           evt.Workdir,
-		LogPath:           textutil.OptionalTrimmedString(evt.LogPath),
-		Preview:           textutil.OptionalTrimmedString(evt.Preview),
-		ExitCode:          textutil.Pointer(evt.ExitCode),
-		UserRequestedKill: evt.UserRequestedKill,
-		NoticeSuppressed:  evt.NoticeSuppressed,
+type transcriptBackgroundActivityFacts struct {
+	activityID        runtimeids.BackgroundActivityID
+	processID         clientui.ProcessID
+	ownerRunID        runtimeids.RunID
+	ownerStepID       runtimeids.StepID
+	lifecycle         clientui.BackgroundLifecycle
+	command           string
+	workdir           string
+	logPath           *string
+	preview           *string
+	exitCode          *int
+	userRequestedKill bool
+	noticeSuppressed  bool
+}
+
+func transcriptBackgroundActivityFromFacts(facts transcriptBackgroundActivityFacts) clientui.TranscriptBackgroundActivity {
+	return clientui.TranscriptBackgroundActivity{
+		ActivityID:        facts.activityID,
+		ProcessID:         facts.processID,
+		OwnerRunID:        facts.ownerRunID,
+		OwnerStepID:       facts.ownerStepID,
+		Lifecycle:         facts.lifecycle,
+		Command:           facts.command,
+		Workdir:           facts.workdir,
+		LogPath:           facts.logPath,
+		Preview:           facts.preview,
+		ExitCode:          facts.exitCode,
+		UserRequestedKill: facts.userRequestedKill,
+		NoticeSuppressed:  facts.noticeSuppressed,
 	}
+}
+
+func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.TranscriptBackgroundActivity {
+	lifecycle := clientui.BackgroundLifecycle("")
 	switch evt.Type {
 	case runtime.BackgroundShellEventBackgrounded:
-		background.Lifecycle = clientui.BackgroundLifecycleBackgrounded
+		lifecycle = clientui.BackgroundLifecycleBackgrounded
 	case runtime.BackgroundShellEventCompleted:
-		background.Lifecycle = clientui.BackgroundLifecycleCompleted
+		lifecycle = clientui.BackgroundLifecycleCompleted
 	case runtime.BackgroundShellEventKilled:
-		background.Lifecycle = clientui.BackgroundLifecycleKilled
+		lifecycle = clientui.BackgroundLifecycleKilled
 	default:
 		panic(fmt.Sprintf("runtime background activity has unknown lifecycle %q: process_id=%q activity_id=%q", evt.Type, evt.ID, evt.ActivityID))
 	}
-	return background
+	return transcriptBackgroundActivityFromFacts(transcriptBackgroundActivityFacts{
+		activityID:        mustTranscriptBackgroundActivityID(evt.ActivityID.String(), "background activity"),
+		processID:         clientui.ProcessID(strings.TrimSpace(evt.ID)),
+		ownerRunID:        mustTranscriptRunID(evt.OwnerRunID, "background activity owner"),
+		ownerStepID:       mustTranscriptStepID(evt.OwnerStepID, "background activity owner"),
+		lifecycle:         lifecycle,
+		command:           evt.Command,
+		workdir:           evt.Workdir,
+		logPath:           textutil.OptionalTrimmedString(evt.LogPath),
+		preview:           textutil.OptionalTrimmedString(evt.Preview),
+		exitCode:          textutil.Pointer(evt.ExitCode),
+		userRequestedKill: evt.UserRequestedKill,
+		noticeSuppressed:  evt.NoticeSuppressed,
+	})
+}
+
+func TranscriptBackgroundActivitiesFromProcessSnapshots(
+	sessionID string,
+	snapshots []shelltool.Snapshot,
+) ([]clientui.TranscriptBackgroundActivity, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	out := make([]clientui.TranscriptBackgroundActivity, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if !snapshot.Running || !snapshot.Backgrounded || strings.TrimSpace(snapshot.OwnerSessionID) != sessionID {
+			continue
+		}
+		activityID, err := runtimeids.ParseBackgroundActivityID(snapshot.ActivityID.String())
+		if err != nil {
+			return nil, fmt.Errorf("background process %q activity id: %w", snapshot.ID, err)
+		}
+		runID, err := runtimeids.ParseRunID(snapshot.OwnerRunID)
+		if err != nil {
+			return nil, fmt.Errorf("background process %q owner run id: %w", snapshot.ID, err)
+		}
+		stepID, err := runtimeids.ParseStepID(snapshot.OwnerStepID)
+		if err != nil {
+			return nil, fmt.Errorf("background process %q owner step id: %w", snapshot.ID, err)
+		}
+		out = append(out, transcriptBackgroundActivityFromFacts(transcriptBackgroundActivityFacts{
+			activityID:  activityID,
+			processID:   clientui.ProcessID(strings.TrimSpace(snapshot.ID)),
+			ownerRunID:  runID,
+			ownerStepID: stepID,
+			lifecycle:   clientui.BackgroundLifecycleBackgrounded,
+			command:     snapshot.Command,
+			workdir:     snapshot.Workdir,
+			logPath:     textutil.OptionalTrimmedString(snapshot.LogPath),
+		}))
+	}
+	return out, nil
 }
 
 func TranscriptSessionIdentityFromRuntime(

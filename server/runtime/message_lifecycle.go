@@ -392,6 +392,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserSteeringIntent
+	m.engine.outputMutationMu.Lock()
 	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		pending = m.queue.Drain()
@@ -400,8 +401,10 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
 	default:
+		m.engine.outputMutationMu.Unlock()
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
+	m.engine.outputMutationMu.Unlock()
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -432,10 +435,12 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			return result, err
 		}
 		if !publishAllowed {
+			e.outputMutationMu.Lock()
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
+			e.outputMutationMu.Unlock()
 			result.continueCombinedFlush = false
 			return result, nil
 		}
