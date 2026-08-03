@@ -7,8 +7,6 @@ import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 import { canonicalBoardFilter } from "./workflowBoardFilters";
 
-const allTasksFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null });
-
 const startTaskParamsSchema = z.object({
   task_id: z.literal("task-1"),
   setup_operation_id: z.string(),
@@ -91,7 +89,7 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getBoard("project-1", undefined, allTasksFilter)).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", undefined, canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
       projectID: "project-1",
       selectedWorkflow: null,
       workflows: [],
@@ -124,11 +122,11 @@ describe("ApiClient", () => {
       params: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-1", label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } }, dependency_filter: null, page_size: 25, page_token: null },
     });
     const unblockedFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true });
-    await client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter);
-    await client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null });
-    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
-    expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
-    expect(transport.calls[3]?.params).toMatchObject({ dependency_filter: true });
+    await Promise.all([
+      client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter),
+      client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null }),
+    ]);
+    expect(transport.calls.slice(2)).toEqual([expect.objectContaining({ method: "workflow.board.get", params: expect.objectContaining({ dependency_filter: true }) }), expect.objectContaining({ method: "workflow.board.nodeCards.list", params: expect.objectContaining({ dependency_filter: true }) })]);
   });
 
   it("rejects malformed Workflow IDs before direct client RPCs or subscriptions", async () => {
@@ -155,7 +153,7 @@ describe("ApiClient", () => {
       new FakeRpcTransport([{ method: "workflow.board.get", result: boardWithJoinResponse }]),
     );
 
-    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", allTasksFilter)).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
       groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
       columns: [{ id: "node-agent", kind: "agent" }],
     });

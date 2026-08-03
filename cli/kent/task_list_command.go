@@ -40,11 +40,17 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
+	unblockedProvided := flagExplicit(fs, "unblocked")
+	blockedProvided := flagExplicit(fs, "blocked")
 	if len(fs.Args()) != 0 {
 		fmt.Fprintln(stderr, "task list does not accept positional arguments")
 		return 2
 	}
-	if *unblocked && *blocked {
+	if (unblockedProvided && !*unblocked) || (blockedProvided && !*blocked) {
+		fmt.Fprintln(stderr, "--unblocked and --blocked must be enabled when supplied")
+		return 2
+	}
+	if unblockedProvided && blockedProvided {
 		fmt.Fprintln(stderr, "--unblocked and --blocked are mutually exclusive")
 		return 2
 	}
@@ -91,10 +97,10 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		recoveryLabelMatch = &value
 	}
 	var dependencyFilter *bool
-	if *unblocked {
+	if unblockedProvided {
 		value := true
 		dependencyFilter = &value
-	} else if *blocked {
+	} else if blockedProvided {
 		value := false
 		dependencyFilter = &value
 	}

@@ -153,6 +153,8 @@ describe("BoardGenerationRequestAdapter", () => {
       "project-1",
       "11111111-1111-4111-8111-111111111111",
       "none",
+      "dependency",
+      "dependency:null",
       "node-1",
     ] as const;
     const pageCalls: (string | null)[] = [];

@@ -40,7 +40,7 @@ func TestGeneratedMetadataQueriesAreFresh(t *testing.T) {
 		t.Fatalf("read generated metadata queries: %v", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatal("generated metadata queries are stale; run go run ./server/metadata/querygen render --input server/metadata/querysrc/queries.sql.tmpl --fragment server/metadata/querysrc/task_label_filter.sql.tmpl --status-fragment server/metadata/querysrc/task_status_projection.sql.tmpl --output server/metadata/queries.sql")
+		t.Fatal("generated metadata queries are stale; run go generate ./server/metadata/sqlitegen")
 	}
 }
 
