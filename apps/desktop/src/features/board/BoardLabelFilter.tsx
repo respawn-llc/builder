@@ -30,7 +30,8 @@ export function BoardMembershipRefreshBinding({
         type: "label.deleted",
         labelID: effect.labelID,
       });
-      const current = generation.snapshot.desiredFilter ?? generation.snapshot.active.filter;
+      const latestSnapshot = generation.controller.getSnapshot();
+      const current = latestSnapshot.desiredFilter ?? latestSnapshot.active.filter;
       generation.controller.setDesiredFilter(boardFilterWithLabelFilter(current, next.filter));
     }
     const activeGeneration = generation.controller.getSnapshot().active.generation;
