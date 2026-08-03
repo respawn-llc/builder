@@ -963,8 +963,14 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *worktree.GitRevisionResolutionError
-	if err := (<-preparations)(ctx); !errors.As(err, &resolutionErr) {
-		t.Fatalf("asynchronous preparation error = %v, want revision failure", err)
+	preparationErr := (<-preparations)(ctx)
+	if !errors.As(preparationErr, &resolutionErr) {
+		t.Fatalf("asynchronous preparation error = %v, want revision failure", preparationErr)
+	}
+	var interrupted *workflowexecution.TaskStartPreparationError
+	if !errors.As(preparationErr, &interrupted) ||
+		interrupted.InterruptionDetail().Code != configuredTargetPreparationFailureCode {
+		t.Fatalf("asynchronous preparation error = %T %v, want configured-target interruption", preparationErr, preparationErr)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -972,6 +978,82 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 	}
 	if targetContext.Task.ExecutionTarget != nil {
 		t.Fatalf("execution target = %+v, want unlocked", targetContext.Task.ExecutionTarget)
+	}
+}
+
+func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	reference := started.Mutation.Created[0].Reference
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		reference,
+		workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
+		workflow.CurrentNodeInterruptionDetail{
+			Code: configuredTargetPreparationFailureCode,
+			Fields: map[string]string{
+				"mode":  string(serverapi.WorkflowExecutionTargetModeHead),
+				"cause": string(serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision),
+			},
+		},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeAskOnFirstExecution,
+	})
+	execution := &currentNodeCompletionExecutionStub{store: service.store}
+	service.currentNodeExecution = execution
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolveErr: &worktree.GitRevisionResolutionError{
+			Kind:         worktree.GitRevisionResolutionErrorInvalidRevision,
+			RequestedRef: "HEAD",
+		},
+	}
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask unavailable target: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired ||
+		response.SelectionRequired == nil ||
+		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
+		t.Fatalf("resume response = %+v, want configured target selection", response)
+	}
+
+	service.executionTargets = &recordingExecutionTargetInfrastructure{}
+	response, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask selected target: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+		t.Fatalf("resume response = %+v, want applied", response)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget == nil ||
+		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("execution target = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
 

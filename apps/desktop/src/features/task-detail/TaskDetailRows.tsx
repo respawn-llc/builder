@@ -20,6 +20,7 @@ import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskDetailLabels } from "./TaskDetailLabels";
+import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -413,15 +414,7 @@ function TaskActionPanel({
       <div className="grid gap-[var(--space-2)] pt-[var(--space-1)]">
         <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
-          <Button
-            disabled={disabled || mutations.resume.isPending}
-            onClick={() => {
-              mutations.resume.mutate();
-            }}
-            variant="primary"
-          >
-            {t("board.resume")}
-          </Button>
+          <TaskResumeButton disabled={disabled} />
         ) : null}
         {detail.actions.canInterrupt ? (
           <Button

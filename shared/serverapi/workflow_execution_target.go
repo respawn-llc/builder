@@ -384,6 +384,22 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 	return errors.New("approve action response outcome is invalid")
 }
 
+func (r WorkflowTaskResumeResponse) Validate() error {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
+		if r.Applied == nil || r.SelectionRequired != nil {
+			return errors.New("resume action response applied outcome requires only applied payload")
+		}
+		return validateWorkflowTaskCurrentNodes(r.Applied.CurrentNodes, "resume applied payload")
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil {
+			return errors.New("resume action response selection_required outcome requires only selection requirement")
+		}
+		return r.SelectionRequired.Validate()
+	}
+	return errors.New("resume action response outcome is invalid")
+}
+
 func (r WorkflowTaskMoveResponse) Validate() error {
 	if r.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
 		if r.NoOp == nil || r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {

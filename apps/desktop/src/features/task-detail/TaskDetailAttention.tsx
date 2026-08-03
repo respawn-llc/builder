@@ -6,6 +6,7 @@ import { useAppServices } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
+import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskDetailCopyableValue } from "./TaskDetailCopyableValue";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -90,11 +91,9 @@ export function ApprovalBox({
 export function InterruptedCurrentNodeBox({
   attention,
   disabled,
-  mutations,
 }: Readonly<{
   attention: InterruptedCurrentNodeAttentionItem;
   disabled: boolean;
-  mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
@@ -137,15 +136,7 @@ export function InterruptedCurrentNodeBox({
           {t("task.copyInterruptionDetail")}
         </Button>
       ) : null}
-      <Button
-        disabled={disabled || mutations.resume.isPending}
-        onClick={() => {
-          mutations.resume.mutate();
-        }}
-        variant="primary"
-      >
-        {t("board.resume")}
-      </Button>
+      <TaskResumeButton disabled={disabled} />
     </Island>
   );
 }

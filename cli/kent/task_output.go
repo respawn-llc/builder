@@ -20,7 +20,7 @@ func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, _
 	fmt.Fprintf(stdout, "Started task %s using workflow %q (%s).\n", taskDisplayID(task), task.Workflow.DisplayName, task.Workflow.WorkflowID)
 }
 
-func writeTaskResumeResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, resp serverapi.WorkflowTaskResumeResponse) {
+func writeTaskResumeResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, resp serverapi.WorkflowTaskResumeApplied) {
 	fmt.Fprintf(stdout, "Resumed task %s.\n", taskDisplayID(task))
 	for _, currentNode := range resp.CurrentNodes {
 		if currentNode.SessionID == nil || strings.TrimSpace(*currentNode.SessionID) == "" {

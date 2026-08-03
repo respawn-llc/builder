@@ -33,6 +33,7 @@ import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
+import { useBoardResumeAction } from "./useBoardResumeAction";
 import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
@@ -282,13 +283,15 @@ function BoardContent({
     refreshErrorTitle: t("board.loadFailed"),
     startErrorTitle: t("board.startFailed"),
   });
+  const resumeAction = useBoardResumeAction(initiatingAction);
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,
     onPreviewError: reportMoveError,
     runAction: runCardAction,
   });
-  const actionsDisabled = initiatingActionsDisabled || manualMove.actionsDisabled;
+  const actionsDisabled =
+    initiatingActionsDisabled || resumeAction.actionsDisabled || manualMove.actionsDisabled;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -406,7 +409,7 @@ function BoardContent({
   }
 
   function resumeTask(taskID: string): void {
-    void actions.resume.execute(taskID).catch(reportResumeError);
+    void resumeAction.execute(taskID).catch(reportResumeError);
   }
 
   function deleteTask(taskID: string): void {
@@ -479,6 +482,14 @@ function BoardContent({
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {
       openTaskDependencies(result.taskID);
+      return;
+    }
+    if (result.action.kind === "resume") {
+      const resumed =
+        result.selection === undefined
+          ? resumeAction.execute(result.action.taskID)
+          : resumeAction.continueExecution(result.action, result.selection);
+      void resumed.catch(reportResumeError);
       return;
     }
     const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
@@ -585,7 +596,7 @@ function BoardContent({
             pendingCardMove={pendingCardMove}
             onResumeTask={resumeTask}
             pendingInterruptTaskIDs={actions.interrupt.pendingTaskIDs}
-            pendingResumeTaskIDs={actions.resume.pendingTaskIDs}
+            pendingResumeTaskIDs={resumeAction.pendingTaskIDs}
             scrollportRef={scrollportRef}
           />
         </div>

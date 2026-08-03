@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -125,8 +126,38 @@ func (c *CurrentNodeController) StartTask(
 }
 
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return c.resumeTask(ctx, taskID, nil)
+}
+
+func (c *CurrentNodeController) ResumeTaskWithPreparation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation TaskStartPreparation,
+) ([]workflow.CurrentNode, error) {
+	if preparation == nil {
+		return nil, errors.New("task resume preparation is required")
+	}
+	return c.resumeTask(ctx, taskID, preparation)
+}
+
+func (c *CurrentNodeController) resumeTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation TaskStartPreparation,
+) ([]workflow.CurrentNode, error) {
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
+	}
+	if preparation != nil {
+		var once sync.Once
+		var preparationErr error
+		run := preparation
+		preparation = func(ctx context.Context) error {
+			once.Do(func() {
+				preparationErr = run(ctx)
+			})
+			return preparationErr
+		}
 	}
 	var resolution workflowstore.TaskAttentionResolution
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
@@ -154,6 +185,7 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 			c.mu.Lock()
 			queueErr := c.queueExplicitStartLocked(currentNodeQueuedStart{
 				reference:          currentNode.Reference,
+				preparation:        preparation,
 				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 			})
 			c.mu.Unlock()

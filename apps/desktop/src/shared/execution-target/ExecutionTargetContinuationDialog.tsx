@@ -61,7 +61,7 @@ function DependencyConfirmationDialog({
   pending: Extract<PendingTaskInitiatingAction, { kind: "dependency_confirmation" }>;
 }>) {
   const { t } = useTranslation();
-  const taskID = pending.action.kind === "start" ? pending.action.taskID : pending.action.input.taskID;
+  const taskID = pending.action.kind === "move" ? pending.action.input.taskID : pending.action.taskID;
   return (
     <Dialog
       closeLabel={t("app.close")}

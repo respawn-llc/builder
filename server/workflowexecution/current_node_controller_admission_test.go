@@ -210,7 +210,15 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+			err: errors.New("Resume must not steer an assignment"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -220,12 +228,21 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 		}
 	})
 
-	resumed, err := controller.ResumeTask(context.Background(), reference.TaskID)
+	prepared := make(chan struct{}, 1)
+	resumed, err := controller.ResumeTaskWithPreparation(context.Background(), reference.TaskID, func(context.Context) error {
+		prepared <- struct{}{}
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
 	if len(resumed) != 1 || !resumed[0].Reference.Equal(reference) {
 		t.Fatalf("resumed Current Nodes = %+v, want %v", resumed, reference)
+	}
+	select {
+	case <-prepared:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resume preparation did not run")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return len(runner.promptDeliveries()) == 1

@@ -89,6 +89,30 @@ type currentNodeAdmissionError struct {
 	admitted bool
 }
 
+type TaskStartPreparationError struct {
+	cause  error
+	detail workflow.CurrentNodeInterruptionDetail
+}
+
+func NewTaskStartPreparationError(
+	cause error,
+	detail workflow.CurrentNodeInterruptionDetail,
+) *TaskStartPreparationError {
+	return &TaskStartPreparationError{cause: cause, detail: detail}
+}
+
+func (e *TaskStartPreparationError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *TaskStartPreparationError) Unwrap() error {
+	return e.cause
+}
+
+func (e *TaskStartPreparationError) InterruptionDetail() workflow.CurrentNodeInterruptionDetail {
+	return e.detail
+}
+
 type pendingCurrentNodeAssignmentSteer struct {
 	ready chan struct{}
 	once  sync.Once
@@ -180,11 +204,13 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		if err := start.preparation(ctx); err != nil {
 			return err
 		}
-		assignment, err := c.steerAssignment(ctx, reference)
-		if err != nil {
-			return err
+		if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment {
+			assignment, err := c.steerAssignment(ctx, reference)
+			if err != nil {
+				return err
+			}
+			start.assignmentSteer = assignment
 		}
-		start.assignmentSteer = assignment
 	}
 	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
 	if err != nil {
@@ -858,15 +884,20 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if admitted {
 		interrupt = c.store.InterruptAdmittedCurrentNode
 	}
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:   string(reasonCurrentNodeRuntimeStartFailed),
+		Fields: map[string]string{"error": cause.Error()},
+	}
+	var preparationErr *TaskStartPreparationError
+	if errors.As(cause, &preparationErr) {
+		detail = preparationErr.InterruptionDetail()
+	}
 	interrupted, err := interruptCurrentNodeReferences(
 		ctx,
 		interrupt,
 		references,
 		reasonCurrentNodeRuntimeStartFailed,
-		workflow.CurrentNodeInterruptionDetail{
-			Code:   string(reasonCurrentNodeRuntimeStartFailed),
-			Fields: map[string]string{"error": cause.Error()},
-		},
+		detail,
 	)
 	for _, reference := range interrupted {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)

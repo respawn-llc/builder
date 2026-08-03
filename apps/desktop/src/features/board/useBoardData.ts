@@ -6,7 +6,7 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect } from "react";
 
 import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
 import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
@@ -18,6 +18,7 @@ import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useRetainedQueryData } from "./useRetainedQueryData";
+import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
@@ -272,59 +273,19 @@ export function useBoardTaskActions(projectID: string) {
     mutationFn: async (taskID: string) => api.interruptTask(taskID),
     onSettled: refresh,
   });
-  const resumeMutation = useMutation({
-    mutationFn: async (taskID: string) => api.resumeTask(taskID),
-    onSuccess: refresh,
-  });
+  const interrupt = useBoardTaskLifecycleAction();
   return {
     refresh,
-    interrupt: useBoardTaskLifecycleAction(interruptMutation),
+    interrupt: {
+      execute: async (taskID: string) =>
+        interrupt.execute(taskID, async () => interruptMutation.mutateAsync(taskID)),
+      pendingTaskIDs: interrupt.pendingTaskIDs,
+    },
     delete: useMutation({
       mutationFn: async (taskID: string) => api.deleteTask(taskID),
       onSuccess: async (_result, taskID) => {
         await refreshAfterTaskDelete(taskID);
       },
     }),
-    resume: useBoardTaskLifecycleAction(resumeMutation),
-  };
-}
-
-type BoardTaskLifecycleAction = Readonly<{
-  execute(taskID: string): Promise<void>;
-  pendingTaskIDs: ReadonlySet<string>;
-}>;
-
-function useBoardTaskLifecycleAction(
-  mutation: Readonly<{
-    mutateAsync(taskID: string): Promise<void>;
-  }>,
-): BoardTaskLifecycleAction {
-  const [pendingTaskIDs, setPendingTaskIDs] = useState<ReadonlySet<string>>(() => new Set());
-  const pendingTaskIDsRef = useRef(pendingTaskIDs);
-  const { mutateAsync } = mutation;
-  const execute = useCallback(
-    async (taskID: string): Promise<void> => {
-      const currentPendingTaskIDs = pendingTaskIDsRef.current;
-      if (currentPendingTaskIDs.has(taskID)) {
-        return;
-      }
-      const nextPendingTaskIDs = new Set(currentPendingTaskIDs);
-      nextPendingTaskIDs.add(taskID);
-      pendingTaskIDsRef.current = nextPendingTaskIDs;
-      setPendingTaskIDs(nextPendingTaskIDs);
-      try {
-        await mutateAsync(taskID);
-      } finally {
-        const settledPendingTaskIDs = new Set(pendingTaskIDsRef.current);
-        settledPendingTaskIDs.delete(taskID);
-        pendingTaskIDsRef.current = settledPendingTaskIDs;
-        setPendingTaskIDs(settledPendingTaskIDs);
-      }
-    },
-    [mutateAsync],
-  );
-  return {
-    execute,
-    pendingTaskIDs,
   };
 }

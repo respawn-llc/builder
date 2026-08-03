@@ -60,6 +60,7 @@ export const defaultWorkflowExecutionTargetPolicy: WorkflowExecutionTargetPolicy
 import type { TaskCurrentNode } from "./models";
 
 export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskResumeApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
 export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 export type TaskMoveNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
@@ -81,6 +82,7 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
     }>;
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
+export type TaskResumeResponse = WorkflowExecutionTargetActionResponse<TaskResumeApplied>;
 export type TaskMoveResponse =
   | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
   | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;

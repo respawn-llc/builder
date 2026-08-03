@@ -380,11 +380,25 @@ func (s *currentNodeCompletionExecutionStub) StartTask(
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return s.ResumeTaskWithPreparation(ctx, taskID, func(context.Context) error { return nil })
+}
+
+func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation workflowexecution.TaskStartPreparation,
+) ([]workflow.CurrentNode, error) {
 	if s.store == nil {
 		return nil, errors.New("workflow store is required")
 	}
+	if preparation == nil {
+		return nil, errors.New("task resume preparation is required")
+	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := preparation(ctx); err != nil {
 		return nil, err
 	}
 	for _, currentNode := range selected {

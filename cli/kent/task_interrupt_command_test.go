@@ -63,7 +63,12 @@ func (r *taskInterruptCommandRemote) InterruptWorkflowTask(_ context.Context, re
 
 func (r *taskInterruptCommandRemote) ResumeWorkflowTask(_ context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	r.resumeRequests = append(r.resumeRequests, req)
-	return serverapi.WorkflowTaskResumeResponse{}, nil
+	return serverapi.WorkflowTaskResumeResponse{
+		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &serverapi.WorkflowTaskResumeApplied{
+			CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
+		},
+	}, nil
 }
 
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
@@ -464,7 +469,8 @@ func TestTaskResumeFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	}
 	if len(remote.resumeRequests) != 1 ||
 		remote.resumeRequests[0].InvokingSessionID == nil ||
-		remote.resumeRequests[0].InvokingSessionID.String() != "agent-session" {
+		remote.resumeRequests[0].InvokingSessionID.String() != "agent-session" ||
+		remote.resumeRequests[0].SetupOperationID.Validate() != nil {
 		t.Fatalf("resume requests = %+v, want invoking Session agent-session", remote.resumeRequests)
 	}
 }
