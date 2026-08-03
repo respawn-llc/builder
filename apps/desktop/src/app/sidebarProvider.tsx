@@ -305,6 +305,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       void runViewTransition({
         scope: "sidebar-push",
         update: () => {
+          if (pendingRef.current?.lifecycleID !== state.lifecycleID) {
+            return;
+          }
           dispatchStack({
             type: "push",
             activationID,
@@ -344,6 +347,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     void runViewTransition({
       scope: "sidebar-back",
       update: () => {
+        if (pendingRef.current?.lifecycleID !== state.lifecycleID) {
+          return;
+        }
         dispatchStack({
           type: "back",
           activationID,

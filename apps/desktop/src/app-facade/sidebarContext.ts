@@ -191,9 +191,7 @@ export function sidebarRouteMatchesExpectation(
   location: SidebarRouteLocation,
   expectation: SidebarRouteChangeExpectation,
 ): boolean {
-  const search = new URLSearchParams(
-    location.searchStr.startsWith("?") ? location.searchStr.slice(1) : location.searchStr,
-  );
+  const search = new URLSearchParams(location.searchStr);
   return (
     location.pathname === `/projects/${expectation.projectID}` &&
     search.get("taskId") === null &&
