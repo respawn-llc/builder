@@ -233,6 +233,9 @@ func TestWorktreeCreateErrorRejectsMalformedWireDataAsContractError(t *testing.T
 			if !errors.As(decoded, &contractErr) {
 				t.Fatalf("decoded error = %T %v, want WorktreeCreateContractError", decoded, decoded)
 			}
+			if test.name == "missing owner" && contractErr.Owner != nil {
+				t.Fatalf("missing owner decoded as %q, want absent owner", *contractErr.Owner)
+			}
 			var typed *WorktreeCreateError
 			if errors.As(decoded, &typed) {
 				t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)

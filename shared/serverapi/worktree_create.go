@@ -30,7 +30,7 @@ type WorktreeCreateError struct {
 func NewWorktreeCreateError(owner WorktreeCreateErrorOwner, diagnostic string, cause error) error {
 	result := &WorktreeCreateError{Owner: owner, Diagnostic: diagnostic, cause: cause}
 	if err := result.Validate(); err != nil {
-		return newWorktreeCreateContractError("worktree.create.constructor", owner, diagnostic, err)
+		return newWorktreeCreateContractError("worktree.create.constructor", worktreeCreateErrorOwnerPointer(owner), diagnostic, err)
 	}
 	return result
 }
@@ -87,12 +87,16 @@ func (e *WorktreeCreateError) Validate() error {
 
 type WorktreeCreateContractError struct {
 	Operation  string
-	Owner      WorktreeCreateErrorOwner
+	Owner      *WorktreeCreateErrorOwner
 	Diagnostic string
 	Cause      error
 }
 
-func newWorktreeCreateContractError(operation string, owner WorktreeCreateErrorOwner, diagnostic string, cause error) *WorktreeCreateContractError {
+func worktreeCreateErrorOwnerPointer(owner WorktreeCreateErrorOwner) *WorktreeCreateErrorOwner {
+	return &owner
+}
+
+func newWorktreeCreateContractError(operation string, owner *WorktreeCreateErrorOwner, diagnostic string, cause error) *WorktreeCreateContractError {
 	return &WorktreeCreateContractError{
 		Operation:  strings.TrimSpace(operation),
 		Owner:      owner,
@@ -105,10 +109,14 @@ func (e *WorktreeCreateContractError) Error() string {
 	if e == nil {
 		return ErrWorktreeCreateContract.Error()
 	}
-	if e.Cause == nil {
-		return fmt.Sprintf("%s: operation=%q owner=%q", ErrWorktreeCreateContract.Error(), e.Operation, e.Owner)
+	details := fmt.Sprintf("%s: operation=%q", ErrWorktreeCreateContract.Error(), e.Operation)
+	if e.Owner != nil {
+		details += fmt.Sprintf(" owner=%q", *e.Owner)
 	}
-	return fmt.Sprintf("%s: operation=%q owner=%q: %v", ErrWorktreeCreateContract.Error(), e.Operation, e.Owner, e.Cause)
+	if e.Cause == nil {
+		return details
+	}
+	return fmt.Sprintf("%s: %v", details, e.Cause)
 }
 
 func (e *WorktreeCreateContractError) Unwrap() error {
@@ -140,7 +148,7 @@ func ValidateWorktreeCreateErrorBoundary(err error, operation string, policy inv
 		},
 	}
 	policy.Check(false, diagnostic)
-	return newWorktreeCreateContractError(operation, typed.Owner, typed.Diagnostic, validationErr)
+	return newWorktreeCreateContractError(operation, worktreeCreateErrorOwnerPointer(typed.Owner), typed.Diagnostic, validationErr)
 }
 
 func DecodeWorktreeCreateError(data json.RawMessage, message string) error {
@@ -151,21 +159,21 @@ func DecodeWorktreeCreateError(data json.RawMessage, message string) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
-		return newWorktreeCreateContractError("worktree.create.remote.decode", "", message, err)
+		return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return newWorktreeCreateContractError("worktree.create.remote.decode", "", message, errors.New("multiple JSON values"))
+			return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, errors.New("multiple JSON values"))
 		}
-		return newWorktreeCreateContractError("worktree.create.remote.decode", "", message, err)
+		return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, err)
 	}
 	if payload.Owner == nil || payload.Diagnostic == nil {
-		return newWorktreeCreateContractError("worktree.create.remote.decode", "", message, errors.New("owner and diagnostic are required"))
+		return newWorktreeCreateContractError("worktree.create.remote.decode", payload.Owner, message, errors.New("owner and diagnostic are required"))
 	}
 	result := &WorktreeCreateError{Owner: *payload.Owner, Diagnostic: *payload.Diagnostic}
 	if err := result.Validate(); err != nil {
-		return newWorktreeCreateContractError("worktree.create.remote.decode", result.Owner, result.Diagnostic, err)
+		return newWorktreeCreateContractError("worktree.create.remote.decode", worktreeCreateErrorOwnerPointer(result.Owner), result.Diagnostic, err)
 	}
 	return result
 }
