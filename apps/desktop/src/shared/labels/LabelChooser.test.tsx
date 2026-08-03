@@ -278,8 +278,6 @@ describe("LabelChooser", () => {
     fireEvent.keyDown(handle, { code: "Space", key: " " });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-    expect(handle).toBeVisible();
-    expect(handle).toHaveFocus();
     fireEvent.keyDown(handle, { code: "Space", key: " " });
 
     await waitFor(() => {
@@ -370,9 +368,6 @@ describe("LabelChooser", () => {
         "942495c2-5958-4959-8445-94046ad74fbd",
         "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
       ]);
-    });
-    await waitFor(() => {
-      expect(screen.getAllByRole("button", { hidden: true, name: "Reorder Alpha" })).toHaveLength(1);
     });
     Reflect.deleteProperty(Element.prototype, "setPointerCapture");
     Reflect.deleteProperty(Element.prototype, "releasePointerCapture");

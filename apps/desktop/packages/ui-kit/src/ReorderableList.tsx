@@ -64,10 +64,6 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   const itemNodes = useRef(new Map<ID, HTMLElement>());
   const reducedMotion = useReducedMotion();
   const [dragMode, setDragMode] = useState<"keyboard" | "pointer" | null>(null);
-  const [overlayItem, setOverlayItem] = useState<Item | null>(null);
-  const clearOverlayItem = useCallback(() => {
-    setOverlayItem(null);
-  }, []);
   const keyboardCoordinates = useCallback<KeyboardCoordinateGetter>(
     (event, args) => {
       const coordinates = sortableKeyboardCoordinates(event, args);
@@ -126,21 +122,15 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       collisionDetection={closestCenter}
       onDragCancel={() => {
         setDragMode(null);
-        setOverlayItem(null);
       }}
       onDragEnd={(event) => {
         handleDragEnd(event);
-        setDragMode(null);
-      }}
-      onDragStart={({ active, activatorEvent }) => {
-        if (activatorEvent instanceof KeyboardEvent) {
-          setDragMode("keyboard");
-          setOverlayItem(null);
-          return;
+        if (dragMode === "keyboard") {
+          setDragMode(null);
         }
-        setDragMode("pointer");
-        const activeItem = items.find((item) => getItemID(item) === active.id);
-        setOverlayItem(activeItem ?? null);
+      }}
+      onDragStart={({ activatorEvent }) => {
+        setDragMode(activatorEvent instanceof KeyboardEvent ? "keyboard" : "pointer");
       }}
       sensors={sensors}
     >
@@ -158,60 +148,41 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
           />
         ))}
       </SortableContext>
-      {dragMode === "pointer" || overlayItem !== null ? (
-        <ReorderableListDragOverlay
-          dragMode={dragMode}
-          item={overlayItem}
-          onDropAnimationEnd={clearOverlayItem}
-          reducedMotion={reducedMotion}
-          renderItem={renderItem}
-        />
-      ) : null}
+      <ReorderableListDragOverlay
+        dragMode={dragMode}
+        getItemID={getItemID}
+        items={items}
+        reducedMotion={reducedMotion}
+        renderItem={renderItem}
+      />
     </DndContext>
   );
 }
 
 function ReorderableListDragOverlay<Item>({
   dragMode,
-  item,
-  onDropAnimationEnd,
+  getItemID,
+  items,
   reducedMotion,
   renderItem,
 }: Readonly<{
   dragMode: "keyboard" | "pointer" | null;
-  item: Item | null;
-  onDropAnimationEnd(): void;
+  getItemID: (item: Item) => UniqueIdentifier;
+  items: readonly Item[];
   reducedMotion: boolean;
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>) {
   const { active } = useDndContext();
-  useEffect(() => {
-    if (item === null || dragMode !== null || active !== null) {
-      return undefined;
-    }
-    if (reducedMotion) {
-      onDropAnimationEnd();
-      return undefined;
-    }
-    const timeoutID = window.setTimeout(onDropAnimationEnd, DROP_ANIMATION_DURATION_MS);
-    return () => {
-      window.clearTimeout(timeoutID);
-    };
-  }, [active, dragMode, item, onDropAnimationEnd, reducedMotion]);
+  if (dragMode !== "pointer") {
+    return null;
+  }
+  const activeItem = active === null ? undefined : items.find((item) => getItemID(item) === active.id);
   return createPortal(
-    <DragOverlay
-      dropAnimation={
-        reducedMotion
-          ? null
-          : {
-              duration: DROP_ANIMATION_DURATION_MS,
-            }
-      }
-    >
+    <DragOverlay dropAnimation={reducedMotion ? null : undefined}>
       <div aria-hidden="true" className="pointer-events-none" inert>
-        {item === null
+        {activeItem === undefined
           ? null
-          : renderItem(item, {
+          : renderItem(activeItem, {
               activatorAttributes: {},
               activatorListeners: undefined,
               activatorRef: noopRef,
@@ -273,8 +244,6 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
     style,
   });
 }
-
-const DROP_ANIMATION_DURATION_MS = 250;
 
 const noopRef = (): void => undefined;
 
