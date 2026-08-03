@@ -59,6 +59,10 @@ type DropDestination = Readonly<{
   top: number;
 }>;
 
+interface DropAnimationToken {
+  readonly marker: symbol;
+}
+
 export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdentifier>({
   disabled = false,
   getItemID,
@@ -73,18 +77,31 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   const [pointerActiveID, setPointerActiveID] = useState<ID | null>(null);
   const [overlayItem, setOverlayItem] = useState<Item | null>(null);
   const [dropDestination, setDropDestination] = useState<DropDestination | null>(null);
-  const [dropAnimationToken, setDropAnimationToken] = useState<object | null>(null);
-  const dropAnimationTokenRef = useRef<object | null>(null);
-  const clearDropState = useCallback((token?: object) => {
+  const [dropAnimationToken, setDropAnimationToken] = useState<DropAnimationToken | null>(null);
+  const dropAnimationTokenRef = useRef<DropAnimationToken | null>(null);
+  const dropAnimationRef = useRef<Animation | null>(null);
+  const clearDropState = useCallback((token?: DropAnimationToken) => {
     if (token !== undefined && token !== dropAnimationTokenRef.current) {
       return;
     }
     dropAnimationTokenRef.current = null;
+    const currentAnimation = dropAnimationRef.current;
+    dropAnimationRef.current = null;
+    if (token === undefined) {
+      currentAnimation?.cancel();
+    }
     setDragMode(null);
     setPointerActiveID(null);
     setOverlayItem(null);
     setDropDestination(null);
     setDropAnimationToken(null);
+  }, []);
+  const recordDropAnimation = useCallback((token: DropAnimationToken, animation: Animation) => {
+    if (token !== dropAnimationTokenRef.current) {
+      animation.cancel();
+      return;
+    }
+    dropAnimationRef.current = animation;
   }, []);
   const keyboardCoordinates = useCallback<KeyboardCoordinateGetter>(
     (event, args) => {
@@ -161,24 +178,21 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
         if (event.activatorEvent instanceof KeyboardEvent || destination === null) {
           clearDropState();
         } else {
-          const token = {};
+          const token: DropAnimationToken = { marker: Symbol("drop-animation") };
           dropAnimationTokenRef.current = token;
           setDropAnimationToken(token);
         }
       }}
       onDragStart={({ active, activatorEvent }) => {
+        clearDropState();
         if (activatorEvent instanceof KeyboardEvent) {
           setDragMode("keyboard");
-          dropAnimationTokenRef.current = null;
-          setDropAnimationToken(null);
           setPointerActiveID(null);
           setOverlayItem(null);
           setDropDestination(null);
           return;
         }
         setDragMode("pointer");
-        dropAnimationTokenRef.current = null;
-        setDropAnimationToken(null);
         setPointerActiveID(itemIDs.find((id) => id === active.id) ?? null);
         setOverlayItem(items.find((item) => getItemID(item) === active.id) ?? null);
         setDropDestination(null);
@@ -207,6 +221,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
         items={items}
         dropAnimationToken={dropAnimationToken}
         onDropAnimationEnd={clearDropState}
+        onDropAnimationCreated={recordDropAnimation}
         overlayItem={overlayItem}
         reducedMotion={reducedMotion}
         renderItem={renderItem}
@@ -221,6 +236,7 @@ function ReorderableListDragOverlay<Item>({
   dropAnimationToken,
   getItemID,
   items,
+  onDropAnimationCreated,
   onDropAnimationEnd,
   overlayItem,
   reducedMotion,
@@ -228,10 +244,11 @@ function ReorderableListDragOverlay<Item>({
 }: Readonly<{
   dragMode: "keyboard" | "pointer" | null;
   dropDestination: DropDestination | null;
-  dropAnimationToken: object | null;
+  dropAnimationToken: DropAnimationToken | null;
   getItemID: (item: Item) => UniqueIdentifier;
   items: readonly Item[];
-  onDropAnimationEnd(token: object): void;
+  onDropAnimationCreated: (token: DropAnimationToken, animation: Animation) => void;
+  onDropAnimationEnd: (token: DropAnimationToken) => void;
   overlayItem: Item | null;
   reducedMotion: boolean;
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
@@ -267,8 +284,14 @@ function ReorderableListDragOverlay<Item>({
           fill: "forwards",
         },
       );
+      onDropAnimationCreated(dropAnimationToken, animation);
+      let settled = false;
       await new Promise<void>((resolve) => {
         const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           onDropAnimationEnd(dropAnimationToken);
           resolve();
         };
@@ -276,7 +299,7 @@ function ReorderableListDragOverlay<Item>({
         animation.oncancel = finish;
       });
     },
-    [dropAnimationToken, dropDestination, onDropAnimationEnd, reducedMotion],
+    [dropAnimationToken, dropDestination, onDropAnimationCreated, onDropAnimationEnd, reducedMotion],
   );
   if (dragMode !== "pointer" && overlayItem === null) {
     return null;
