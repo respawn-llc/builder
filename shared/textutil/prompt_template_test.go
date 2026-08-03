@@ -2,9 +2,10 @@ package textutil
 
 import "testing"
 
-func TestExpandPromptTemplateReplacesLiteralArgumentsOccurrence(t *testing.T) {
-	if got := ExpandPromptTemplate("prefix$ARGUMENTS_SUFFIX", " src "); got != "prefixsrc_SUFFIX" {
-		t.Fatalf("literal replacement = %q", got)
+func TestExpandPromptTemplateDoesNotReplaceEmbeddedArgumentsPlaceholder(t *testing.T) {
+	prompt := "prefix$ARGUMENTS $ARGUMENTS_SUFFIX"
+	if got := ExpandPromptTemplate(prompt, " src "); got != prompt+"\n\nsrc" {
+		t.Fatalf("embedded placeholder expansion = %q", got)
 	}
 }
 
@@ -23,5 +24,19 @@ func TestExpandPromptTemplateAppendsArgumentsAfterBlankLine(t *testing.T) {
 func TestExpandPromptTemplateLeavesPromptUnchangedForEmptyArguments(t *testing.T) {
 	if got := ExpandPromptTemplate("Review", " "); got != "Review" {
 		t.Fatalf("empty args = %q", got)
+	}
+}
+
+func TestExpandPromptTemplateTreatsUnicodeAdjacentTextAsLiteral(t *testing.T) {
+	prompt := "Review $ARGUMENTSé"
+	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
+		t.Fatalf("unicode-adjacent placeholder expansion = %q", got)
+	}
+}
+
+func TestExpandPromptTemplateTreatsUnicodeConnectorPunctuationAsLiteral(t *testing.T) {
+	prompt := "Review $ARGUMENTS‿suffix"
+	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
+		t.Fatalf("connector-adjacent placeholder expansion = %q", got)
 	}
 }
