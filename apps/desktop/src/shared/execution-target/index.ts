@@ -6,6 +6,7 @@ export {
   executeTaskInitiatingAction,
   moveTaskInitiatingAction,
   proceedWithTaskInitiatingAction,
+  resumeTaskInitiatingAction,
   startTaskInitiatingAction,
   taskInitiatingActionTaskID,
   type TaskInitiatingAction,

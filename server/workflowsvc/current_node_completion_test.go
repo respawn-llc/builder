@@ -338,6 +338,7 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 
 type currentNodeCompletionExecutionStub struct {
 	store               *workflowstore.Store
+	startPreparations   chan<- workflowexecution.TaskStartPreparation
 	sessionID           runtimeids.SessionID
 	sessionResult       workflowstore.CurrentNodeCompletionResult
 	sessionErr          error
@@ -359,23 +360,45 @@ func (f workflowQuestionAcceptanceFunc) AwaitSuccessor(ctx context.Context) erro
 	return f(ctx)
 }
 
-func (s *currentNodeCompletionExecutionStub) StartTaskWithExecutionTarget(
+func (s *currentNodeCompletionExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	candidate *workflowstore.ExecutionTargetCandidate,
+	preparation workflowexecution.TaskStartPreparation,
 ) (workflowstore.StartTaskResult, error) {
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
-	return s.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
+	started, err := s.store.StartTask(ctx, taskID)
+	if err != nil || preparation == nil {
+		return started, err
+	}
+	if s.startPreparations != nil {
+		s.startPreparations <- preparation
+		return started, nil
+	}
+	return started, preparation(ctx)
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return s.ResumeTaskWithPreparation(ctx, taskID, func(context.Context) error { return nil })
+}
+
+func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation workflowexecution.TaskStartPreparation,
+) ([]workflow.CurrentNode, error) {
 	if s.store == nil {
 		return nil, errors.New("workflow store is required")
 	}
+	if preparation == nil {
+		return nil, errors.New("task resume preparation is required")
+	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := preparation(ctx); err != nil {
 		return nil, err
 	}
 	for _, currentNode := range selected {

@@ -109,6 +109,27 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 	}
 }
 
+func TestTaskStartPlacementFreezesSourceWorkspace(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	alternate, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	_, err = store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID:            task.ID,
+		SourceWorkspaceID: alternate.WorkspaceID,
+	})
+	if !errors.Is(err, ErrSourceWorkspaceAfterAutomation) {
+		t.Fatalf("UpdateTask source workspace error = %v, want %v", err, ErrSourceWorkspaceAfterAutomation)
+	}
+}
+
 func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

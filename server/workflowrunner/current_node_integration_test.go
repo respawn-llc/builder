@@ -241,15 +241,17 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
-	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
+	started, err := f.controller.StartTask(context.Background(), task.ID, func(ctx context.Context) error {
+		return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   f.workspaceID,
+				SourceWorkspaceRoot: f.workspace,
+			},
+		})
 	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)
@@ -955,15 +957,17 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
-	started, err := f.controller.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
-		Snapshot: workflowstore.ExecutionTargetSnapshot{
-			Mode:       workflow.ExecutionTargetModeNone,
-			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		Root: workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   f.workspaceID,
-			SourceWorkspaceRoot: f.workspace,
-		},
+	started, err := f.controller.StartTask(context.Background(), task.ID, func(ctx context.Context) error {
+		return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   f.workspaceID,
+				SourceWorkspaceRoot: f.workspace,
+			},
+		})
 	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)

@@ -16,6 +16,7 @@ import type {
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
+  TaskResumeInput,
   TaskStartInput,
   TaskMutationInput,
   TaskListInput,
@@ -56,6 +57,7 @@ import type {
   TaskApproveResponse,
   TaskMoveResponse,
   TaskMovePreviewResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowBoard,
   WorkflowDeleteImpact,
@@ -575,8 +577,8 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async resumeTask(taskID: string): Promise<void> {
-    await this.#transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
+  async resumeTask(input: TaskResumeInput): Promise<TaskResumeResponse> {
+    return taskLifecycle.resumeTask(this.#transport, input);
   }
 
   async approveApproval(approvalID: string): Promise<TaskApproveResponse> {

@@ -527,6 +527,9 @@ func drainTaskControllerWorkLocked(
 		if start.reference.TaskID != taskID {
 			continue
 		}
+		if _, preparing := c.admissionWorkers[key]; preparing {
+			continue
+		}
 		delete(c.explicitReservations, key)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
@@ -534,6 +537,9 @@ func drainTaskControllerWorkLocked(
 	}
 	for key, start := range c.automaticReservations {
 		if start.reference.TaskID != taskID {
+			continue
+		}
+		if _, preparing := c.admissionWorkers[key]; preparing {
 			continue
 		}
 		delete(c.automaticReservations, key)
@@ -551,14 +557,6 @@ func drainTaskControllerWorkLocked(
 		*drainedGates = append(*drainedGates, gate)
 		*references = append(*references, gate.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, gate.done)
-	}
-	for key, start := range c.admissionWorkers {
-		if start.reference.TaskID != taskID {
-			continue
-		}
-		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
 	}
 	return nil
 }

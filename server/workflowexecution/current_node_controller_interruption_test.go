@@ -159,6 +159,108 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	}
 }
 
+func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	running := currentNodeReferenceForControllerTest(t, "task-preparing-sibling", "node-running")
+	preparing := currentNodeReferenceForControllerTest(t, "task-preparing-sibling", "node-preparing")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 2)
+	preparationRelease := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-preparationRelease:
+		default:
+			close(preparationRelease)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, running); err != nil {
+		t.Fatalf("start running Current Node: %v", err)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(running) {
+			t.Fatalf("started Current Node = %v, want %v", started, running)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("running Current Node did not start")
+	}
+	waitForRunningCurrentNode(t, authority, running)
+
+	store.mu.Lock()
+	store.interrupted = []workflow.CurrentNode{{
+		Reference:  preparing,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+	}}
+	store.mu.Unlock()
+	preparationStarted := make(chan struct{})
+	if _, err := controller.ResumeTaskWithPreparation(context.Background(), running.TaskID, func(ctx context.Context) error {
+		close(preparationStarted)
+		select {
+		case <-preparationRelease:
+			return nil
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}); err != nil {
+		t.Fatalf("resume preparing sibling: %v", err)
+	}
+	select {
+	case <-preparationStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sibling preparation did not start")
+	}
+
+	interruptDone := make(chan error, 1)
+	go func() {
+		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID})
+	}()
+	select {
+	case err := <-interruptDone:
+		if err != nil {
+			t.Fatalf("interrupt running sibling: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Interrupt waited for non-selected sibling preparation")
+	}
+	if interruption, interrupted := store.interruption(preparing); interrupted {
+		t.Fatalf("preparing sibling was interrupted: %+v", interruption)
+	}
+
+	close(preparationRelease)
+	select {
+	case started := <-runner.started:
+		if !started.Equal(preparing) {
+			t.Fatalf("started Current Node = %v, want preserved sibling %v", started, preparing)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preserved sibling did not start after Task Interrupt")
+	}
+}
+
 func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

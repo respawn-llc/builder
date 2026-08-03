@@ -13,6 +13,7 @@ import type {
   TaskApproveResponse,
   TaskMoveResponse,
   TaskMovePreviewResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowBoard,
@@ -184,26 +185,33 @@ const dependencyConfirmationRequiredResponseSchema = z
       }) as const,
   );
 
+const appliedCurrentNodesResponseSchema = z
+  .object({
+    outcome: z.literal("applied"),
+    applied: z
+      .object({
+        current_nodes: z.array(currentNodeSchema).min(1),
+      })
+      .strict(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        applied: { currentNodes: value.applied.current_nodes },
+      }) as const,
+  );
+
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          current_nodes: z.array(currentNodeSchema).min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: { currentNodes: value.applied.current_nodes },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
+]);
+
+export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
+  appliedCurrentNodesResponseSchema,
+  selectionRequiredResponseSchema,
 ]);
 
 const taskMoveNoOpResponseSchema = z
@@ -218,23 +226,7 @@ const taskMoveNoOpResponseSchema = z
   }));
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          current_nodes: z.array(currentNodeSchema).min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: { currentNodes: value.applied.current_nodes },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
   taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,

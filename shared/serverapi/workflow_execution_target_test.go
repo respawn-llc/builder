@@ -18,6 +18,7 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 
 	for _, request := range []interface{ Validate() error }{
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
+		WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &valid},
 		WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &valid},
 	} {
 		if err := request.Validate(); err != nil {
@@ -34,6 +35,9 @@ func TestWorkflowExecutionTargetSelectionRequestValidation(t *testing.T) {
 	} {
 		if err := (WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("selection %#v validated", selection)
+		}
+		if err := (WorkflowTaskResumeRequest{TaskID: "task", SetupOperationID: NewWorktreeSetupOperationID(), ExecutionTarget: &selection}).Validate(); err == nil {
+			t.Fatalf("resume selection %#v validated", selection)
 		}
 		if err := (WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node", ExecutionTarget: &selection}).Validate(); err == nil {
 			t.Fatalf("move selection %#v validated", selection)
@@ -61,6 +65,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &sessionID,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -91,6 +96,7 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &zero,
+			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -173,6 +179,8 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 	for _, response := range []interface{ Validate() error }{
 		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeApplied, Applied: &startApplied},
 		WorkflowTaskStartResponse{Outcome: WorkflowTaskActionOutcomeSelectionRequired, SelectionRequired: &requirement},
+		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskResumeApplied{CurrentNodes: currentNodes}},
+		WorkflowTaskResumeResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
 		WorkflowTaskApproveResponse{Outcome: WorkflowExecutionTargetActionOutcomeApplied, Applied: &WorkflowTaskApproveApplied{TaskID: "task", CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeNoOp, NoOp: &WorkflowTaskMoveNoOp{CurrentNodes: currentNodes}},
 		WorkflowTaskMoveResponse{Outcome: WorkflowExecutionTargetActionOutcomeSelectionRequired, SelectionRequired: &requirement},
@@ -209,6 +217,7 @@ func TestWorkflowExecutionTargetActionResponsesAreOneOf(t *testing.T) {
 func TestWorkflowExecutionTargetActionResponsesExposeOnlyDiscriminatedPayloads(t *testing.T) {
 	responseTypes := []reflect.Type{
 		reflect.TypeOf(WorkflowTaskStartResponse{}),
+		reflect.TypeOf(WorkflowTaskResumeResponse{}),
 		reflect.TypeOf(WorkflowTaskApproveResponse{}),
 		reflect.TypeOf(WorkflowTaskMoveResponse{}),
 	}

@@ -210,7 +210,15 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+			err: errors.New("Resume must not steer an assignment"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -220,12 +228,21 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 		}
 	})
 
-	resumed, err := controller.ResumeTask(context.Background(), reference.TaskID)
+	prepared := make(chan struct{}, 1)
+	resumed, err := controller.ResumeTaskWithPreparation(context.Background(), reference.TaskID, func(context.Context) error {
+		prepared <- struct{}{}
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
 	if len(resumed) != 1 || !resumed[0].Reference.Equal(reference) {
 		t.Fatalf("resumed Current Nodes = %+v, want %v", resumed, reference)
+	}
+	select {
+	case <-prepared:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resume preparation did not run")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return len(runner.promptDeliveries()) == 1
@@ -594,7 +611,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTaskWithExecutionTarget(context.Background(), taskID, nil)
+		_, err := controller.StartTask(context.Background(), taskID, func(context.Context) error { return nil })
 		startDone <- err
 	}()
 	select {
@@ -617,7 +634,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	select {
 	case err := <-startDone:
 		if err != nil {
-			t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+			t.Fatalf("StartTask: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task start did not finish")
@@ -636,6 +653,111 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		t.Fatal("explicit admission did not begin")
 	}
 	releaseRunner()
+}
+
+func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-deferred-preparation", "node-agent")
+	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
+	permit := NewMutationPermit()
+	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
+		AgentConcurrency:  1,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+	})
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	preparationStarted := make(chan struct{})
+	preparationRelease := make(chan struct{})
+
+	started := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(context.Background(), reference.TaskID, func(ctx context.Context) error {
+			close(preparationStarted)
+			select {
+			case <-preparationRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		})
+		started <- err
+	}()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("StartTask: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("StartTask waited for asynchronous preparation")
+	}
+	<-preparationStarted
+	permitAvailable := make(chan error, 1)
+	go func() {
+		permitAvailable <- permit.Run(context.Background(), func(context.Context) error { return nil })
+	}()
+	select {
+	case err := <-permitAvailable:
+		if err != nil {
+			t.Fatalf("unrelated mutation permit: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("preparation blocked unrelated workflow mutations")
+	}
+	close(preparationRelease)
+	<-runner.entered
+	close(runner.release)
+}
+
+func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-preparation-failure", "node-agent")
+	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	cause := errors.New("worktree setup failed")
+
+	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error {
+		return cause
+	}); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if interruption, ok := store.interruption(reference); ok {
+			if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+				interruption.detail.Fields["error"] != cause.Error() {
+				t.Fatalf("interruption = %+v, want preparation failure", interruption)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("placed Current Node was not interrupted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if runner.starts() != 0 {
+		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
 }
 
 func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {

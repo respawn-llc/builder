@@ -701,6 +701,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		return TaskWorktreeMaterialization{}, sql.ErrNoRows
 	}
 	cleanup.active = false
+	worktree := registeredTopologyEntry(created)
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: req.Workspace.RootPath,
@@ -714,10 +715,10 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		},
 		CreatedBranch: createdBranch,
 	}); err != nil {
-		return TaskWorktreeMaterialization{}, err
+		return TaskWorktreeMaterialization{}, serverapi.NewWorktreeSetupRetainedError(worktree, err.Error(), err)
 	}
 	return TaskWorktreeMaterialization{
-		Worktree:      registeredTopologyEntry(created),
+		Worktree:      worktree,
 		Created:       true,
 		CreatedBranch: createdBranch,
 	}, nil

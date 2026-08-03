@@ -204,7 +204,7 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTaskWithExecutionTarget(ctx, reference.TaskID, nil)
+	_, err := controller.StartTask(ctx, reference.TaskID, func(context.Context) error { return nil })
 	return err
 }
 
@@ -343,7 +343,7 @@ func (*currentNodeControllerStore) TaskExecutionScope(context.Context, workflow.
 	return workflowstore.TaskExecutionScope{ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID}, nil
 }
 
-func (s *currentNodeControllerStore) StartTaskWithExecutionTarget(ctx context.Context, _ workflow.TaskID, _ *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
+func (s *currentNodeControllerStore) StartTask(ctx context.Context, _ workflow.TaskID) (workflowstore.StartTaskResult, error) {
 	if s.startTaskStarted != nil {
 		s.startTaskOnce.Do(func() {
 			close(s.startTaskStarted)

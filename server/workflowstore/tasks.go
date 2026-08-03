@@ -308,6 +308,13 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	metadataJSON := task.MetadataJson
 	if requested := strings.TrimSpace(req.SourceWorkspaceID); requested != "" && requested != sourceWorkspaceID {
+		backlog, err := taskCurrentPositionIsBacklog(ctx, q, workflow.TaskID(task.ID))
+		if err != nil {
+			return TaskRecord{}, err
+		}
+		if !backlog {
+			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
+		}
 		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
 		}
@@ -606,6 +613,21 @@ func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Que
 		}
 	}
 	return "", fmt.Errorf("project %q has no source workspace", projectID)
+}
+
+func taskCurrentPositionIsBacklog(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (bool, error) {
+	currentNodes, err := q.ListTaskCurrentNodes(ctx, string(taskID))
+	if err != nil {
+		return false, err
+	}
+	if len(currentNodes) != 1 {
+		return false, nil
+	}
+	node, err := q.GetWorkflowNode(ctx, currentNodes[0].NodeID)
+	if err != nil {
+		return false, err
+	}
+	return workflow.NodeKind(node.Kind) == workflow.NodeKindStart, nil
 }
 
 func taskMetadataWithSourceWorkspaceSnapshot(ctx context.Context, q *sqlitegen.Queries, currentMetadata, sourceWorkspaceID string) (string, error) {

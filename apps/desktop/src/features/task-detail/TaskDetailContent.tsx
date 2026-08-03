@@ -11,6 +11,7 @@ import {
 } from "./TaskDetailDescriptionPresentation";
 import { TaskDetailList } from "./TaskDetailList";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
+import { TaskResumeProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -77,16 +78,14 @@ export function TaskDetailContent({
   }
   const update = useUpdateTask(detail.id, detail.projectID);
   const reportActionError = useCallback(
-    (action: "dependency_remove" | "interrupt" | "resume", error: unknown) => {
+    (action: "dependency_remove" | "interrupt", error: unknown) => {
       const notice =
         action === "interrupt"
           ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
-          : action === "resume"
-            ? { id: "task-resume-error", title: t("board.resumeFailed") }
-            : {
-                id: "task-dependency-remove-error",
-                title: t("task.dependenciesRemoveFailed"),
-              };
+          : {
+              id: "task-dependency-remove-error",
+              title: t("task.dependenciesRemoveFailed"),
+            };
       push({
         ...notice,
         body: errorMessage(error),
@@ -125,7 +124,8 @@ export function TaskDetailContent({
   }
 
   return (
-    <TaskDetailList
+    <TaskResumeProvider key={detail.id} onApplied={mutations.refresh} taskID={detail.id}>
+      <TaskDetailList
       activity={activity}
       attention={attention}
       comments={comments}
@@ -186,8 +186,9 @@ export function TaskDetailContent({
       selectedTab={selectedTab}
       setTab={setSelectedTab}
       updateError={update.error}
-      updatePending={update.isPending}
-    />
+        updatePending={update.isPending}
+      />
+    </TaskResumeProvider>
   );
 }
 

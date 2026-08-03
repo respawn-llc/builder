@@ -465,6 +465,7 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -479,22 +480,43 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
-			TaskID:            taskID,
-			InvokingSessionID: invokingSessionID,
+		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
+			return remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+				TaskID:            taskID,
+				InvokingSessionID: invokingSessionID,
+				SetupOperationID:  setupOperationID,
+				ExecutionTarget:   executionTarget,
+			})
 		})
 		if err != nil {
-			if writeWorkflowTaskMutationSelfTargetError(stderr, err) {
+			if writeWorkflowExecutionTargetError(stderr, err) ||
+				writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				return 1
 			}
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := resp.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
+			return 1
+		}
+		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -503,7 +525,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintf(stderr, "resumed task %s but failed to load task detail for output: %v\n", taskID, err)
 			return 1
 		}
-		writeTaskResumeResult(stdout, detail, resp)
+		writeTaskResumeResult(stdout, detail, *applied)
 		return 0
 	})
 }
@@ -910,7 +932,11 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandR
 		for {
 			event, err := subscription.Next(progressCtx)
 			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) || errors.Is(err, io.EOF) {
+				if errors.Is(err, io.EOF) {
+					done <- io.ErrUnexpectedEOF
+					return
+				}
+				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) {
 					done <- nil
 					return
 				}

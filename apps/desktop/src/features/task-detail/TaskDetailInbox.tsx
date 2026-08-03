@@ -173,7 +173,7 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} mutations={mutations} />
+      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} />
     </div>
   );
 }

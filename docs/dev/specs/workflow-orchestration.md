@@ -320,6 +320,7 @@
 - Kent presents every required Parameter value before movement. Values already available from the Task are prefilled and remain editable; the operator supplies unresolved values and may override prefilled values.
 - Deliberately selecting an Approval-gated Transition counts as its Approval. Kent applies the move without creating another Approval and clears any older pending Approval.
 - Task Start and manual movement into executable work make no Task change while Execution Target selection is required. Dismissal leaves the Task unchanged.
+- After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without holding the shared Workflow mutation permit; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
 - Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
 - Other conflicting lifecycle operations block Manual Move.
@@ -445,14 +446,14 @@
 - Repository default branch uses configured local remote-HEAD metadata: `origin` when configured, otherwise one unambiguous configured remote HEAD. Kent does not contact remotes or guess branch names; missing or ambiguous metadata makes the configured target unavailable.
 - `ask_on_first_execution` and an unavailable configured target use the same task-local selection flow. They offer no managed worktree, source `HEAD`, repository default branch, and custom Git ref.
 - For `ask_on_first_execution`, repository default branch is preselected. For an unavailable configured target, the configured mode and custom-ref input remain selected when useful; otherwise repository default branch is preselected.
-- An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why.
+- An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why, except during Task Start where resolution occurs after placement and failure interrupts the placed Current Node. Resuming that unlocked Current Node requests a concrete target before it requeues.
 - Selection-required results distinguish two reasons: the Workflow requires selection, or the configured target is unavailable. Every selection flow offers all four concrete modes.
-- Failure to resolve an explicitly selected custom ref is a validation failure. It does not recursively request selection or fall back to another target.
-- A Task locks target-selection provenance only when the initiating action successfully reaches its first executable current Node. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
+- Failure to resolve an explicitly selected custom ref is a validation failure. During Task Start that failure occurs asynchronously after placement; it does not recursively request selection or fall back to another target. A later Resume may select another concrete target while the Task remains unlocked.
+- A Task locks target-selection provenance when preparation establishes the first Execution Root. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
 - A Task with a legacy managed worktree and usable recorded `HEAD` continues to use that worktree. Kent identifies its observed commit as legacy provenance and does not present it as a known original branch point.
 - A legacy Task without a managed worktree remains unlocked and uses its Workflow's source-`HEAD` policy.
 - Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
-- Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
+- Managed worktree setup failure during Task Start leaves placement applied and interrupts the placed Current Node. For other initiating actions it leaves the action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when an operation creates or recreates a worktree root. A later retry does not rerun setup for an existing compatible root.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.
 - Workflow Task setup has no Session identity. Its JSON input represents the Session as `null`, and its Session environment value is absent. Session-originated setup supplies the requesting Session identity in both inputs.

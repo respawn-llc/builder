@@ -72,7 +72,6 @@
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
-- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. A usable fixed policy is not overridden.
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task
   Dependencies, Desktop opens dependency confirmation before Execution Target
   selection or another continuation dialog.
@@ -99,9 +98,10 @@
 - Advancing to the values or confirmation phase animates the content and dialog size, subject to reduced-motion preference. The dialog has no Back action; Cancel closes it, and choosing another Transition requires another drop.
 - Selecting a Fan-Out Transition moves to every target Node. The dialog does not list sibling destinations, and dropping onto one fan-out member never starts that branch alone.
 - Selecting an Approval-gated Transition in the Manual Move dialog acts as the Approval and does not open another Approval surface.
-- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. For Manual Move, its dialog closes before Execution Target selection opens. A usable fixed policy is not overridden.
+- Starting or manually moving to executable work opens Execution Target selection when the Workflow asks on first execution. Manual Move also opens it when its configured target is unavailable; its dialog closes before Execution Target selection opens. A usable fixed policy is not overridden.
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
-- Closing Execution Target selection leaves the Task unchanged. Manual Move does not interrupt live work until required target selection succeeds. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
+- Closing Execution Target selection leaves the Task unchanged. Manual Move does not interrupt live work until required target selection succeeds. During Manual Move resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
+- Desktop acknowledges Task Start after durable placement without waiting for preparation. Preparation failure uses the existing interrupted-Current-Node error display and Resume action. Resume opens the ordinary Execution Target selection flow when the interrupted Task is still unlocked.
 - Board movement, Done permission, paging, status, Resume, and Interrupt follow server-authoritative live execution facts. The desktop never infers blockers from stored Task state.
 - Submitting a Manual Move revalidates it. If the Task or Workflow changed while its dialog was open, the desktop uses the ordinary move error and provides no dedicated stale-preflight recovery flow.
 - Invalid and default-Node-only Workflows remain visible with their Tasks. Invalid Workflows permit Backlog creation, editing where allowed, and comments, but disable drag, Start, Resume, manual move, and Done. Existing executable Nodes created under an earlier valid definition retain their server-provided Resume and Interrupt actions.
