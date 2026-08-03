@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/app-facade", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/app-facade")>();
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     useAppNavigation: () => mocks.navigation,
