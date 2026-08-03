@@ -5,17 +5,29 @@ import (
 	"strings"
 )
 
-func ValidateDirtyState[K ~string](kind K, dirtyFileCount *int, unknownCause *string) error {
-	switch string(kind) {
-	case "clean":
+type DirtyStateKind string
+
+const (
+	DirtyStateClean   DirtyStateKind = "clean"
+	DirtyStateDirty   DirtyStateKind = "dirty"
+	DirtyStateUnknown DirtyStateKind = "unknown"
+)
+
+type TransitionKind string
+
+const TransitionDelete TransitionKind = "delete"
+
+func ValidateDirtyState(kind DirtyStateKind, dirtyFileCount *int, unknownCause *string) error {
+	switch kind {
+	case DirtyStateClean:
 		if dirtyFileCount != nil || unknownCause != nil {
 			return errors.New("clean dirty state has no payload")
 		}
-	case "dirty":
+	case DirtyStateDirty:
 		if dirtyFileCount == nil || *dirtyFileCount <= 0 || unknownCause != nil {
 			return errors.New("dirty state requires a positive count only")
 		}
-	case "unknown":
+	case DirtyStateUnknown:
 		if dirtyFileCount != nil || unknownCause == nil || strings.TrimSpace(*unknownCause) == "" {
 			return errors.New("unknown dirty state requires an unknown cause only")
 		}
@@ -25,23 +37,23 @@ func ValidateDirtyState[K ~string](kind K, dirtyFileCount *int, unknownCause *st
 	return nil
 }
 
-func ValidateDeletePrecondition[K ~string](kind K, dirtyFileCount *int, unknownCause *string) error {
+func ValidateDeletePrecondition(kind DirtyStateKind, dirtyFileCount *int, unknownCause *string) error {
 	if err := ValidateDirtyState(kind, dirtyFileCount, unknownCause); err != nil {
 		return err
 	}
-	if string(kind) == "clean" {
+	if kind == DirtyStateClean {
 		return errors.New("clean worktree cannot fail delete precondition")
 	}
 	return nil
 }
 
-func ValidateDeleteTransitionPrecondition[T ~string, K ~string](
-	transition T,
-	kind K,
+func ValidateDeleteTransitionPrecondition(
+	transition TransitionKind,
+	kind DirtyStateKind,
 	dirtyFileCount *int,
 	unknownCause *string,
 ) error {
-	if string(transition) != "delete" {
+	if transition != TransitionDelete {
 		return errors.New("delete precondition is only valid for delete transitions")
 	}
 	return ValidateDeletePrecondition(kind, dirtyFileCount, unknownCause)

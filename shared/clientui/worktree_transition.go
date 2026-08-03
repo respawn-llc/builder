@@ -118,7 +118,7 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 		if outcome.Failure.DeletePrecondition != nil {
 			precondition := outcome.Failure.DeletePrecondition
 			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
-				outcome.Transition,
+				worktreecontract.TransitionKind(outcome.Transition),
 				precondition.Kind,
 				precondition.DirtyFileCount,
 				precondition.UnknownCause,

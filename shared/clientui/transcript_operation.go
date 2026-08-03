@@ -56,7 +56,7 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 		if o.DeletePrecondition != nil {
 			precondition := o.DeletePrecondition
 			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
-				o.Transition,
+				worktreecontract.TransitionKind(o.Transition),
 				precondition.Kind,
 				precondition.DirtyFileCount,
 				precondition.UnknownCause,

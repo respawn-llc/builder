@@ -4,12 +4,12 @@ import (
 	"core/shared/worktreecontract"
 )
 
-type WorktreeDirtyStateKind string
+type WorktreeDirtyStateKind = worktreecontract.DirtyStateKind
 
 const (
-	WorktreeDirtyStateClean   WorktreeDirtyStateKind = "clean"
-	WorktreeDirtyStateDirty   WorktreeDirtyStateKind = "dirty"
-	WorktreeDirtyStateUnknown WorktreeDirtyStateKind = "unknown"
+	WorktreeDirtyStateClean   = worktreecontract.DirtyStateClean
+	WorktreeDirtyStateDirty   = worktreecontract.DirtyStateDirty
+	WorktreeDirtyStateUnknown = worktreecontract.DirtyStateUnknown
 )
 
 type WorktreeDirtyState struct {
