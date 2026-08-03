@@ -35,7 +35,7 @@ type promptHistoryPersistErrMsg struct {
 }
 
 type promptCatalogRefreshDoneMsg struct {
-	token   uint64
+	token   *uuid.UUID
 	entries []commands.PromptCommandCatalogEntry
 	err     error
 }

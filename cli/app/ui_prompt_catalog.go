@@ -8,6 +8,7 @@ import (
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 func promptCatalogSnapshot(response serverapi.PromptCommandCatalogResponse) ([]commands.PromptCommandCatalogEntry, error) {
@@ -37,27 +38,24 @@ func (m *uiModel) startPromptCatalogRefresh(name string) tea.Cmd {
 		return nil
 	}
 	m.removePromptCatalogEntry(name)
-	m.promptCatalogRefreshToken++
-	if m.promptCatalogRefreshToken == 0 {
-		m.promptCatalogRefreshToken++
-	}
-	token := m.promptCatalogRefreshToken
+	token := uuid.New()
+	m.promptCatalogRefreshToken = &token
 	catalog := m.promptCatalog
 	return func() tea.Msg {
 		response, err := catalog.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
 		if err != nil {
-			return promptCatalogRefreshDoneMsg{token: token, err: err}
+			return promptCatalogRefreshDoneMsg{token: &token, err: err}
 		}
 		entries, err := promptCatalogSnapshot(response)
 		if err != nil {
-			return promptCatalogRefreshDoneMsg{token: token, err: err}
+			return promptCatalogRefreshDoneMsg{token: &token, err: err}
 		}
-		return promptCatalogRefreshDoneMsg{token: token, entries: entries}
+		return promptCatalogRefreshDoneMsg{token: &token, entries: entries}
 	}
 }
 
 func (m *uiModel) handlePromptCatalogRefreshDone(msg promptCatalogRefreshDoneMsg) tea.Cmd {
-	if m == nil || msg.token != m.promptCatalogRefreshToken {
+	if m == nil || msg.token == nil || m.promptCatalogRefreshToken == nil || *msg.token != *m.promptCatalogRefreshToken {
 		return nil
 	}
 	if msg.err != nil {

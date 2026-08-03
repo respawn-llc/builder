@@ -131,9 +131,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			}
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
 			if msg.Content != nil {
-				if req.Input.Kind == serverapi.RuntimeUserTurnInputKindText {
-					resp.Message = *msg.Content
-				}
+				resp.Message = *msg.Content
 			}
 			return nil
 		})

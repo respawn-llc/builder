@@ -75,6 +75,15 @@ func TestCatalogBlankHigherPrecedenceFallsBackAndPreviewCollapsesWhitespaceAtUni
 	}
 }
 
+func TestPreviewTruncatesBeforeTrailingWhitespace(t *testing.T) {
+	content := strings.Repeat("a", 255) + " \nremainder"
+	got := preview(content)
+	want := strings.Repeat("a", 255)
+	if got != want {
+		t.Fatalf("preview = %q, want 255 non-whitespace runes without trailing space", got)
+	}
+}
+
 func TestResolveReadsCurrentWinningContentAndExpandsArguments(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()

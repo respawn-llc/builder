@@ -1587,8 +1587,8 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	if err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
-	if resp.Message != "" {
-		t.Fatalf("prompt command response message = %q, want omitted execution text", resp.Message)
+	if resp.Message != "done" {
+		t.Fatalf("prompt command response message = %q, want assistant result", resp.Message)
 	}
 	if resolver.calls != 1 {
 		t.Fatalf("resolver calls = %d, want 1", resolver.calls)

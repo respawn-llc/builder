@@ -156,7 +156,7 @@ func previewReader(reader io.Reader) (string, error) {
 			continue
 		}
 		if pendingSpace {
-			if outputRunes == 256 {
+			if outputRunes >= 255 {
 				return result.String(), nil
 			}
 			result.WriteByte(' ')

@@ -10,6 +10,7 @@ import (
 	"core/server/promptcommands"
 	"core/server/runtimecontrol"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -35,6 +36,17 @@ type promptCommandEffectiveWorkspaceResolver struct {
 	persistenceRoot string
 }
 
+func promptCommandWorkspaceRoot(target clientui.SessionExecutionTarget, fallback string) (string, error) {
+	if target.Worktree == nil {
+		return fallback, nil
+	}
+	root := strings.TrimSpace(target.Worktree.Root)
+	if root == "" {
+		return "", errors.New("session execution worktree root is required")
+	}
+	return root, nil
+}
+
 func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspace(ctx context.Context, workspaceRoot, name, arguments string) (string, error) {
 	content, err := promptcommands.New(r.persistenceRoot, workspaceRoot).Resolve(name, arguments)
 	if err != nil {
@@ -55,7 +67,11 @@ func (r promptCommandRuntimeResolver) ResolvePromptCommand(ctx context.Context, 
 	if err != nil {
 		return "", err
 	}
-	return r.effectiveWorkspace.ResolvePromptCommandForWorkspace(ctx, binding.CanonicalRoot, name, arguments)
+	workspaceRoot, err := promptCommandWorkspaceRoot(target, binding.CanonicalRoot)
+	if err != nil {
+		return "", err
+	}
+	return r.effectiveWorkspace.ResolvePromptCommandForWorkspace(ctx, workspaceRoot, name, arguments)
 }
 
 var _ runtimecontrol.PromptCommandResolver = promptCommandRuntimeResolver{}

@@ -123,6 +123,19 @@ func TestPromptCommandEffectiveWorkspaceResolverUsesSuppliedWorkspace(t *testing
 	}
 }
 
+func TestPromptCommandWorkspaceRootUsesCurrentWorktree(t *testing.T) {
+	target := clientui.SessionExecutionTarget{
+		Worktree: &clientui.SessionExecutionWorktreeTarget{Root: "/worktrees/feature"},
+	}
+	got, err := promptCommandWorkspaceRoot(target, "/workspace/main")
+	if err != nil {
+		t.Fatalf("promptCommandWorkspaceRoot: %v", err)
+	}
+	if got != "/worktrees/feature" {
+		t.Fatalf("workspace root = %q, want current worktree root", got)
+	}
+}
+
 func TestPromptCommandCatalogRedactsFilesystemCauseAtClientBoundary(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

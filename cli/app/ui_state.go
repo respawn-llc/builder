@@ -105,7 +105,7 @@ type uiInputFeatureState struct {
 	commandRegistry           *commands.Registry
 	promptCatalog             apicontract.PromptCommandCatalogService
 	promptCatalogEntries      []commands.PromptCommandCatalogEntry
-	promptCatalogRefreshToken uint64
+	promptCatalogRefreshToken *uuid.UUID
 	finalAnswerOperation      *uiFinalAnswerOperation
 	finalAnswerOperationToken uint64
 	authSlashCommand          authSlashCommandKind
