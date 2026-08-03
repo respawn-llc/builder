@@ -127,7 +127,7 @@ WHERE id = sqlc.arg(id)
 
 -- name: MoveProjectLabelOrdinalsToTemporaryBand :exec
 UPDATE project_labels
-SET ordinal = ordinal + 100
+SET ordinal = ordinal + CAST(sqlc.arg(temporary_band_offset) AS INTEGER)
 WHERE project_id = sqlc.arg(project_id);
 
 -- name: RenameProjectLabel :one

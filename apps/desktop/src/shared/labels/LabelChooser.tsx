@@ -13,7 +13,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
-import { errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
 import { useAppServices, useStatusController } from "@/app-facade";
 import {
   Button,
@@ -36,6 +36,7 @@ import { labelNameContains, labelNamesEqual } from "./labelComparison";
 import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
 import {
   handleLabelChooserSearchKeyDown,
+  labelMutationErrorMessage,
   labelResultRowSelection,
   selectLabel,
   selectUnlabeled,
@@ -310,7 +311,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           onReorder(nextLabels) {
             void mutations.reorder.mutateAsync(nextLabels.map((label) => label.id)).catch((error: unknown) => {
               push({
-                body: errorMessage(error),
+                body: labelMutationErrorMessage(error, t),
                 durationMs: Infinity,
                 id: "project-label-reorder-error",
                 title: t("labels.mutationFailed"),
@@ -420,9 +421,13 @@ function renderLabelChooserResults({
               confirmDelete,
               commitRename,
               deletion,
-              highlighted:
-                keyboardHighlightedIndex ===
-                (labelIndexes.get(label.id) ?? -1) + (showUnlabeledChoice ? 1 : 0),
+              highlighted: (() => {
+                const labelIndex = labelIndexes.get(label.id);
+                return (
+                  labelIndex !== undefined &&
+                  keyboardHighlightedIndex === labelIndex + (showUnlabeledChoice ? 1 : 0)
+                );
+              })(),
               invocation,
               rename,
               setDeletion,

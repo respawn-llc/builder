@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as AppFacade from "@/app-facade";
 import { createLabelFilterState, type LabelFilterAction } from "./labelFilterState";
@@ -130,6 +130,11 @@ beforeEach(() => {
   hooks.reorder.mockClear();
   hooks.create.mockClear();
   statusPush.mockClear();
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(Element.prototype, "setPointerCapture");
+  Reflect.deleteProperty(Element.prototype, "releasePointerCapture");
 });
 
 describe("LabelChooser", () => {
@@ -375,8 +380,6 @@ describe("LabelChooser", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("button", { hidden: true, name: "Reorder Alpha" })).toHaveLength(1);
     });
-    Reflect.deleteProperty(Element.prototype, "setPointerCapture");
-    Reflect.deleteProperty(Element.prototype, "releasePointerCapture");
   });
 
 });

@@ -8854,13 +8854,18 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 
 const moveProjectLabelOrdinalsToTemporaryBand = `-- name: MoveProjectLabelOrdinalsToTemporaryBand :exec
 UPDATE project_labels
-SET ordinal = ordinal + 100
-WHERE project_id = ?1
+SET ordinal = ordinal + CAST(?1 AS INTEGER)
+WHERE project_id = ?2
 `
 
-func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, projectID string) error {
-	_, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, projectID)
-	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 1)
+type MoveProjectLabelOrdinalsToTemporaryBandParams struct {
+	TemporaryBandOffset int64
+	ProjectID           string
+}
+
+func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) error {
+	_, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, arg.TemporaryBandOffset, arg.ProjectID)
+	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 2)
 	return err
 }
 

@@ -57,7 +57,10 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 				Limit:     label.MaxProjectLabels,
 			}
 		}
-		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, trimmedProjectID); err != nil {
+		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+			TemporaryBandOffset: int64(label.MaxProjectLabels),
+			ProjectID:           trimmedProjectID,
+		}); err != nil {
 			return ProjectLabelRecord{}, err
 		}
 		for index := len(current) - 1; index >= 0; index-- {
@@ -165,7 +168,10 @@ func (s *Store) DeleteProjectLabel(ctx context.Context, projectID string, id lab
 			}
 			return ProjectLabelRecord{}, err
 		}
-		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, trimmedProjectID); err != nil {
+		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+			TemporaryBandOffset: int64(label.MaxProjectLabels),
+			ProjectID:           trimmedProjectID,
+		}); err != nil {
 			return ProjectLabelRecord{}, err
 		}
 		nextOrdinal := int64(1)
@@ -220,7 +226,10 @@ func (s *Store) ReorderProjectLabels(ctx context.Context, projectID string, ids 
 		if unchanged {
 			return ProjectLabelReorderResult{Labels: current}, nil
 		}
-		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, trimmedProjectID); err != nil {
+		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+			TemporaryBandOffset: int64(label.MaxProjectLabels),
+			ProjectID:           trimmedProjectID,
+		}); err != nil {
 			return ProjectLabelReorderResult{}, err
 		}
 		for index, id := range ids {
@@ -282,7 +291,7 @@ func projectLabelRecord(id string, projectID string, name string, ordinal int64)
 	if strings.TrimSpace(projectID) == "" {
 		return ProjectLabelRecord{}, errors.New("persisted project label project id is required")
 	}
-	if ordinal < 1 || ordinal > 200 {
+	if ordinal < 1 || ordinal > int64(label.MaxProjectLabels*2) {
 		return ProjectLabelRecord{}, fmt.Errorf("persisted project label %q has invalid ordinal %d", id, ordinal)
 	}
 	return ProjectLabelRecord{

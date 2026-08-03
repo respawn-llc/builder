@@ -2,6 +2,7 @@
 
 -- Project labels are capped at 100 records. Reordering first moves ordinals
 -- into the temporary band 101..200, then rewrites them into 1..100.
+-- The bound mirrors two times labelcontract.MaxProjectLabels for this migration.
 ALTER TABLE project_labels
 ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 1
 CHECK (ordinal BETWEEN 1 AND 200);

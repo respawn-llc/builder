@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
 
-export function prefersReducedMotion(): boolean {
-  return (
-    window.matchMedia instanceof Function && window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
+const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
 
 export function useReducedMotion(): boolean {
   const [reducedMotion, setReducedMotion] = useState(
-    () => prefersReducedMotion(),
+    () => window.matchMedia instanceof Function && window.matchMedia(reducedMotionQuery).matches,
   );
   useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    if (!(window.matchMedia instanceof Function)) {
+      return undefined;
+    }
+    const media = window.matchMedia(reducedMotionQuery);
     const handleChange = () => {
       setReducedMotion(media.matches);
     };
