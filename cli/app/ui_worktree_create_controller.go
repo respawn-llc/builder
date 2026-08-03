@@ -71,6 +71,9 @@ func (d *uiWorktreeCreateDialogState) applyResolveState(state worktreeui.State) 
 	d.submitPending = state.SubmitPending
 	d.resolveToken = state.Token
 	d.resolution = state.Resolution
+	if d.resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindNewBranch {
+		d.baseRefErrorText = ""
+	}
 	d.syncFocus()
 }
 
@@ -176,6 +179,7 @@ func (c uiInputController) handleWorktreeCreateDialogKey(msg tea.KeyMsg) (tea.Mo
 	}
 	if dialog.focus == uiWorktreeCreateFieldBaseRef {
 		dialog.errorText = ""
+		dialog.baseRefErrorText = ""
 	}
 	return m, cmd
 }
