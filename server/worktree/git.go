@@ -10,13 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 )
-
-// ErrBaseRefRequired is returned when a create spec omits a required base ref.
-// Callers match it via errors.Is; the create_branch context is added with %w.
-var ErrBaseRefRequired = errors.New("base ref is required")
 
 var errGitTargetNotFound = errors.New("git target not found")
 
@@ -353,6 +349,14 @@ func (i *GitInspector) ResolveHEAD(ctx context.Context, workspaceRoot string) (G
 }
 
 func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string, revision string) (GitRevision, error) {
+	return i.resolveRevision(ctx, workspaceRoot, revision, true)
+}
+
+func (i *GitInspector) ResolveRevisionCommit(ctx context.Context, workspaceRoot string, revision string) (GitRevision, error) {
+	return i.resolveRevision(ctx, workspaceRoot, revision, false)
+}
+
+func (i *GitInspector) resolveRevision(ctx context.Context, workspaceRoot string, revision string, resolveCanonicalRef bool) (GitRevision, error) {
 	if i == nil {
 		return GitRevision{}, fmt.Errorf("git inspector is required")
 	}
@@ -393,9 +397,9 @@ func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return GitRevision{}, ctxErr
 		}
-		kind := GitRevisionResolutionErrorNonCommit
-		if exitCode < 0 {
-			kind = GitRevisionResolutionErrorGitFailure
+		kind := GitRevisionResolutionErrorGitFailure
+		if exitCode == 1 {
+			kind = GitRevisionResolutionErrorNonCommit
 		}
 		return GitRevision{}, &GitRevisionResolutionError{
 			Kind:         kind,
@@ -410,6 +414,12 @@ func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string
 			RequestedRef: requestedRef,
 			Cause:        fmt.Errorf("git %s returned no commit oid", strings.Join(commitArgs, " ")),
 		}
+	}
+	if !resolveCanonicalRef {
+		return GitRevision{
+			RequestedRef: requestedRef,
+			CommitOID:    commitOID,
+		}, nil
 	}
 
 	symbolicArgs := []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", requestedRef}
@@ -908,49 +918,33 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	return normalized.CreateBranch, nil
 }
 
-func (i *GitInspector) DirtyFileCount(ctx context.Context, worktreeRoot string) (int, error) {
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
 	if i == nil {
-		return 0, fmt.Errorf("git inspector is required")
+		return clientui.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
 	}
 	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return 0, err
-	}
-	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
-	if err != nil {
-		return 0, err
-	}
-	return countPorcelainStatusEntries(output), nil
-}
-
-func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (serverapi.WorktreeDirtyState, error) {
-	if i == nil {
-		return serverapi.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
-	}
-	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
-	if err != nil {
-		return serverapi.WorktreeDirtyState{}, err
+		return clientui.WorktreeDirtyState{}, err
 	}
 	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return serverapi.WorktreeDirtyState{}, ctxErr
+			return clientui.WorktreeDirtyState{}, ctxErr
 		}
 		cause := err.Error()
-		return serverapi.WorktreeDirtyState{
-			Kind:         serverapi.WorktreeDirtyStateUnknown,
+		return clientui.WorktreeDirtyState{
+			Kind:         clientui.WorktreeDirtyStateUnknown,
 			UnknownCause: &cause,
 		}, nil
 	}
 	count := countPorcelainStatusEntries(output)
 	if count == 0 {
-		return serverapi.WorktreeDirtyState{
-			Kind:           serverapi.WorktreeDirtyStateClean,
-			DirtyFileCount: &count,
+		return clientui.WorktreeDirtyState{
+			Kind: clientui.WorktreeDirtyStateClean,
 		}, nil
 	}
-	return serverapi.WorktreeDirtyState{
-		Kind:           serverapi.WorktreeDirtyStateDirty,
+	return clientui.WorktreeDirtyState{
+		Kind:           clientui.WorktreeDirtyStateDirty,
 		DirtyFileCount: &count,
 	}, nil
 }
@@ -1109,22 +1103,10 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
 	baseRef := strings.TrimSpace(spec.BaseRef)
 	branchName := strings.TrimSpace(spec.BranchName)
-	if spec.CreateBranch {
-		if branchName == "" {
-			return CreateSpec{}, fmt.Errorf("branch name is required when create_branch=true")
-		}
-		if baseRef == "" {
-			return CreateSpec{}, fmt.Errorf("%w when create_branch=true", ErrBaseRefRequired)
-		}
-		return CreateSpec{BaseRef: baseRef, CreateBranch: true, BranchName: branchName}, nil
+	if err := serverapi.ValidateWorktreeCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
+		return CreateSpec{}, err
 	}
-	if baseRef == "" {
-		return CreateSpec{}, fmt.Errorf("%w when create_branch=false", ErrBaseRefRequired)
-	}
-	if branchName != "" {
-		return CreateSpec{}, fmt.Errorf("branch name must be empty when create_branch=false")
-	}
-	return CreateSpec{BaseRef: baseRef, CreateBranch: false}, nil
+	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil
 }
 
 type execGitCommandRunner struct{}

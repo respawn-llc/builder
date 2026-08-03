@@ -2,6 +2,7 @@ package serverapi
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"core/shared/clientui"
@@ -51,6 +52,115 @@ func TestWorktreeTopologyEntryRequiresExactlyOneMatchingPayload(t *testing.T) {
 		OriginSessionID: &empty,
 	}).Validate(); err == nil {
 		t.Fatal("empty optional Kent fact validated")
+	}
+}
+
+func TestWorktreeTopologyEntryDeletionSelectorCoversEveryDeletionVariant(t *testing.T) {
+	registered := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantRegistered,
+		Registered: &WorktreeRegisteredFacts{
+			Git: WorktreeGitFacts{
+				CanonicalRoot: "/repo/feature",
+				HeadObject:    "abc123",
+				IsMain:        false,
+			},
+			Kent: WorktreeKentFacts{
+				WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+				CanonicalRoot: "/repo/feature",
+				DisplayName:   "feature",
+			},
+		},
+	}
+	missing := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantMissing,
+		Missing: &WorktreeMissingFacts{
+			Kent: registered.Registered.Kent,
+		},
+	}
+	external := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantExternal,
+		External: &WorktreeExternalFacts{
+			Git: WorktreeGitFacts{
+				CanonicalRoot: "/repo/external",
+				HeadObject:    "def456",
+				IsMain:        false,
+			},
+		},
+	}
+	mainRegistered := registered
+	mainRegistered.Registered = &WorktreeRegisteredFacts{
+		Git:  registered.Registered.Git,
+		Kent: registered.Registered.Kent,
+	}
+	mainRegistered.Registered.Git.IsMain = true
+	mainExternal := external
+	mainExternal.External = &WorktreeExternalFacts{
+		Git: external.External.Git,
+	}
+	mainExternal.External.Git.IsMain = true
+
+	tests := []struct {
+		name    string
+		entry   WorktreeTopologyEntry
+		want    string
+		blocked bool
+	}{
+		{name: "registered", entry: registered, want: registered.Registered.Kent.WorktreeID},
+		{name: "missing", entry: missing, want: missing.Missing.Kent.WorktreeID},
+		{name: "external", entry: external, want: external.External.Git.CanonicalRoot},
+		{name: "registered main", entry: mainRegistered, blocked: true},
+		{name: "external main", entry: mainExternal, blocked: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := test.entry.DeletionSelector()
+			if test.blocked {
+				if !errors.Is(err, ErrWorktreeBlocked) {
+					t.Fatalf("DeletionSelector error = %v, want ErrWorktreeBlocked", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeletionSelector: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("DeletionSelector = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWorktreeDeletePreviewResponseValidatesTopologyOwnedSelectorAndCleanliness(t *testing.T) {
+	entry := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantMissing,
+		Missing: &WorktreeMissingFacts{
+			Kent: WorktreeKentFacts{
+				WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+				CanonicalRoot: "/repo/missing",
+				DisplayName:   "missing",
+			},
+		},
+	}
+	valid := WorktreeDeletePreviewResponse{
+		Worktree:         entry,
+		DeletionSelector: entry.Missing.Kent.WorktreeID,
+		Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid deletion preview rejected: %v", err)
+	}
+	mismatched := valid
+	mismatched.DeletionSelector = "/repo/missing"
+	if err := mismatched.Validate(); err == nil {
+		t.Fatal("deletion preview accepted a selector that does not match topology")
+	}
+	notClean := valid
+	notClean.Cleanliness = clientui.WorktreeDirtyState{
+		Kind:         clientui.WorktreeDirtyStateUnknown,
+		UnknownCause: stringPointer("status unavailable"),
+	}
+	if err := notClean.Validate(); err == nil {
+		t.Fatal("missing deletion preview accepted non-cleanliness")
 	}
 }
 

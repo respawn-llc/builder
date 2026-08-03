@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/worktreecontract"
 )
 
 var (
@@ -283,42 +285,8 @@ func (e *WorktreeSetupRetainedError) Validate() error {
 	return nil
 }
 
-type WorktreeDirtyStateKind string
-
-const (
-	WorktreeDirtyStateClean   WorktreeDirtyStateKind = "clean"
-	WorktreeDirtyStateDirty   WorktreeDirtyStateKind = "dirty"
-	WorktreeDirtyStateUnknown WorktreeDirtyStateKind = "unknown"
-)
-
-type WorktreeDirtyState struct {
-	Kind           WorktreeDirtyStateKind `json:"kind"`
-	DirtyFileCount *int                   `json:"dirty_file_count,omitempty"`
-	UnknownCause   *string                `json:"unknown_cause,omitempty"`
-}
-
-func (state WorktreeDirtyState) Validate() error {
-	switch state.Kind {
-	case WorktreeDirtyStateClean:
-		if state.DirtyFileCount == nil || *state.DirtyFileCount != 0 || state.UnknownCause != nil {
-			return errors.New("clean dirty state requires a present zero count only")
-		}
-	case WorktreeDirtyStateDirty:
-		if state.DirtyFileCount == nil || *state.DirtyFileCount <= 0 || state.UnknownCause != nil {
-			return errors.New("dirty state requires a positive count only")
-		}
-	case WorktreeDirtyStateUnknown:
-		if state.DirtyFileCount != nil || state.UnknownCause == nil || strings.TrimSpace(*state.UnknownCause) == "" {
-			return errors.New("unknown dirty state requires an unknown cause only")
-		}
-	default:
-		return errors.New("worktree dirty state kind is invalid")
-	}
-	return nil
-}
-
 type WorktreeDeletePreconditionError struct {
-	DirtyState WorktreeDirtyState `json:"dirty_state"`
+	DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 }
 
 func (e *WorktreeDeletePreconditionError) Error() string {
@@ -327,7 +295,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 		return base
 	}
 	switch e.DirtyState.Kind {
-	case WorktreeDirtyStateDirty:
+	case clientui.WorktreeDirtyStateDirty:
 		if e.DirtyState.DirtyFileCount != nil && *e.DirtyState.DirtyFileCount > 0 {
 			return fmt.Sprintf(
 				"%s: %d modified or untracked file(s); force folder removal to continue",
@@ -335,7 +303,7 @@ func (e *WorktreeDeletePreconditionError) Error() string {
 				*e.DirtyState.DirtyFileCount,
 			)
 		}
-	case WorktreeDirtyStateUnknown:
+	case clientui.WorktreeDirtyStateUnknown:
 		if e.DirtyState.UnknownCause != nil {
 			cause := strings.TrimSpace(*e.DirtyState.UnknownCause)
 			if cause != "" {
@@ -363,8 +331,8 @@ func (e *WorktreeDeletePreconditionError) RPCErrorData() json.RawMessage {
 		return nil
 	}
 	return marshalRPCErrorData(struct {
-		Type       string             `json:"type"`
-		DirtyState WorktreeDirtyState `json:"dirty_state"`
+		Type       string                      `json:"type"`
+		DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 	}{
 		Type:       "worktree_delete_precondition",
 		DirtyState: e.DirtyState,
@@ -375,13 +343,11 @@ func (e *WorktreeDeletePreconditionError) Validate() error {
 	if e == nil {
 		return errors.New("worktree delete precondition error is required")
 	}
-	if err := e.DirtyState.Validate(); err != nil {
-		return err
-	}
-	if e.DirtyState.Kind == WorktreeDirtyStateClean {
-		return errors.New("clean worktree cannot fail delete precondition")
-	}
-	return nil
+	return worktreecontract.ValidateDeletePrecondition(
+		e.DirtyState.Kind,
+		e.DirtyState.DirtyFileCount,
+		e.DirtyState.UnknownCause,
+	)
 }
 
 func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
@@ -449,8 +415,8 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 		return result
 	case "worktree_delete_precondition":
 		var payload struct {
-			Type       string             `json:"type"`
-			DirtyState WorktreeDirtyState `json:"dirty_state"`
+			Type       string                      `json:"type"`
+			DirtyState clientui.WorktreeDirtyState `json:"dirty_state"`
 		}
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fallbackWorktreeRPCError(message)

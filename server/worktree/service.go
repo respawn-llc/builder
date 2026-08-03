@@ -22,6 +22,7 @@ import (
 	"core/shared/boundedio"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
@@ -71,6 +72,34 @@ type Service struct {
 type syncedWorktree struct {
 	record metadata.WorktreeRecord
 	git    GitWorktree
+}
+
+func (s *Service) evaluateDeleteCleanliness(ctx context.Context, entry serverapi.WorktreeTopologyEntry) (clientui.WorktreeDirtyState, error) {
+	if s == nil || s.git == nil {
+		return clientui.WorktreeDirtyState{}, errors.New("worktree service dependencies are required")
+	}
+	if err := entry.Validate(); err != nil {
+		return clientui.WorktreeDirtyState{}, err
+	}
+	if entry.Variant == serverapi.WorktreeTopologyVariantMissing {
+		return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}, nil
+	}
+	root := topologyRoot(entry)
+	if strings.TrimSpace(root) == "" {
+		return clientui.WorktreeDirtyState{}, errors.New("worktree topology root is required")
+	}
+	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
+	if err == nil {
+		return dirtyState, nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return clientui.WorktreeDirtyState{}, err
+	}
+	cause := err.Error()
+	return clientui.WorktreeDirtyState{
+		Kind:         clientui.WorktreeDirtyStateUnknown,
+		UnknownCause: &cause,
+	}, nil
 }
 
 type deleteTargetActivityLease struct {
@@ -824,7 +853,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		if err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
-		forceRemoval = dirtyState.Kind != serverapi.WorktreeDirtyStateClean
+		forceRemoval = dirtyState.Kind != clientui.WorktreeDirtyStateClean
 	}
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
@@ -1028,6 +1057,27 @@ func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi
 }
 
 func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (resp serverapi.WorktreeCreateResponse, err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		if contractErr := serverapi.ValidateWorktreeCreateErrorBoundary(err, "worktree.create", invariant.NewPolicy()); contractErr != nil {
+			err = contractErr
+			return
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		var retainedErr *serverapi.WorktreeSetupRetainedError
+		if errors.As(err, &retainedErr) {
+			return
+		}
+		var createErr *serverapi.WorktreeCreateError
+		if errors.As(err, &createErr) {
+			return
+		}
+		err = serverapi.NewWorktreeCreateError(serverapi.WorktreeCreateErrorOwnerForm, err.Error(), err)
+	}()
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
@@ -1053,6 +1103,28 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
+	if createSpec.CreateBranch {
+		resolved, resolveErr := s.git.ResolveRevisionCommit(ctx, workspaceCtx.workspaceRoot, createSpec.BaseRef)
+		if resolveErr != nil {
+			if errors.Is(resolveErr, context.Canceled) || errors.Is(resolveErr, context.DeadlineExceeded) {
+				return serverapi.WorktreeCreateResponse{}, resolveErr
+			}
+			owner := serverapi.WorktreeCreateErrorOwnerForm
+			var revisionErr *GitRevisionResolutionError
+			if errors.As(resolveErr, &revisionErr) {
+				switch revisionErr.Kind {
+				case GitRevisionResolutionErrorInvalidRevision, GitRevisionResolutionErrorNonCommit:
+					owner = serverapi.WorktreeCreateErrorOwnerBaseRef
+				}
+			}
+			return serverapi.WorktreeCreateResponse{}, serverapi.NewWorktreeCreateError(
+				owner,
+				resolveErr.Error(),
+				resolveErr,
+			)
+		}
+		createSpec.BaseRef = resolved.CommitOID
+	}
 	var worktreeRoot string
 	rootKind := managedRootKindExplicit
 	if strings.TrimSpace(req.RootPath) == "" {

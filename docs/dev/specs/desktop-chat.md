@@ -311,6 +311,7 @@
 - If the deletion preview request fails, the popup stays open and replaces loading with the authoritative error in error-colored plain text.
 - A preview-request failure shows ordinary Close but no Retry action, deletion action, or Sonner.
 - Closing and reopening the delete popup starts a fresh preview request.
+- A Missing target previews as Clean because deleting it preserves any leftover recorded directory.
 - The popup shows a Dirty or Unknown warning before its action items. Worktree List and Worktree Status remain lightweight and do not add dirty state.
 - After preview, a branch-backed target offers `Confirm` and `Confirm + Branch`.
 - The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.
@@ -348,6 +349,10 @@
 - Submitting a nonempty value before its latest resolution finishes waits for that resolution and then creates only if it succeeds. Editing the field again cancels that pending submit intent.
 - Submitting an empty value sends no resolution or creation request and shows the inline validation error `Branch or ref is required`.
 - `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- Before creating a new branch, the server must resolve `Base ref` once to an immutable commit. The server must use that commit for creation.
+- Blank, invalid, and unresolved Base refs must be owned by the `Base ref` field.
+- A failure after successful Base-ref resolution must be owned by the creation form, including a race in which the resolved commit disappears before creation.
+- Desktop must use typed ownership to place creation failures. Desktop must never inspect diagnostic text to choose between the `Base ref` field and the creation form.
 - Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
 - Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
 - An empty Base ref sends no creation request and shows `Base ref is required`.
@@ -355,6 +360,8 @@
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If creation fails before a worktree exists, Desktop must stop the spinner. Desktop must preserve every entered value. Desktop must show the authoritative diagnostic inline at its typed owner.
+- If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
 - If creation fails before Kent retains a worktree, Desktop keeps the creation state open with every entered value preserved.
 - A pre-retention creation failure not owned by one field shows the authoritative diagnostic as error-colored form-level plain text below the fields. It shows no Sonner.
 - The Worktree sidebar remains dismissible while creation and optional setup run.

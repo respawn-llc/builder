@@ -50,17 +50,12 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	if topologyIsMain(match.entry) {
+	if _, err := match.entry.DeletionSelector(); err != nil {
 		release()
-		return serverapi.WorktreeDeleteResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
-		target, _, err := s.deleteTarget(ctx, workspaceCtx, match.entry)
-		if err != nil {
-			release()
-			return serverapi.WorktreeDeleteResult{}, err
-		}
-		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
+		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, match.entry, req.ForceFolderRemoval); err != nil {
 			release()
 			return serverapi.WorktreeDeleteResult{}, err
 		}
@@ -122,8 +117,8 @@ func (s *Service) executeDeleteLocked(
 	req serverapi.WorktreeDeleteRequest,
 	currentSync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
-	if topologyIsMain(entry) {
-		return serverapi.WorktreeDeleteCompletedResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
+	if _, err := entry.DeletionSelector(); err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
 	if err != nil {
@@ -149,10 +144,8 @@ func (s *Service) executeDeleteLocked(
 	}
 	defer activityLease.Close()
 	mutationCtx := activityLease.Context()
-	if target != nil {
-		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
-		}
+	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
@@ -193,17 +186,14 @@ func (s *Service) executeDeleteLocked(
 
 func (s *Service) ensureDeleteFolderRemovalAuthorized(
 	ctx context.Context,
-	target *syncedWorktree,
+	entry serverapi.WorktreeTopologyEntry,
 	forceFolderRemoval bool,
 ) error {
-	if target == nil {
-		return nil
-	}
-	dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
+	dirtyState, err := s.evaluateDeleteCleanliness(ctx, entry)
 	if err != nil {
 		return err
 	}
-	if dirtyState.Kind != serverapi.WorktreeDirtyStateClean && !forceFolderRemoval {
+	if dirtyState.Kind != clientui.WorktreeDirtyStateClean && !forceFolderRemoval {
 		return &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
 	}
 	return nil
@@ -248,17 +238,6 @@ func (s *Service) deleteTarget(
 		return nil, &record, nil
 	default:
 		return nil, nil, errors.New("worktree topology variant is invalid")
-	}
-}
-
-func topologyIsMain(entry serverapi.WorktreeTopologyEntry) bool {
-	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		return entry.Registered.Git.IsMain
-	case serverapi.WorktreeTopologyVariantExternal:
-		return entry.External.Git.IsMain
-	default:
-		return false
 	}
 }
 

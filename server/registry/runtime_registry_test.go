@@ -428,6 +428,29 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	if projected.OperationID != outcome.OperationID {
 		t.Fatalf("worktree transition projection = %+v, want %+v", projected, outcome)
 	}
+
+	dirtyCount := 2
+	failed := clientui.WorktreeTransitionOutcome{
+		OperationID: clientui.NewWorktreeTransitionID(),
+		Transition:  clientui.WorktreeTransitionDelete,
+		State:       clientui.WorktreeTransitionFailed,
+		Failure: &clientui.WorktreeTransitionFailure{
+			Diagnostic: "delete precondition",
+			DeletePrecondition: &clientui.WorktreeDirtyState{
+				Kind:           clientui.WorktreeDirtyStateDirty,
+				DirtyFileCount: &dirtyCount,
+			},
+		},
+	}
+	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), failed)
+	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
+	projected = transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
+	if projected.DeletePrecondition == nil ||
+		projected.DeletePrecondition.Kind != clientui.WorktreeDirtyStateDirty ||
+		projected.DeletePrecondition.DirtyFileCount == nil ||
+		*projected.DeletePrecondition.DirtyFileCount != dirtyCount {
+		t.Fatalf("typed delete precondition projection = %+v, want dirty count %d", projected, dirtyCount)
+	}
 }
 
 func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle(t *testing.T) {
