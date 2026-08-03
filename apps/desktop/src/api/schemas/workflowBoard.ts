@@ -186,24 +186,26 @@ const dependencyConfirmationRequiredResponseSchema = z
       }) as const,
   );
 
+const appliedCurrentNodesResponseSchema = z
+  .object({
+    outcome: z.literal("applied"),
+    applied: z
+      .object({
+        current_nodes: z.array(currentNodeSchema).min(1),
+      })
+      .strict(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        applied: { currentNodes: value.applied.current_nodes },
+      }) as const,
+  );
+
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          current_nodes: z.array(currentNodeSchema).min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: { currentNodes: value.applied.current_nodes },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
 ]);
@@ -220,39 +222,14 @@ const taskMoveNoOpResponseSchema = z
   }));
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          current_nodes: z.array(currentNodeSchema).min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: { currentNodes: value.applied.current_nodes },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
   taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
 ]);
 
 export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
-    })
-    .strict()
-    .transform((value) => ({
-      outcome: value.outcome,
-      applied: { currentNodes: value.applied.current_nodes },
-    })),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
 ]);
 
