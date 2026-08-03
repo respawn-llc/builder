@@ -120,6 +120,7 @@ type messageLifecycle interface {
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
+	QueueUserMessageWithResolver(text string, clientRequestID string, resolve DeferredUserMessageResolver) QueuedUserMessage
 	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool

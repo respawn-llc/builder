@@ -410,6 +410,22 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
 	pending = e.dropStoppedLiveRunQueueItems(pending)
+	for index := range pending {
+		if pending[index].resolve == nil {
+			continue
+		}
+		text, err := pending[index].resolve()
+		if err != nil {
+			m.queue.RestoreFront(pending)
+			return result, err
+		}
+		pending[index].intent = steerMessagesWithPersistenceIntent(
+			steeringPriorityUser,
+			steeringMessageEventNone,
+			true,
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}},
+		)
+	}
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
 		queueItems := queuedUserMessagesForFlush(pending)
@@ -446,10 +462,14 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {
+	return m.QueueUserMessageWithResolver(text, clientRequestID, nil)
+}
+
+func (m *defaultMessageLifecycle) QueueUserMessageWithResolver(text string, clientRequestID string, resolve DeferredUserMessageResolver) QueuedUserMessage {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}
 	}
-	return m.queue.Queue(text, clientRequestID)
+	return m.queue.QueueItem(QueuedUserMessage{Text: text, ClientRequestID: clientRequestID, Resolve: resolve})
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage {

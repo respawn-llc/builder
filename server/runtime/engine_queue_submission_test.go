@@ -12,6 +12,41 @@ import (
 	"core/shared/textutil"
 )
 
+func TestDeferredQueuedUserMessageResolvesAtFlush(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("done"),
+		},
+	}}}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.pauseQueuedUserAutoDrain()
+	t.Cleanup(engine.resumeQueuedUserAutoDrain)
+
+	resolved := false
+	engine.QueueUserMessageForAutoDrainWithResolver(
+		"/prompt:review src",
+		"request-id",
+		func() (string, error) {
+			resolved = true
+			return "resolved prompt body", nil
+		},
+	)
+	if resolved {
+		t.Fatal("deferred user message resolved during queue admission")
+	}
+	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
+		t.Fatalf("SubmitQueuedUserMessages: %v", err)
+	}
+	if !resolved {
+		t.Fatal("deferred user message was not resolved during queue flush")
+	}
+	if got := boundedPersistedUserMessageCount(t, store); got != 1 {
+		t.Fatalf("persisted user message count = %d, want one", got)
+	}
+}
+
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

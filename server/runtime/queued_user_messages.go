@@ -17,6 +17,7 @@ type queuedUserMessageStore struct {
 type queuedUserSteeringIntent struct {
 	message QueuedUserMessage
 	intent  steeringIntent
+	resolve DeferredUserMessageResolver
 }
 
 func newQueuedUserMessageStore() *queuedUserMessageStore {
@@ -38,8 +39,9 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) QueuedUserMes
 	}
 	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(item.Text)}})
+	resolve := item.Resolve
 	s.mu.Lock()
-	s.pending = append(s.pending, queuedUserSteeringIntent{message: item, intent: intent})
+	s.pending = append(s.pending, queuedUserSteeringIntent{message: item, intent: intent, resolve: resolve})
 	s.mu.Unlock()
 	return item
 }

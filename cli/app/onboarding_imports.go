@@ -446,3 +446,17 @@ func skillImportSummary(state *onboardingFlowState) string {
 		importProviderDisplayLabel(providerIDFromPtr(state.selections.skillImport.ChoiceRef.ImportProviderID), "external_provider"),
 	)
 }
+
+func commandImportSummary(state *onboardingFlowState) string {
+	if state.imports.skipCommands {
+		return "skipped - existing found"
+	}
+	switch state.selections.commandImport.Mode {
+	case onboardingImportModeNone:
+		return "disabled"
+	case onboardingImportModeSymlinkSource:
+		return "from " + importProviderDisplayLabel(providerIDFromPtr(state.selections.commandImport.ChoiceRef.ImportProviderID), "external_provider")
+	default:
+		return ""
+	}
+}
