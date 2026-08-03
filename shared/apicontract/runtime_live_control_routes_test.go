@@ -37,6 +37,13 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 			requestType:  reflect.TypeOf(serverapi.RuntimeLiveWaitRequest{}),
 			responseType: reflect.TypeOf(serverapi.RuntimeLiveWaitResponse{}),
 		},
+		{
+			method:       protocol.MethodRuntimeLiveWatch,
+			scope:        ScopeRuntimeLiveSessionRequired,
+			connection:   ConnectionDedicated,
+			requestType:  reflect.TypeOf(serverapi.RuntimeLiveWatchRequest{}),
+			responseType: reflect.TypeOf(serverapi.RuntimeLiveWatchResponse{}),
+		},
 	}
 
 	for _, tt := range tests {
@@ -56,7 +63,7 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 func TestRuntimeLiveControlServiceIsSeparateContract(t *testing.T) {
 	liveType := reflect.TypeOf((*RuntimeLiveControlService)(nil)).Elem()
 	runtimeType := reflect.TypeOf((*RuntimeControlService)(nil)).Elem()
-	for _, method := range []string{"LiveSteer", "LiveStop", "LiveWait"} {
+	for _, method := range []string{"LiveSteer", "LiveStop", "LiveWait", "LiveWatch"} {
 		if _, ok := liveType.MethodByName(method); !ok {
 			t.Fatalf("RuntimeLiveControlService missing %s", method)
 		}

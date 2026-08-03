@@ -52,6 +52,16 @@ func (d *TaskDetail) GetTask(ctx context.Context, taskID string) (serverapi.Work
 	return d.task(ctx, task)
 }
 
+func (d *TaskDetail) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]workflow.CurrentNode, error) {
+	if d == nil || d.projection == nil {
+		return nil, errors.New("task detail is required")
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return nil, ErrTaskIDRequired
+	}
+	return d.projection.ListCurrentNodes(ctx, workflow.TaskID(taskID))
+}
+
 func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")

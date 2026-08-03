@@ -58,6 +58,9 @@ type Service struct {
 	promptCommands PromptCommandResolver
 	workflowTasks  WorkflowTaskSessionResolver
 	persisted      session.PersistedSessionResolver
+	askViews       servicecontract.AskViewService
+	approvalViews  servicecontract.ApprovalViewService
+	attention      servicecontract.AttentionNotificationService
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
@@ -269,6 +272,20 @@ func (s *Service) WithPersistedSessionResolver(resolver session.PersistedSession
 		return nil
 	}
 	s.persisted = resolver
+	return s
+}
+
+func (s *Service) WithLiveWatchPromptSources(
+	askViews servicecontract.AskViewService,
+	approvalViews servicecontract.ApprovalViewService,
+	attention servicecontract.AttentionNotificationService,
+) *Service {
+	if s == nil {
+		return nil
+	}
+	s.askViews = askViews
+	s.approvalViews = approvalViews
+	s.attention = attention
 	return s
 }
 

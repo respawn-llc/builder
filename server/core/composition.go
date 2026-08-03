@@ -187,7 +187,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
-		WithPersistedSessionResolver(metadataStore)
+		WithPersistedSessionResolver(metadataStore).
+		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
 		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
 			persistenceRoot: cfg.PersistenceRoot,
@@ -346,6 +347,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskDependencies: workflowTaskDependencies,
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
+		Approvals:        approvalService,
 	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()

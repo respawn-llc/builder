@@ -726,6 +726,27 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 	}
 }
 
+func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest, createdAt time.Time) {
+	resource, ok := scope.Resource()
+	if !ok {
+		panic(fmt.Sprintf("workflow prompt scope %s has no session resource", scope.ID()))
+	}
+	if r == nil {
+		return
+	}
+	id := resource.SessionID().String()
+	projected := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+		return r.pendingPrompts.Begin(id, resource, scope.ID(), req, createdAt, func(snapshot PendingPromptSnapshot) {
+			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+			r.publishAttentionPending(id, snapshot)
+			r.publishTaskQuestionWaitingForScope(scope, snapshot)
+		})
+	})
+	if projected {
+		_ = r.publishCurrentRuntimeActivity(id)
+	}
+}
+
 func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
 	if r == nil {
 		return
@@ -748,6 +769,14 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 		r.publishAttentionResolved(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
+}
+
+func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) {
+	resource, ok := scope.Resource()
+	if !ok {
+		panic(fmt.Sprintf("workflow prompt scope %s has no session resource", scope.ID()))
+	}
+	r.PromptResolved(resource, scope.ID(), requestID)
 }
 
 func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, sessionID string, snapshot PendingPromptSnapshot) {

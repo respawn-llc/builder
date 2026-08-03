@@ -100,6 +100,13 @@ func (p *TaskStatusProjection) DecodeStatus(input TaskStatusInput) (workflowTask
 	return p.projector.DecodeStatus(input)
 }
 
+func (p *TaskStatusProjection) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+	if p == nil || p.workflowStore == nil {
+		return nil, errors.New("task status projection workflow store is required")
+	}
+	return p.workflowStore.ListCurrentNodes(ctx, taskID)
+}
+
 type taskStatusLiveState struct {
 	TaskID             string `json:"task_id"`
 	HasRunning         bool   `json:"has_running"`

@@ -12,6 +12,9 @@ func TestRuntimeLiveControlProtocolConstants(t *testing.T) {
 	if MethodRuntimeLiveWait != "runtime.liveWait" {
 		t.Fatalf("MethodRuntimeLiveWait = %q", MethodRuntimeLiveWait)
 	}
+	if MethodRuntimeLiveWatch != "runtime.liveWatch" {
+		t.Fatalf("MethodRuntimeLiveWatch = %q", MethodRuntimeLiveWatch)
+	}
 	if ErrCodeRuntimeNoActiveRun == 0 || ErrCodeRuntimeNoFinalAnswer == 0 || ErrCodeRuntimeNoActiveRun == ErrCodeRuntimeNoFinalAnswer {
 		t.Fatalf("runtime live-control error codes are invalid: %d %d", ErrCodeRuntimeNoActiveRun, ErrCodeRuntimeNoFinalAnswer)
 	}

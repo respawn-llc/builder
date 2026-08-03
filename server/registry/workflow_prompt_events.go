@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -58,5 +59,39 @@ func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot 
 			"ask_id", snapshot.Request.ID,
 			"error", err,
 		)
+	}
+}
+
+func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntime.ExecutionScope, snapshot PendingPromptSnapshot) {
+	if r == nil || r.workflowEventPublisher == nil {
+		return
+	}
+	ref, ok := scope.Workflow()
+	if !ok {
+		return
+	}
+	resource, ok := scope.Resource()
+	if !ok {
+		return
+	}
+	projectID := strings.TrimSpace(ref.ProjectID)
+	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
+	sessionID := resource.SessionID().String()
+	askID := strings.TrimSpace(snapshot.Request.ID)
+	if projectID == "" || taskID == "" || askID == "" {
+		return
+	}
+	workflowID := ref.WorkflowID
+	event := serverapi.WorkflowProjectEvent{
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		Resource:         serverapi.WorkflowProjectEventResourceTask,
+		Action:           serverapi.WorkflowProjectEventActionQuestionWaiting,
+		PrimaryEntityID:  taskID,
+		RelatedIDs:       []string{sessionID, askID},
+		OccurredAtUnixMs: snapshot.CreatedAt.UTC().UnixMilli(),
+	}
+	if err := r.workflowEventPublisher(context.Background(), event); err != nil {
+		slog.Warn("publish workflow question waiting event failed", "project_id", projectID, "task_id", taskID, "error", err)
 	}
 }

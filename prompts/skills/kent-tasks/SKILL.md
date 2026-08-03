@@ -9,6 +9,7 @@ A task is a durable user-facing unit of work moving through one workflow.
 - Tasks live under the intersection of a **Workflow**, which defines the process graph, and a **Project**, which defines the execution environment and source workspaces.
 - Projects are sets of workspace directories, with one primary workspace (e.g. `~/kent`) and secondary ones (e.g. `~/kent-marketing`).
 - Tasks follow the project's default workflow unless another linked workflow is selected. Each task has a source workspace.
+- Use `kent task wait <task>` to block until the task is done or current workflow execution reports failure. Use `kent task watch <task>` to block until a question, interruption, failure, or done outcome.
 - The workflow's git worktree policy is evaluated when an unlocked task first reaches executable work. It may run directly in the source workspace or create a git worktree. More info in the kent-workflows docs.
 - Every workflow runs in **the same environment as you do** - it may be the user's local machine, or if you are running on a server, there. You can generally assume that what you have available here in this environment will also be available for agents that work on tasks (such as main-workspace docs, git repos, committed files, system utilities or tools), but you should avoid leaking PII, credentials, or references to outside-workspace paths (e.g. ~/Desktop, ~/Documents) that are unstable and may be moved or deleted by the user.
 - Task body and comments are formatted as markdown.

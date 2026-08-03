@@ -641,6 +641,10 @@ func (c *Remote) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTask
 	return validateWorkflowResponse("get workflow task", response, err)
 }
 
+func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
+	return callDedicatedRPC[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](c, ctx, "workflow-task-observe", protocol.MethodWorkflowTaskObserve, req)
+}
+
 func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 	var resp serverapi.SessionPlanResponse
 	return resp, c.call(ctx, protocol.MethodSessionPlan, req, &resp)
@@ -827,6 +831,10 @@ func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequ
 
 func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+}
+
+func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](c, ctx, "runtime-live-watch", protocol.MethodRuntimeLiveWatch, req)
 }
 
 func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {

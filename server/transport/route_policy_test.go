@@ -171,6 +171,7 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	ctx := context.Background()
 	requiredRoute := routeForTest(t, protocol.MethodRuntimeLiveSteer)
 	waitRoute := routeForTest(t, protocol.MethodRuntimeLiveWait)
+	watchRoute := routeForTest(t, protocol.MethodRuntimeLiveWatch)
 	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
 
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
@@ -182,6 +183,9 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, waitRoute, serverapi.RuntimeLiveWaitRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("live wait root-scoped existing session: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{}, watchRoute, serverapi.RuntimeLiveWatchRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("live watch root-scoped existing session: %v", err)
 	}
 	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
 	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{

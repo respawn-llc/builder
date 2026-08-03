@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
@@ -475,6 +477,7 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
+	s.publishCurrentNodeInterruptionEvent(ctx, reference.TaskID)
 	return nil
 }
 
@@ -524,7 +527,25 @@ func (s *Store) InterruptCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
+	s.publishCurrentNodeInterruptionEvent(ctx, reference.TaskID)
 	return nil
+}
+
+func (s *Store) publishCurrentNodeInterruptionEvent(ctx context.Context, taskID workflow.TaskID) {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		slog.Warn("read interrupted task for workflow event failed", "task_id", taskID, "error", err)
+		return
+	}
+	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       &task.ProjectID,
+		WorkflowID:      &task.WorkflowID,
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionInterrupted,
+		PrimaryEntityID: string(taskID),
+	}); err != nil {
+		slog.Warn("publish interrupted current node task event failed", "task_id", taskID, "error", err)
+	}
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -551,6 +572,7 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		return nil, err
 	}
 	references := make([]workflow.CurrentNodeReference, 0, len(rows))
+	seenTasks := make(map[workflow.TaskID]struct{}, len(rows))
 	for _, row := range rows {
 		var branchKey *workflow.TransitionBranchKey
 		if row.TransitionBranchKey.Valid {
@@ -562,6 +584,10 @@ func (s *Store) RecoverExecutableCurrentNodes(
 			return nil, err
 		}
 		references = append(references, reference)
+		seenTasks[reference.TaskID] = struct{}{}
+	}
+	for taskID := range seenTasks {
+		s.publishCurrentNodeInterruptionEvent(ctx, taskID)
 	}
 	return references, nil
 }

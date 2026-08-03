@@ -70,10 +70,11 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 		return 0, errors.New("current node workflow controller is required")
 	}
 	recovered, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
-		return c.store.RecoverExecutableCurrentNodes(ctx, ReasonCurrentNodeStartupRecovery, workflow.CurrentNodeInterruptionDetail{
-			Code:   string(ReasonCurrentNodeStartupRecovery),
-			Fields: map[string]string{},
-		})
+		return c.store.RecoverExecutableCurrentNodes(
+			ctx,
+			ReasonCurrentNodeStartupRecovery,
+			workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
+		)
 	})
 	if err != nil {
 		return 0, err

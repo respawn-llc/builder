@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
@@ -21,6 +22,7 @@ var transcriptPromptAnswerRetryDelays = []time.Duration{time.Second, 2 * time.Se
 type transcriptPromptAnswerer struct {
 	ctx                   context.Context
 	control               apicontract.PromptControlService
+	runtime               apicontract.RuntimeControlService
 	connectionOutcomeSink func(error)
 	retryDelays           []time.Duration
 	retryWait             func(context.Context, time.Duration) error
@@ -43,12 +45,16 @@ type promptAnswerDeliveryResultMsg struct {
 	err       error
 }
 
-func newTranscriptPromptAnswerer(ctx context.Context, control apicontract.PromptControlService) *transcriptPromptAnswerer {
+func newTranscriptPromptAnswerer(ctx context.Context, control apicontract.PromptControlService, runtimeControls ...apicontract.RuntimeControlService) *transcriptPromptAnswerer {
 	if ctx == nil || control == nil {
 		return nil
 	}
+	var runtimeControl apicontract.RuntimeControlService
+	if len(runtimeControls) > 0 {
+		runtimeControl = runtimeControls[0]
+	}
 	return &transcriptPromptAnswerer{
-		ctx: ctx, control: control,
+		ctx: ctx, control: control, runtime: runtimeControl,
 		retryDelays: transcriptPromptAnswerRetryDelays,
 		retryWait:   rpcwire.WaitForRetry,
 	}
@@ -122,15 +128,60 @@ func (a *transcriptPromptAnswerer) submitter(
 			request.ErrorMessage = answerErr.Error()
 		case answer.Approval != nil:
 			request.Decision = answer.Approval.Decision
-			request.Commentary = answer.Approval.Commentary
+			if request.Decision == clientui.ApprovalDecisionDeny {
+				request.Commentary = answer.Approval.Commentary
+			}
 		default:
 			return nil, errors.New("approval response is required")
 		}
 		if err := request.Validate(); err != nil {
 			return nil, fmt.Errorf("validate approval answer: %w", err)
 		}
+		if answerErr != nil {
+			return func(ctx context.Context) error {
+				return a.control.AnswerApproval(ctx, request)
+			}, nil
+		}
+		decision := request.Decision
+		commentary := ""
+		if answer.Approval != nil {
+			commentary = answer.Approval.Commentary
+		}
+		effects, err := client.PlanApprovalCommentary(decision, commentary)
+		if err != nil {
+			return nil, err
+		}
+		var stableRuntimeUserTurnRequest *serverapi.RuntimeSubmitUserTurnRequest
+		for _, effect := range effects {
+			if effect.Kind == client.ApprovalCommentaryEffectRuntimeInput && a.runtime == nil {
+				return nil, errors.New("runtime input control is unavailable for approval commentary")
+			}
+			if effect.Kind == client.ApprovalCommentaryEffectRuntimeInput {
+				request := client.NewRuntimeUserTurnRequest(prompt.SessionID.String(), effect.Commentary)
+				stableRuntimeUserTurnRequest = &request
+			}
+		}
 		return func(ctx context.Context) error {
-			return a.control.AnswerApproval(ctx, request)
+			for _, effect := range effects {
+				switch effect.Kind {
+				case client.ApprovalCommentaryEffectRuntimeInput:
+					if stableRuntimeUserTurnRequest == nil {
+						return errors.New("approval commentary runtime request is missing")
+					}
+					if _, err := a.runtime.SubmitUserTurn(ctx, *stableRuntimeUserTurnRequest); err != nil {
+						return err
+					}
+				case client.ApprovalCommentaryEffectApproval:
+					approvalRequest := request
+					approvalRequest.Commentary = effect.Commentary
+					if err := a.control.AnswerApproval(ctx, approvalRequest); err != nil {
+						return err
+					}
+				default:
+					return errors.New("approval commentary effect is invalid")
+				}
+			}
+			return nil
 		}, nil
 	}
 	request := serverapi.AskAnswerRequest{

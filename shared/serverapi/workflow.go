@@ -1251,9 +1251,10 @@ func (k WorkflowTaskStatusKind) NativeState() (WorkflowTaskNativeState, bool) {
 type WorkflowTaskAttentionKind string
 
 const (
-	WorkflowTaskAttentionKindQuestion    WorkflowTaskAttentionKind = "question"
-	WorkflowTaskAttentionKindApproval    WorkflowTaskAttentionKind = "approval"
-	WorkflowTaskAttentionKindInterrupted WorkflowTaskAttentionKind = "interrupted"
+	WorkflowTaskAttentionKindQuestion               WorkflowTaskAttentionKind = "question"
+	WorkflowTaskAttentionKindApproval               WorkflowTaskAttentionKind = "approval"
+	WorkflowTaskAttentionKindInterrupted            WorkflowTaskAttentionKind = "interrupted"
+	WorkflowTaskAttentionKindInterruptedCurrentNode WorkflowTaskAttentionKind = "interrupted_current_node"
 )
 
 type WorkflowTaskListSortField string

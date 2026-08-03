@@ -1348,9 +1348,6 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := s.currentNodeExecution.Interrupt(ctx, selector); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionInterrupted, req.TaskID)
-	}
 	return serverapi.WorkflowTaskInterruptResponse{}, nil
 }
 
@@ -1835,9 +1832,6 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 			defer cancel()
 			s.attentionFinalizer.PublishPendingApproval(finalizeCtx, completed.PendingApproval.ID)
 		}
-	}
-	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, string(taskID)); detailErr == nil {
-		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCompleted, string(taskID))
 	}
 	return response, nil
 }

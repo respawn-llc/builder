@@ -159,9 +159,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	client := &runtimeControlFakeClient{submitErr: io.EOF}
 	model := newProjectedTestUIModel(client)
 	control := newRecordingPromptControl()
+	runtimeControl := &approvalCommentaryRuntimeControl{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control).withConnectionOutcomeSink(func(err error) {
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control, runtimeControl).withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})
 	if model.runtimeConnectionEvents == nil {
@@ -249,8 +250,8 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	case <-time.After(time.Second):
 		t.Fatal("approval answer did not start while transient expiry was blocked")
 	}
-	if approvalRequest.Commentary != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
-		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
+	if approvalRequest.Commentary != "" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
+		t.Fatalf("approval request = %+v, want Allow once with empty approval commentary", approvalRequest)
 	}
 
 	deliveryResult := <-results

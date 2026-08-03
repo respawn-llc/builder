@@ -502,10 +502,7 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			ctx,
 			source.Reference,
 			reasonProtocolViolationCap,
-			workflow.CurrentNodeInterruptionDetail{
-				Code:   string(reasonProtocolViolationCap),
-				Fields: map[string]string{"error": workflowProtocolViolationCause(req).Error()},
-			},
+			workflow.NewCurrentNodeInterruptionDetail(string(reasonProtocolViolationCap), workflowProtocolViolationCause(req)),
 		); err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
@@ -600,10 +597,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	reason workflow.CurrentNodeInterruptionReason,
 	cause error,
 ) error {
-	detail := workflow.CurrentNodeInterruptionDetail{Code: string(reason)}
-	if cause != nil {
-		detail.Fields = map[string]string{"error": cause.Error()}
-	}
+	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
 	var lease sessionruntime.WorkflowExecutionLease
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -67,6 +68,18 @@ type questionCommandPendingQuestion struct {
 	Question               string
 	Suggestions            []string
 	RecommendedOptionIndex *int
+	AccessOptions          []clientui.ApprovalOption
+	CreatedAt              time.Time
+	Access                 bool
+}
+
+type questionCommandApprovalRemote interface {
+	apicontract.ApprovalViewService
+	apicontract.PromptControlService
+}
+
+type questionCommandRuntimeRemote interface {
+	apicontract.RuntimeControlService
 }
 
 func questionSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -119,21 +132,16 @@ func (c questionCommand) showSubcommand(args []string, stdout io.Writer, stderr 
 
 func (c questionCommand) showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stderr io.Writer) int {
 	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
-		response, err := listPendingSessionQuestions(remote, sessionID)
+		questions, err := listPendingSessionPrompts(remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if len(response.Asks) == 0 {
+		if len(questions) == 0 {
 			fmt.Fprintln(stdout, noPendingQuestionsText)
 			return 0
 		}
-		question, err := pendingSessionQuestion(response.Asks[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		writePendingQuestion(stdout, question, false)
+		writePendingQuestion(stdout, questions[0], false)
 		return 0
 	})
 }
@@ -187,19 +195,23 @@ func (c questionCommand) answerSessionQuestion(
 	stderr io.Writer,
 ) int {
 	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
-		pending, err := listPendingSessionQuestions(remote, sessionID)
+		questions, err := listPendingSessionPrompts(remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if len(pending.Asks) == 0 {
+		if len(questions) == 0 {
 			fmt.Fprintln(stderr, noPendingQuestionAnswerText)
 			return 1
+		}
+		pending := questions[0]
+		if pending.Access {
+			return c.answerSessionApproval(remote, sessionID, pending, option, commentary, stdout, stderr)
 		}
 		request := serverapi.AskAnswerRequest{
 			ClientRequestID:      uuid.NewString(),
 			SessionID:            sessionID.String(),
-			AskID:                pending.Asks[0].AskID,
+			AskID:                pending.AskID,
 			SelectedOptionNumber: option,
 		}
 		if commentary != nil {
@@ -211,23 +223,67 @@ func (c questionCommand) answerSessionQuestion(
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		next, err := listPendingSessionQuestions(remote, sessionID)
+		next, err := listPendingSessionPrompts(remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if len(next.Asks) == 0 {
+		if len(next) == 0 {
 			fmt.Fprintln(stdout, questionAnswerDoneText)
 			return 0
 		}
-		question, err := pendingSessionQuestion(next.Asks[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		writePendingQuestion(stdout, question, true)
+		writePendingQuestion(stdout, next[0], true)
 		return 0
 	})
+}
+
+func (c questionCommand) answerSessionApproval(remote questionCommandRemote, sessionID runtimeids.SessionID, pending questionCommandPendingQuestion, option *int, commentary *string, stdout io.Writer, stderr io.Writer) int {
+	approvalRemote, ok := remote.(questionCommandApprovalRemote)
+	if !ok {
+		fmt.Fprintln(stderr, "approval control is unavailable")
+		return 1
+	}
+	if option == nil || *option < 1 || *option > len(pending.AccessOptions) {
+		fmt.Fprintln(stderr, "access requests require a valid --option")
+		return 2
+	}
+	decision := pending.AccessOptions[*option-1].Decision
+	commentaryValue, _ := textutil.OptionalExact(commentary)
+	answerCtx, stopAnswer := questionAnswerContext()
+	defer stopAnswer()
+	effects, err := client.PlanApprovalCommentary(decision, commentaryValue)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if err := executeQuestionApprovalPlan(answerCtx, remote, sessionID.String(), effects, func() error {
+		return approvalRemote.AnswerApproval(answerCtx, serverapi.ApprovalAnswerRequest{
+			ClientRequestID: uuid.NewString(),
+			SessionID:       sessionID.String(),
+			ApprovalID:      pending.AskID,
+			Decision:        decision,
+			Commentary: func() string {
+				if decision == clientui.ApprovalDecisionDeny {
+					return commentaryValue
+				}
+				return ""
+			}(),
+		})
+	}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	next, err := listPendingSessionPrompts(remote, sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if len(next) == 0 {
+		fmt.Fprintln(stdout, questionAnswerDoneText)
+		return 0
+	}
+	writePendingQuestion(stdout, next[0], true)
+	return 0
 }
 
 func showTaskQuestion(selector questionCommandSelector, stdout io.Writer, stderr io.Writer) int {
@@ -272,28 +328,69 @@ func answerTaskQuestion(
 			return 1
 		}
 		question := candidate.Questions[0]
+		commentaryValue, _ := textutil.OptionalExact(commentary)
+		if question.Access {
+			if option == nil || *option < 1 || *option > len(question.AccessOptions) {
+				fmt.Fprintln(stderr, "access requests require a valid --option")
+				return 2
+			}
+		}
+		var accessDecision clientui.ApprovalDecision
+		if question.Access {
+			accessDecision = question.AccessOptions[*option-1].Decision
+		}
 		request := serverapi.WorkflowTaskQuestionAnswerRequest{
 			ClientRequestID:      uuid.NewString(),
 			TaskID:               taskID,
 			AskID:                question.AskID,
 			SelectedOptionNumber: option,
 		}
-		if commentary != nil {
+		if question.Access {
+			request.Approval = &serverapi.WorkflowTaskQuestionApprovalAnswer{
+				Decision: accessDecision,
+				Commentary: func() string {
+					if accessDecision == clientui.ApprovalDecisionDeny {
+						return commentaryValue
+					}
+					return ""
+				}(),
+			}
+			request.SelectedOptionNumber = nil
+			request.FreeformAnswer = ""
+		}
+		if commentary != nil && !question.Access {
 			request.FreeformAnswer = *commentary
 		}
 		answerCtx, stopAnswer := questionAnswerContext()
 		defer stopAnswer()
-		err = remote.AnswerWorkflowTaskQuestion(answerCtx, request)
-		if err != nil {
-			if errors.Is(err, serverapi.ErrWorkflowTaskQuestionSelectorAmbiguous) {
-				refreshed, refreshErr := listTaskQuestionCandidates(context.Background(), remote, taskID)
-				if refreshErr == nil && len(refreshed) > 1 {
-					writeTaskQuestionAmbiguity(stderr, selector, refreshed)
-					return 1
-				}
+		if question.Access {
+			effects, planErr := client.PlanApprovalCommentary(
+				accessDecision,
+				commentaryValue,
+			)
+			if planErr != nil {
+				fmt.Fprintln(stderr, planErr)
+				return 2
 			}
-			fmt.Fprintln(stderr, err)
-			return 1
+			if err := executeQuestionApprovalPlan(answerCtx, remote, candidate.SessionID.String(), effects, func() error {
+				return remote.AnswerWorkflowTaskQuestion(answerCtx, request)
+			}); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		} else {
+			err = remote.AnswerWorkflowTaskQuestion(answerCtx, request)
+			if err != nil {
+				if errors.Is(err, serverapi.ErrWorkflowTaskQuestionSelectorAmbiguous) {
+					refreshed, refreshErr := listTaskQuestionCandidates(context.Background(), remote, taskID)
+					if refreshErr == nil && len(refreshed) > 1 {
+						writeTaskQuestionAmbiguity(stderr, selector, refreshed)
+						return 1
+					}
+				}
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
 		}
 		refreshed, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
 		if err != nil {
@@ -324,6 +421,46 @@ func listPendingSessionQuestions(
 	return remote.ListPendingAsksBySession(ctx, serverapi.AskListPendingBySessionRequest{
 		SessionID: sessionID.String(),
 	})
+}
+
+func listPendingSessionPrompts(remote questionCommandRemote, sessionID runtimeids.SessionID) ([]questionCommandPendingQuestion, error) {
+	response, err := listPendingSessionQuestions(remote, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	questions := make([]questionCommandPendingQuestion, 0, len(response.Asks))
+	for _, ask := range response.Asks {
+		question, err := pendingSessionQuestion(ask)
+		if err != nil {
+			return nil, err
+		}
+		question.CreatedAt = ask.CreatedAt
+		questions = append(questions, question)
+	}
+	if approvalRemote, ok := remote.(apicontract.ApprovalViewService); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
+		defer cancel()
+		approvals, err := approvalRemote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID.String()})
+		if err != nil {
+			return nil, err
+		}
+		for _, approval := range approvals.Approvals {
+			questions = append(questions, questionCommandPendingQuestion{
+				AskID:         approval.ApprovalID,
+				Question:      approval.Question,
+				AccessOptions: append([]clientui.ApprovalOption(nil), approval.Options...),
+				CreatedAt:     approval.CreatedAt,
+				Access:        true,
+			})
+		}
+	}
+	sort.SliceStable(questions, func(i, j int) bool {
+		if !questions[i].CreatedAt.Equal(questions[j].CreatedAt) {
+			return questions[i].CreatedAt.Before(questions[j].CreatedAt)
+		}
+		return questions[i].AskID < questions[j].AskID
+	})
+	return questions, nil
 }
 
 func withQuestionTaskRemote(
@@ -364,7 +501,69 @@ func listTaskQuestionCandidates(
 	if err != nil {
 		return nil, err
 	}
-	return taskQuestionCandidates(response.Items)
+	candidates, err := taskQuestionCandidates(response.Items)
+	if err != nil {
+		return nil, err
+	}
+	approvalRemote, ok := remote.(apicontract.ApprovalViewService)
+	if !ok {
+		return candidates, nil
+	}
+	approvalCache := make(map[string][]clientui.PendingApproval)
+	for _, item := range response.Items {
+		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) ||
+			item.Question == nil ||
+			item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
+			item.SessionID == nil ||
+			item.ApprovalID == nil {
+			continue
+		}
+		sessionIDValue := *item.SessionID
+		approvals, loaded := approvalCache[sessionIDValue]
+		if !loaded {
+			response, err := approvalRemote.ListPendingApprovalsBySession(rpcCtx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionIDValue})
+			if err != nil {
+				return nil, err
+			}
+			approvals = append([]clientui.PendingApproval(nil), response.Approvals...)
+			approvalCache[sessionIDValue] = approvals
+		}
+		approval, ok := serverapi.FindPendingApproval(approvals, *item.ApprovalID)
+		if !ok {
+			continue
+		}
+		sessionID, err := runtimeids.ParseSessionID(*item.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		var candidate *taskQuestionSessionCandidate
+		for index := range candidates {
+			if candidates[index].SessionID == sessionID {
+				candidate = &candidates[index]
+				break
+			}
+		}
+		if candidate == nil {
+			candidates = append(candidates, taskQuestionSessionCandidate{SessionID: sessionID, SessionName: textutil.Pointer(item.SessionName)})
+			candidate = &candidates[len(candidates)-1]
+		}
+		candidate.Questions = append(candidate.Questions, questionCommandPendingQuestion{
+			AskID:         approval.ApprovalID,
+			Question:      approval.Question,
+			AccessOptions: append([]clientui.ApprovalOption(nil), approval.Options...),
+			CreatedAt:     approval.CreatedAt,
+			Access:        true,
+		})
+	}
+	for index := range candidates {
+		sort.SliceStable(candidates[index].Questions, func(left, right int) bool {
+			if !candidates[index].Questions[left].CreatedAt.Equal(candidates[index].Questions[right].CreatedAt) {
+				return candidates[index].Questions[left].CreatedAt.Before(candidates[index].Questions[right].CreatedAt)
+			}
+			return candidates[index].Questions[left].AskID < candidates[index].Questions[right].AskID
+		})
+	}
+	return candidates, nil
 }
 
 func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
@@ -417,6 +616,7 @@ func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQues
 			Question:               *item.Message,
 			Suggestions:            append([]string(nil), item.Suggestions...),
 			RecommendedOptionIndex: textutil.Pointer(item.RecommendedOptionIndex),
+			CreatedAt:              time.UnixMilli(item.OccurredAtUnixMs),
 		})
 	}
 	return candidates, nil
@@ -577,6 +777,7 @@ func pendingSessionQuestion(ask clientui.PendingAsk) (questionCommandPendingQues
 		Question:               ask.Question,
 		Suggestions:            append([]string(nil), ask.Suggestions...),
 		RecommendedOptionIndex: textutil.Pointer(ask.RecommendedOptionIndex),
+		CreatedAt:              ask.CreatedAt,
 	}, nil
 }
 
@@ -585,6 +786,13 @@ func writePendingQuestion(stdout io.Writer, ask questionCommandPendingQuestion, 
 		fmt.Fprint(stdout, nextQuestionPrefix)
 	}
 	fmt.Fprintln(stdout, ask.Question)
+	if ask.Access {
+		fmt.Fprintln(stdout, questionSuggestionsHeading)
+		for index, option := range ask.AccessOptions {
+			fmt.Fprintf(stdout, "%d. %s\n", index+1, option.Label)
+		}
+		return
+	}
 	if len(ask.Suggestions) == 0 {
 		return
 	}
@@ -596,4 +804,57 @@ func writePendingQuestion(stdout io.Writer, ask questionCommandPendingQuestion, 
 		}
 		fmt.Fprintf(stdout, "%d. %s%s\n", index+1, suggestion, suffix)
 	}
+}
+
+func writeObservedQuestion(stdout io.Writer, question serverapi.RuntimeObservationQuestion, answerHint string) {
+	writePendingQuestion(stdout, questionCommandPendingQuestion{
+		AskID:                  question.QuestionID,
+		Question:               question.Text,
+		Suggestions:            append([]string(nil), question.Suggestions...),
+		RecommendedOptionIndex: textutil.Pointer(question.RecommendedOptionIndex),
+		AccessOptions:          append([]clientui.ApprovalOption(nil), question.AccessOptions...),
+		Access:                 question.Kind == serverapi.RuntimeObservationQuestionAccessRequest,
+	}, false)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, answerHint)
+}
+
+func observedQuestionAnswerHint(question serverapi.RuntimeObservationQuestion, selector string) string {
+	if question.Kind == serverapi.RuntimeObservationQuestionAccessRequest || len(question.Suggestions) > 0 {
+		return fmt.Sprintf("Answer with: kent question answer %s --option <number>", selector)
+	}
+	return fmt.Sprintf("Answer with: kent question answer %s --commentary \"<answer>\"", selector)
+}
+
+func executeQuestionApprovalPlan(
+	ctx context.Context,
+	remote any,
+	sessionID string,
+	effects []client.ApprovalCommentaryEffect,
+	answerApproval func() error,
+) error {
+	var runtimeRemote questionCommandRuntimeRemote
+	for _, effect := range effects {
+		switch effect.Kind {
+		case client.ApprovalCommentaryEffectRuntimeInput:
+			if runtimeRemote == nil {
+				var ok bool
+				runtimeRemote, ok = remote.(questionCommandRuntimeRemote)
+				if !ok {
+					return errors.New("runtime input control is unavailable for approval commentary")
+				}
+			}
+			if _, err := runtimeRemote.SubmitUserTurn(ctx, client.NewRuntimeUserTurnRequest(sessionID, effect.Commentary)); err != nil {
+				return err
+			}
+		case client.ApprovalCommentaryEffectApproval:
+			if answerApproval == nil {
+				return errors.New("approval answer is unavailable")
+			}
+			return answerApproval()
+		default:
+			return errors.New("approval commentary effect is invalid")
+		}
+	}
+	return errors.New("approval plan did not contain an approval effect")
 }

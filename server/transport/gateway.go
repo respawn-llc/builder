@@ -139,6 +139,7 @@ func RuntimeLiveControlRoutesExecutable() bool {
 		protocol.MethodRuntimeLiveSteer,
 		protocol.MethodRuntimeLiveStop,
 		protocol.MethodRuntimeLiveWait,
+		protocol.MethodRuntimeLiveWatch,
 	} {
 		if _, ok := gatewayUnaryHandlers[method]; !ok {
 			return false

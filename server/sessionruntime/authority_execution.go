@@ -57,8 +57,8 @@ type WorkflowPromptResolution struct {
 var ErrWorkflowPromptAmbiguous = errors.New("workflow prompt is ambiguous")
 
 type ExecutionPromptFeed interface {
-	PromptPending(runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID, tools.AskQuestionRequest, time.Time)
-	PromptResolved(runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID, string)
+	PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time)
+	PromptResolvedScope(ExecutionScope, string)
 }
 
 type execution struct {
@@ -751,22 +751,14 @@ func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) 
 	if s.feed == nil {
 		return
 	}
-	resource, ok := snapshot.Scope.Resource()
-	if !ok {
-		panic(fmt.Sprintf("agent execution prompt scope %s has no session resource", snapshot.Scope.ID()))
-	}
-	s.feed.PromptPending(resource, snapshot.Scope.ID(), cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
+	s.feed.PromptPendingScope(snapshot.Scope, cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
 }
 
 func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot) {
 	if s.feed == nil {
 		return
 	}
-	resource, ok := snapshot.Scope.Resource()
-	if !ok {
-		panic(fmt.Sprintf("agent execution prompt scope %s has no session resource", snapshot.Scope.ID()))
-	}
-	s.feed.PromptResolved(resource, snapshot.Scope.ID(), snapshot.Request.ID)
+	s.feed.PromptResolvedScope(snapshot.Scope, snapshot.Request.ID)
 }
 
 func (a *Authority) AwaitPromptResponse(ctx context.Context, scopeID runtimeids.ExecutionScopeID, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {

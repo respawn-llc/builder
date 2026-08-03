@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"core/server/workflow"
+	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -56,6 +57,7 @@ type ReadModels struct {
 	TaskDependencies WorkflowTaskDependencyReadModel
 	Activity         WorkflowActivityReadModel
 	Attention        WorkflowAttentionReadModel
+	Approvals        apicontract.ApprovalViewService
 }
 
 func (r ReadModels) validate() error {
