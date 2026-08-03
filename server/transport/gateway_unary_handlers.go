@@ -115,11 +115,18 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
 	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		params, err := decodeParams[serverapi.PromptCommandCatalogRequest](req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		if err := params.Validate(); err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
 		projectID, err := g.activeProjectID(ctx, state)
 		if err != nil {
 			return responseForError(req.ID, err)
 		}
-		workspaceRoot, err := g.promptCommandWorkspaceRootForState(ctx, state)
+		workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, params.SessionID)
 		if err != nil {
 			return responseForError(req.ID, err)
 		}
@@ -127,9 +134,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if err != nil {
 			return responseForError(req.ID, err)
 		}
-		return decodeAndHandle(req, func(params serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
-			return catalog.GetPromptCommandCatalog(ctx, params)
-		})
+		resp, err := catalog.GetPromptCommandCatalog(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, resp)
 	},
 	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := decodeParams[serverapi.OnboardingFinalizeRequest](req.Params)

@@ -8,8 +8,10 @@ import (
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/theme"
 )
 
@@ -29,7 +31,7 @@ type appServerCore interface {
 type embeddedAppServer struct {
 	inner              *embeddedattach.Server
 	boundProjectID     string
-	boundWorkspaceID   string
+	boundWorkspaceID   *string
 	boundSessionLaunch apicontract.SessionLaunchService
 	retarget           *sessionWorkspaceRetargetContext
 }
@@ -88,6 +90,9 @@ func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID 
 		return nil, err
 	}
 	nextWorkspaceID := strings.TrimSpace(workspaceID)
+	if nextWorkspaceID == "" {
+		return nil, errors.New("workspace id is required")
+	}
 	retargetContext, err := resolveSessionWorkspaceRetargetContext(
 		ctx,
 		s.ProjectViewClient(),
@@ -101,7 +106,7 @@ func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID 
 	return &embeddedAppServer{
 		inner:              s.inner,
 		boundProjectID:     bound.ProjectID,
-		boundWorkspaceID:   nextWorkspaceID,
+		boundWorkspaceID:   textutil.Value(nextWorkspaceID),
 		boundSessionLaunch: bound.SessionLaunch,
 		retarget:           retargetContext,
 	}, nil
@@ -217,17 +222,27 @@ func (s *embeddedAppServer) RunPromptClient() apicontract.RunPromptService {
 	return s.inner.RunPromptClient()
 }
 
-func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context) (apicontract.PromptCommandCatalogService, error) {
+func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context, _ string, target clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
 	if s == nil || s.inner == nil {
 		return nil, errors.New("embedded server is required")
 	}
-	workspaceRoot := s.Config().WorkspaceRoot
-	if strings.TrimSpace(s.boundWorkspaceID) != "" {
-		binding, err := s.inner.MetadataStore().LookupWorkspaceBindingByID(ctx, s.boundWorkspaceID)
+	workspaceRoot := strings.TrimSpace(target.WorkspaceRoot)
+	if target.Worktree != nil {
+		var err error
+		workspaceRoot, err = clientui.SessionExecutionWorkspaceRoot(target, workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if workspaceRoot == "" && s.boundWorkspaceID != nil {
+		binding, err := s.inner.MetadataStore().LookupWorkspaceBindingByID(ctx, *s.boundWorkspaceID)
 		if err != nil {
 			return nil, err
 		}
 		workspaceRoot = binding.CanonicalRoot
+	}
+	if workspaceRoot == "" {
+		workspaceRoot = s.Config().WorkspaceRoot
 	}
 	return s.inner.PromptCommandCatalogClientForProjectWorkspace(ctx, s.ProjectID(), workspaceRoot)
 }

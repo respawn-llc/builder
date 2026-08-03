@@ -7,12 +7,18 @@ import (
 	"strings"
 
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
-type PromptCommandCatalogRequest struct{}
+type PromptCommandCatalogRequest struct {
+	SessionID *runtimeids.SessionID `json:"session_id,omitempty"`
+}
 
-func (PromptCommandCatalogRequest) Validate() error {
+func (r PromptCommandCatalogRequest) Validate() error {
+	if r.SessionID != nil && r.SessionID.IsZero() {
+		return errors.New("session_id is required when present")
+	}
 	return nil
 }
 

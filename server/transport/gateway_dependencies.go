@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -97,6 +98,17 @@ func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state 
 		return "", err
 	}
 	return clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+}
+
+func (g *Gateway) promptCommandWorkspaceRootForCatalog(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
+	if sessionID != nil {
+		target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID.String())
+		if err != nil {
+			return "", err
+		}
+		return clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+	}
+	return g.promptCommandWorkspaceRootForState(ctx, state)
 }
 
 func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (apicontract.SessionLaunchService, error) {

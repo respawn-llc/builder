@@ -7,6 +7,7 @@ import (
 	"core/cli/app/internal/remoteattach"
 	"core/shared/apicontract"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -53,11 +54,11 @@ func (s *remoteAppServer) PresentationTheme() string {
 	return s.presentation.Theme
 }
 
-func (s *remoteAppServer) PromptCommandCatalogClient(context.Context) (apicontract.PromptCommandCatalogService, error) {
+func (s *remoteAppServer) PromptCommandCatalogClient(_ context.Context, sessionID string, _ clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
 	if s == nil {
 		return nil, errors.New("remote server is required")
 	}
-	return s.remote, nil
+	return s.remote.PromptCommandCatalogClientForSession(sessionID)
 }
 
 func (s *remoteAppServer) Close() error {

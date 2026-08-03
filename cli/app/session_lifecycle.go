@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
@@ -36,7 +37,7 @@ type sessionWorkspaceChangeServer interface {
 }
 
 type promptCommandCatalogServer interface {
-	PromptCommandCatalogClient(context.Context) (apicontract.PromptCommandCatalogService, error)
+	PromptCommandCatalogClient(context.Context, string, clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error)
 }
 
 type interactiveSessionServer interface {
@@ -272,7 +273,7 @@ func prepareSessionUIRun(
 	var promptCatalog apicontract.PromptCommandCatalogService
 	var catalogEntries []commands.PromptCommandCatalogEntry
 	if catalogServer, ok := server.(promptCommandCatalogServer); ok {
-		catalogClient, catalogErr := catalogServer.PromptCommandCatalogClient(ctx)
+		catalogClient, catalogErr := catalogServer.PromptCommandCatalogClient(ctx, plan.SessionID, plan.ExecutionTarget)
 		if catalogErr != nil {
 			notice := "Custom prompt commands are unavailable for this session."
 			catalogStatus = &notice
