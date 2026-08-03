@@ -107,8 +107,8 @@ func ParsePromptCommandName(raw string) (PromptCommandName, error) {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
 	}
 	identifier := *token.Identifier
-	normalized := NormalizeIdentifier(identifier)
-	if normalized == "" || normalized != identifier {
+	normalized, normalizeErr := NormalizeIdentifier(identifier)
+	if normalizeErr != nil || normalized != identifier {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
 	}
 	return PromptCommandName{Identifier: normalized}, nil
@@ -121,7 +121,7 @@ func (n PromptCommandName) String() string {
 	return NamespacePrompt + ":" + n.Identifier
 }
 
-func NormalizeIdentifier(raw string) string {
+func NormalizeIdentifier(raw string) (string, error) {
 	var builder strings.Builder
 	lastUnderscore := false
 	for _, r := range strings.TrimSpace(raw) {
@@ -137,5 +137,9 @@ func NormalizeIdentifier(raw string) string {
 			lastUnderscore = true
 		}
 	}
-	return strings.Trim(builder.String(), "_")
+	normalized := strings.Trim(builder.String(), "_")
+	if normalized == "" {
+		return "", fmt.Errorf("identifier %q cannot be normalized", raw)
+	}
+	return normalized, nil
 }

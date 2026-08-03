@@ -163,6 +163,16 @@ func TestCatalogReadFailureIsTypedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestNilErrorReceiverFailsExplicitly(t *testing.T) {
+	var commandErr *Error
+	defer func() {
+		if recover() == nil {
+			t.Fatal("nil error receiver did not panic")
+		}
+	}()
+	_ = commandErr.Error()
+}
+
 func writePromptFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

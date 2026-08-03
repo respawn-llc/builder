@@ -33,3 +33,12 @@ func TestCommandTokenParsesNamespaceStructurally(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeIdentifierReportsUnformableInput(t *testing.T) {
+	if _, err := NormalizeIdentifier("___"); err == nil {
+		t.Fatal("unformable identifier was accepted")
+	}
+	if got, err := NormalizeIdentifier("Review Plan"); err != nil || got != "review_plan" {
+		t.Fatalf("normalized identifier = %q, %v", got, err)
+	}
+}

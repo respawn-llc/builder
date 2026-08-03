@@ -26,7 +26,7 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e == nil {
-		return ""
+		panic("nil prompt command error")
 	}
 	switch e.Kind {
 	case ErrorKindCatalogRead:
@@ -48,7 +48,7 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error {
 	if e == nil {
-		return nil
+		panic("nil prompt command error")
 	}
 	return e.cause
 }

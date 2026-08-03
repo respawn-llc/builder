@@ -38,20 +38,21 @@ func (s Service) scan() ([]CatalogEntry, error) {
 			if !ok {
 				continue
 			}
-			if _, ok := seen[name]; ok {
+			command := name.String()
+			if _, ok := seen[command]; ok {
 				continue
 			}
 			path := filepath.Join(dir, entry.Name())
 			preview, err := previewFile(path)
 			if err != nil {
-				commandName := name
+				commandName := command
 				return nil, &Error{Kind: ErrorKindCatalogRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", path, err)}
 			}
 			if preview == "" {
 				continue
 			}
-			seen[name] = struct{}{}
-			result = append(result, CatalogEntry{Name: name, Preview: preview})
+			seen[command] = struct{}{}
+			result = append(result, CatalogEntry{Name: command, Preview: preview})
 		}
 	}
 	return result, nil
@@ -76,7 +77,7 @@ func (s Service) findCandidate(command string) (candidate, bool, error) {
 		})
 		for _, entry := range entries {
 			candidateName, ok := commandNameForEntry(entry.Name(), entry.IsDir())
-			if !ok || candidateName != name.String() {
+			if !ok || candidateName.String() != name.String() {
 				continue
 			}
 			content, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
@@ -87,21 +88,22 @@ func (s Service) findCandidate(command string) (candidate, bool, error) {
 			if strings.TrimSpace(string(content)) == "" {
 				continue
 			}
-			return candidate{name: candidateName, content: string(content)}, true, nil
+			return candidate{name: candidateName.String(), content: string(content)}, true, nil
 		}
 	}
 	return candidate{}, false, nil
 }
 
-func commandNameForEntry(entryName string, directory bool) (string, bool) {
+func commandNameForEntry(entryName string, directory bool) (*runtimeinput.PromptCommandName, bool) {
 	if directory || filepath.Ext(entryName) != ".md" {
-		return "", false
+		return nil, false
 	}
-	identifier := runtimeinput.NormalizeIdentifier(strings.TrimSuffix(entryName, ".md"))
-	if identifier == "" {
-		return "", false
+	identifier, err := runtimeinput.NormalizeIdentifier(strings.TrimSuffix(entryName, ".md"))
+	if err != nil {
+		return nil, false
 	}
-	return "prompt:" + identifier, true
+	name := runtimeinput.PromptCommandName{Identifier: identifier}
+	return &name, true
 }
 
 func previewFile(path string) (string, error) {
@@ -109,12 +111,25 @@ func previewFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = file.Close() }()
-	return previewReader(file)
+	preview, readErr := previewReader(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		if closeErr != nil {
+			return "", errors.Join(readErr, closeErr)
+		}
+		return "", readErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	return preview, nil
 }
 
 func preview(content string) string {
-	preview, _ := previewReader(strings.NewReader(content))
+	preview, err := previewReader(strings.NewReader(content))
+	if err != nil {
+		panic(fmt.Sprintf("in-memory prompt preview failed: %v", err))
+	}
 	return preview
 }
 
