@@ -11,13 +11,9 @@ func TestTranscriptSessionStatusSeparatesRuntimeContextAndGoalFacts(t *testing.T
 		ReviewerFrequency: "off",
 		ThinkingLevel:     "medium",
 		CompactionMode:    "auto",
-		CompactionCount:   4,
 	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("validate session status: %v", err)
-	}
-	if status.CompactionCount != 4 {
-		t.Fatalf("compaction count = %d, want 4", status.CompactionCount)
 	}
 }
 

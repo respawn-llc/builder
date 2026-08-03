@@ -207,15 +207,13 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 }
 
 func TestSessionFeedSequencerBuildsHydrationWithoutPriorRuntimeReadModel(t *testing.T) {
-	s := newSessionFeedSequencer(newTranscriptSubscriptionBroker())
 	h := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
-	sub, err := s.Subscribe(func() (clientui.TranscriptHydration, error) { return h, nil })
+	sub, err := newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) { return h, nil })
 	if err != nil {
 		t.Fatalf("subscribe without prior read-model: %v", err)
 	}
 	defer func() { _ = sub.Close() }()
-	message := nextTranscriptMessage(t, sub)
-	if message.Sequence != 1 || message.Kind() != clientui.TranscriptMessageHydration {
+	if message := nextTranscriptMessage(t, sub); message.Sequence != 1 || message.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("first message = %+v, want sequence 1 hydration", message)
 	}
 }

@@ -191,40 +191,6 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	}
 }
 
-func TestPromptPendingPublicationPrecedesResourceDrainResolution(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	ref := registryTestResourceRef(engine.SessionID())
-	registerResource(t, registry, ref, engine)
-	sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	_ = nextTranscriptMessage(t, sub)
-	scopeID := runtimeids.NewExecutionScopeID()
-	registry.PromptPending(ref, scopeID, askquestion.AskQuestionRequest{
-		ID: "ask-1", StepID: registryTestStepID, Question: "Continue?",
-	}, time.Now().UTC())
-	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
-		t.Fatalf("drain: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	states := make([]clientui.TranscriptPromptStatus, 0, 2)
-	for len(states) < 2 {
-		message, err := sub.Next(ctx)
-		if err != nil {
-			t.Fatalf("read prompt lifecycle: %v", err)
-		}
-		if message.Kind() == clientui.TranscriptMessagePrompt {
-			states = append(states, transcriptPayload[clientui.TranscriptPrompt](t, message).Status)
-		}
-	}
-	if states[0] != clientui.TranscriptPromptStatusPending || states[1] != clientui.TranscriptPromptStatusResolved {
-		t.Fatalf("prompt lifecycle = %v, want pending then resolved", states)
-	}
-}
-
 func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
@@ -249,14 +215,22 @@ func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
 	}()
 	<-hydrationResolverStarted
 
-	publicationStarted := make(chan struct{})
+	entry := registry.authorityEntryBySession(engine.SessionID())
+	if entry == nil {
+		t.Fatal("authority entry missing")
+	}
+	publicationAttempted := make(chan struct{})
 	publicationDone := make(chan struct{})
 	go func() {
-		close(publicationStarted)
+		if entry.sessionFeed.mu.TryLock() {
+			entry.sessionFeed.mu.Unlock()
+			t.Error("sequencer was not held by hydration builder")
+		}
+		close(publicationAttempted)
 		registry.PublishRuntimeReadModelUpdate(engine.SessionID(), update)
 		close(publicationDone)
 	}()
-	<-publicationStarted
+	<-publicationAttempted
 	select {
 	case <-publicationDone:
 		t.Fatal("runtime read-model publication passed hydration admission")

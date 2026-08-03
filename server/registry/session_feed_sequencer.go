@@ -42,22 +42,14 @@ func (s *sessionFeedSequencer) Subscribe(
 	return s.broker.Subscribe(event)
 }
 
-func (s *sessionFeedSequencer) withAdmission(admit func()) {
-	if s == nil || admit == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	admit()
-}
-
 func (s *sessionFeedSequencer) Publish(events []clientui.TranscriptEvent) {
 	if s == nil || len(events) == 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.publishLocked(events)
+	s.validateEvents(events)
+	s.broker.Publish(events)
 }
 
 func (s *sessionFeedSequencer) PublishBuilt(build func() ([]clientui.TranscriptEvent, error)) error {
@@ -76,7 +68,8 @@ func (s *sessionFeedSequencer) PublishBuilt(build func() ([]clientui.TranscriptE
 	if len(events) == 0 {
 		return nil
 	}
-	s.publishLocked(events)
+	s.validateEvents(events)
+	s.broker.Publish(events)
 	return nil
 }
 
@@ -114,11 +107,6 @@ func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.Run
 		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
 	s.broker.Publish([]clientui.TranscriptEvent{event})
-}
-
-func (s *sessionFeedSequencer) publishLocked(events []clientui.TranscriptEvent) {
-	s.validateEvents(events)
-	s.broker.Publish(events)
 }
 
 func (s *sessionFeedSequencer) validateEvents(events []clientui.TranscriptEvent) {

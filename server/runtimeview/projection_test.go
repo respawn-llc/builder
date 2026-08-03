@@ -198,9 +198,6 @@ func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T
 	if status.FastModeEnabled {
 		t.Fatal("expected transcript status to disable unavailable fast mode")
 	}
-	if status.CompactionCount != eng.CompactionCount() {
-		t.Fatalf("transcript compaction count = %d, want runtime count %d", status.CompactionCount, eng.CompactionCount())
-	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("transcript session status: %v", err)
 	}

@@ -117,7 +117,18 @@ func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session feed sequencer: %v", err)
 	}
+	var fields []string
 	ast.Inspect(file, func(node ast.Node) bool {
+		if spec, ok := node.(*ast.TypeSpec); ok && spec.Name.Name == "sessionFeedSequencer" {
+			if structType, ok := spec.Type.(*ast.StructType); ok {
+				for _, field := range structType.Fields.List {
+					for _, name := range field.Names {
+						fields = append(fields, name.Name)
+					}
+				}
+			}
+			return false
+		}
 		ident, ok := node.(*ast.Ident)
 		if !ok {
 			return true
@@ -127,6 +138,9 @@ func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 		}
 		return true
 	})
+	if len(fields) != 2 || fields[0] != "mu" || fields[1] != "broker" {
+		t.Fatalf("session feed sequencer fields = %v, want only mutex and broker", fields)
+	}
 }
 
 func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *testing.T) {

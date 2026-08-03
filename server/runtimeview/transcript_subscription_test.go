@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -192,6 +193,42 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 	}
 	if hydration.ActiveAssistant.Phase != transcript.AssistantPhaseFinal {
 		t.Fatalf("active assistant stream phase = %q, want final", hydration.ActiveAssistant.Phase)
+	}
+}
+
+func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
+	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveReasoning: &runtime.TranscriptReasoningState{
+			StepID: transcriptProjectionStepID, Key: "plan", Text: "inspect",
+			CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
+		},
+		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
+		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), ClientRequestID: clientRequestID.String(), Text: "queued"}},
+		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
+		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
+		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
+		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
+		GoalSuspended:    true,
+	})
+	if hydration.ActiveReasoning == nil || hydration.ActiveReasoning.Text != "inspect" {
+		t.Fatalf("reasoning = %+v", hydration.ActiveReasoning)
+	}
+	if len(hydration.InFlightTools) != 1 || hydration.InFlightTools[0].ToolCallID != "call-1" {
+		t.Fatalf("tools = %+v", hydration.InFlightTools)
+	}
+	if len(hydration.QueuedMessages) != 1 || hydration.QueuedMessages[0].QueueItemID != queueItemID ||
+		hydration.QueuedMessages[0].Status != clientui.QueuedUserMessageAccepted {
+		t.Fatalf("queue = %+v", hydration.QueuedMessages)
+	}
+	if hydration.ActiveReviewer == nil || hydration.ActiveCompaction == nil ||
+		hydration.ActiveCompaction.Count != 3 {
+		t.Fatalf("step owners = reviewer %+v compaction %+v", hydration.ActiveReviewer, hydration.ActiveCompaction)
+	}
+	if hydration.ContextUsage == nil || hydration.ContextUsage.CacheHitPercent == nil ||
+		*hydration.ContextUsage.CacheHitPercent != 25 || hydration.GoalStatus == nil ||
+		hydration.GoalStatus.Goal == nil || !hydration.GoalStatus.Goal.Suspended {
+		t.Fatalf("usage/goal = usage %+v goal %+v", hydration.ContextUsage, hydration.GoalStatus)
 	}
 }
 

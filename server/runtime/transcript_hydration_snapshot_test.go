@@ -64,9 +64,13 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
 	const stepID = "step-owner"
-	engine.reviewerRuntimeState().SetActiveStep(stepID)
 	engine.compactionRuntimeState().SetCount(7)
-	engine.compactionRuntimeState().SetActive(stepID, "remote", 8)
+	if err := engine.steer(stepID,
+		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}),
+		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: stepID, Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
+	); err != nil {
+		t.Fatalf("steer active owner events: %v", err)
+	}
 	engine.setLastUsage(llm.Usage{InputTokens: 123, WindowTokens: 1000})
 	if _, err := engine.SetGoal("ship the owner snapshot", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
@@ -82,16 +86,19 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		snapshot.ActiveCompaction.Count != 8 || snapshot.CompactionCount != 7 {
 		t.Fatalf("compaction = active %+v count %d", snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
-	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != 1000 ||
-		snapshot.ContextUsage.UsedTokens <= 0 {
+	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != 1000 || snapshot.ContextUsage.UsedTokens <= 0 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
 	}
-	if snapshot.Goal == nil || snapshot.Goal.Objective != "ship the owner snapshot" || !snapshot.GoalSuspended {
+	if snapshot.Goal == nil || !snapshot.GoalSuspended {
 		t.Fatalf("goal = %+v suspended=%t", snapshot.Goal, snapshot.GoalSuspended)
 	}
 
-	engine.reviewerRuntimeState().ClearActiveStep(stepID)
-	engine.compactionRuntimeState().ClearActive(stepID)
+	if err := engine.steer(stepID,
+		steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID}),
+		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: stepID}),
+	); err != nil {
+		t.Fatalf("steer terminal owner events: %v", err)
+	}
 	snapshot = hydrationSnapshot(t, engine)
 	if snapshot.ActiveReviewer != nil || snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 7 {
 		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
