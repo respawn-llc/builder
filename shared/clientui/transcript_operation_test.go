@@ -59,6 +59,11 @@ func TestTranscriptOperationOutcomesRejectUntypedFailure(t *testing.T) {
 	if err := typed.Validate(); err != nil {
 		t.Fatalf("typed delete precondition rejected: %v", err)
 	}
+	invalidNonDelete := typed
+	invalidNonDelete.Transition = WorktreeTransitionLeave
+	if err := invalidNonDelete.Validate(); err == nil {
+		t.Fatal("non-delete transcript transition accepted delete precondition")
+	}
 }
 
 func TestTranscriptWorktreeTransitionOutcomeJSONKeepsDeletePrecondition(t *testing.T) {

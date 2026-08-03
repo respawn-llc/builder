@@ -48,3 +48,10 @@ func (state WorktreeDirtyState) ValidateDeletePrecondition() error {
 	}
 	return nil
 }
+
+func (state WorktreeDirtyState) ValidateDeleteForTransition(transition WorktreeTransitionKind) error {
+	if transition != WorktreeTransitionDelete {
+		return errors.New("delete precondition is only valid for delete transitions")
+	}
+	return state.ValidateDeletePrecondition()
+}

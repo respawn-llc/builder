@@ -53,10 +53,7 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 			return err
 		}
 		if o.DeletePrecondition != nil {
-			if o.Transition != WorktreeTransitionDelete {
-				return fmt.Errorf("delete precondition is only valid for delete transitions")
-			}
-			if err := o.DeletePrecondition.ValidateDeletePrecondition(); err != nil {
+			if err := o.DeletePrecondition.ValidateDeleteForTransition(o.Transition); err != nil {
 				return err
 			}
 		}

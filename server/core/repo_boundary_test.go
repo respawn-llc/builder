@@ -326,6 +326,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"WorktreeTransitionOutcome.Validate":                      {},
 		"WorktreeDirtyState.Validate":                             {},
 		"WorktreeDirtyState.ValidateDeletePrecondition":           {},
+		"WorktreeDirtyState.ValidateDeleteForTransition":          {},
 		"validateHydrationBackgrounds":                            {},
 		"validateHydrationPrompts":                                {},
 		"validateHydrationQueuedMessages":                         {},

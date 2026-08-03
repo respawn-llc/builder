@@ -115,10 +115,7 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 			return errors.New("worktree transition failure diagnostic is required")
 		}
 		if outcome.Failure.DeletePrecondition != nil {
-			if outcome.Transition != WorktreeTransitionDelete {
-				return errors.New("delete precondition is only valid for delete transitions")
-			}
-			if err := outcome.Failure.DeletePrecondition.ValidateDeletePrecondition(); err != nil {
+			if err := outcome.Failure.DeletePrecondition.ValidateDeleteForTransition(outcome.Transition); err != nil {
 				return err
 			}
 		}
