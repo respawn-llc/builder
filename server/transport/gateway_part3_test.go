@@ -557,7 +557,7 @@ func TestDecodeAndHandlePreservesWorktreeStructuredErrors(t *testing.T) {
 
 func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
 	source := &serverapi.WorktreeCreateError{
-		Owner:      serverapi.WorktreeCreateErrorOwnerBaseRef,
+		Owner: serverapi.WorktreeCreateErrorOwnerBaseRef,
 		Diagnostic: errors.Join(
 			errors.New("base ref object disappeared"),
 			errors.New("cleanup removed no worktree"),

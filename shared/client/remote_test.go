@@ -1676,7 +1676,7 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			},
 		},
 		&serverapi.WorktreeCreateError{
-			Owner:      serverapi.WorktreeCreateErrorOwnerForm,
+			Owner: serverapi.WorktreeCreateErrorOwnerForm,
 			Diagnostic: errors.Join(
 				errors.New("worktree path already exists"),
 				errors.New("cleanup failed"),
