@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/attentionnotify"
@@ -47,7 +48,7 @@ type authorityRuntimeEntry struct {
 	retain      func() (io.Closer, error)
 
 	mu             sync.Mutex
-	lifecycle      authorityRuntimeEntryLifecycle
+	lifecycle      atomic.Uint32
 	nextRetention  uint64
 	retentions     map[uint64]io.Closer
 	readModelUnpin func()
@@ -97,6 +98,7 @@ func (r *RuntimeRegistry) ResourceReady(
 		retain:      retain,
 		retentions:  make(map[uint64]io.Closer),
 	}
+	entry.lifecycle.Store(uint32(authorityRuntimeEntryReady))
 	r.authorityMu.Lock()
 	if existing := r.authorityBySession[sessionID]; existing != nil {
 		r.authorityMu.Unlock()
@@ -129,11 +131,11 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 		return nil
 	}
 	entry.mu.Lock()
-	if entry.lifecycle != authorityRuntimeEntryReady {
+	if entry.lifecycle.Load() != uint32(authorityRuntimeEntryReady) {
 		entry.mu.Unlock()
 		return nil
 	}
-	entry.lifecycle = authorityRuntimeEntryDraining
+	entry.lifecycle.Store(uint32(authorityRuntimeEntryDraining))
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
@@ -145,12 +147,12 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	r.publishCurrentRuntimeActivity(sessionID)
 	update, err := r.unavailableRuntimeReadModelFeedSnapshot(sessionID)
 	entry.mu.Lock()
-	lifecycle := entry.lifecycle
+	lifecycle := authorityRuntimeEntryLifecycle(entry.lifecycle.Load())
 	if lifecycle != authorityRuntimeEntryDraining {
 		entry.mu.Unlock()
 		panic(fmt.Sprintf("authority runtime resource %s generation %d reached terminal feed closure from lifecycle %d", sessionID, ref.Generation(), lifecycle))
 	}
-	entry.lifecycle = authorityRuntimeEntryRetired
+	entry.lifecycle.Store(uint32(authorityRuntimeEntryRetired))
 	entry.mu.Unlock()
 	if err == nil {
 		entry.sessionFeed.CloseWithRuntimeReadModel(update, io.EOF)
@@ -191,17 +193,31 @@ func (r *RuntimeRegistry) authorityEntryByRef(ref runtimeids.SessionResourceRef)
 	return entry
 }
 
-func (r *RuntimeRegistry) withCurrentAuthorityEntry(ref runtimeids.SessionResourceRef, mutate func(*authorityRuntimeEntry) bool) bool {
+func (r *RuntimeRegistry) withCurrentAuthorityEntry(
+	ref runtimeids.SessionResourceRef,
+	mutate func(*authorityRuntimeEntry) (func(*sessionFeedSequencer), bool),
+) bool {
 	entry := r.authorityEntryByRef(ref)
 	if entry == nil {
 		return false
 	}
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.lifecycle != authorityRuntimeEntryReady {
+	if entry.lifecycle.Load() != uint32(authorityRuntimeEntryReady) {
+		entry.mu.Unlock()
 		return false
 	}
-	return mutate(entry)
+	publish, admitted := mutate(entry)
+	if !admitted {
+		entry.mu.Unlock()
+		return false
+	}
+	entry.sessionFeed.withAdmission(func() {
+		entry.mu.Unlock()
+		if publish != nil {
+			publish(entry.sessionFeed)
+		}
+	})
+	return true
 }
 
 func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
@@ -210,7 +226,7 @@ func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.lifecycle != authorityRuntimeEntryReady {
+	if e.lifecycle.Load() != uint32(authorityRuntimeEntryReady) {
 		return 0, fmt.Errorf("authority runtime subscription is draining: %w", serverapi.ErrStreamUnavailable)
 	}
 	retention, err := e.retain()
@@ -379,9 +395,7 @@ func (r *RuntimeRegistry) RuntimeActivityRegistrySnapshot(sessionID string) runt
 		return runtimeactivity.RegistrySnapshot{}
 	}
 	if authorityEntry := r.authorityEntryBySession(id); authorityEntry != nil {
-		authorityEntry.mu.Lock()
-		lifecycle := authorityEntry.lifecycle
-		authorityEntry.mu.Unlock()
+		lifecycle := authorityRuntimeEntryLifecycle(authorityEntry.lifecycle.Load())
 		switch lifecycle {
 		case authorityRuntimeEntryReady:
 			return runtimeactivity.RegistrySnapshot{
@@ -628,13 +642,9 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}
 	var sub *transcriptSubscription
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
-		readModel, readModelErr := r.runtimeReadModelFeedSnapshot(ctx, id, nil)
-		if readModelErr != nil {
-			return fmt.Errorf("build transcript runtime read model: %w", readModelErr)
-		}
 		var subscribeErr error
 		sub, subscribeErr = entry.sessionFeed.Subscribe(func() (clientui.TranscriptHydration, error) {
-			return r.composeTranscriptHydration(ctx, id, entry, snapshot, readModel)
+			return r.composeTranscriptHydration(ctx, id, entry, snapshot)
 		})
 		return subscribeErr
 	})
@@ -656,17 +666,19 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 	}
 	id := resource.SessionID().String()
 	var snapshot PendingPromptSnapshot
-	projected := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
-		var projected bool
-		snapshot, projected = r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt)
-		if projected {
-			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
-			r.publishAttentionPending(id, snapshot)
-			r.publishTaskQuestionWaiting(id, snapshot)
+	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) (func(*sessionFeedSequencer), bool) {
+		var admitted bool
+		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt)
+		if !admitted {
+			return nil, false
 		}
-		return projected
+		return func(feed *sessionFeedSequencer) {
+			publishPendingPromptLocked(feed, id, snapshot, pendingPromptEventPending)
+		}, true
 	})
 	if projected {
+		r.publishAttentionPending(id, snapshot)
+		r.publishTaskQuestionWaiting(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
 }
@@ -680,15 +692,18 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 	}
 	id := resource.SessionID().String()
 	var snapshot PendingPromptSnapshot
-	resolved := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+	resolved := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) (func(*sessionFeedSequencer), bool) {
 		var ok bool
 		snapshot, ok = r.pendingPrompts.Complete(id, resource, scopeID, requestID)
-		if ok {
-			r.publishPromptResolution(entry, id, snapshot)
+		if !ok {
+			return nil, false
 		}
-		return ok
+		return func(feed *sessionFeedSequencer) {
+			publishPendingPromptLocked(feed, id, snapshot, pendingPromptEventResolved)
+		}, true
 	})
 	if resolved {
+		r.publishAttentionResolved(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
 }
@@ -722,9 +737,7 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID s
 	if id == "" {
 		return false
 	}
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.lifecycle == authorityRuntimeEntryRetired && activeForControl {
+	if entry.lifecycle.Load() == uint32(authorityRuntimeEntryRetired) && activeForControl {
 		return false
 	}
 	r.authorityMu.RLock()

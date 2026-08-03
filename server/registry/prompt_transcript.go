@@ -25,8 +25,22 @@ func publishPendingPrompt(
 	if feed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
 		return
 	}
+	feed.withAdmission(func() {
+		publishPendingPromptLocked(feed, sessionID, snapshot, eventType)
+	})
+}
+
+func publishPendingPromptLocked(
+	feed *sessionFeedSequencer,
+	sessionID string,
+	snapshot PendingPromptSnapshot,
+	eventType pendingPromptEventType,
+) {
+	if feed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
+		return
+	}
 	prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
-	feed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(prompt)})
+	feed.publishLocked([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(prompt)})
 }
 
 func transcriptPendingPromptFromSnapshot(

@@ -225,6 +225,54 @@ func TestPromptPendingPublicationPrecedesResourceDrainResolution(t *testing.T) {
 	}
 }
 
+func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), engine.SessionID(), nil)
+	if err != nil {
+		t.Fatalf("read runtime model: %v", err)
+	}
+	hydrationResolverStarted := make(chan struct{})
+	releaseHydrationResolver := make(chan struct{})
+	registry.WithExecutionTargetResolver(func(context.Context, string) (*clientui.SessionExecutionTarget, error) {
+		close(hydrationResolverStarted)
+		<-releaseHydrationResolver
+		return nil, nil
+	})
+	subscriptionDone := make(chan error, 1)
+	go func() {
+		_, subscribeErr := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+			SessionID: engine.SessionID(),
+		})
+		subscriptionDone <- subscribeErr
+	}()
+	<-hydrationResolverStarted
+
+	publicationStarted := make(chan struct{})
+	publicationDone := make(chan struct{})
+	go func() {
+		close(publicationStarted)
+		registry.PublishRuntimeReadModelUpdate(engine.SessionID(), update)
+		close(publicationDone)
+	}()
+	<-publicationStarted
+	select {
+	case <-publicationDone:
+		t.Fatal("runtime read-model publication passed hydration admission")
+	default:
+	}
+	close(releaseHydrationResolver)
+	if err := <-subscriptionDone; err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	select {
+	case <-publicationDone:
+	case <-time.After(time.Second):
+		t.Fatal("runtime read-model publication remained blocked after hydration")
+	}
+}
+
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
 	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"}, func(_ *runtime.Engine, evt runtime.Event) {

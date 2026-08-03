@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 )
 
@@ -57,6 +58,44 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	}
 	if got := hydrationSnapshot(t, engine).ActiveReasoning; got != nil {
 		t.Fatalf("reasoning after reset = %+v", got)
+	}
+}
+
+func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing.T) {
+	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
+	const stepID = "step-owner"
+	engine.reviewerRuntimeState().SetActiveStep(stepID)
+	engine.compactionRuntimeState().SetCount(7)
+	engine.compactionRuntimeState().SetActive(stepID, "remote", 8)
+	engine.setLastUsage(llm.Usage{InputTokens: 123, WindowTokens: 1000})
+	if _, err := engine.SetGoal("ship the owner snapshot", session.GoalActorUser); err != nil {
+		t.Fatalf("set goal: %v", err)
+	}
+	engine.goalLoopState().Start()
+	engine.goalLoopState().Suspend()
+
+	snapshot := hydrationSnapshot(t, engine)
+	if snapshot.ActiveReviewer == nil || snapshot.ActiveReviewer.StepID != stepID {
+		t.Fatalf("active reviewer = %+v", snapshot.ActiveReviewer)
+	}
+	if snapshot.ActiveCompaction == nil || snapshot.ActiveCompaction.StepID != stepID ||
+		snapshot.ActiveCompaction.Count != 8 || snapshot.CompactionCount != 7 {
+		t.Fatalf("compaction = active %+v count %d", snapshot.ActiveCompaction, snapshot.CompactionCount)
+	}
+	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != 1000 ||
+		snapshot.ContextUsage.UsedTokens <= 0 {
+		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
+	}
+	if snapshot.Goal == nil || snapshot.Goal.Objective != "ship the owner snapshot" || !snapshot.GoalSuspended {
+		t.Fatalf("goal = %+v suspended=%t", snapshot.Goal, snapshot.GoalSuspended)
+	}
+
+	engine.reviewerRuntimeState().ClearActiveStep(stepID)
+	engine.compactionRuntimeState().ClearActive(stepID)
+	snapshot = hydrationSnapshot(t, engine)
+	if snapshot.ActiveReviewer != nil || snapshot.ActiveCompaction != nil || snapshot.CompactionCount != 7 {
+		t.Fatalf("terminal owner state = reviewer %+v compaction %+v count %d",
+			snapshot.ActiveReviewer, snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
 }
 
