@@ -35,6 +35,26 @@ type promptCommandRuntimeResolver struct {
 	metadataStore      *metadata.Store
 }
 
+type promptCommandSessionCatalogService struct {
+	core      *Core
+	sessionID string
+}
+
+func (s promptCommandSessionCatalogService) GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
+	if s.core == nil {
+		return serverapi.PromptCommandCatalogResponse{}, errors.New("core is required")
+	}
+	projectID, workspaceRoot, err := resolvePromptCommandSessionWorkspace(ctx, s.core.MetadataStore(), s.sessionID)
+	if err != nil {
+		return serverapi.PromptCommandCatalogResponse{}, err
+	}
+	catalog, err := s.core.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
+	if err != nil {
+		return serverapi.PromptCommandCatalogResponse{}, err
+	}
+	return catalog.GetPromptCommandCatalog(ctx, req)
+}
+
 type promptCommandEffectiveWorkspaceResolver struct {
 	persistenceRoot string
 }
@@ -48,22 +68,34 @@ func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspac
 }
 
 func (r promptCommandRuntimeResolver) ResolvePromptCommand(ctx context.Context, sessionID, name, arguments string) (string, error) {
-	if r.metadataStore == nil {
-		return "", errors.New("metadata store is required")
-	}
-	target, err := r.metadataStore.ResolveSessionExecutionTarget(ctx, strings.TrimSpace(sessionID))
-	if err != nil {
-		return "", err
-	}
-	binding, err := r.metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
-	if err != nil {
-		return "", err
-	}
-	workspaceRoot, err := clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+	_, workspaceRoot, err := resolvePromptCommandSessionWorkspace(ctx, r.metadataStore, sessionID)
 	if err != nil {
 		return "", err
 	}
 	return r.effectiveWorkspace.ResolvePromptCommandForWorkspace(ctx, workspaceRoot, name, arguments)
+}
+
+func resolvePromptCommandSessionWorkspace(ctx context.Context, metadataStore *metadata.Store, sessionID string) (string, string, error) {
+	if metadataStore == nil {
+		return "", "", errors.New("metadata store is required")
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return "", "", errors.New("session id is required")
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, trimmedSessionID)
+	if err != nil {
+		return "", "", err
+	}
+	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
+	if err != nil {
+		return "", "", err
+	}
+	workspaceRoot, err := clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+	if err != nil {
+		return "", "", err
+	}
+	return binding.ProjectID, workspaceRoot, nil
 }
 
 var _ runtimecontrol.PromptCommandResolver = promptCommandRuntimeResolver{}
@@ -123,6 +155,16 @@ func (s *Core) PromptCommandCatalogClientForProjectWorkspace(ctx context.Context
 	return promptCommandCatalogService{
 		catalog: promptcommands.New(projectCtx.config.PersistenceRoot, projectCtx.projectRoot),
 	}, nil
+}
+
+func (s *Core) PromptCommandCatalogClientForSession(ctx context.Context, sessionID string) (apicontract.PromptCommandCatalogService, error) {
+	if s == nil {
+		return nil, errors.New("core is required")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("session id is required")
+	}
+	return promptCommandSessionCatalogService{core: s, sessionID: strings.TrimSpace(sessionID)}, nil
 }
 
 func (s *Core) resolvePromptCommandCatalogContext(ctx context.Context, projectID, workspaceRoot string) (projectContext, error) {

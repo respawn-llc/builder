@@ -1,6 +1,10 @@
 package textutil
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 const promptArgumentsPlaceholder = "$ARGUMENTS"
 
@@ -57,7 +61,7 @@ func parsePromptTemplate(prompt string) ([]promptTemplatePart, bool) {
 }
 
 func isArgumentsPlaceholderAt(prompt string, index int) bool {
-	if index > 0 && isPromptTokenCharacter(prompt[index-1]) {
+	if promptTokenCharacterBefore(prompt, index) {
 		return false
 	}
 	end := index + len(promptArgumentsPlaceholder)
@@ -69,12 +73,25 @@ func isArgumentsPlaceholderAt(prompt string, index int) bool {
 			return false
 		}
 	}
-	return end == len(prompt) || !isPromptTokenCharacter(prompt[end])
+	return !promptTokenCharacterAfter(prompt, end)
 }
 
-func isPromptTokenCharacter(value byte) bool {
-	return value == '_' ||
-		value >= '0' && value <= '9' ||
-		value >= 'A' && value <= 'Z' ||
-		value >= 'a' && value <= 'z'
+func promptTokenCharacterBefore(prompt string, index int) bool {
+	if index <= 0 {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(prompt[:index])
+	return isPromptTokenCharacter(r)
+}
+
+func promptTokenCharacterAfter(prompt string, index int) bool {
+	if index >= len(prompt) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(prompt[index:])
+	return isPromptTokenCharacter(r)
+}
+
+func isPromptTokenCharacter(value rune) bool {
+	return value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value)
 }

@@ -10,11 +10,15 @@ func CanonicalCommandText(name string, arguments string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := "/" + parsed.String()
+	return formatCommandText(parsed.String(), arguments), nil
+}
+
+func formatCommandText(name string, arguments string) string {
+	text := "/" + name
 	if trimmed := strings.TrimSpace(arguments); trimmed != "" {
 		text += " " + trimmed
 	}
-	return text, nil
+	return text
 }
 
 func (c PromptCommand) CanonicalHistoryText() (string, error) {
@@ -23,11 +27,7 @@ func (c PromptCommand) CanonicalHistoryText() (string, error) {
 		return "", err
 	}
 	if command, ok := BuiltinPromptCommandForName(name); ok {
-		text := "/" + command.Alias()
-		if trimmed := strings.TrimSpace(c.Arguments); trimmed != "" {
-			text += " " + trimmed
-		}
-		return text, nil
+		return formatCommandText(command.Alias(), c.Arguments), nil
 	}
 	return CanonicalCommandText(c.Name, c.Arguments)
 }

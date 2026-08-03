@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	modelstub "core/internal/testharness/pty/blackbox"
@@ -204,13 +203,14 @@ func TestPromptCommandCatalogRedactsFilesystemCauseAtClientBoundary(t *testing.T
 	if err != nil {
 		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
 	}
-	_, err = client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
-	var typed *serverapi.PromptCommandError
-	if !errors.As(err, &typed) {
-		t.Fatalf("catalog error = %T %v, want typed prompt command error", err, err)
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("catalog broken symlink: %v", err)
 	}
-	if strings.Contains(err.Error(), workspace) {
-		t.Fatalf("catalog error exposed workspace path: %v", err)
+	for _, entry := range response.Commands {
+		if entry.Name == "prompt:broken" {
+			t.Fatalf("catalog included broken symlink: %+v", response.Commands)
+		}
 	}
 }
 

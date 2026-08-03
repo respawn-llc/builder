@@ -10,7 +10,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/theme"
 )
@@ -220,47 +219,11 @@ func (s *embeddedAppServer) RunPromptClient() apicontract.RunPromptService {
 	return s.inner.RunPromptClient()
 }
 
-type embeddedPromptCommandCatalogClient struct {
-	server    *embeddedAppServer
-	sessionID runtimeids.SessionID
-}
-
-func (c embeddedPromptCommandCatalogClient) GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
-	if c.server == nil || c.server.inner == nil {
-		return serverapi.PromptCommandCatalogResponse{}, errors.New("embedded server is required")
-	}
-	metadataStore := c.server.inner.MetadataStore()
-	if metadataStore == nil {
-		return serverapi.PromptCommandCatalogResponse{}, errors.New("metadata store is required")
-	}
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, c.sessionID.String())
-	if err != nil {
-		return serverapi.PromptCommandCatalogResponse{}, err
-	}
-	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
-	if err != nil {
-		return serverapi.PromptCommandCatalogResponse{}, err
-	}
-	workspaceRoot, err := clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
-	if err != nil {
-		return serverapi.PromptCommandCatalogResponse{}, err
-	}
-	catalog, err := c.server.inner.PromptCommandCatalogClientForProjectWorkspace(ctx, binding.ProjectID, workspaceRoot)
-	if err != nil {
-		return serverapi.PromptCommandCatalogResponse{}, err
-	}
-	return catalog.GetPromptCommandCatalog(ctx, req)
-}
-
-func (s *embeddedAppServer) PromptCommandCatalogClient(_ context.Context, sessionID string, _ clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
+func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context, sessionID string, _ clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
 	if s == nil || s.inner == nil {
 		return nil, errors.New("embedded server is required")
 	}
-	parsed, err := runtimeids.ParseSessionID(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	return embeddedPromptCommandCatalogClient{server: s, sessionID: parsed}, nil
+	return s.inner.PromptCommandCatalogClientForSession(ctx, sessionID)
 }
 
 func (s *embeddedAppServer) Reauthenticate(ctx context.Context, interactor authInteractor, interactiveAuth bool) error {

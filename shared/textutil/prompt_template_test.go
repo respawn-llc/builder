@@ -20,3 +20,10 @@ func TestExpandPromptTemplateOnlyExpandsExactArgumentsTokens(t *testing.T) {
 		t.Fatalf("exact-token expansion = %q", got)
 	}
 }
+
+func TestExpandPromptTemplateTreatsUnicodeAdjacentTextAsLiteral(t *testing.T) {
+	prompt := "Review $ARGUMENTSé"
+	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
+		t.Fatalf("unicode-adjacent placeholder = %q", got)
+	}
+}
