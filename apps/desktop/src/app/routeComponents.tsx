@@ -6,7 +6,7 @@ import { BoardRoute } from "@/features/board";
 import { HomeRoute } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
-import { LoadingState } from "@/ui";
+import { ErrorState, LoadingState } from "@/ui";
 import { AppChrome } from "./AppChrome";
 import {
   readBrowserStorage,
@@ -115,6 +115,11 @@ export function ProjectRoute() {
   return (
     <BoardRoute projectId={params.projectId} selectedTaskId={search.taskId} workflowId={search.workflowId} />
   );
+}
+
+export function ProjectRouteError({ error }: { error: Error }) {
+  const { t } = useTranslation();
+  return <ErrorState body={error.message} reveal={false} title={t("states.error")} />;
 }
 
 export function HomeShellRoute() {

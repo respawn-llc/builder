@@ -372,6 +372,27 @@ describe("SidebarProvider stack contract", () => {
     expect(result.current.stackDestinations).toEqual([{ kind: "taskDetail", taskID: "task-1" }]);
   });
 
+  it("preserves the exit block when replacement capture reports a pending save", () => {
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const token = result.current.activeToken;
+    if (token === null) {
+      throw new Error("Sidebar token was not created.");
+    }
+    act(() => {
+      result.current.setSidebarExitBlocked(token, true);
+    });
+    result.current.registerSidebarStateCapture(token, () => null);
+
+    act(() => {
+      result.current.replaceSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+
+    expect(result.current.sidebarExitBlocked).toBe(true);
+  });
+
   it("blocks sidebar exits only for the current destination token", () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
     act(() => {

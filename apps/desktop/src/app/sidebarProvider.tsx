@@ -247,9 +247,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (state === null || pendingRef.current === null) {
         throw new Error("Sidebar replacement requires an active destination lifecycle.");
       }
-      clearCloseTimeout();
-      setExitBlockedToken(null);
-      preserveRouteChangeRef.current = null;
       const currentEntry = state.entries.at(-1);
       if (currentEntry === undefined) {
         throw new Error("Sidebar replacement requires an active destination.");
@@ -257,6 +254,9 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (findTaskDetailIndex([currentEntry], destination) === 0 && !captureCurrentState()) {
         return;
       }
+      clearCloseTimeout();
+      setExitBlockedToken(null);
+      preserveRouteChangeRef.current = null;
       clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
       const nextProfile = sidebarWidthProfile(destination);
       setActiveWidthProfile(nextProfile);

@@ -2,11 +2,7 @@ import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  hasSelectedWorkflow,
-  type BoardColumn,
-  type SelectedWorkflowBoard,
-} from "@/api";
+import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -156,11 +152,12 @@ function BoardRouteData({
     selectedTaskId,
     workflowId,
   });
+  const handleSubscriptionSelectedTaskDeleted = useCallback(() => {
+    void handleSelectedTaskDeleted();
+  }, [handleSelectedTaskDeleted]);
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
-    onSelectedTaskDeleted: () => {
-      void handleSelectedTaskDeleted();
-    },
+    onSelectedTaskDeleted: handleSubscriptionSelectedTaskDeleted,
     ...(selectedTaskId === undefined ? {} : { selectedTaskID: selectedTaskId }),
     selectedWorkflowID,
   });
@@ -469,7 +466,6 @@ function BoardContent({
       return { ids: next, scope: columnExpansionScope };
     });
   }
-
 
   function handleTaskInitiatingDialogResult(result: TaskInitiatingActionDialogResult): void {
     if (result.kind === "view_dependencies") {

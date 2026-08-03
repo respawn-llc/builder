@@ -6,6 +6,7 @@ import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nat
 import {
   HomeShellRoute,
   ProjectRoute,
+  ProjectRouteError,
   RootRoute,
   TaskRoute,
   WorkflowEditorShellRoute,
@@ -39,6 +40,7 @@ const projectRoute = createRoute({
   path: "/projects/$projectId",
   validateSearch: validateProjectSearch,
   component: ProjectRoute,
+  errorComponent: ProjectRouteError,
 });
 
 const workflowLibraryRoute = createRoute({

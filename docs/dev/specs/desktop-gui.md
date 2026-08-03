@@ -198,7 +198,10 @@ Related-Task creation uses the open Task's Project, Workflow, and default source
 workspace, then atomically creates the Backlog Task and directed Task
 Dependency. Success replaces New Task with the created Task Detail and keeps
 the originating Task immediately behind it. Failure preserves ordinary New Task
-recovery, while leaving through Back or X creates neither record.
+recovery. Before submission starts, leaving through Back or X creates neither
+record. Once submission starts, Back and X are unavailable until creation
+succeeds or fails, and a stale completion cannot change a newer sidebar
+destination.
 
 While a Task title/body or add/edit-comment save is pending, related-Task
 selection and Dependency Add are unavailable. Back, X, route change, Pop out,
