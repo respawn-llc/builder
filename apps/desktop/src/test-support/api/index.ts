@@ -2,6 +2,7 @@ import {
   ConnectionStore,
   type JsonValue,
   type RpcCallOptions,
+  type RpcDedicatedCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
   type RpcTransport,
@@ -17,6 +18,11 @@ export type FakeRoute = Readonly<{
 export class FakeRpcTransport implements RpcTransport {
   readonly connection = new ConnectionStore();
   readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
+  readonly dedicatedCalls: Readonly<{
+    method: string;
+    params: JsonValue;
+    options?: RpcDedicatedCallOptions;
+  }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
@@ -31,6 +37,19 @@ export class FakeRpcTransport implements RpcTransport {
 
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     this.calls.push(options === undefined ? { method, params } : { method, params, options });
+    return this.#dispatch(method, params);
+  }
+
+  async callDedicated(
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown> {
+    this.dedicatedCalls.push(options === undefined ? { method, params } : { method, params, options });
+    return this.#dispatch(method, params);
+  }
+
+  #dispatch(method: string, params: JsonValue): unknown {
     const route = this.#routes.get(method);
     if (route === undefined) {
       throw new Error(`Missing fake route: ${method}`);

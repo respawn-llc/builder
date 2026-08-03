@@ -95,6 +95,80 @@ func (c *fakeTaskAwarenessSource) TaskAwareness(context.Context, workflow.TaskID
 	return c.awareness, nil
 }
 
+func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	backgroundStarted := make(chan struct{})
+	backgroundRelease := make(chan struct{})
+	releaseBackground := sync.OnceFunc(func() { close(backgroundRelease) })
+	t.Cleanup(releaseBackground)
+	var firstRequest sync.Once
+	client := &hookClient{
+		response: commentaryResponse(
+			"complete",
+			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+		),
+		errors: []error{&llm.ProviderAPIError{
+			ProviderID: "test",
+			Code:       llm.UnifiedErrorCodeProviderContract,
+		}},
+		beforeReturn: func() error {
+			firstRequest.Do(func() {
+				close(backgroundStarted)
+				<-backgroundRelease
+			})
+			return nil
+		},
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+
+	engine.HandleBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "background-race",
+		State:      "completed",
+		NoticeText: "Background shell completed.",
+	}, true)
+	select {
+	case <-backgroundStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal background notice continuation did not start")
+	}
+
+	workflowDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitWorkflowTurn(context.Background())
+		workflowDone <- err
+	}()
+	select {
+	case err := <-workflowDone:
+		t.Fatalf("workflow turn returned before the background continuation finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseBackground()
+	select {
+	case err := <-workflowDone:
+		if err != nil {
+			t.Fatalf("workflow turn after background continuation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow turn did not start after the background continuation finished")
+	}
+	waitEngineLifecycleTasks(t, engine)
+	client.mu.Lock()
+	callCount := len(client.calls)
+	client.mu.Unlock()
+	if callCount != 2 {
+		t.Fatalf("model calls = %d, want background continuation then workflow turn", callCount)
+	}
+}
+
 type workflowSteeringClient struct {
 	started  chan struct{}
 	release  chan struct{}

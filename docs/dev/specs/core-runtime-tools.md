@@ -81,6 +81,17 @@
 - Internal approvals offer exactly `Allow once`, `Allow for this session`, and `Deny`. Denial commentary travels only with the approval answer and authoritatively fails the guarded tool call. Allow commentary is sent as an ordinary user message before the Approval answer. The TUI's Queue-creation failure recovery for Allow commentary is defined in `tui-chat-core.md`.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - Answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
+- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. Accepting an answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
+- `kent question` shows the first pending ordinary Question. `kent questions` is an alias.
+- The Question CLI requires exactly one of `--session <session-id>` or `--task <task-id-or-short-id>`. A Task short ID uses `--project`, which defaults to the Project attached to the current workspace.
+- A Session selector cannot target the invoking agent's `KENT_SESSION_ID`.
+- A Task selector uses the live Workflow Question authority. If pending ordinary Questions belong to exactly one Session, the command selects that Session. If they belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
+- A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
+- The show command writes the Question text. When suggestions exist, it follows with `Suggestions:` and a one-based numbered list. The recommended suggestion ends with ` (recommended)`.
+- The show command writes `No questions pending` and succeeds when no ordinary Question is pending.
+- `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
+- `kent question answer` writes `No pending questions at the moment for that session` and exits with status `1` when no ordinary Question is pending.
+- After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions again. It writes `Next question: <question text>` followed by suggestions when another Question is pending in that Session. Otherwise it writes `Done, session resumed`.
 
 ## Sessions, Location, And Transcript Bounds
 

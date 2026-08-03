@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import type { QuestionAnswerInput, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { queryKeys } from "@/app-facade";
+import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import {
@@ -173,6 +173,7 @@ export function useTaskMutations(
     await queryClient.invalidateQueries({ queryKey: queryKeys.allTasks });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allActivity });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks });
+    await invalidateProjectTaskSearches(queryClient, projectID);
     onChanged?.();
   }
   return {

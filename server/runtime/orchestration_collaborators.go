@@ -40,6 +40,9 @@ type exclusiveStepLifecycle interface {
 
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
+	RecordBackgroundShellUpdate(BackgroundShellEvent) error
+	QueueBackgroundShellContinuation(BackgroundShellEvent)
+	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
 	QueueDeveloperNotice(msg llm.Message)
 	flushPendingNotices(stepID string) (int, error)
 	HasPendingNotices() bool

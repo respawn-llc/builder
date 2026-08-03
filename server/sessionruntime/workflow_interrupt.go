@@ -113,7 +113,7 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		resolved = append(resolved, struct {
 			store     *executionPromptStore
 			snapshots []ExecutionPromptSnapshot
-		}{store: &execution.prompts, snapshots: execution.prompts.closeLocked(context.Canceled)})
+		}{store: &execution.prompts, snapshots: execution.prompts.closeAndSignalLocked(context.Canceled)})
 	}
 	for _, execution := range locked {
 		execution.prompts.mu.Unlock()

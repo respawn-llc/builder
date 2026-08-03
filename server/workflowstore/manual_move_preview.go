@@ -419,7 +419,7 @@ func manualMoveRequiredValuesForTarget(
 		values = append(values, ManualMoveRequiredValue{
 			NodeKey:       requirement.ProviderNode,
 			OutputName:    requirement.ParameterName,
-			Description:   manualMovePriorParameterDescription(definition, requirement),
+			Description:   manualMovePriorParameterDescription(definition, derived, requirement),
 			ResolvedValue: manualMoveSubmittedOrResolved(requirement.ProviderNode, requirement.ParameterName, environment, submitted),
 		})
 	}
@@ -434,6 +434,7 @@ func manualMoveRequiredValuesForTarget(
 
 func manualMovePriorParameterDescription(
 	definition workflow.Definition,
+	derived workflow.DerivedWiring,
 	requirement workflow.PriorTransitionParameterRequirement,
 ) string {
 	for _, group := range definition.TransitionGroups {
@@ -442,6 +443,14 @@ func manualMovePriorParameterDescription(
 		}
 		source, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
 		if err != nil || workflow.NodeKey(source) != requirement.ProviderNode {
+			continue
+		}
+		if source.Kind() == workflow.NodeKindJoin {
+			for _, field := range derived.JoinOutputFieldsForNode(group.SourceNodeID) {
+				if field.Name == requirement.ParameterName {
+					return field.Description
+				}
+			}
 			continue
 		}
 		for _, edge := range definition.Edges {

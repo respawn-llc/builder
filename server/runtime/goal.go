@@ -656,15 +656,11 @@ func (e *Engine) surfaceRunError(err error) {
 		errors.Is(err, ErrEngineClosed) {
 		return
 	}
-	message := llm.UserFacingError(err)
-	if message == "" {
-		message = err.Error()
-	}
-	if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAuto,
-		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-		Text:       message,
-	})); appendErr != nil {
+	message, appendErr := e.steerRuntimeErrorFeedback(err)
+	if appendErr != nil {
+		if message == "" {
+			message = err.Error()
+		}
 		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
@@ -672,6 +668,21 @@ func (e *Engine) surfaceRunError(err error) {
 		}))
 	}
 	e.SetStreamingError(message)
+}
+
+func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {
+	if err == nil {
+		return "", errors.New("runtime error feedback requires an error")
+	}
+	message := strings.TrimSpace(llm.UserFacingError(err))
+	if message == "" {
+		message = err.Error()
+	}
+	return message, e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		Visibility: transcript.EntryVisibilityAuto,
+		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text:       message,
+	}))
 }
 
 func (e *Engine) shouldContinueGoalLoop(ctx context.Context) bool {

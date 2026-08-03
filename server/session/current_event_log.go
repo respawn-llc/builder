@@ -376,6 +376,28 @@ func (l *currentEventLog) readNewestSegmentBackward(
 	return l.readSegmentBackward(info.Size(), chunkBytes, match)
 }
 
+func (l *currentEventLog) readActiveSegment() (EventRecordWindow, error) {
+	var matchErr error
+	window, err := l.readNewestSegmentBackward(
+		activeTailReverseChunkBytes,
+		func(record EventRecord) bool {
+			kind, err := record.Kind()
+			if err != nil {
+				matchErr = err
+				return true
+			}
+			return kind == EventKindHistoryReplace
+		},
+	)
+	if err != nil {
+		return EventRecordWindow{}, err
+	}
+	if matchErr != nil {
+		return EventRecordWindow{}, matchErr
+	}
+	return window, nil
+}
+
 func (l *currentEventLog) readRecentRecords(
 	maxRecords int,
 	chunkBytes int64,

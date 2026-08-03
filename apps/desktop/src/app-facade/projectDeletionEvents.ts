@@ -6,6 +6,7 @@ import { errorMessage } from "@/api";
 import { clearLastProjectRoute } from "./projectRoutePersistence";
 import { queryKeys } from "./queryKeys";
 import type { SidebarController } from "./sidebarContext";
+import { removeProjectTaskSearches } from "./taskSearchQueries";
 import { useAppServices } from "./useAppServices";
 
 export function useProjectDeletedEvents(
@@ -67,6 +68,7 @@ export async function invalidateProjectDeleteQueries(
 ): Promise<void> {
   queryClient.removeQueries({ queryKey: queryKeys.projectEdit(projectID) });
   queryClient.removeQueries({ queryKey: queryKeys.workspaces(projectID) });
+  removeProjectTaskSearches(queryClient, projectID);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),

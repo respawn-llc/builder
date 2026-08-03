@@ -12,6 +12,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")

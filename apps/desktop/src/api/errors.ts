@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { JsonValue } from "./json";
 import { labelIDSchema } from "./schemas/workflowLabels";
 import { workflowLabelMaxIDs } from "./workflowLabelContract";
+import { rpcErrorCodes } from "./rpcErrorCodes";
 
 export type RpcErrorInfo = Readonly<{
   code: number;
@@ -23,6 +24,42 @@ export class RpcError extends Error {
     this.method = info.method;
     this.data = info.data;
   }
+}
+
+export type TaskSearchErrorReason = "normalized_too_short";
+
+export class TaskSearchError extends RpcError {
+  readonly reason: TaskSearchErrorReason;
+
+  constructor(rpcError: RpcError, reason: TaskSearchErrorReason) {
+    super({
+      code: rpcError.code,
+      message: rpcError.message,
+      method: rpcError.method,
+      data: rpcError.data,
+    });
+    this.name = "TaskSearchError";
+    this.reason = reason;
+  }
+}
+
+const taskSearchErrorDataSchema = z
+  .object({
+    type: z.literal("task_search_error"),
+    reason: z.literal("normalized_too_short"),
+  })
+  .strict();
+
+export function decodeTaskSearchError(error: unknown): TaskSearchError | null {
+  if (
+    !(error instanceof RpcError) ||
+    error.code !== rpcErrorCodes.workflowTaskSearch ||
+    error.method !== "workflow.task.search"
+  ) {
+    return null;
+  }
+  const parsed = taskSearchErrorDataSchema.safeParse(error.data);
+  return parsed.success ? new TaskSearchError(error, parsed.data.reason) : null;
 }
 
 export const workflowLabelErrorReasons = [
