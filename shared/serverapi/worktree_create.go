@@ -1,11 +1,9 @@
 package serverapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"core/shared/invariant"
@@ -162,16 +160,7 @@ func DecodeWorktreeCreateError(data json.RawMessage, message string) error {
 		Owner      *WorktreeCreateErrorOwner `json:"owner"`
 		Diagnostic *string                   `json:"diagnostic"`
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, errors.New("multiple JSON values"))
-		}
+	if err := protocol.DecodeStrictJSON([]byte(data), &payload); err != nil {
 		return newWorktreeCreateContractError("worktree.create.remote.decode", nil, message, err)
 	}
 	if payload.Owner == nil || payload.Diagnostic == nil {
