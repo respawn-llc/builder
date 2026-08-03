@@ -1454,6 +1454,14 @@ func (s *manualMoveExecutionStub) ApplyManualMove(
 	return moved, err
 }
 
+func (s *manualMoveExecutionStub) ApplyManualMoveWithPreparation(
+	ctx context.Context,
+	prepared workflowstore.ManualMovePreparation,
+	_ workflowexecution.LaunchPreparation,
+) (workflowstore.ManualMoveResult, error) {
+	return s.ApplyManualMove(ctx, prepared, nil)
+}
+
 func (s *manualMoveExecutionStub) recordStarted(nodes []workflow.CurrentNode) {
 	for _, currentNode := range nodes {
 		if currentNode.Scheduling != nil {

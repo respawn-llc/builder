@@ -52,6 +52,9 @@ func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serv
 	return serverapi.WorkflowTaskGetResponse{
 		Task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: req.TaskID, ShortID: "KENT-1"},
+			CurrentScripts: []serverapi.WorkflowTaskCurrentScript{{
+				CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-1"},
+			}},
 		},
 	}, nil
 }

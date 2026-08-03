@@ -116,7 +116,21 @@ type CurrentNodeInterruptionReason string
 const (
 	CurrentNodeInterruptionReasonUserInterrupt   CurrentNodeInterruptionReason = "user_interrupt"
 	CurrentNodeInterruptionReasonRuntimeCanceled CurrentNodeInterruptionReason = "workflow_runtime_canceled"
+
+	CurrentNodeInterruptionCodeRuntimeStartFailed               = "workflow_runtime_start_failed"
+	CurrentNodeInterruptionCodeExecutionTargetResolutionFailed  = "workflow_execution_target_resolution_failed"
+	CurrentNodeInterruptionCodeExecutionTargetPreparationFailed = "workflow_execution_target_preparation_failed"
 )
+
+func IsExecutionTargetPreparationInterruptionCode(code string) bool {
+	switch code {
+	case CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
+		CurrentNodeInterruptionCodeExecutionTargetPreparationFailed:
+		return true
+	default:
+		return false
+	}
+}
 
 func IsActionableCurrentNodeInterruptionReason(reason CurrentNodeInterruptionReason) bool {
 	switch CurrentNodeInterruptionReason(strings.TrimSpace(string(reason))) {

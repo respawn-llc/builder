@@ -100,15 +100,19 @@ func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *test
 	service.readModels.TaskDependencies = reader
 	service.executionTargets = nil
 
-	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-		TaskID:           taskID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:                     taskID,
+		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
+		ProceedDespiteDependencies: true,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	if !errors.Is(err, errExecutionTargetInfrastructureRequired) {
-		t.Fatalf("StartWorkflowTask error = %v, want required target infrastructure", err)
+	if err != nil {
+		t.Fatalf("StartWorkflowTask error = %v, want execution-target preparation to be owned by current-node execution", err)
+	}
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied || response.Applied == nil {
+		t.Fatalf("StartWorkflowTask response = %+v, want applied", response)
 	}
 	if reader.count != 0 {
 		t.Fatalf("dependency reader count = %d, want 0", reader.count)
@@ -129,7 +133,7 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructur
 	service.currentNodeExecution = newManualMoveExecutionStub(service)
 	service.executionTargets = nil
 
-	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     task.Task.ID,
 		TargetNodeID:               workflowServiceNodeIDByKey(t, definition.Definition, "plan"),
 		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
@@ -138,8 +142,11 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructur
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	if !errors.Is(err, errExecutionTargetInfrastructureRequired) {
-		t.Fatalf("MoveWorkflowTask error = %v, want required target infrastructure", err)
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask error = %v, want execution-target preparation to be owned by current-node execution", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+		t.Fatalf("MoveWorkflowTask response = %+v, want applied", response)
 	}
 	if reader.count != 0 {
 		t.Fatalf("dependency reader count = %d, want 0", reader.count)

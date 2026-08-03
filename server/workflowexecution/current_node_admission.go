@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	explicitAdmissionConcurrency                                               = 8
-	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
+	explicitAdmissionConcurrency        = 8
+	reasonCurrentNodeRuntimeStartFailed = workflow.CurrentNodeInterruptionReason(workflow.CurrentNodeInterruptionCodeRuntimeStartFailed)
 )
 
 type currentNodeAdmissionPolicy uint8
@@ -437,20 +437,58 @@ func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteersInBackg
 	starts []currentNodeQueuedStart,
 	pending []*pendingCurrentNodeAssignmentSteer,
 ) {
-	if len(starts) == 0 || len(starts) != len(pending) {
+	if len(starts) == 0 && len(pending) == 0 {
+		return
+	}
+	if len(starts) != len(pending) {
+		err := fmt.Errorf("current node assignment steer count mismatch: starts=%d pending=%d", len(starts), len(pending))
+		for _, unresolved := range pending {
+			unresolved.resolve(nil, err)
+		}
 		return
 	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
+		err := errors.New("current node workflow controller is closed")
+		for _, unresolved := range pending {
+			unresolved.resolve(nil, err)
+		}
 		return
 	}
 	c.workerWG.Add(1)
 	c.mu.Unlock()
 	go func() {
 		defer c.workerWG.Done()
-		_ = c.resolvePendingCurrentNodeAssignmentSteers(c.workerContext, starts, pending)
+		if err := c.resolvePendingCurrentNodeAssignmentSteers(c.workerContext, starts, pending); err != nil {
+			c.publishPendingCurrentNodeAssignmentFailure(starts, err)
+		}
 	}()
+}
+
+func (c *CurrentNodeController) publishPendingCurrentNodeAssignmentFailure(
+	starts []currentNodeQueuedStart,
+	err error,
+) {
+	if err == nil {
+		return
+	}
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:   string(reasonCurrentNodeRuntimeStartFailed),
+		Fields: map[string]string{"error": err.Error()},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	for _, start := range starts {
+		if persistErr := c.permit.Run(ctx, func(ctx context.Context) error {
+			return c.store.InterruptCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed, detail)
+		}); persistErr != nil {
+			c.mu.Lock()
+			c.workerErr = errors.Join(c.workerErr, err, persistErr)
+			c.mu.Unlock()
+		}
+		c.publishPendingInterruptedCurrentNode(c.workerContext, start.reference, reasonCurrentNodeRuntimeStartFailed)
+	}
 }
 
 func (c *CurrentNodeController) steerAssignment(

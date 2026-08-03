@@ -450,6 +450,13 @@ func (i taskExecutionTargetPreparer) PrepareExecutionTarget(ctx context.Context,
 		if err != nil {
 			return workflowstore.ExecutionRoot{}, err
 		}
+		if materialized.Worktree.Registered == nil {
+			cleanupErr := materialized.Cleanup(ctx)
+			return workflowstore.ExecutionRoot{}, errors.Join(
+				errors.New("prepared managed worktree is not registered"),
+				cleanupErr,
+			)
+		}
 		worktreeID := materialized.Worktree.Registered.Kent.WorktreeID
 		worktreeRoot := materialized.Worktree.Registered.Git.CanonicalRoot
 		root := workflowstore.ExecutionRoot{

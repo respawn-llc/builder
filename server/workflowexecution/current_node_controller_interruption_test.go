@@ -828,7 +828,7 @@ func TestCurrentNodeControllerSessionInterruptIgnoresUnrelatedPreparationGate(t 
 		canceled: make(chan struct{}),
 		released: make(chan struct{}),
 	}
-	fixture.controller.runner = preparation
+	fixture.runnerSlot.Swap(preparation)
 	fixture.controller.enqueueStarts([]currentNodeQueuedStart{{
 		reference:         blocked,
 		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},

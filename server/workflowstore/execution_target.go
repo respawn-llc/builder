@@ -144,10 +144,13 @@ func applyPreparedExecutionTargetMutation(ctx context.Context, q *sqlitegen.Quer
 	if prepared.candidateToLock != nil {
 		locked, err := q.LockTaskExecutionTarget(ctx, executionTargetLockParams(task, *prepared.candidateToLock, now))
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrExecutionTargetAlreadyLocked
+			}
 			return err
 		}
 		if locked != 1 {
-			return sql.ErrNoRows
+			return ErrExecutionTargetAlreadyLocked
 		}
 	}
 	return nil

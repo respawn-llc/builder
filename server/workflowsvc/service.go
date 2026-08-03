@@ -923,28 +923,50 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 			},
 		}, nil
 	}
-	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
-		taskID:                  workflow.TaskID(req.TaskID),
-		setupOperationID:        req.SetupOperationID,
-		requiresExecutionTarget: true,
-		targetPreflight:         preflight.target,
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.StartTaskResult, error) {
-		started, err := s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
-		return &started, err
-	})
+	if s.executionTargets != nil {
+		coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+			taskID:                  workflow.TaskID(req.TaskID),
+			setupOperationID:        req.SetupOperationID,
+			requiresExecutionTarget: true,
+			targetPreflight:         preflight.target,
+		}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.StartTaskResult, error) {
+			started, err := s.currentNodeExecution.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+			return &started, err
+		})
+		if err != nil {
+			return serverapi.WorkflowTaskStartResponse{}, err
+		}
+		if coordinated.selectionRequired != nil {
+			return serverapi.WorkflowTaskStartResponse{
+				Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
+				SelectionRequired: coordinated.selectionRequired,
+			}, nil
+		}
+		if coordinated.applied == nil {
+			return serverapi.WorkflowTaskStartResponse{}, errors.New("coordinated task start returned no applied result")
+		}
+		started := *coordinated.applied
+		if len(started.Mutation.Created) != 1 {
+			return serverapi.WorkflowTaskStartResponse{}, errors.New("task start did not create exactly one current node")
+		}
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
+			s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID)
+		}
+		return serverapi.WorkflowTaskStartResponse{
+			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskStartApplied{
+				CurrentNodes: workflowCurrentNodes(started.Mutation.Created),
+			},
+		}, nil
+	}
+	preparation, err := launchPreparationForTarget(preflight.target, req.SetupOperationID)
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	if coordinated.selectionRequired != nil {
-		return serverapi.WorkflowTaskStartResponse{
-			Outcome:           serverapi.WorkflowTaskActionOutcomeSelectionRequired,
-			SelectionRequired: coordinated.selectionRequired,
-		}, nil
+	started, err := s.currentNodeExecution.StartTaskWithPreparation(ctx, workflow.TaskID(req.TaskID), preparation)
+	if err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	if coordinated.applied == nil {
-		return serverapi.WorkflowTaskStartResponse{}, errors.New("coordinated task start returned no applied result")
-	}
-	started := *coordinated.applied
 	if len(started.Mutation.Created) != 1 {
 		return serverapi.WorkflowTaskStartResponse{}, errors.New("task start did not create exactly one current node")
 	}
@@ -998,11 +1020,6 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 		if explicit != nil {
 			return initiatingActionTargetPreflight{}, workflowstore.ErrExecutionTargetAlreadyLocked
 		}
-		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
-			if s.executionTargets == nil {
-				return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
-			}
-		}
 		return initiatingActionTargetPreflight{context: targetContext}, nil
 	}
 	selection := workflow.ExecutionTargetSelection{
@@ -1019,11 +1036,6 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 		selection = workflow.ExecutionTargetSelection{
 			Mode:      workflow.ExecutionTargetMode(explicit.Mode),
 			CustomRef: explicit.CustomRef,
-		}
-	}
-	if selection.Mode != workflow.ExecutionTargetModeNone {
-		if s.executionTargets == nil {
-			return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 		}
 	}
 	return initiatingActionTargetPreflight{
@@ -1302,14 +1314,25 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 					},
 				}, nil
 			}
-			preflight.selection = workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead}
+			if targetContext.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
+				return serverapi.WorkflowTaskResumeResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+					SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+						Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+					},
+				}, nil
+			}
+			preflight.selection = workflow.ExecutionTargetSelection{
+				Mode:      targetContext.Policy.Mode,
+				CustomRef: targetContext.Policy.CustomRef,
+			}
 		} else {
 			preflight.selection = workflow.ExecutionTargetSelection{
 				Mode:      workflow.ExecutionTargetMode(req.ExecutionTarget.Mode),
 				CustomRef: req.ExecutionTarget.CustomRef,
 			}
 		}
-		preflight.explicit = true
+		preflight.explicit = req.ExecutionTarget != nil
 	}
 	preparation, err := launchPreparationForTarget(preflight, req.SetupOperationID)
 	if err != nil {
@@ -1333,8 +1356,7 @@ func hasUnlockedPreparationFailure(nodes []workflow.CurrentNode) bool {
 		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
 			continue
 		}
-		switch node.Scheduling.Interruption.Detail.Code {
-		case "workflow_execution_target_resolution_failed", "workflow_execution_target_preparation_failed":
+		if workflow.IsExecutionTargetPreparationInterruptionCode(node.Scheduling.Interruption.Detail.Code) {
 			return true
 		}
 	}
@@ -1526,6 +1548,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		}
 	}
 	var targetPreflight initiatingActionTargetPreflight
+	preparation := workflowexecution.LaunchPreparation{Kind: workflowexecution.LaunchPreparationEstablishedRoot}
 	if prepared.RequiresExecutionTarget() {
 		if !req.ProceedDespiteDependencies {
 			count, countErr := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
@@ -1543,33 +1566,112 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		if err != nil {
 			return serverapi.WorkflowTaskMoveResponse{}, err
 		}
-	}
-	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
-		taskID:                  moveRequest.TaskID,
-		setupOperationID:        req.SetupOperationID,
-		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
-		targetPreflight:         targetPreflight,
-		afterTargetResolution: func() error {
-			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
-				preview, err := s.store.PreviewManualMove(ctx, moveRequest)
-				if err != nil {
-					return err
-				}
-				if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
-					return &manualMoveNoOpBeforeInterruptError{
-						currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
-					}
-				}
-				return nil
-			})
-		},
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
-		moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
-		if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
-			moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
-			return nil, err
+		if !targetPreflight.explicit &&
+			targetPreflight.context.Task.ExecutionTarget == nil &&
+			targetPreflight.context.Policy.Mode == workflow.ExecutionTargetModeAskOnFirstExecution {
+			return serverapi.WorkflowTaskMoveResponse{
+				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+				SelectionRequired: &serverapi.WorkflowExecutionTargetSelectionRequirement{
+					Reason: serverapi.WorkflowExecutionTargetSelectionReasonPolicyRequiresSelection,
+				},
+			}, nil
 		}
-		return &moved, err
+		preparation, err = launchPreparationForTarget(targetPreflight, req.SetupOperationID)
+		if err != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+	}
+	if s.executionTargets != nil {
+		coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
+			taskID:                  moveRequest.TaskID,
+			setupOperationID:        req.SetupOperationID,
+			requiresExecutionTarget: prepared.RequiresExecutionTarget(),
+			targetPreflight:         targetPreflight,
+			afterTargetResolution: func() error {
+				return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
+					preview, err := s.store.PreviewManualMove(ctx, moveRequest)
+					if err != nil {
+						return err
+					}
+					if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+						return &manualMoveNoOpBeforeInterruptError{
+							currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+						}
+					}
+					return nil
+				})
+			},
+		}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
+			moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
+			if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
+				moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
+				return nil, err
+			}
+			return &moved, err
+		})
+		var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
+		if errors.As(err, &noOpBeforeInterrupt) {
+			return serverapi.WorkflowTaskMoveResponse{
+				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+				NoOp: &serverapi.WorkflowTaskMoveNoOp{
+					CurrentNodes: workflowCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				},
+			}, nil
+		}
+		if err != nil && coordinated.applied == nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+		if coordinated.selectionRequired != nil {
+			return serverapi.WorkflowTaskMoveResponse{
+				Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+				SelectionRequired: coordinated.selectionRequired,
+			}, nil
+		}
+		if coordinated.applied == nil {
+			return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
+		}
+		moved := *coordinated.applied
+		if err != nil {
+			slog.Error(
+				"manual move committed with post-commit lifecycle error",
+				"task_id", req.TaskID,
+				"target_node_id", req.TargetNodeID,
+				"error", err,
+			)
+		}
+		if err := moved.Validate(); err != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, err
+		}
+		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
+			return serverapi.WorkflowTaskMoveResponse{
+				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+				NoOp: &serverapi.WorkflowTaskMoveNoOp{
+					CurrentNodes: workflowCurrentNodes(moved.CurrentNodes),
+				},
+			}, nil
+		}
+		s.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
+			s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID)
+		}
+		return serverapi.WorkflowTaskMoveResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskMoveApplied{
+				CurrentNodes: workflowCurrentNodes(moved.Mutation.Created),
+			},
+		}, nil
+	}
+	err = s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
+		preview, err := s.store.PreviewManualMove(ctx, moveRequest)
+		if err != nil {
+			return err
+		}
+		if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+			return &manualMoveNoOpBeforeInterruptError{
+				currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+			}
+		}
+		return nil
 	})
 	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
 	if errors.As(err, &noOpBeforeInterrupt) {
@@ -1580,27 +1682,14 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			},
 		}, nil
 	}
-	if err != nil && coordinated.applied == nil {
+	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	if coordinated.selectionRequired != nil {
-		return serverapi.WorkflowTaskMoveResponse{
-			Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
-			SelectionRequired: coordinated.selectionRequired,
-		}, nil
+	moved, err := s.currentNodeExecution.ApplyManualMoveWithPreparation(ctx, prepared, preparation)
+	if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
+		moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
+		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
-	if coordinated.applied == nil {
-		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
-	}
-	if err != nil {
-		slog.Error(
-			"manual move committed with post-commit lifecycle error",
-			"task_id", req.TaskID,
-			"target_node_id", req.TargetNodeID,
-			"error", err,
-		)
-	}
-	moved := *coordinated.applied
 	if err := moved.Validate(); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}

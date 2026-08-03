@@ -197,7 +197,8 @@ type taskWorktreePreparation struct {
 }
 
 // Commit preserves the registered worktree after the workflow store has
-// durably bound and locked its Execution Target.
+// durably bound and locked its Execution Target. Reused worktrees have no
+// preparation and are already retained, so Commit is a no-op for them.
 func (m *TaskWorktreeMaterialization) Commit() {
 	if m == nil || m.preparation == nil || m.preparation.cleanup == nil {
 		return
@@ -219,7 +220,8 @@ func (m *TaskWorktreeMaterialization) Cleanup(ctx context.Context) error {
 }
 
 // RunSetup executes the configured setup script after the caller has
-// committed the durable Task binding and Execution Target lock.
+// committed the durable Task binding and Execution Target lock. Reused
+// worktrees have no preparation and therefore skip setup.
 func (m *TaskWorktreeMaterialization) RunSetup(ctx context.Context) error {
 	if m == nil || m.preparation == nil || m.preparation.service == nil {
 		return nil

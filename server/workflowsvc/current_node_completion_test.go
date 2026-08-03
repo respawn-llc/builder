@@ -307,10 +307,28 @@ type currentNodeCompletionExecutionStub struct {
 func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	_ workflowexecution.LaunchPreparation,
+	preparation workflowexecution.LaunchPreparation,
 ) (workflowstore.StartTaskResult, error) {
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
+	}
+	if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone {
+		target, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
+		if err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		if _, err := s.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   target.SourceWorkspaceID,
+				SourceWorkspaceRoot: target.SourceWorkspaceRoot,
+			},
+		}); err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
 	}
 	return s.store.StartTaskWithExecutionTarget(ctx, taskID, nil)
 }

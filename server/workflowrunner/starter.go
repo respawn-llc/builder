@@ -173,7 +173,7 @@ func currentNodeStartFailure(cause error) error {
 	if errors.As(cause, &existing) {
 		return cause
 	}
-	reason := workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed")
+	reason := workflow.CurrentNodeInterruptionReason(workflow.CurrentNodeInterruptionCodeRuntimeStartFailed)
 	detail := workflow.CurrentNodeInterruptionDetail{
 		Code:   string(reason),
 		Fields: map[string]string{"error": cause.Error()},
@@ -181,7 +181,7 @@ func currentNodeStartFailure(cause error) error {
 	var targetPreparation *workflowexecution.ExecutionTargetPreparationFailure
 	if errors.As(cause, &targetPreparation) {
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code:   "workflow_execution_target_preparation_failed",
+			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetPreparationFailed,
 			Fields: map[string]string{"error": targetPreparation.Error()},
 		}
 	}
@@ -200,7 +200,7 @@ func currentNodeStartFailure(cause error) error {
 	var target *serverapi.WorkflowExecutionTargetResolutionError
 	if errors.As(cause, &target) {
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: "workflow_execution_target_resolution_failed",
+			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
 			Fields: map[string]string{
 				"code":          string(target.Code),
 				"requested_ref": target.RequestedRef,
@@ -210,7 +210,7 @@ func currentNodeStartFailure(cause error) error {
 	var revisionResolution *worktree.GitRevisionResolutionError
 	if errors.As(cause, &revisionResolution) {
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: "workflow_execution_target_resolution_failed",
+			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
 			Fields: map[string]string{
 				"code":          string(revisionResolution.Kind),
 				"requested_ref": revisionResolution.RequestedRef,
@@ -220,7 +220,7 @@ func currentNodeStartFailure(cause error) error {
 	var defaultBranchResolution *worktree.GitDefaultBranchResolutionError
 	if errors.As(cause, &defaultBranchResolution) {
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: "workflow_execution_target_resolution_failed",
+			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
 			Fields: map[string]string{
 				"code":           string(defaultBranchResolutionCode(defaultBranchResolution.Kind)),
 				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -531,8 +532,48 @@ type currentNodeQuestionFixture struct {
 	metadata   interface{ AuthoritativeSessionStoreOptions() []session.StoreOption }
 	authority  *sessionruntime.Authority
 	controller *CurrentNodeController
+	runnerSlot *currentNodeRunnerSlot
 	store      *currentNodeControllerStore
 	sessionDir string
+}
+
+type currentNodeRunnerSlot struct {
+	runner atomic.Value
+}
+
+type currentNodeRunnerHolder struct {
+	runner CurrentNodeRunner
+}
+
+func newCurrentNodeRunnerSlot(runner CurrentNodeRunner) *currentNodeRunnerSlot {
+	slot := &currentNodeRunnerSlot{}
+	slot.runner.Store(currentNodeRunnerHolder{runner: runner})
+	return slot
+}
+
+func (s *currentNodeRunnerSlot) Swap(runner CurrentNodeRunner) {
+	s.runner.Store(currentNodeRunnerHolder{runner: runner})
+}
+
+func (s *currentNodeRunnerSlot) StartCurrentNodeWithPreparation(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	preparation LaunchPreparation,
+	delivery workflowruntime.TaskPromptDelivery,
+	assignment CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+) error {
+	holder := s.runner.Load().(currentNodeRunnerHolder)
+	return holder.runner.StartCurrentNodeWithPreparation(
+		ctx,
+		reference,
+		preparation,
+		delivery,
+		assignment,
+		lease,
+		controller,
+	)
 }
 
 type currentNodePendingPrompt struct {
@@ -590,7 +631,8 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 		PersistenceRoot: appCfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 	})
-	controller = newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	runnerSlot := newCurrentNodeRunnerSlot(&countingCurrentNodeRunner{})
+	controller = newCurrentNodeControllerForTest(t, store, runnerSlot, authority, 1)
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -604,6 +646,7 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 		metadata:   metadataStore,
 		authority:  authority,
 		controller: controller,
+		runnerSlot: runnerSlot,
 		store:      store,
 		sessionDir: filepath.Join(appCfg.PersistenceRoot, "projects", binding.ProjectID, "sessions"),
 	}

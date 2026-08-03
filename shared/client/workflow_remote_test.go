@@ -949,9 +949,9 @@ func TestRemoteWorkflowTaskResumeRoundTripsExecutionTargetContinuation(t *testin
 		t.Fatalf("ResumeWorkflowTask response = %+v", response)
 	}
 	selectionResponse, err := remote.ResumeWorkflowTask(context.Background(), serverapi.WorkflowTaskResumeRequest{
-		TaskID:          "task-1",
+		TaskID:           "task-1",
 		SetupOperationID: setupOperationID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeCustomRef, CustomRef: &customRef},
+		ExecutionTarget:  &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeCustomRef, CustomRef: &customRef},
 	})
 	if err != nil {
 		t.Fatalf("ResumeWorkflowTask selection-required: %v", err)

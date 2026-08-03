@@ -480,7 +480,11 @@ function BoardContent({
       return;
     }
     if (result.action.kind === "resume") {
-      resumeAction.execute(result.action.taskID);
+      if (result.selection === undefined) {
+        resumeAction.execute(result.action.taskID);
+      } else {
+        resumeAction.continueExecution(result.action, result.selection);
+      }
       return;
     }
     const targetColumnID = result.action.kind === "move" ? result.action.input.targetNodeID : firstActive?.id;
