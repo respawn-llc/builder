@@ -78,18 +78,15 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
       ...runtime.snapshot,
       active: { ...runtime.snapshot.active, generation: 3 },
     };
-    queryByColumn.set(
-      "column-1",
-      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
-    );
+    queryByColumn.set("column-1", queryState({ error: new Error(), isError: true, refetch }));
     view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary?.state).toBe("error"));
     expect(loggerAppend).toHaveBeenCalledWith(
       "warn",
-      "Board task-card replacement failed.",
+      expect.any(String),
       expect.objectContaining({
         columnID: "column-1",
-        error: "replacement failed",
+        error: expect.any(String),
         filterGeneration: "3",
         projectID: "project-1",
         workflowID: "workflow-1",

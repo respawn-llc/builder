@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { KanbanColumn } from "./BoardColumns";
@@ -24,8 +24,8 @@ describe("KanbanColumn retained replacement boundary", () => {
   it("keeps the Retry boundary in fixed column chrome outside the scroll content", () => {
     const boundary = {
       state: "error" as const,
-      message: "board.cardsLoadRetryBody",
-      retryLabel: "app.retry",
+      message: "message",
+      retryLabel: "retry",
       onRetry: vi.fn(),
     };
 
@@ -54,9 +54,14 @@ describe("KanbanColumn retained replacement boundary", () => {
 
     const alert = screen.getByTestId("virtual-boundary-replacement");
     const list = screen.getByTestId("kanban-column-scroll-column-1");
+    const chrome = alert.closest(".pointer-events-none");
     expect(alert.closest("[data-testid='kanban-column-scroll-column-1']")).toBeNull();
-    expect(alert.parentElement?.contains(alert)).toBe(true);
+    expect(chrome).not.toBeNull();
+    expect(chrome).toHaveClass("pointer-events-none");
+    expect(alert.parentElement).toHaveClass("pointer-events-auto");
     expect(list).not.toContainElement(alert);
-    expect(screen.getByRole("alert")).toContainElement(screen.getByText("board.cardsLoadRetryBody"));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(boundary.onRetry).toHaveBeenCalledOnce();
   });
 });

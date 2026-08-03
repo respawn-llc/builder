@@ -189,7 +189,7 @@ export function KanbanColumn({
         <CollapsedColumnHeader column={column} onExpand={onExpandColumn} />
       ) : (
         <>
-          <div className="absolute top-0 right-0 left-0 z-10" ref={chromeRef}>
+          <div className="pointer-events-none absolute top-0 right-0 left-0 z-10" ref={chromeRef}>
             <header className="pointer-events-none flex items-start justify-between gap-[var(--space-2)] px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)]">
               <div>
                 <h2 className="m-0 text-[1rem]">{column.name}</h2>
