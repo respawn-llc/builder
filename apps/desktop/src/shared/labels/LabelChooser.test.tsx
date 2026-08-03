@@ -278,6 +278,8 @@ describe("LabelChooser", () => {
     fireEvent.keyDown(handle, { code: "Space", key: " " });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
+    expect(handle).toBeVisible();
+    expect(handle).toHaveFocus();
     fireEvent.keyDown(handle, { code: "Space", key: " " });
 
     await waitFor(() => {
