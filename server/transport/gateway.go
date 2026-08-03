@@ -17,6 +17,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -45,6 +46,7 @@ type GatewayDependencies interface {
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
+	GatewayPromptCommandDependencies
 	GatewayProcessDependencies
 	GatewayWorktreeDependencies
 }
@@ -104,6 +106,10 @@ type GatewayPromptDependencies interface {
 	AttentionNotificationClient() apicontract.AttentionNotificationService
 }
 
+type GatewayPromptCommandDependencies interface {
+	PromptCommandCatalogClientForProjectWorkspace(context.Context, string, string) (apicontract.PromptCommandCatalogService, error)
+}
+
 type GatewayProcessDependencies interface {
 	ProcessViewClient() apicontract.ProcessViewService
 	ProcessControlClient() apicontract.ProcessControlService
@@ -157,7 +163,7 @@ type connectionState struct {
 	attachedProject       string
 	attachedWorkspaceID   string
 	attachedWorkspaceRoot string
-	attachedSession       string
+	attachedSession       *runtimeids.SessionID
 	runtimeOwnerID        string
 	ownedRuntimes         map[serverapi.SessionRuntimeAttachment]struct{}
 }

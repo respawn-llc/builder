@@ -337,10 +337,20 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 	}
 	items := make([]Item, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+		if filepath.Ext(entry.Name()) != ".md" {
 			continue
 		}
 		sourceRoot, sourcePath, target := root, filepath.Join(root, entry.Name()), entry.Name()
+		info, err := os.Stat(sourcePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
 		name := strings.TrimSuffix(target, filepath.Ext(target))
 		items = append(items, Item{Ref: ItemRef{ItemKind: ItemKindCommand, SourceKind: SourceKindExternalProvider, ProviderID: &providerID, SourceRoot: &sourceRoot, SourcePath: &sourcePath, TargetName: target, Name: &name}})
 	}

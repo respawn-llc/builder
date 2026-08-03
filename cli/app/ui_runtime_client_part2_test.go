@@ -11,6 +11,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -473,7 +474,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -522,7 +523,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -731,7 +732,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {

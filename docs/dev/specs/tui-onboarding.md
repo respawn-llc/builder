@@ -21,8 +21,9 @@
   7. **Follow-up questions** — enable/disable the ask-question tool.
   8. **Supervisor** — off / after edits / always; when enabled, sub-steps for supervisor model (pre-filled with the primary model) and supervisor thinking (mirrors primary until explicitly diverged; custom entry as above).
   9. **Compaction mode** — Local always offered; Native only when the provider supports it; Manual-only.
-  10. **Skills import** — only when importable items are detected from other providers; skills enablement is a multi-select. Remote onboarding does not offer slash-command import.
-  11. **Review** — finish, or start over (returns to the first step with all selections preserved).
+  10. **Skills import** — only when importable items are detected from other providers; skills enablement is a multi-select.
+  11. **Slash commands import** — only when importable slash commands are detected from other providers.
+  12. **Review** — finish, or start over (returns to the first step with all selections preserved).
 - Validation errors render inline on the current screen and block advancing; they never abort the wizard.
 
 ## Keys
@@ -52,7 +53,7 @@
 - Provider capability facts cover both the current effective provider and explicit provider choices.
 - An unknown explicit provider fails with an unsupported-provider error. Kent does not replace it with the current provider.
 - Importable skills and slash commands include source paths when identity requires them.
-- The TUI offers importable skills but does not offer slash-command import.
+- The TUI offers importable skills and slash commands as separate import choices.
 - Generated Kent skills appear with external provider skills in the enablement list.
 - Onboarding facts are available before auth completion and before project or session attachment.
 - The model list comes from Kent's built-in catalog. Setup does not perform live provider model discovery.

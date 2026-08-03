@@ -66,6 +66,7 @@ const (
 	ErrCodeManualCompactionActive            = -32056
 	ErrCodeWorkflowTaskMutationSelfTarget    = -32057
 	ErrCodeWorktreeCreate                    = -32058
+	ErrCodePromptCommands                    = -32059
 )
 
 type Request struct {

@@ -8,7 +8,9 @@ import (
 
 	"core/server/metadata"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -52,31 +54,60 @@ func (g *Gateway) resolveAttachedProjectWorkspace(ctx context.Context, request p
 	return strings.TrimSpace(resolved.Binding.WorkspaceID), strings.TrimSpace(resolved.Binding.CanonicalRoot), nil
 }
 
-func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {
+func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *connectionState, sessionID string) (clientui.SessionExecutionTarget, metadata.Binding, error) {
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
-		return metadata.Binding{}, errors.New("session id is required")
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, errors.New("session id is required")
 	}
 	metadataStore := g.deps.MetadataStore()
 	if metadataStore == nil {
-		return metadata.Binding{}, errors.New("metadata store is required")
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, errors.New("metadata store is required")
 	}
 	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, trimmedSessionID)
 	if err != nil {
-		return metadata.Binding{}, err
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
 	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
 	if err != nil {
-		return metadata.Binding{}, err
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, err
 	}
 	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
 	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
 		activeProjectID = strings.TrimSpace(state.attachedProject)
 	}
 	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
-		return metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
+		return clientui.SessionExecutionTarget{}, metadata.Binding{}, sessionOutsideActiveProjectError{sessionID: trimmedSessionID}
 	}
-	return binding, nil
+	return target, binding, nil
+}
+
+func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {
+	_, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID)
+	return binding, err
+}
+
+func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
+	if state == nil {
+		return "", errors.New("connection state is required")
+	}
+	if sessionID == nil {
+		sessionID = state.attachedSession
+	}
+	if sessionID == nil {
+		return state.attachedWorkspaceRoot, nil
+	}
+	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID.String())
+	if err != nil {
+		return "", err
+	}
+	return clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+}
+
+func (g *Gateway) promptCommandWorkspaceRootForCatalog(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
+	if sessionID != nil {
+		return g.promptCommandWorkspaceRootForState(ctx, state, sessionID)
+	}
+	return g.promptCommandWorkspaceRootForState(ctx, state, nil)
 }
 
 func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (apicontract.SessionLaunchService, error) {

@@ -25,6 +25,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -32,6 +33,20 @@ import (
 )
 
 type missingMetadataPersistedSessionResolver struct{}
+
+type runtimeControlPromptCommandResolver struct {
+	content string
+	err     error
+	calls   int
+}
+
+func (r *runtimeControlPromptCommandResolver) ResolvePromptCommand(context.Context, string, string, string) (string, error) {
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.content, nil
+}
 
 func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
 	return session.PersistedSessionRecord{SessionDir: "/tmp/session"}, nil
@@ -1553,6 +1568,96 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHistory(t *testing.T) {
+	client := finalResponseRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded current body"}
+	service.WithPromptCommandResolver(resolver)
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID.String(),
+		SessionID:       store.Meta().SessionID,
+		Input:           runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src/internal"),
+		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
+	}
+	resp, err := service.SubmitUserTurn(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if resp.Message != "done" {
+		t.Fatalf("prompt command response message = %q, want assistant result", resp.Message)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if got := countUserMessagesWithContent(t, store, "expanded current body"); got != 1 {
+		t.Fatalf("expanded user message count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src/internal"); got != 1 {
+		t.Fatalf("canonical history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded current body"); got != 0 {
+		t.Fatalf("expanded body history count = %d, want 0", got)
+	}
+}
+
+func TestServiceSubmitUserTurnPromptResolutionFailureRecordsFailedWithRestore(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{err: errors.New("prompt command disappeared")}
+	service.WithPromptCommandResolver(resolver)
+	operations := runtimeops.NewCoordinator()
+	service.WithOperationCoordinator(operations)
+	req := runtimeControlUserTurnRequest(store, "missing-prompt", "unused")
+	req.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
+
+	if _, err := service.SubmitUserTurn(context.Background(), req); err == nil {
+		t.Fatal("SubmitUserTurn missing prompt command succeeded")
+	}
+	assertRuntimeControlReconciliation(
+		t,
+		operations,
+		store.Meta().SessionID,
+		req.OperationRef,
+		clientui.RuntimeInputReconciliationFailedWithRestore,
+	)
+}
+
+func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(t *testing.T) {
+	client := finalResponseRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{content: "first body"}
+	service.WithPromptCommandResolver(resolver)
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	req := serverapi.RuntimeSubmitUserTurnRequest{
+		ClientRequestID: ref.ClientRequestID.String(),
+		SessionID:       store.Meta().SessionID,
+		Input:           runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src"),
+		OperationRef:    ref,
+		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+			clientui.RuntimeOperationKindPreSubmitCompact,
+		),
+	}
+	if _, err := service.SubmitUserTurn(context.Background(), req); err != nil {
+		t.Fatalf("first SubmitUserTurn: %v", err)
+	}
+	resolver.content = "changed body"
+	if _, err := service.SubmitUserTurn(context.Background(), req); err != nil {
+		t.Fatalf("retry SubmitUserTurn: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if got := countUserMessagesWithContent(t, store, "changed body"); got != 0 {
+		t.Fatalf("changed body user messages = %d, want 0", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
+		t.Fatalf("canonical history count = %d, want 1", got)
+	}
+}
+
 func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1579,7 +1684,7 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 	req := serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Text:            "flush before model completes",
+		Input:           runtimeinput.Text("flush before model completes"),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,
@@ -1853,6 +1958,156 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 		}
 	}
 	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				queuedStatuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded prompt body"}
+	service.WithPromptCommandResolver(resolver)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(
+			context.Background(),
+			runtimeControlUserTurnRequest(store, "active-prompt-turn", "start"),
+		)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active turn did not reach the first model request")
+	}
+
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-prompt-command", "unused")
+	steeringReq.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
+	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking: %v", err)
+	}
+	if !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls before queue admission = %d, want 1", resolver.calls)
+	}
+	select {
+	case status := <-queuedStatuses:
+		if status.ClientRequestID != steeringReq.OperationRef.ClientRequestID.String() ||
+			status.RestoreText != "expanded prompt body" {
+			t.Fatalf("accepted prompt-command queue status = %+v", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("accepted prompt-command steering emitted no queue status")
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
+		t.Fatalf("canonical prompt history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded prompt body"); got != 0 {
+		t.Fatalf("expanded prompt history count = %d, want 0", got)
+	}
+
+	close(client.releaseFirst)
+	select {
+	case <-client.secondStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active turn did not reach the prompt-command safe-boundary request")
+	}
+	defer close(client.releaseSecond)
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls after queue drain = %d, want 1", resolver.calls)
+	}
+
+	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
+		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == "expanded prompt body" {
+			return
+		}
+	}
+	t.Fatalf("next model request did not receive expanded prompt command: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWithoutQueueing(t *testing.T) {
+	for _, kind := range []serverapi.PromptCommandErrorKind{
+		serverapi.PromptCommandErrorKindCommandNotFound,
+		serverapi.PromptCommandErrorKindCommandRead,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			client := newSteeringDrainRuntimeControlClient()
+			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 1)
+			registry := tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: fakeShellHandler{},
+			})
+			store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+				OnEvent: func(event runtime.Event) {
+					if event.QueuedUserMessageStatus != nil {
+						queuedStatuses <- *event.QueuedUserMessageStatus
+					}
+				},
+			})
+			command := runtimeinput.PromptCommandReviewName
+			resolutionErr := &serverapi.PromptCommandError{Kind: kind, Command: &command}
+			resolver := &runtimeControlPromptCommandResolver{err: resolutionErr}
+			service.WithPromptCommandResolver(resolver)
+			submitDone := make(chan error, 1)
+			go func() {
+				_, err := service.SubmitUserTurn(
+					context.Background(),
+					runtimeControlUserTurnRequest(store, "active-before-failed-prompt", "start"),
+				)
+				submitDone <- err
+			}()
+			select {
+			case <-client.firstStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("active turn did not reach the first model request")
+			}
+
+			req := runtimeControlUserTurnRequest(store, "failed-prompt-during-active-run", "unused")
+			req.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
+			_, err := service.SubmitUserTurn(context.Background(), req)
+			var typed *serverapi.PromptCommandError
+			if !errors.As(err, &typed) || typed.Kind != kind {
+				t.Fatalf("SubmitUserTurn prompt resolution error = %T %v, want typed %s", err, err, kind)
+			}
+			if resolver.calls != 1 {
+				t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+			}
+			if engine.HasQueuedUserWork() {
+				t.Fatal("failed prompt command was admitted to the runtime queue")
+			}
+			select {
+			case status := <-queuedStatuses:
+				t.Fatalf("failed prompt command emitted queued status %+v", status)
+			default:
+			}
+			if got := countPromptHistoryEvents(t, store, "/review"); got != 0 {
+				t.Fatalf("failed prompt command history count = %d, want 0", got)
+			}
+
+			close(client.releaseFirst)
+			select {
+			case <-client.secondStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("active turn did not reach its second model request")
+			}
+			close(client.releaseSecond)
+			if err := <-submitDone; err != nil {
+				t.Fatalf("active SubmitUserTurn: %v", err)
+			}
+		})
+	}
 }
 
 func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testing.T) {
@@ -2181,7 +2436,7 @@ func runtimeControlUserTurnRequest(store *session.Store, _ string, text string) 
 	return serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Text:            text,
+		Input:           runtimeinput.Text(text),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,

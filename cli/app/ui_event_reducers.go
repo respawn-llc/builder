@@ -96,6 +96,8 @@ func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.logf("committed_entry.persist_error notice_id=%q err=%q", msg.noticeID, msg.err.Error())
 		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+	case promptCatalogRefreshDoneMsg:
+		return handledUIFeatureUpdate(m, m.handlePromptCatalogRefreshDone(msg))
 	case runtimeControlDoneMsg:
 		cmd := m.applyRuntimeControlDone(msg)
 		m.layout().syncViewport()

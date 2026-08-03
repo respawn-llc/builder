@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,10 +22,17 @@ const (
 )
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
-	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, activeSubmitOriginDirect)
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
+	return c.startTypedSubmissionWithPreSubmitQueuePosition(text, runtimeinput.Text(text), queuePosition, queuedID, activeSubmitOriginDirect)
 }
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
+	return c.startTypedSubmissionWithPreSubmitQueuePosition(text, runtimeinput.Text(text), queuePosition, queuedID, origin)
+}
+
+func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePosition(text string, input runtimeinput.Input, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -46,7 +54,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOrigin(te
 	if isUserShell {
 		return tea.Batch(c.submitUserShellCmd(text, command, origin), m.reconcileSpinnerTicking(false))
 	}
-	return tea.Batch(c.submitCmd(text, queuedID, origin), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.submitCmd(text, input, queuedID, origin), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
@@ -55,6 +63,9 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
 	}
@@ -65,7 +76,7 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, origin)
 }
 
-func (c uiInputController) submitCmd(text string, queuedID string, origin activeSubmitOrigin) tea.Cmd {
+func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	preSubmitCompactionRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
@@ -79,7 +90,7 @@ func (c uiInputController) submitCmd(text string, queuedID string, origin active
 		submission, err := m.submitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
 			OperationRef:                    operationRef,
 			PreSubmitCompactionOperationRef: preSubmitCompactionRef,
-			Text:                            text,
+			Input:                           input,
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
@@ -241,6 +252,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
 		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		if notFound, ok := promptCommandNotFound(msg.err); ok && notFound.Command != nil {
+			if refreshCmd := m.startPromptCatalogRefresh(*notFound.Command); refreshCmd != nil {
+				return m, tea.Batch(restoreInjectedCmd, statusCmd, refreshCmd)
+			}
+		}
 		return m, tea.Batch(restoreInjectedCmd, statusCmd)
 	}
 
