@@ -429,7 +429,7 @@ export const englishResources = {
     },
     routes: {
       legacyEmptyTaskSelector:
-        "This legacy project URL contains an empty task selector. Remove '?taskId=' from the URL and reload the project.",
+        "This legacy project URL contains an empty taskId query parameter. Remove that parameter and reload the project.",
     },
     form: {
       required: "Required",
