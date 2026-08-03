@@ -126,9 +126,8 @@ describe("ApiClient", () => {
     const unblockedFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true });
     await client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter);
     await client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null });
-    expect(transport.calls[2]?.method).toBe("workflow.board.get");
+    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
     expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
-    expect(transport.calls[3]?.method).toBe("workflow.board.nodeCards.list");
     expect(transport.calls[3]?.params).toMatchObject({ dependency_filter: true });
   });
 
