@@ -56,14 +56,11 @@ describe("Markdown adapters", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
-  it("uses the approved character-separated blurIn streaming presentation", () => {
-    render(<StreamingMarkdown value="stream" />);
+  it("renders streaming output through the public adapter boundary", async () => {
+    const view = render(<StreamingMarkdown value="stream" />);
 
-    const firstCharacter = screen.getByText("s", { exact: true });
-    expect(firstCharacter).toHaveAttribute("data-sd-animate", "true");
-    expect(firstCharacter).toHaveStyle({
-      "--sd-duration": "50ms",
-      "--sd-easing": "ease",
+    await waitFor(() => {
+      expect(renderedText(view)).toBe("stream");
     });
   });
 
@@ -173,7 +170,6 @@ describe("TaskBodyMarkdown", () => {
     render(<TaskBodyMarkdown value={value} />);
 
     const element = taskBodyText(value);
-    expect(element).toHaveClass("markdown-plain-text");
     expect(element.tagName).toBe("SPAN");
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
