@@ -72,7 +72,6 @@
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
-- Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. A usable fixed policy is not overridden.
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task
   Dependencies, Desktop opens dependency confirmation before Execution Target
   selection or another continuation dialog.

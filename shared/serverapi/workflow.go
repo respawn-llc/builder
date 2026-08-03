@@ -2576,8 +2576,13 @@ func validateOptionalAttentionString(field string, value *string) error {
 }
 
 type workflowAttentionInterruptionDetailSchema struct {
-	Code   string             `json:"code"`
-	Fields map[string]*string `json:"fields"`
+	Code                                 string             `json:"code"`
+	Fields                               map[string]*string `json:"fields"`
+	ConfiguredExecutionTargetUnavailable *struct {
+		Mode         WorkflowExecutionTargetMode             `json:"mode"`
+		RequestedRef *string                                 `json:"requested_ref,omitempty"`
+		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
+	} `json:"configured_execution_target_unavailable,omitempty"`
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2597,6 +2602,19 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 		if value == nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" values must be strings")
+		}
+	}
+	if unavailable := detail.ConfiguredExecutionTargetUnavailable; unavailable != nil {
+		requirement := WorkflowExecutionTargetSelectionRequirement{
+			Reason: WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
+			ConfiguredTarget: &WorkflowExecutionTargetConfiguredTarget{
+				Mode:         unavailable.Mode,
+				RequestedRef: unavailable.RequestedRef,
+			},
+			UnavailableCause: unavailable.Cause,
+		}
+		if err := requirement.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" configured execution target metadata is invalid")
 		}
 	}
 	return nil

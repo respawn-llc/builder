@@ -1129,21 +1129,47 @@ func (s *Service) materializeInitiatingActionTarget(
 }
 
 func configuredTargetSelectionRequirement(selection workflow.ExecutionTargetSelection, err error) (*serverapi.WorkflowExecutionTargetSelectionRequirement, bool) {
+	unavailable, ok := configuredExecutionTargetUnavailable(selection, err)
+	if !ok {
+		return nil, false
+	}
+	return configuredTargetSelectionRequirementFromUnavailable(*unavailable), true
+}
+
+func configuredExecutionTargetUnavailable(
+	selection workflow.ExecutionTargetSelection,
+	err error,
+) (*workflow.ConfiguredExecutionTargetUnavailable, bool) {
 	cause, ok := executionTargetUnavailableCause(err)
 	if !ok {
 		return nil, false
 	}
-	configured := &serverapi.WorkflowExecutionTargetConfiguredTarget{
-		Mode: serverapi.WorkflowExecutionTargetMode(selection.Mode),
+	unavailable := &workflow.ConfiguredExecutionTargetUnavailable{
+		Mode:  selection.Mode,
+		Cause: cause,
 	}
 	if selection.Mode == workflow.ExecutionTargetModeCustomRef {
-		configured.RequestedRef = selection.CustomRef
+		requestedRef := *selection.CustomRef
+		unavailable.RequestedRef = &requestedRef
+	}
+	return unavailable, true
+}
+
+func configuredTargetSelectionRequirementFromUnavailable(
+	unavailable workflow.ConfiguredExecutionTargetUnavailable,
+) *serverapi.WorkflowExecutionTargetSelectionRequirement {
+	configured := &serverapi.WorkflowExecutionTargetConfiguredTarget{
+		Mode: serverapi.WorkflowExecutionTargetMode(unavailable.Mode),
+	}
+	if unavailable.RequestedRef != nil {
+		requestedRef := *unavailable.RequestedRef
+		configured.RequestedRef = &requestedRef
 	}
 	return &serverapi.WorkflowExecutionTargetSelectionRequirement{
 		Reason:           serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
 		ConfiguredTarget: configured,
-		UnavailableCause: cause,
-	}, true
+		UnavailableCause: serverapi.WorkflowExecutionTargetUnavailableCause(unavailable.Cause),
+	}
 }
 
 const configuredTargetPreparationFailureCode = "workflow_configured_execution_target_unavailable"
@@ -1152,10 +1178,11 @@ func configuredTargetPreparationError(preflight initiatingActionTargetPreflight,
 	if err == nil || preflight.explicit {
 		return err
 	}
-	requirement, ok := configuredTargetSelectionRequirement(preflight.selection, err)
+	unavailable, ok := configuredExecutionTargetUnavailable(preflight.selection, err)
 	if !ok {
 		return err
 	}
+	requirement := configuredTargetSelectionRequirementFromUnavailable(*unavailable)
 	fields := map[string]string{
 		"error": err.Error(),
 		"mode":  string(requirement.ConfiguredTarget.Mode),
@@ -1165,67 +1192,50 @@ func configuredTargetPreparationError(preflight initiatingActionTargetPreflight,
 		fields["requested_ref"] = *requirement.ConfiguredTarget.RequestedRef
 	}
 	return workflowexecution.NewTaskStartPreparationError(err, workflow.CurrentNodeInterruptionDetail{
-		Code:   configuredTargetPreparationFailureCode,
-		Fields: fields,
+		Code:                                 configuredTargetPreparationFailureCode,
+		Fields:                               fields,
+		ConfiguredExecutionTargetUnavailable: unavailable,
 	})
 }
 
-func configuredTargetResumeSelection(nodes []workflow.CurrentNode) *serverapi.WorkflowExecutionTargetSelectionRequirement {
+func configuredTargetResumeSelection(nodes []workflow.CurrentNode) (*serverapi.WorkflowExecutionTargetSelectionRequirement, error) {
 	for _, node := range nodes {
-		if node.Scheduling == nil || node.Scheduling.Interruption == nil ||
-			node.Scheduling.Interruption.Detail.Code != configuredTargetPreparationFailureCode {
+		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
 			continue
 		}
-		fields := node.Scheduling.Interruption.Detail.Fields
-		modeValue, hasMode := fields["mode"]
-		causeValue, hasCause := fields["cause"]
-		if !hasMode || !hasCause {
+		unavailable := node.Scheduling.Interruption.Detail.ConfiguredExecutionTargetUnavailable
+		if unavailable == nil {
 			continue
 		}
-		mode := serverapi.WorkflowExecutionTargetMode(modeValue)
-		cause := serverapi.WorkflowExecutionTargetUnavailableCause(causeValue)
-		requirement := serverapi.WorkflowExecutionTargetSelectionRequirement{
-			Reason: serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
-			ConfiguredTarget: &serverapi.WorkflowExecutionTargetConfiguredTarget{
-				Mode: mode,
-			},
-			UnavailableCause: cause,
+		if err := unavailable.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid configured execution target interruption: %w", err)
 		}
-		if mode == serverapi.WorkflowExecutionTargetModeCustomRef {
-			requestedRef, exists := fields["requested_ref"]
-			if !exists {
-				continue
-			}
-			requirement.ConfiguredTarget.RequestedRef = &requestedRef
-		}
-		if requirement.Validate() == nil {
-			return &requirement
-		}
+		return configuredTargetSelectionRequirementFromUnavailable(*unavailable), nil
 	}
-	return nil
+	return nil, nil
 }
 
-func executionTargetUnavailableCause(err error) (serverapi.WorkflowExecutionTargetUnavailableCause, bool) {
+func executionTargetUnavailableCause(err error) (workflow.ExecutionTargetUnavailableCause, bool) {
 	var revisionErr *worktree.GitRevisionResolutionError
 	if errors.As(err, &revisionErr) {
 		switch revisionErr.Kind {
 		case worktree.GitRevisionResolutionErrorInvalidRevision:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision, true
+			return workflow.ExecutionTargetUnavailableCauseInvalidRevision, true
 		case worktree.GitRevisionResolutionErrorNonCommit:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseNonCommit, true
+			return workflow.ExecutionTargetUnavailableCauseNonCommit, true
 		case worktree.GitRevisionResolutionErrorGitFailure:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure, true
+			return workflow.ExecutionTargetUnavailableCauseGitFailure, true
 		}
 	}
 	var defaultBranchErr *worktree.GitDefaultBranchResolutionError
 	if errors.As(err, &defaultBranchErr) {
 		switch defaultBranchErr.Kind {
 		case worktree.GitDefaultBranchResolutionErrorMissing:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing, true
+			return workflow.ExecutionTargetUnavailableCauseDefaultBranchMissing, true
 		case worktree.GitDefaultBranchResolutionErrorAmbiguous:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous, true
+			return workflow.ExecutionTargetUnavailableCauseDefaultBranchAmbiguous, true
 		case worktree.GitDefaultBranchResolutionErrorGitFailure:
-			return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure, true
+			return workflow.ExecutionTargetUnavailableCauseGitFailure, true
 		}
 	}
 	return "", false
@@ -1327,7 +1337,11 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		if err != nil {
 			return serverapi.WorkflowTaskResumeResponse{}, err
 		}
-		if selectionRequired := configuredTargetResumeSelection(interrupted); selectionRequired != nil {
+		selectionRequired, err := configuredTargetResumeSelection(interrupted)
+		if err != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, err
+		}
+		if selectionRequired != nil {
 			return serverapi.WorkflowTaskResumeResponse{
 				Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
 				SelectionRequired: selectionRequired,

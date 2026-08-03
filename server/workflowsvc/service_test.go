@@ -1004,6 +1004,10 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 				"mode":  string(serverapi.WorkflowExecutionTargetModeHead),
 				"cause": string(serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision),
 			},
+			ConfiguredExecutionTargetUnavailable: &workflow.ConfiguredExecutionTargetUnavailable{
+				Mode:  workflow.ExecutionTargetModeHead,
+				Cause: workflow.ExecutionTargetUnavailableCauseInvalidRevision,
+			},
 		},
 	); err != nil {
 		t.Fatalf("InterruptCurrentNode: %v", err)
@@ -1098,7 +1102,10 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	})
 	var preparationErr *workflowexecution.TaskStartPreparationError
 	if !errors.As(err, &preparationErr) ||
-		preparationErr.InterruptionDetail().Code != configuredTargetPreparationFailureCode {
+		preparationErr.InterruptionDetail().Code != configuredTargetPreparationFailureCode ||
+		preparationErr.InterruptionDetail().ConfiguredExecutionTargetUnavailable == nil ||
+		preparationErr.InterruptionDetail().ConfiguredExecutionTargetUnavailable.Cause !=
+			workflow.ExecutionTargetUnavailableCauseGitFailure {
 		t.Fatalf("ResumeWorkflowTask error = %T %v, want configured-target preparation failure", err, err)
 	}
 }

@@ -128,8 +128,9 @@ func IsActionableCurrentNodeInterruptionReason(reason CurrentNodeInterruptionRea
 }
 
 type CurrentNodeInterruptionDetail struct {
-	Code   string
-	Fields map[string]string
+	Code                                 string
+	Fields                               map[string]string
+	ConfiguredExecutionTargetUnavailable *ConfiguredExecutionTargetUnavailable `json:"configured_execution_target_unavailable,omitempty"`
 }
 
 type CurrentNodeInterruption struct {
@@ -279,6 +280,11 @@ func validateCurrentNodeScheduling(scheduling *CurrentNodeScheduling) error {
 		if scheduling.Interruption.OccurredAt.IsZero() {
 			return fmt.Errorf("current node interruption occurrence time is required")
 		}
+		if unavailable := scheduling.Interruption.Detail.ConfiguredExecutionTargetUnavailable; unavailable != nil {
+			if err := unavailable.Validate(); err != nil {
+				return fmt.Errorf("current node configured execution target interruption: %w", err)
+			}
+		}
 		return nil
 	}
 	if scheduling.Interruption != nil {
@@ -303,6 +309,14 @@ func cloneCurrentNodeScheduling(scheduling *CurrentNodeScheduling) *CurrentNodeS
 	if scheduling.Interruption != nil {
 		interruption := *scheduling.Interruption
 		interruption.Detail.Fields = cloneStringMap(interruption.Detail.Fields)
+		if unavailable := interruption.Detail.ConfiguredExecutionTargetUnavailable; unavailable != nil {
+			clonedUnavailable := *unavailable
+			if unavailable.RequestedRef != nil {
+				requestedRef := *unavailable.RequestedRef
+				clonedUnavailable.RequestedRef = &requestedRef
+			}
+			interruption.Detail.ConfiguredExecutionTargetUnavailable = &clonedUnavailable
+		}
 		cloned.Interruption = &interruption
 	}
 	return &cloned
