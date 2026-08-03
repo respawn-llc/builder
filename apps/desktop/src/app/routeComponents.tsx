@@ -122,7 +122,9 @@ export function ProjectRouteError({ error }: { error: Error }) {
   const { t } = useTranslation();
   return (
     <ErrorState
-      body={isLegacyEmptyTaskSelectorError(error) ? error.message : t("form.serverError")}
+      body={
+        isLegacyEmptyTaskSelectorError(error) ? t("routes.legacyEmptyTaskSelector") : t("form.serverError")
+      }
       reveal={false}
       title={t("states.error")}
     />

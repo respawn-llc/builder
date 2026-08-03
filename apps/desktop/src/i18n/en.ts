@@ -427,6 +427,10 @@ export const englishResources = {
       empty: "Empty",
       error: "Error",
     },
+    routes: {
+      legacyEmptyTaskSelector:
+        "This legacy project URL contains an empty task selector. Remove '?taskId=' from the URL and reload the project.",
+    },
     form: {
       required: "Required",
       serverError: "Request failed",
