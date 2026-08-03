@@ -247,6 +247,52 @@ func TestSessionTranscriptSubscriptionWaitsForReplacementRuntime(t *testing.T) {
 	}
 }
 
+func TestSessionTranscriptSubscriptionRacingInitialRuntimeReadyHydrates(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	type subscribeResult struct {
+		sub serverapi.TranscriptSubscription
+		err error
+	}
+	result := make(chan subscribeResult, 1)
+	subscribeCtx, cancelSubscribe := context.WithCancel(context.Background())
+	defer cancelSubscribe()
+	go func() {
+		sub, err := registry.SubscribeSessionTranscript(
+			subscribeCtx,
+			serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()},
+		)
+		result <- subscribeResult{sub: sub, err: err}
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("initial subscription returned before runtime wake: %+v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() {
+		_ = registry.ResourceDraining(
+			context.Background(),
+			registryTestResource(registryTestResourceRef(engine.SessionID())),
+		)
+	})
+	var subscription serverapi.TranscriptSubscription
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("initial subscription after runtime wake: %v", got.err)
+		}
+		subscription = got.sub
+	case <-time.After(time.Second):
+		t.Fatal("initial runtime wake did not open transcript subscription")
+	}
+	defer func() { _ = subscription.Close() }()
+	if hydration := nextTranscriptMessage(t, subscription); hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("initial first message = %+v, want hydration", hydration)
+	}
+}
+
 func TestSessionTranscriptSubscriptionWaitStopsWithContext(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	sessionID := runtimeids.NewSessionID().String()
