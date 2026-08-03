@@ -63,12 +63,11 @@ describe("useBoardResumeAction", () => {
 
   it("disables a second Resume while the first controller operation is running", async () => {
     let release!: () => void;
-    const run = vi.fn<TaskInitiatingActionController["run"]>().mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
+    const run = vi.fn<TaskInitiatingActionController["run"]>().mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
     const controller: TaskInitiatingActionController = {
       pending: null,
       running: false,

@@ -126,9 +126,10 @@ export function TaskDetailContent({
       });
     },
   });
+  const { close: closeResumeContinuation } = resumeContinuation;
   useEffect(() => {
-    resumeContinuation.close();
-  }, [detail.id, resumeContinuation.close]);
+    closeResumeContinuation();
+  }, [closeResumeContinuation, detail.id]);
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
 

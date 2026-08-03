@@ -55,7 +55,7 @@ export function useBoardResumeAction(controller: TaskInitiatingActionController)
     [runAction],
   );
   return {
-    actionsDisabled: controller.running || runningRef.current,
+    actionsDisabled: controller.running || pendingTaskIDs.size > 0,
     continueExecution,
     execute,
     pendingTaskIDs,

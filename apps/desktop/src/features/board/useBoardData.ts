@@ -6,7 +6,7 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect } from "react";
 
 import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
@@ -285,7 +285,11 @@ function useBoardTaskLifecycleMutation(
   const { execute: track, pendingTaskIDs } = useBoardTaskLifecycleAction();
   const { mutateAsync } = mutation;
   const execute = useCallback(
-    (taskID: string): Promise<void> => track(taskID, () => mutateAsync(taskID)),
+    async (taskID: string): Promise<void> => {
+      await track(taskID, async () => {
+        await mutateAsync(taskID);
+      });
+    },
     [mutateAsync, track],
   );
   return {
