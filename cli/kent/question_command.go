@@ -40,7 +40,14 @@ type questionCommandRemote interface {
 	Close() error
 }
 
-var questionCommandRemoteOpener = openQuestionCommandRemote
+type questionCommandRemoteOpener func(
+	context.Context,
+	string,
+) (questionCommandRemote, error)
+
+type questionCommand struct {
+	openRemote questionCommandRemoteOpener
+}
 
 type questionCommandSelector struct {
 	SessionID  *runtimeids.SessionID
@@ -63,6 +70,10 @@ type questionCommandPendingQuestion struct {
 }
 
 func questionSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	return questionCommand{openRemote: openQuestionCommandRemote}.run(args, stdout, stderr)
+}
+
+func (c questionCommand) run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -72,16 +83,16 @@ func questionSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case "answer":
-			return questionAnswerSubcommand(args[1:], stdout, stderr)
+			return c.answerSubcommand(args[1:], stdout, stderr)
 		case "--help", "-h":
 			questionUsage.write(newCommandFlagSet(config.Command+" question", stderr, questionUsage))
 			return 0
 		}
 	}
-	return questionShowSubcommand(args, stdout, stderr)
+	return c.showSubcommand(args, stdout, stderr)
 }
 
-func questionShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+func (c questionCommand) showSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" question", stderr, questionShowUsage)
 	var sessionFlag *string
 	registerOptionalStringFlag(fs, "session", "session to inspect", &sessionFlag)
@@ -101,13 +112,13 @@ func questionShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 2
 	}
 	if selector.SessionID != nil {
-		return showSessionQuestion(*selector.SessionID, stdout, stderr)
+		return c.showSessionQuestion(*selector.SessionID, stdout, stderr)
 	}
 	return showTaskQuestion(selector, stdout, stderr)
 }
 
-func showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stderr io.Writer) int {
-	return withQuestionCommandRemote(stderr, sessionID, func(remote questionCommandRemote) int {
+func (c questionCommand) showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stderr io.Writer) int {
+	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
 		response, err := listPendingSessionQuestions(remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -127,7 +138,7 @@ func showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stder
 	})
 }
 
-func questionAnswerSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+func (c questionCommand) answerSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" question answer", stderr, questionAnswerUsage)
 	var sessionFlag *string
 	registerOptionalStringFlag(fs, "session", "session whose pending question to answer", &sessionFlag)
@@ -163,19 +174,19 @@ func questionAnswerSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return 2
 	}
 	if selector.SessionID != nil {
-		return answerSessionQuestion(*selector.SessionID, option, commentary, stdout, stderr)
+		return c.answerSessionQuestion(*selector.SessionID, option, commentary, stdout, stderr)
 	}
 	return answerTaskQuestion(selector, option, commentary, stdout, stderr)
 }
 
-func answerSessionQuestion(
+func (c questionCommand) answerSessionQuestion(
 	sessionID runtimeids.SessionID,
 	option *int,
 	commentary *string,
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
-	return withQuestionCommandRemote(stderr, sessionID, func(remote questionCommandRemote) int {
+	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
 		pending, err := listPendingSessionQuestions(remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -515,12 +526,12 @@ func resolveQuestionCommandSelector(
 	return selector, nil
 }
 
-func withQuestionCommandRemote(
+func (c questionCommand) withRemote(
 	stderr io.Writer,
 	sessionID runtimeids.SessionID,
 	run func(questionCommandRemote) int,
 ) int {
-	remote, err := questionCommandRemoteOpener(context.Background(), sessionID.String())
+	remote, err := c.openRemote(context.Background(), sessionID.String())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
