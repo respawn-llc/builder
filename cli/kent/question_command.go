@@ -52,7 +52,14 @@ type questionCommandSelector struct {
 type taskQuestionSessionCandidate struct {
 	SessionID   runtimeids.SessionID
 	SessionName *string
-	Questions   []clientui.PendingAsk
+	Questions   []questionCommandPendingQuestion
+}
+
+type questionCommandPendingQuestion struct {
+	AskID                  string
+	Question               string
+	Suggestions            []string
+	RecommendedOptionIndex *int
 }
 
 func questionSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -110,7 +117,7 @@ func showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stder
 			fmt.Fprintln(stdout, noPendingQuestionsText)
 			return 0
 		}
-		writePendingQuestion(stdout, response.Asks[0], false)
+		writePendingQuestion(stdout, pendingSessionQuestion(response.Asks[0]), false)
 		return 0
 	})
 }
@@ -197,7 +204,7 @@ func answerSessionQuestion(
 			fmt.Fprintln(stdout, questionAnswerDoneText)
 			return 0
 		}
-		writePendingQuestion(stdout, next.Asks[0], true)
+		writePendingQuestion(stdout, pendingSessionQuestion(next.Asks[0]), true)
 		return 0
 	})
 }
@@ -384,17 +391,11 @@ func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQues
 		} else if !textutil.EqualOptional(candidates[index].SessionName, sessionName) {
 			return nil, fmt.Errorf("pending questions for session %s disagree on the session name", sessionID)
 		}
-		recommended := 0
-		if item.RecommendedOptionIndex != nil {
-			recommended = *item.RecommendedOptionIndex
-		}
-		candidates[index].Questions = append(candidates[index].Questions, clientui.PendingAsk{
+		candidates[index].Questions = append(candidates[index].Questions, questionCommandPendingQuestion{
 			AskID:                  *item.QuestionID,
-			SessionID:              sessionID.String(),
 			Question:               *item.Message,
 			Suggestions:            append([]string(nil), item.Suggestions...),
-			RecommendedOptionIndex: recommended,
-			CreatedAt:              time.UnixMilli(item.OccurredAtUnixMs).UTC(),
+			RecommendedOptionIndex: textutil.Pointer(item.RecommendedOptionIndex),
 		})
 	}
 	return candidates, nil
@@ -540,7 +541,20 @@ func openQuestionCommandRemote(ctx context.Context, sessionID string) (questionC
 	return remote, nil
 }
 
-func writePendingQuestion(stdout io.Writer, ask clientui.PendingAsk, next bool) {
+func pendingSessionQuestion(ask clientui.PendingAsk) questionCommandPendingQuestion {
+	var recommendedOptionIndex *int
+	if ask.RecommendedOptionIndex > 0 {
+		recommendedOptionIndex = textutil.Value(ask.RecommendedOptionIndex)
+	}
+	return questionCommandPendingQuestion{
+		AskID:                  ask.AskID,
+		Question:               ask.Question,
+		Suggestions:            append([]string(nil), ask.Suggestions...),
+		RecommendedOptionIndex: recommendedOptionIndex,
+	}
+}
+
+func writePendingQuestion(stdout io.Writer, ask questionCommandPendingQuestion, next bool) {
 	if next {
 		fmt.Fprint(stdout, nextQuestionPrefix)
 	}
@@ -551,7 +565,7 @@ func writePendingQuestion(stdout io.Writer, ask clientui.PendingAsk, next bool) 
 	fmt.Fprintln(stdout, questionSuggestionsHeading)
 	for index, suggestion := range ask.Suggestions {
 		suffix := ""
-		if ask.RecommendedOptionIndex == index+1 {
+		if ask.RecommendedOptionIndex != nil && *ask.RecommendedOptionIndex == index+1 {
 			suffix = recommendedSuggestionSuffix
 		}
 		fmt.Fprintf(stdout, "%d. %s%s\n", index+1, suggestion, suffix)

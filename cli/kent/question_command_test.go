@@ -529,6 +529,48 @@ func TestQuestionByTaskUsesOldestQuestionInSelectedSession(t *testing.T) {
 	}
 }
 
+func TestTaskQuestionCandidatesPreserveRecommendationAbsence(t *testing.T) {
+	sessionID := uuid.NewString()
+	withoutRecommendation := taskQuestionAttention(
+		"task-1",
+		sessionID,
+		"Implementer",
+		"ask-1",
+		"First?",
+		1,
+	)
+	withRecommendation := taskQuestionAttention(
+		"task-1",
+		sessionID,
+		"Implementer",
+		"ask-2",
+		"Second?",
+		2,
+	)
+	recommendedOptionIndex := 2
+	withRecommendation.RecommendedOptionIndex = &recommendedOptionIndex
+
+	candidates, err := taskQuestionCandidates([]serverapi.WorkflowAttentionItem{
+		withoutRecommendation,
+		withRecommendation,
+	})
+	if err != nil {
+		t.Fatalf("task question candidates: %v", err)
+	}
+	if len(candidates) != 1 || len(candidates[0].Questions) != 2 {
+		t.Fatalf("task question candidates = %+v, want one Session with two Questions", candidates)
+	}
+	if candidates[0].Questions[0].RecommendedOptionIndex != nil {
+		t.Fatalf(
+			"absent recommendation = %v, want nil",
+			*candidates[0].Questions[0].RecommendedOptionIndex,
+		)
+	}
+	if got := candidates[0].Questions[1].RecommendedOptionIndex; got == nil || *got != 2 {
+		t.Fatalf("present recommendation = %v, want 2", got)
+	}
+}
+
 func TestQuestionByTaskResolvesProjectScopedShortID(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	remote := &stubQuestionTaskRemote{
