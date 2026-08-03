@@ -100,6 +100,7 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 		{"supervisor.thinking", string(selections.supervisor.thinking.kind), []string{"inherited", "overridden", "capability_disabled"}},
 		{"compaction", string(selections.compaction), []string{"local", "native", "manual_only"}},
 		{"skill_import", string(selections.skillImport.Mode), []string{"none", "symlink_source"}},
+		{"command_import", string(selections.commandImport.Mode), []string{"none", "symlink_source"}},
 		{"pending_primary_thinking", string(selections.pendingPrimaryThinking.kind), []string{"none", "pending", "revisiting"}},
 		{"pending_reviewer_thinking", string(selections.pendingReviewerThinking.kind), []string{"none", "pending", "revisiting"}},
 	}
@@ -130,23 +131,11 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 			return violation, true
 		}
 	}
-	if selections.skillImport.Mode == onboardingImportModeSymlinkSource {
-		ref := selections.skillImport.ChoiceRef
-		if onboardingImportMode(ref.Mode) != onboardingImportModeSymlinkSource {
-			return onboardingInvariantViolation{VariantType: "skill_import.choice_ref.mode", VariantTag: ref.Mode}, true
-		}
-		if violation, ok := requiredStringReferenceViolation(
-			"skill_import.choice_ref.import_provider_id",
-			ref.ImportProviderID,
-		); ok {
-			return violation, true
-		}
-		if violation, ok := requiredStringReferenceViolation(
-			"skill_import.choice_ref.source_root_path",
-			ref.SourceRootPath,
-		); ok {
-			return violation, true
-		}
+	if violation, ok := importSelectionInvariantViolation("skill_import", selections.skillImport); ok {
+		return violation, true
+	}
+	if violation, ok := importSelectionInvariantViolation("command_import", selections.commandImport); ok {
+		return violation, true
 	}
 	if selections.preserved.providerOverride != nil && strings.TrimSpace(*selections.preserved.providerOverride) == "" {
 		return onboardingInvariantViolation{VariantType: "preserved.provider_override", VariantTag: *selections.preserved.providerOverride}, true
@@ -166,6 +155,29 @@ func (selections onboardingSelections) invariantViolation() (onboardingInvariant
 		}
 	}
 	return onboardingInvariantViolation{}, false
+}
+
+func importSelectionInvariantViolation(
+	variantPrefix string,
+	selection onboardingImportSelection,
+) (onboardingInvariantViolation, bool) {
+	if selection.Mode != onboardingImportModeSymlinkSource {
+		return onboardingInvariantViolation{}, false
+	}
+	ref := selection.ChoiceRef
+	if onboardingImportMode(ref.Mode) != onboardingImportModeSymlinkSource {
+		return onboardingInvariantViolation{VariantType: variantPrefix + ".choice_ref.mode", VariantTag: ref.Mode}, true
+	}
+	if violation, ok := requiredStringReferenceViolation(
+		variantPrefix+".choice_ref.import_provider_id",
+		ref.ImportProviderID,
+	); ok {
+		return violation, true
+	}
+	return requiredStringReferenceViolation(
+		variantPrefix+".choice_ref.source_root_path",
+		ref.SourceRootPath,
+	)
 }
 
 func requiredStringReferenceViolation(variantType string, value *string) (onboardingInvariantViolation, bool) {
