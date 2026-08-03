@@ -166,6 +166,9 @@ func TestDiscoverCommandsCountsOnlyFollowedRegularFiles(t *testing.T) {
 	home := t.TempDir()
 	writeProviderCommand(t, home, ProviderCodex, "prompts", "regular.md")
 	root := filepath.Join(home, ".codex", "prompts")
+	if err := os.WriteFile(filepath.Join(root, "blank.md"), []byte(" \n\t"), 0o644); err != nil {
+		t.Fatalf("write blank command: %v", err)
+	}
 	targetDir := filepath.Join(t.TempDir(), "command-directory")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir command target directory: %v", err)
@@ -186,10 +189,10 @@ func TestDiscoverCommandsCountsOnlyFollowedRegularFiles(t *testing.T) {
 		t.Fatalf("Discover: %v", err)
 	}
 	if len(result.Commands.Items) != 2 {
-		t.Fatalf("command items = %+v, want regular file and regular-file symlink only", result.Commands.Items)
+		t.Fatalf("command items = %+v, want non-blank regular file and regular-file symlink only", result.Commands.Items)
 	}
 	for _, item := range result.Commands.Items {
-		if item.Ref.TargetName == "directory.md" {
+		if item.Ref.TargetName == "directory.md" || item.Ref.TargetName == "blank.md" {
 			t.Fatalf("directory symlink counted as command: %+v", item)
 		}
 	}

@@ -351,6 +351,16 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 		if !info.Mode().IsRegular() {
 			continue
 		}
+		contents, err := os.ReadFile(sourcePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if strings.TrimSpace(string(contents)) == "" {
+			continue
+		}
 		name := strings.TrimSuffix(target, filepath.Ext(target))
 		items = append(items, Item{Ref: ItemRef{ItemKind: ItemKindCommand, SourceKind: SourceKindExternalProvider, ProviderID: &providerID, SourceRoot: &sourceRoot, SourcePath: &sourcePath, TargetName: target, Name: &name}})
 	}

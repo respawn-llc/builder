@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -273,7 +275,18 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	if state.FailureReason != nil &&
 		*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound &&
 		state.PromptCommand != nil {
-		return tea.Batch(cmd, m.startPromptCatalogRefresh(*state.PromptCommand))
+		commandErr := &serverapi.PromptCommandError{
+			Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+			Command: state.PromptCommand,
+		}
+		statusCmd := m.sendTransientStatusWithNoticeID(
+			runtimeattach.FormatSubmissionError(commandErr),
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+		return tea.Batch(cmd, statusCmd, m.startPromptCatalogRefresh(*state.PromptCommand))
 	}
 	m.inputController().restoreInjectedTextIntoInput(*state.Text)
 	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
