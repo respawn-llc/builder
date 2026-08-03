@@ -67,7 +67,7 @@ describe("Markdown adapters", () => {
   it("uses Streamdown's default sanitized HTML and link behavior", async () => {
     render(
       <StaticMarkdown
-        value={'before <span>inner</span> [safe](https://example.com) [unsafe](javascript:alert(1))'}
+        value={"before <span>inner</span> [safe](https://example.com) [unsafe](javascript:alert(1))"}
       />,
     );
 
@@ -94,12 +94,13 @@ describe("Markdown adapters", () => {
   it.each(["javascript", "js", "JavaScript", "JS", "python", "py", "Python", "PY"])(
     "highlights completed %s code",
     async (language) => {
-    const view = render(<StaticMarkdown value={`\`\`\`${language}\nconst answer = 1;\n\`\`\``} />);
+      const view = render(<StaticMarkdown value={`\`\`\`${language}\nconst answer = 1;\n\`\`\``} />);
 
-    await waitFor(() => {
-      expect(codeText(view)).toEqual(["const answer = 1;\n"]);
-    });
-  });
+      await waitFor(() => {
+        expect(codeText(view)).toEqual(["const answer = 1;\n"]);
+      });
+    },
+  );
 
   it.each(["JS", "PY"])("keeps mixed-case incomplete %s code plain", async (language) => {
     render(<StreamingMarkdown value={`\`\`\`${language}\nconst answer = 1;`} />);
@@ -135,17 +136,13 @@ describe("Markdown adapters", () => {
   });
 
   it("shows the exact current live text after appending prose", async () => {
-    const view = render(
-      <StreamingMarkdown value={"```javascript\nconst answer = 1;\n```\n\ntail-A"} />,
-    );
+    const view = render(<StreamingMarkdown value={"```javascript\nconst answer = 1;\n```\n\ntail-A"} />);
 
     await waitFor(() => {
       expect(renderedText(view)).toBe("const answer = 1;\ntail-A");
     });
 
-    view.rerender(
-      <StreamingMarkdown value={"```javascript\nconst answer = 1;\n```\n\ntail-A tail-B"} />,
-    );
+    view.rerender(<StreamingMarkdown value={"```javascript\nconst answer = 1;\n```\n\ntail-A tail-B"} />);
 
     await waitFor(() => {
       expect(renderedText(view)).toBe("const answer = 1;\ntail-A tail-B");
@@ -156,7 +153,11 @@ describe("Markdown adapters", () => {
 describe("TaskBodyMarkdown", () => {
   it.each([
     ["punctuation and formatting", "5 * 3 | 2\n\n**bold** *italic* ~~gone~~", "5 * 3 | 2 bold italic gone"],
-    ["autolinks and reference labels", "<https://example.com> [label][ref]\n\n[ref]: https://example.com", "https://example.com label"],
+    [
+      "autolinks and reference labels",
+      "<https://example.com> [label][ref]\n\n[ref]: https://example.com",
+      "https://example.com label",
+    ],
     ["image alt text", "![image alt](image.png)", "image alt"],
     ["code payloads", "inline `x`\n\n```javascript\nconst x = 1;\n```", "inline x const x = 1;"],
   ])("projects %s to readable plain text", (_name, value, expected) => {
