@@ -141,7 +141,7 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, other); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("start during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, EstablishedRootLaunchPreparation()); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("approval during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
@@ -501,7 +501,7 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	controller.agentCapacityActive = 1
 	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
 		reference:         reserved,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionAutomaticAgent,
 		agentCapacityLease: &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,
@@ -618,7 +618,7 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptFailsWhilePreparationGateActive(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptStopsLiveScopeWithoutCancelingPreparationGate(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -692,31 +692,28 @@ func TestCurrentNodeControllerTaskInterruptFailsWhilePreparationGateActive(t *te
 		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID})
 	}()
 	select {
-	case err := <-interruptDone:
-		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			t.Fatalf("Task Interrupt while preparation gate active = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Task Interrupt waited for active preparation gate")
-	}
-	select {
 	case <-store.interruptStarted:
-		t.Fatal("Task Interrupt persisted an interruption despite the active preparation gate")
-	default:
+	case <-time.After(time.Second):
+		t.Fatal("Task Interrupt did not persist the live-scope interruption")
 	}
-	if !hasLiveCurrentNode(controller.Snapshot(), running) {
-		t.Fatalf("running current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
+	close(store.interruptRelease)
+	if err := <-interruptDone; err != nil {
+		t.Fatalf("Task Interrupt while preparation gate active: %v", err)
+	}
+	if hasLiveCurrentNode(controller.Snapshot(), running) {
+		t.Fatalf("running current node remains live after Task Interrupt: %+v", controller.Snapshot())
 	}
 	releaseQueued()
-	for _, reference := range []workflow.CurrentNodeReference{running, queued} {
-		interruption, interrupted := store.interruption(reference)
-		if interrupted {
-			t.Fatalf("current node %v interruption = %+v after rejected Task Interrupt", reference, interruption)
-		}
+	if interruption, interrupted := store.interruption(running); !interrupted ||
+		interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+		t.Fatalf("running current node interruption = %+v, interrupted=%t", interruption, interrupted)
+	}
+	if interruption, interrupted := store.interruption(queued); interrupted {
+		t.Fatalf("preparing sibling interruption = %+v, want preparation untouched", interruption)
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptFailsWhileBlockedPreparationContinues(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptStopsLiveScopeWhileBlockedPreparationContinues(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -766,7 +763,7 @@ func TestCurrentNodeControllerTaskInterruptFailsWhileBlockedPreparationContinues
 	waitForRunningCurrentNode(t, authority, live)
 	controller.enqueueStarts([]currentNodeQueuedStart{{
 		reference:         blocked,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionExplicitOverride,
 	}})
 	select {
@@ -781,19 +778,19 @@ func TestCurrentNodeControllerTaskInterruptFailsWhileBlockedPreparationContinues
 	}()
 	select {
 	case err := <-interruptDone:
-		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			t.Fatalf("Task Interrupt while blocked preparation = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		if err != nil {
+			t.Fatalf("Task Interrupt while blocked preparation: %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Task Interrupt waited for blocked preparation gate")
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Interrupt did not stop the live scope")
 	}
 	select {
 	case <-runner.canceled:
 		t.Fatal("Task Interrupt canceled preparation")
 	default:
 	}
-	if !hasLiveCurrentNode(controller.Snapshot(), live) {
-		t.Fatalf("live current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
+	if hasLiveCurrentNode(controller.Snapshot(), live) {
+		t.Fatalf("live current node remains live after Task Interrupt: %+v", controller.Snapshot())
 	}
 	close(runner.released)
 	select {
@@ -831,7 +828,7 @@ func TestCurrentNodeControllerSessionInterruptIgnoresUnrelatedPreparationGate(t 
 	fixture.runnerSlot.Swap(preparation)
 	fixture.controller.enqueueStarts([]currentNodeQueuedStart{{
 		reference:         blocked,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionExplicitOverride,
 	}})
 	select {
@@ -893,7 +890,7 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 	controller.mu.Lock()
 	controller.automaticReservations[key] = currentNodeQueuedStart{
 		reference:         reference,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionAutomaticAgent,
 	}
 	controller.mu.Unlock()

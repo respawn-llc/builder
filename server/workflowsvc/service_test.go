@@ -321,6 +321,36 @@ func TestServiceResumeRejectsEmptyCurrentNodeResult(t *testing.T) {
 	}
 }
 
+func TestExplicitUnlockedPreparationFailureRestoresTypedCustomRefValidation(t *testing.T) {
+	requestedRef := "missing/ref"
+	fields, err := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
+		Cause:           serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision,
+		SelectionMode:   workflow.ExecutionTargetModeCustomRef,
+		RequestedRef:    &requestedRef,
+		SelectionSource: workflowexecution.ExecutionTargetSelectionSourceExplicit,
+	}).Fields()
+	if err != nil {
+		t.Fatalf("failure metadata: %v", err)
+	}
+	failure := explicitUnlockedPreparationFailure([]workflow.CurrentNode{{
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+			Interruption: &workflow.CurrentNodeInterruption{
+				Detail: workflow.CurrentNodeInterruptionDetail{
+					Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
+					Fields: fields,
+				},
+			},
+		},
+	}})
+	var resolution *serverapi.WorkflowExecutionTargetResolutionError
+	if !errors.As(failure, &resolution) ||
+		resolution.Code != serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision ||
+		resolution.RequestedRef != requestedRef {
+		t.Fatalf("explicit preparation failure = %#v, want typed invalid revision", failure)
+	}
+}
+
 func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -675,14 +705,17 @@ func TestServiceApprovalQueuesLockedTargetRestoration(t *testing.T) {
 		t.Fatalf("ApproveWorkflowTask: %v", err)
 	}
 	preparation := execution.approvalPreparation
-	if preparation == nil ||
-		preparation.Kind != workflowexecution.LaunchPreparationRestoreLockedTarget ||
-		preparation.SourceWorkspaceID != target.SourceWorkspaceID ||
-		preparation.SourceWorkspaceRoot != target.SourceWorkspaceRoot ||
-		preparation.Coordinator == nil {
+	if preparation == nil {
 		t.Fatalf("approval launch preparation = %+v, want coordinated locked-target restoration", preparation)
 	}
-	if err := preparation.SetupOperationID.Validate(); err != nil {
+	locked, ok := preparation.RestoreLockedTarget()
+	if !ok ||
+		locked.SourceWorkspace.ID != target.SourceWorkspaceID ||
+		locked.SourceWorkspace.Root != target.SourceWorkspaceRoot ||
+		preparation.Coordinator() == nil {
+		t.Fatalf("approval launch preparation = %+v, want coordinated locked-target restoration", preparation)
+	}
+	if err := locked.SetupOperationID.Validate(); err != nil {
 		t.Fatalf("approval setup operation ID: %v", err)
 	}
 }

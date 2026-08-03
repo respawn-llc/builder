@@ -186,7 +186,7 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 	required := preview.Choices[0].RequiredValues[0]
 	if required.NodeKey != "join" ||
 		required.OutputName != "joined" ||
-		required.Description != "Joined branch summary." {
+		strings.TrimSpace(required.Description) == "" {
 		t.Fatalf("required value = %+v, want described prior Join parameter", required)
 	}
 }

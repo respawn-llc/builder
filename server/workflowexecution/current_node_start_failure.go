@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"core/server/workflow"
+	"core/shared/serverapi"
 )
 
 // CurrentNodeStartFailure carries the interruption projection selected by the
@@ -15,8 +16,101 @@ type CurrentNodeStartFailure struct {
 }
 
 type ExecutionTargetPreparationFailure struct {
-	Cause     error
-	Selection workflow.ExecutionTargetSelection
+	Cause           error
+	Selection       workflow.ExecutionTargetSelection
+	SelectionSource ExecutionTargetSelectionSource
+}
+
+type ExecutionTargetSelectionSource string
+
+const (
+	ExecutionTargetSelectionSourceConfigured ExecutionTargetSelectionSource = "configured"
+	ExecutionTargetSelectionSourceExplicit   ExecutionTargetSelectionSource = "explicit"
+)
+
+const (
+	executionTargetFailureFieldCause           = "code"
+	executionTargetFailureFieldRequestedRef    = "requested_ref"
+	executionTargetFailureFieldSelectionMode   = "selection_mode"
+	executionTargetFailureFieldSelectionSource = "selection_source"
+)
+
+type ExecutionTargetResolutionFailureMetadata struct {
+	Cause           serverapi.WorkflowExecutionTargetUnavailableCause
+	SelectionMode   workflow.ExecutionTargetMode
+	RequestedRef    *string
+	SelectionSource ExecutionTargetSelectionSource
+}
+
+func (s ExecutionTargetSelectionSource) Validate() error {
+	switch s {
+	case ExecutionTargetSelectionSourceConfigured, ExecutionTargetSelectionSourceExplicit:
+		return nil
+	default:
+		return errors.New("execution target selection source is invalid")
+	}
+}
+
+func (m ExecutionTargetResolutionFailureMetadata) Fields() (map[string]string, error) {
+	if m.Cause == "" {
+		return nil, errors.New("execution target resolution failure cause is required")
+	}
+	if m.SelectionMode != workflow.ExecutionTargetModeHead &&
+		m.SelectionMode != workflow.ExecutionTargetModeDefaultBranch &&
+		m.SelectionMode != workflow.ExecutionTargetModeCustomRef {
+		return nil, errors.New("execution target resolution failure selection mode is invalid")
+	}
+	if err := m.SelectionSource.Validate(); err != nil {
+		return nil, err
+	}
+	fields := map[string]string{
+		executionTargetFailureFieldCause:           string(m.Cause),
+		executionTargetFailureFieldSelectionMode:   string(m.SelectionMode),
+		executionTargetFailureFieldSelectionSource: string(m.SelectionSource),
+	}
+	if m.RequestedRef != nil {
+		if *m.RequestedRef == "" {
+			return nil, errors.New("execution target resolution failure requested ref must be non-empty")
+		}
+		fields[executionTargetFailureFieldRequestedRef] = *m.RequestedRef
+	}
+	return fields, nil
+}
+
+func ExecutionTargetResolutionFailureMetadataFromFields(fields map[string]string) (ExecutionTargetResolutionFailureMetadata, error) {
+	cause := serverapi.WorkflowExecutionTargetUnavailableCause(fields[executionTargetFailureFieldCause])
+	switch cause {
+	case serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision,
+		serverapi.WorkflowExecutionTargetUnavailableCauseNonCommit,
+		serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing,
+		serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous,
+		serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure:
+	default:
+		return ExecutionTargetResolutionFailureMetadata{}, errors.New("execution target resolution failure cause is invalid")
+	}
+	mode := workflow.ExecutionTargetMode(fields[executionTargetFailureFieldSelectionMode])
+	if mode != workflow.ExecutionTargetModeHead &&
+		mode != workflow.ExecutionTargetModeDefaultBranch &&
+		mode != workflow.ExecutionTargetModeCustomRef {
+		return ExecutionTargetResolutionFailureMetadata{}, errors.New("execution target resolution failure selection mode is invalid")
+	}
+	source := ExecutionTargetSelectionSource(fields[executionTargetFailureFieldSelectionSource])
+	if err := source.Validate(); err != nil {
+		return ExecutionTargetResolutionFailureMetadata{}, err
+	}
+	var requestedRef *string
+	if value, exists := fields[executionTargetFailureFieldRequestedRef]; exists {
+		if value == "" {
+			return ExecutionTargetResolutionFailureMetadata{}, errors.New("execution target resolution failure requested ref must be non-empty")
+		}
+		requestedRef = &value
+	}
+	return ExecutionTargetResolutionFailureMetadata{
+		Cause:           cause,
+		SelectionMode:   mode,
+		RequestedRef:    requestedRef,
+		SelectionSource: source,
+	}, nil
 }
 
 func (e *ExecutionTargetPreparationFailure) Error() string {

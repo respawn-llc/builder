@@ -134,7 +134,7 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
 	}
-	return c.resumeTask(ctx, taskID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}, func(workflow.CurrentNode) workflowruntime.TaskPromptDelivery {
+	return c.resumeTask(ctx, taskID, EstablishedRootLaunchPreparation(), func(workflow.CurrentNode) workflowruntime.TaskPromptDelivery {
 		return workflowruntime.TaskPromptDeliveryResume
 	})
 }

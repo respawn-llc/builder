@@ -129,3 +129,32 @@ func TestCurrentNodeStartFailureProjectsTypedCauses(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentNodeStartFailurePreservesExplicitTargetSelectionSource(t *testing.T) {
+	requestedRef := "missing/ref"
+	failure := currentNodeStartFailure(&workflowexecution.ExecutionTargetPreparationFailure{
+		Cause: &worktree.GitRevisionResolutionError{
+			Kind:         worktree.GitRevisionResolutionErrorInvalidRevision,
+			RequestedRef: requestedRef,
+		},
+		Selection: workflow.ExecutionTargetSelection{
+			Mode:      workflow.ExecutionTargetModeCustomRef,
+			CustomRef: &requestedRef,
+		},
+		SelectionSource: workflowexecution.ExecutionTargetSelectionSourceExplicit,
+	})
+	var projected *workflowexecution.CurrentNodeStartFailure
+	if !errors.As(failure, &projected) {
+		t.Fatalf("failure = %T %v, want CurrentNodeStartFailure", failure, failure)
+	}
+	metadata, err := workflowexecution.ExecutionTargetResolutionFailureMetadataFromFields(projected.Detail.Fields)
+	if err != nil {
+		t.Fatalf("resolution failure metadata: %v", err)
+	}
+	if metadata.SelectionSource != workflowexecution.ExecutionTargetSelectionSourceExplicit ||
+		metadata.SelectionMode != workflow.ExecutionTargetModeCustomRef ||
+		metadata.RequestedRef == nil ||
+		*metadata.RequestedRef != requestedRef {
+		t.Fatalf("resolution failure metadata = %+v, want explicit custom ref", metadata)
+	}
+}

@@ -241,13 +241,15 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
-	started, err := f.controller.StartTaskWithPreparation(context.Background(), task.ID, workflowexecution.LaunchPreparation{
-		Kind:                workflowexecution.LaunchPreparationEstablishUnlockedNone,
-		SourceWorkspaceID:   f.workspaceID,
-		SourceWorkspaceRoot: f.workspace,
-		Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-	})
+	started, err := f.controller.StartTaskWithPreparation(
+		context.Background(),
+		task.ID,
+		workflowexecution.NewEstablishUnlockedNoneLaunchPreparation(
+			workflowexecution.LaunchSourceWorkspaceSnapshot{ID: f.workspaceID, Root: f.workspace},
+			serverapi.NewWorktreeSetupOperationID(),
+			nil,
+		),
+	)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
@@ -642,7 +644,7 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	if _, err := f.controller.ApplyPendingApproval(
 		context.Background(),
 		approval.ID,
-		workflowexecution.LaunchPreparation{Kind: workflowexecution.LaunchPreparationEstablishedRoot},
+		workflowexecution.EstablishedRootLaunchPreparation(),
 	); err != nil {
 		t.Fatalf("apply pending Approval: %v", err)
 	}
@@ -974,13 +976,15 @@ func TestCurrentNodeRuntimePreparationFailureCleansDisposableFreshSession(t *tes
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
-	started, err := f.controller.StartTaskWithPreparation(context.Background(), task.ID, workflowexecution.LaunchPreparation{
-		Kind:                workflowexecution.LaunchPreparationEstablishUnlockedNone,
-		SourceWorkspaceID:   f.workspaceID,
-		SourceWorkspaceRoot: f.workspace,
-		Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-	})
+	started, err := f.controller.StartTaskWithPreparation(
+		context.Background(),
+		task.ID,
+		workflowexecution.NewEstablishUnlockedNoneLaunchPreparation(
+			workflowexecution.LaunchSourceWorkspaceSnapshot{ID: f.workspaceID, Root: f.workspace},
+			serverapi.NewWorktreeSetupOperationID(),
+			nil,
+		),
+	)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}

@@ -205,9 +205,7 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTaskWithPreparation(ctx, reference.TaskID, LaunchPreparation{
-		Kind: LaunchPreparationEstablishedRoot,
-	})
+	_, err := controller.StartTaskWithPreparation(ctx, reference.TaskID, EstablishedRootLaunchPreparation())
 	return err
 }
 

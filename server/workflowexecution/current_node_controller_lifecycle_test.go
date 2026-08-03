@@ -194,12 +194,11 @@ func TestCurrentNodeControllerQueuesNonLiveApprovalTargetWithoutSteering(t *test
 		_ = authority.Close(context.Background())
 	})
 
-	preparation := LaunchPreparation{
-		Kind:                LaunchPreparationRestoreLockedTarget,
-		SourceWorkspaceID:   "workspace-approval",
-		SourceWorkspaceRoot: t.TempDir(),
-		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-	}
+	preparation := NewRestoreLockedTargetLaunchPreparation(
+		LaunchSourceWorkspaceSnapshot{ID: "workspace-approval", Root: t.TempDir()},
+		serverapi.NewWorktreeSetupOperationID(),
+		nil,
+	)
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, preparation); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
@@ -213,9 +212,13 @@ func TestCurrentNodeControllerQueuesNonLiveApprovalTargetWithoutSteering(t *test
 		deliveries[0] != workflowruntime.TaskPromptDeliveryAssignment {
 		t.Fatalf("runner prompt deliveries = %+v, want Assignment", deliveries)
 	}
-	if preparations := runner.launchPreparations(); len(preparations) != 1 ||
-		preparations[0].Kind != LaunchPreparationRestoreLockedTarget ||
-		preparations[0].SetupOperationID != preparation.SetupOperationID {
+	preparations := runner.launchPreparations()
+	if len(preparations) != 1 {
+		t.Fatalf("runner launch preparations = %+v, want one locked-target restoration", preparations)
+	}
+	queued, ok := preparations[0].RestoreLockedTarget()
+	expected, _ := preparation.RestoreLockedTarget()
+	if !ok || queued.SetupOperationID != expected.SetupOperationID {
 		t.Fatalf("runner launch preparations = %+v, want locked-target restoration", preparations)
 	}
 }
@@ -250,7 +253,7 @@ func TestCurrentNodeControllerDoesNotDependOnApprovalAssignmentSteering(t *testi
 		_ = authority.Close(context.Background())
 	})
 
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); err != nil {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, EstablishedRootLaunchPreparation()); err != nil {
 		t.Fatalf("ApplyPendingApproval error = %v, want no steering error", err)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
@@ -517,7 +520,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}); err != nil {
 		t.Fatalf("complete approval source: %v", err)
 	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); err != nil {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, EstablishedRootLaunchPreparation()); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
 	snapshot := controller.Snapshot()

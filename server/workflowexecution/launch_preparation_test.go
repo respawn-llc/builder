@@ -15,27 +15,24 @@ import (
 func TestLaunchPreparationVariantsValidateTheirRequiredFacts(t *testing.T) {
 	setupID := serverapi.NewWorktreeSetupOperationID()
 	valid := []LaunchPreparation{
-		{Kind: LaunchPreparationEstablishedRoot},
-		{
-			Kind:                LaunchPreparationRestoreLockedTarget,
-			SourceWorkspaceID:   "workspace",
-			SourceWorkspaceRoot: "/workspace",
-			SetupOperationID:    setupID,
-		},
-		{
-			Kind:                LaunchPreparationEstablishUnlockedNone,
-			SourceWorkspaceID:   "workspace",
-			SourceWorkspaceRoot: "/workspace",
-			Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-			SetupOperationID:    setupID,
-		},
-		{
-			Kind:                LaunchPreparationEstablishUnlockedManaged,
-			SourceWorkspaceID:   "workspace",
-			SourceWorkspaceRoot: "/workspace",
-			Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
-			SetupOperationID:    setupID,
-		},
+		EstablishedRootLaunchPreparation(),
+		NewRestoreLockedTargetLaunchPreparation(
+			LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+			setupID,
+			nil,
+		),
+		NewEstablishUnlockedNoneLaunchPreparation(
+			LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+			setupID,
+			nil,
+		),
+		NewEstablishUnlockedManagedLaunchPreparation(
+			LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+			workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
+			ExecutionTargetSelectionSourceConfigured,
+			setupID,
+			nil,
+		),
 	}
 	for _, preparation := range valid {
 		if err := preparation.Validate(); err != nil {
@@ -44,22 +41,23 @@ func TestLaunchPreparationVariantsValidateTheirRequiredFacts(t *testing.T) {
 	}
 
 	invalid := []LaunchPreparation{
-		{Kind: LaunchPreparationKind("future")},
-		{Kind: LaunchPreparationRestoreLockedTarget},
-		{
-			Kind:                LaunchPreparationEstablishUnlockedNone,
-			SourceWorkspaceID:   "workspace",
-			SourceWorkspaceRoot: "/workspace",
-			Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
-			SetupOperationID:    setupID,
-		},
-		{
-			Kind:                LaunchPreparationEstablishUnlockedManaged,
-			SourceWorkspaceID:   "workspace",
-			SourceWorkspaceRoot: "/workspace",
-			Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-			SetupOperationID:    setupID,
-		},
+		{},
+		NewRestoreLockedTargetLaunchPreparation(LaunchSourceWorkspaceSnapshot{}, setupID, nil),
+		NewEstablishUnlockedNoneLaunchPreparation(LaunchSourceWorkspaceSnapshot{}, setupID, nil),
+		NewEstablishUnlockedManagedLaunchPreparation(
+			LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+			workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+			ExecutionTargetSelectionSourceConfigured,
+			setupID,
+			nil,
+		),
+		NewEstablishUnlockedManagedLaunchPreparation(
+			LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+			workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
+			ExecutionTargetSelectionSource("future"),
+			setupID,
+			nil,
+		),
 	}
 	for _, preparation := range invalid {
 		if err := preparation.Validate(); err == nil {
@@ -87,13 +85,13 @@ func TestLaunchPreparationCoordinatorPreparesOneTaskTargetForParallelStarts(t *t
 	if err != nil {
 		t.Fatalf("reference: %v", err)
 	}
-	preparation := LaunchPreparation{
-		Kind:                LaunchPreparationEstablishUnlockedManaged,
-		SourceWorkspaceID:   "workspace",
-		SourceWorkspaceRoot: "/workspace",
-		Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
-		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-	}
+	preparation := NewEstablishUnlockedManagedLaunchPreparation(
+		LaunchSourceWorkspaceSnapshot{ID: "workspace", Root: "/workspace"},
+		workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeHead},
+		ExecutionTargetSelectionSourceConfigured,
+		serverapi.NewWorktreeSetupOperationID(),
+		nil,
+	)
 	coordinator := NewLaunchPreparationCoordinator()
 	preparer := &countingLaunchTargetPreparer{
 		root: workflowstore.ExecutionRoot{

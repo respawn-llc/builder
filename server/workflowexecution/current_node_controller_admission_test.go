@@ -594,9 +594,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTaskWithPreparation(context.Background(), taskID, LaunchPreparation{
-			Kind: LaunchPreparationEstablishedRoot,
-		})
+		_, err := controller.StartTaskWithPreparation(context.Background(), taskID, EstablishedRootLaunchPreparation())
 		startDone <- err
 	}()
 	select {
@@ -661,7 +659,7 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 	controller.mu.Lock()
 	controller.automaticReservations[key] = currentNodeQueuedStart{
 		reference:         reference,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionAutomaticAgent,
 	}
 	controller.mu.Unlock()
@@ -693,7 +691,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 			apply: func(controller *CurrentNodeController) {
 				controller.automaticQueue.append(currentNodeQueuedStart{
 					reference:         reference,
-					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					launchPreparation: EstablishedRootLaunchPreparation(),
 					policy:            currentNodeAdmissionAutomaticAgent,
 				})
 			},
@@ -707,7 +705,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				}
 				controller.automaticReservations[key] = currentNodeQueuedStart{
 					reference:         reference,
-					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					launchPreparation: EstablishedRootLaunchPreparation(),
 					policy:            currentNodeAdmissionAutomaticAgent,
 				}
 			},
@@ -717,7 +715,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 			apply: func(controller *CurrentNodeController) {
 				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
 					reference:         reference,
-					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					launchPreparation: EstablishedRootLaunchPreparation(),
 					policy:            currentNodeAdmissionAutomaticAgent,
 				}}
 			},

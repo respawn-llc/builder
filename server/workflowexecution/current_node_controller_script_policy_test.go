@@ -30,7 +30,7 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			apply: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
 				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
 					reference:         script,
-					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					launchPreparation: EstablishedRootLaunchPreparation(),
 					policy:            currentNodeAdmissionAutomaticScript,
 				}}
 			},
@@ -43,7 +43,7 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				controller.automaticReservations[key] = currentNodeQueuedStart{
 					reference:         script,
-					launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+					launchPreparation: EstablishedRootLaunchPreparation(),
 					policy:            currentNodeAdmissionAutomaticScript,
 				}
 			},
@@ -126,7 +126,7 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			controller.agentCapacityActive = 1
 			controller.automaticQueue.append(currentNodeQueuedStart{
 				reference:         queuedAgent,
-				launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+				launchPreparation: EstablishedRootLaunchPreparation(),
 				policy:            currentNodeAdmissionAutomaticAgent,
 			})
 			controller.queued[queuedKey] = struct{}{}
@@ -258,7 +258,7 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 
 	controller.enqueueStarts([]currentNodeQueuedStart{{
 		reference:         failed,
-		launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+		launchPreparation: EstablishedRootLaunchPreparation(),
 		policy:            currentNodeAdmissionAutomaticAgent,
 		assignmentSteer: completedCurrentNodeAssignmentSteer{
 			err: errors.New("assignment preparation failed"),

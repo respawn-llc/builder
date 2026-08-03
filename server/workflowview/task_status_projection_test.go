@@ -277,9 +277,7 @@ func startControllerBackedTaskStatusExecution(
 	options.executionRelease = release
 	options.started = startedHandle
 	surfaces.runner.configure(backlog.task.ID, options)
-	startedResult, err := surfaces.controller.StartTaskWithPreparation(t.Context(), backlog.task.ID, workflowexecution.LaunchPreparation{
-		Kind: workflowexecution.LaunchPreparationEstablishedRoot,
-	})
+	startedResult, err := surfaces.controller.StartTaskWithPreparation(t.Context(), backlog.task.ID, workflowexecution.EstablishedRootLaunchPreparation())
 	if err != nil {
 		t.Fatalf("StartTaskWithPreparation: %v", err)
 	}

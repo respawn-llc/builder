@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
@@ -38,15 +38,7 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
-export function TaskDetailContent({
-  activity,
-  attention,
-  comments,
-  detail,
-  initialFocus,
-  onMutated,
-  openLink,
-}: Readonly<{
+type TaskDetailContentProps = Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
@@ -54,7 +46,21 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
-}>) {
+}>;
+
+export function TaskDetailContent(props: TaskDetailContentProps) {
+  return <TaskDetailContentState key={props.detail.id} {...props} />;
+}
+
+function TaskDetailContentState({
+  activity,
+  attention,
+  comments,
+  detail,
+  initialFocus,
+  onMutated,
+  openLink,
+}: TaskDetailContentProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const { api } = useAppServices();
@@ -75,19 +81,6 @@ export function TaskDetailContent({
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
-  // When the surface switches to a different task, drop the previous task's
-  // in-progress comment edit, new-comment draft, and question selections so they
-  // don't bleed into the newly loaded task. Reset during render (the React
-  // "adjust state on prop change" pattern) rather than in an effect. The
-  // title/body draft is reconciled separately below via reconcileDraftState.
-  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
-  if (loadedTaskID !== detail.id) {
-    setLoadedTaskID(detail.id);
-    setEditingComment(null);
-    setNewCommentBody("");
-    setDescriptionPresentation(initialDescriptionPresentationState);
-    setQuestionSelections(new Map());
-  }
   const update = useUpdateTask(detail.id, detail.projectID);
   const reportActionError = useCallback(
     (action: "dependency_remove" | "interrupt", error: unknown) => {
@@ -126,10 +119,6 @@ export function TaskDetailContent({
       });
     },
   });
-  const { close: closeResumeContinuation } = resumeContinuation;
-  useEffect(() => {
-    closeResumeContinuation();
-  }, [closeResumeContinuation, detail.id]);
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
 

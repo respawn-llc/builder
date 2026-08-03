@@ -41,13 +41,18 @@ func TestExecutionTargetPreparerLocksNoneTargetUnderMutationPermit(t *testing.T)
 	}
 	prepared := make(chan result, 1)
 	go func() {
-		root, prepareErr := preparer.PrepareExecutionTarget(context.Background(), reference, workflowexecution.LaunchPreparation{
-			Kind:                workflowexecution.LaunchPreparationEstablishUnlockedNone,
-			SourceWorkspaceID:   fixture.workspaceID,
-			SourceWorkspaceRoot: fixture.workspace,
-			Selection:           workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
-			SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-		})
+		root, prepareErr := preparer.PrepareExecutionTarget(
+			context.Background(),
+			reference,
+			workflowexecution.NewEstablishUnlockedNoneLaunchPreparation(
+				workflowexecution.LaunchSourceWorkspaceSnapshot{
+					ID:   fixture.workspaceID,
+					Root: fixture.workspace,
+				},
+				serverapi.NewWorktreeSetupOperationID(),
+				nil,
+			),
+		)
 		prepared <- result{root: root, err: prepareErr}
 	}()
 

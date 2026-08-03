@@ -368,7 +368,7 @@ func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
-	if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone {
+	if _, unlockedNone := preparation.EstablishUnlockedNone(); unlockedNone {
 		target, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err

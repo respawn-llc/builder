@@ -371,8 +371,9 @@
 - Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
 - Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
-- Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
-- Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
+- The Resume server mutation returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
+- Direct API and Desktop Resume acknowledgement does not wait for Execution Target restoration, Session setup, or agent or Script startup.
+- The CLI Resume command waits for each affected Current Node to report a live Session or Script scope or to advance beyond that Current Node. An interruption observed before that acknowledgement makes the command fail.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
@@ -438,7 +439,8 @@
 
 - A workflow execution target policy is evaluated only when an unlocked task first reaches an executable node through task start or manual movement.
 - No managed worktree uses the source workspace as the execution root, supports non-Git workspaces, and creates no branch or worktree and runs no worktree setup.
-- A no-managed-worktree target follows the task's current source workspace. Changing that workspace intentionally changes later execution roots.
+- A no-managed-worktree preparation attempt uses the source-workspace snapshot captured for that initiating action.
+- Source workspace is editable only while the Task is in Backlog. A Backlog source-workspace edit changes the root captured by later initiating actions.
 - Source `HEAD`, repository default branch, and custom Git ref resolve to an immutable commit before managed-worktree creation. A custom ref accepts any Git revision that resolves to a commit.
 - Repository default branch uses configured local remote-HEAD metadata: `origin` when configured, otherwise one unambiguous configured remote HEAD. Kent does not contact remotes or guess branch names; missing or ambiguous metadata makes the configured target unavailable.
 - `ask_on_first_execution` and an unavailable configured target use the same task-local selection flow. They offer no managed worktree, source `HEAD`, repository default branch, and custom Git ref.

@@ -307,8 +307,14 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		if !exists || gate.lease.ScopeID() != lease.ScopeID() {
 			return errors.New("current node admission gate was replaced before live scope registration")
 		}
-		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
-			return err
+		if c.closed {
+			return errors.New("current node workflow controller is closed")
+		}
+		if c.workerErr != nil {
+			return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
+		}
+		if c.interrupts.currentNodeFenced(key) {
+			return ErrTaskExecutionNotQuiescent
 		}
 		if _, stopping := c.stopping[lease.ScopeID()]; stopping {
 			return sessionruntime.ErrExecutionNoLongerLive
@@ -992,7 +998,7 @@ func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQu
 		}
 		starts = append(starts, currentNodeQueuedStart{
 			reference:         intent.CurrentNode,
-			launchPreparation: LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+			launchPreparation: EstablishedRootLaunchPreparation(),
 			policy:            policy,
 		})
 	}

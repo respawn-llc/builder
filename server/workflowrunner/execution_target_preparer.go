@@ -45,8 +45,7 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 	if err := preparation.Validate(); err != nil {
 		return workflowstore.ExecutionRoot{}, err
 	}
-	switch preparation.Kind {
-	case workflowexecution.LaunchPreparationEstablishUnlockedNone:
+	if unlockedNone, ok := preparation.EstablishUnlockedNone(); ok {
 		return workflowexecution.RunMutation(ctx, p.permit, func(ctx context.Context) (workflowstore.ExecutionRoot, error) {
 			return p.store.LockTaskExecutionTarget(ctx, reference.TaskID, &workflowstore.ExecutionTargetCandidate{
 				Snapshot: workflowstore.ExecutionTargetSnapshot{
@@ -54,30 +53,31 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 					Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 				},
 				Root: workflowstore.ExecutionRoot{
-					SourceWorkspaceID:   preparation.SourceWorkspaceID,
-					SourceWorkspaceRoot: preparation.SourceWorkspaceRoot,
+					SourceWorkspaceID:   unlockedNone.SourceWorkspace.ID,
+					SourceWorkspaceRoot: unlockedNone.SourceWorkspace.Root,
 				},
 			})
 		})
-	case workflowexecution.LaunchPreparationEstablishUnlockedManaged:
+	}
+	if unlockedManaged, ok := preparation.EstablishUnlockedManaged(); ok {
 		if p.service == nil {
 			return workflowstore.ExecutionRoot{}, errors.New("worktree service is required")
 		}
-		snapshot, err := p.resolveExecutionTarget(ctx, preparation.SourceWorkspaceRoot, preparation.Selection)
+		snapshot, err := p.resolveExecutionTarget(ctx, unlockedManaged.SourceWorkspace.Root, unlockedManaged.Selection)
 		if err != nil {
 			return workflowstore.ExecutionRoot{}, err
 		}
 		materialized, err := p.service.PrepareInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
 			TaskID:           reference.TaskID,
-			SetupOperationID: preparation.SetupOperationID,
+			SetupOperationID: unlockedManaged.SetupOperationID,
 			ResolvedTarget: worktree.GitRevision{
 				RequestedRef: *snapshot.RequestedRef,
 				CommitOID:    *snapshot.CommitOID,
 				CanonicalRef: snapshot.ResolvedRef,
 			},
 			SourceWorkspace: &worktree.SourceWorkspaceSnapshot{
-				ID:   preparation.SourceWorkspaceID,
-				Root: preparation.SourceWorkspaceRoot,
+				ID:   unlockedManaged.SourceWorkspace.ID,
+				Root: unlockedManaged.SourceWorkspace.Root,
 			},
 		})
 		if err != nil {
@@ -93,8 +93,8 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 		worktreeID := materialized.Worktree.Registered.Kent.WorktreeID
 		worktreeRoot := materialized.Worktree.Registered.Git.CanonicalRoot
 		root := workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   preparation.SourceWorkspaceID,
-			SourceWorkspaceRoot: preparation.SourceWorkspaceRoot,
+			SourceWorkspaceID:   unlockedManaged.SourceWorkspace.ID,
+			SourceWorkspaceRoot: unlockedManaged.SourceWorkspace.Root,
 			Managed:             &workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot},
 		}
 		candidate := &workflowstore.ExecutionTargetCandidate{Snapshot: snapshot, Root: root}
@@ -110,16 +110,17 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 			return workflowstore.ExecutionRoot{}, setupErr
 		}
 		return lockedRoot, nil
-	case workflowexecution.LaunchPreparationRestoreLockedTarget:
+	}
+	if locked, ok := preparation.RestoreLockedTarget(); ok {
 		if p.service == nil {
 			return workflowstore.ExecutionRoot{}, errors.New("worktree service is required")
 		}
 		materialized, err := p.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{
 			TaskID:           reference.TaskID,
-			SetupOperationID: preparation.SetupOperationID,
+			SetupOperationID: locked.SetupOperationID,
 			SourceWorkspace: &worktree.SourceWorkspaceSnapshot{
-				ID:   preparation.SourceWorkspaceID,
-				Root: preparation.SourceWorkspaceRoot,
+				ID:   locked.SourceWorkspace.ID,
+				Root: locked.SourceWorkspace.Root,
 			},
 		})
 		if err != nil {
@@ -130,8 +131,8 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 			return workflowstore.ExecutionRoot{}, err
 		}
 		root := workflowstore.ExecutionRoot{
-			SourceWorkspaceID:   preparation.SourceWorkspaceID,
-			SourceWorkspaceRoot: preparation.SourceWorkspaceRoot,
+			SourceWorkspaceID:   locked.SourceWorkspace.ID,
+			SourceWorkspaceRoot: locked.SourceWorkspace.Root,
 		}
 		if targetContext.Task.ExecutionTarget != nil && targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 			if materialized.Worktree.Registered == nil {
@@ -143,9 +144,8 @@ func (p *executionTargetPreparer) PrepareExecutionTarget(
 			}
 		}
 		return root, nil
-	default:
-		return workflowstore.ExecutionRoot{}, errors.New("unsupported execution target preparation")
 	}
+	return workflowstore.ExecutionRoot{}, errors.New("unsupported execution target preparation")
 }
 
 func (p *executionTargetPreparer) resolveExecutionTarget(

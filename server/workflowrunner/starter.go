@@ -131,21 +131,31 @@ func (s *Starter) StartCurrentNodeWithPreparation(
 		return err
 	}
 	var preparedRoot *workflowstore.ExecutionRoot
-	if preparation.Kind != workflowexecution.LaunchPreparationEstablishedRoot {
+	if !preparation.IsEstablishedRoot() {
 		if s.executionTarget == nil {
 			return errors.New("workflow execution target preparer is required")
 		}
 		var root workflowstore.ExecutionRoot
 		var err error
-		if preparation.Coordinator != nil {
-			root, err = preparation.Coordinator.Prepare(ctx, reference, preparation, s.executionTarget)
+		if coordinator := preparation.Coordinator(); coordinator != nil {
+			root, err = coordinator.Prepare(ctx, reference, preparation, s.executionTarget)
 		} else {
 			root, err = s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
 		}
 		if err != nil {
-			if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone ||
-				preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedManaged {
-				return &workflowexecution.ExecutionTargetPreparationFailure{Cause: err, Selection: preparation.Selection}
+			if _, unlocked := preparation.EstablishUnlockedNone(); unlocked {
+				return &workflowexecution.ExecutionTargetPreparationFailure{
+					Cause:           err,
+					Selection:       workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+					SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
+				}
+			}
+			if unlocked, ok := preparation.EstablishUnlockedManaged(); ok {
+				return &workflowexecution.ExecutionTargetPreparationFailure{
+					Cause:           err,
+					Selection:       unlocked.Selection,
+					SelectionSource: unlocked.SelectionSource,
+				}
 			}
 			return err
 		}
@@ -208,32 +218,51 @@ func currentNodeStartFailure(cause error) error {
 	}
 	var target *serverapi.WorkflowExecutionTargetResolutionError
 	if errors.As(cause, &target) {
+		requestedRef := target.RequestedRef
+		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
+			Cause:           serverapi.WorkflowExecutionTargetUnavailableCause(target.Code),
+			SelectionMode:   workflow.ExecutionTargetModeCustomRef,
+			RequestedRef:    &requestedRef,
+			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
+		}).Fields()
+		if fieldsErr != nil {
+			return errors.Join(cause, fieldsErr)
+		}
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: map[string]string{
-				"code":          string(target.Code),
-				"requested_ref": target.RequestedRef,
-			},
+			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
+			Fields: fields,
 		}
 	}
 	var revisionResolution *worktree.GitRevisionResolutionError
 	if errors.As(cause, &revisionResolution) {
+		requestedRef := revisionResolution.RequestedRef
+		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
+			Cause:           serverapi.WorkflowExecutionTargetUnavailableCause(revisionResolution.Kind),
+			SelectionMode:   workflow.ExecutionTargetModeCustomRef,
+			RequestedRef:    &requestedRef,
+			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
+		}).Fields()
+		if fieldsErr != nil {
+			return errors.Join(cause, fieldsErr)
+		}
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: map[string]string{
-				"code":          string(revisionResolution.Kind),
-				"requested_ref": revisionResolution.RequestedRef,
-			},
+			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
+			Fields: fields,
 		}
 	}
 	var defaultBranchResolution *worktree.GitDefaultBranchResolutionError
 	if errors.As(cause, &defaultBranchResolution) {
+		fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
+			Cause:           defaultBranchResolutionCode(defaultBranchResolution.Kind),
+			SelectionMode:   workflow.ExecutionTargetModeDefaultBranch,
+			SelectionSource: workflowexecution.ExecutionTargetSelectionSourceConfigured,
+		}).Fields()
+		if fieldsErr != nil {
+			return errors.Join(cause, fieldsErr)
+		}
 		detail = workflow.CurrentNodeInterruptionDetail{
-			Code: workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
-			Fields: map[string]string{
-				"code":           string(defaultBranchResolutionCode(defaultBranchResolution.Kind)),
-				"selection_mode": string(workflow.ExecutionTargetModeDefaultBranch),
-			},
+			Code:   workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed,
+			Fields: fields,
 		}
 	}
 	var locked *worktree.LockedTaskWorktreeError
@@ -251,14 +280,21 @@ func currentNodeStartFailure(cause error) error {
 		}
 	}
 	if targetPreparation != nil {
-		if detail.Fields == nil {
-			detail.Fields = map[string]string{}
+		var resolutionCause serverapi.WorkflowExecutionTargetUnavailableCause
+		if metadata, metadataErr := workflowexecution.ExecutionTargetResolutionFailureMetadataFromFields(detail.Fields); metadataErr == nil {
+			resolutionCause = metadata.Cause
 		}
-		if _, exists := detail.Fields["selection_mode"]; !exists && targetPreparation.Selection.Mode != "" {
-			detail.Fields["selection_mode"] = string(targetPreparation.Selection.Mode)
-		}
-		if _, exists := detail.Fields["requested_ref"]; !exists && targetPreparation.Selection.CustomRef != nil {
-			detail.Fields["requested_ref"] = *targetPreparation.Selection.CustomRef
+		if resolutionCause != "" {
+			fields, fieldsErr := (workflowexecution.ExecutionTargetResolutionFailureMetadata{
+				Cause:           resolutionCause,
+				SelectionMode:   targetPreparation.Selection.Mode,
+				RequestedRef:    targetPreparation.Selection.CustomRef,
+				SelectionSource: targetPreparation.SelectionSource,
+			}).Fields()
+			if fieldsErr != nil {
+				return errors.Join(cause, fieldsErr)
+			}
+			detail.Fields = fields
 		}
 	}
 	return &workflowexecution.CurrentNodeStartFailure{
