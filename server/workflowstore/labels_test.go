@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflow/label"
@@ -885,7 +884,7 @@ func openConcurrentWorkflowStores(t *testing.T, cfg config.App) (*Store, *Store)
 				t.Errorf("close concurrent metadata store: %v", err)
 			}
 		})
-		store, err := New(metadataStore, WithRoleResolver(testsetup.QuestionsEnabled("coder", "reviewer")))
+		store, err := New(metadataStore)
 		if err != nil {
 			t.Fatalf("workflowstore.New concurrent store: %v", err)
 		}

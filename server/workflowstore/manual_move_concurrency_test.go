@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/config"
 )
 
 func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *testing.T) {
@@ -30,7 +32,7 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
 
-	moveStore, writerStore := openConcurrentWorkflowStores(t, cfg)
+	moveStore, writerStore := openConcurrentManualMoveStores(t, cfg)
 	writer := acquireUnrelatedManualMoveWriter(t, ctx, writerStore, binding.ProjectID)
 	moveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -75,7 +77,7 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLock
 	}
 	candidate := noneManualMoveExecutionTargetCandidate(binding)
 
-	moveStore, writerStore := openConcurrentWorkflowStores(t, cfg)
+	moveStore, writerStore := openConcurrentManualMoveStores(t, cfg)
 	writer := acquireUnrelatedManualMoveWriter(t, ctx, writerStore, binding.ProjectID)
 	moveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -130,7 +132,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
 
-	moveStore, writerStore := openConcurrentWorkflowStores(t, cfg)
+	moveStore, writerStore := openConcurrentManualMoveStores(t, cfg)
 	writer := acquireUnrelatedManualMoveWriter(t, ctx, writerStore, binding.ProjectID)
 	moveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -201,6 +203,13 @@ func noneManualMoveExecutionTargetCandidate(binding metadata.Binding) *Execution
 			SourceWorkspaceRoot: binding.CanonicalRoot,
 		},
 	}
+}
+
+func openConcurrentManualMoveStores(t *testing.T, cfg config.App) (*Store, *Store) {
+	t.Helper()
+	moveStore, writerStore := openConcurrentWorkflowStores(t, cfg)
+	moveStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
+	return moveStore, writerStore
 }
 
 func acquireUnrelatedManualMoveWriter(t *testing.T, ctx context.Context, store *Store, projectID string) *sql.Tx {
