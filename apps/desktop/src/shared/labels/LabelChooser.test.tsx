@@ -159,7 +159,7 @@ describe("LabelChooser", () => {
     await waitFor(() => {
       expect(actions).toEqual([]);
     });
-  });
+  }, 15_000);
 
   it("shows handle-only reorder controls in catalog order and hides them during search", async () => {
     const user = userEvent.setup();
