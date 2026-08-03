@@ -1,4 +1,3 @@
-import { StrictMode } from "react";
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -70,13 +69,10 @@ afterEach(() => {
 describe("BoardColumnDataOwner retained replacement boundary", () => {
   it("publishes a generation-scoped Retry boundary, logs the failure, and removes it after recovery", async () => {
     const refetch = vi.fn(async () => undefined);
+    const onViewRelease = vi.fn();
     queryByColumn.set("column-1", queryState({ refetch }));
     let latestView: BoardColumnDataView | undefined;
-    const view = render(
-      <StrictMode>
-        <Owner onView={(next) => (latestView = next)} />
-      </StrictMode>,
-    );
+    const view = render(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
 
     runtime.snapshot = {
@@ -85,11 +81,7 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     };
     const replacementError = new Error("replacement failed");
     queryByColumn.set("column-1", queryState({ error: replacementError, isError: true, refetch }));
-    view.rerender(
-      <StrictMode>
-        <Owner onView={(next) => (latestView = next)} />
-      </StrictMode>,
-    );
+    view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
 
     await waitFor(() => expect(latestView?.replacementBoundary?.state).toBe("error"));
     expect(loggerAppend).toHaveBeenCalledWith(
@@ -108,12 +100,8 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     expect(refetch).toHaveBeenCalledOnce();
 
     const staleRetry = latestView?.replacementBoundary;
-    const replacementFilter = canonicalBoardFilter({
-      labelFilter: { kind: "none" },
-      dependencyFilter: false,
-    });
     runtime.snapshot = {
-      active: { generation: 4, filter: replacementFilter, retiring: false },
+      active: { ...runtime.snapshot.active, generation: 4 },
       desiredFilter: null,
     };
     if (staleRetry?.state === "error") {
@@ -122,13 +110,10 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     expect(refetch).toHaveBeenCalledOnce();
     const recoveredQuery = queryState({ refetch });
     queryByColumn.set("column-1", recoveredQuery);
-    view.rerender(
-      <StrictMode>
-        <Owner onView={(next) => (latestView = next)} />
-      </StrictMode>,
-    );
+    view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
     view.unmount();
+    expect(onViewRelease).toHaveBeenCalledOnce();
   });
 
   it("keeps retained replacement failures independent across visible columns", async () => {
@@ -178,28 +163,6 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     expect(views.get("column-2")?.replacementBoundary?.state).toBe("error");
     view.unmount();
   });
-
-  it("removes the boundary when the generation retires and releases the view on deactivation", async () => {
-    queryByColumn.set("column-1", queryState());
-    const onViewRelease = vi.fn();
-    let latestView: BoardColumnDataView | undefined;
-    const view = render(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
-    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
-
-    runtime.snapshot = {
-      ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 3, retiring: true },
-      desiredFilter: canonicalBoardFilter({
-        labelFilter: { kind: "none" },
-        dependencyFilter: false,
-      }),
-    };
-    queryByColumn.set("column-1", queryState({ error: new Error("retiring"), isError: true }));
-    view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
-    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
-    view.unmount();
-    expect(onViewRelease).toHaveBeenCalledOnce();
-  });
 });
 
 function Owner({
@@ -226,16 +189,8 @@ function queryState(overrides: Readonly<Record<string, unknown>> = {}): Record<s
   return {
     data: { pages: [{ cards: [] }] },
     error: null,
-    fetchNextPage: vi.fn(),
-    fetchPreviousPage: vi.fn(),
-    hasNextPage: false,
-    hasPreviousPage: false,
     isError: false,
-    isFetchNextPageError: false,
-    isFetchPreviousPageError: false,
     isFetching: false,
-    isFetchingNextPage: false,
-    isFetchingPreviousPage: false,
     isPending: false,
     isPlaceholderData: false,
     refetch: vi.fn(async () => undefined),

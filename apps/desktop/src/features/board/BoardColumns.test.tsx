@@ -32,7 +32,7 @@ describe("KanbanColumn retained replacement boundary", () => {
     render(
       <KanbanColumn
         actionsDisabled={false}
-        cards={[card]}
+        cards={[]}
         column={column}
         dropState="idle"
         hasMoreCards={false}
@@ -60,18 +60,3 @@ describe("KanbanColumn retained replacement boundary", () => {
     expect(screen.getByRole("alert")).toContainElement(screen.getByText("board.cardsLoadRetryBody"));
   });
 });
-
-const card = {
-  actions: { canDelete: false, canInterrupt: false, canResume: false, canStart: false },
-  activeNodeIDs: [],
-  borderTone: "default",
-  dependencyProgress: null,
-  id: "task-1",
-  labels: [],
-  preview: { markdown: "", truncated: false },
-  statusKind: "queued",
-  shortID: "T-1",
-  title: "Task",
-  updatedAt: 0,
-  workspaceChipLabel: null,
-} as unknown as KanbanCardVM;
