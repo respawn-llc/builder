@@ -215,10 +215,10 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	pending := fixture.startPendingPrompt(t, reference, request)
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 
-	if err := fixture.controller.AnswerWorkflowQuestion(context.Background(), reference.TaskID, "different-ask-id", askquestion.AskQuestionResponse{RequestID: "different-ask-id", Answer: "yes"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
+	if err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, "different-ask-id", askquestion.AskQuestionResponse{RequestID: "different-ask-id", Answer: "yes"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("unknown prompt answer error = %v, want prompt not found", err)
 	}
-	if err := fixture.controller.AnswerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil); err != nil {
+	if err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil); err != nil {
 		t.Fatalf("AnswerWorkflowQuestion: %v", err)
 	}
 	select {
@@ -306,7 +306,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 
 	answerDone := make(chan error, 1)
 	go func() {
-		answerDone <- fixture.controller.AnswerWorkflowQuestion(
+		answerDone <- fixture.answerWorkflowQuestion(
 			context.Background(),
 			reference.TaskID,
 			firstID,
@@ -325,7 +325,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 
 	independentDone := make(chan error, 1)
 	go func() {
-		independentDone <- fixture.controller.AnswerWorkflowQuestion(
+		independentDone <- fixture.answerWorkflowQuestion(
 			context.Background(),
 			independentReference.TaskID,
 			independentRequest.ID,
@@ -407,7 +407,7 @@ func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariant
 	pending := fixture.startPendingPrompt(t, reference, request)
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 
-	err := fixture.controller.AnswerWorkflowQuestion(
+	err := fixture.answerWorkflowQuestion(
 		context.Background(),
 		reference.TaskID,
 		request.ID,
@@ -446,7 +446,7 @@ func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *t
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 	fixture.store.setBindingError(workflowstore.ErrSessionNotCurrentWorkflowNode)
 
-	err := fixture.controller.AnswerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
+	err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
 	if !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("ownership mismatch answer error = %v, want prompt not found", err)
 	}
@@ -481,7 +481,7 @@ func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 	second := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"), request)
 	fixture.waitForAmbiguousPendingPrompt(t, taskID, request.ID)
 
-	err := fixture.controller.AnswerWorkflowQuestion(context.Background(), taskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
+	err := fixture.answerWorkflowQuestion(context.Background(), taskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
 	if !errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous) {
 		t.Fatalf("ambiguous prompt answer error = %v, want prompt ambiguity", err)
 	}

@@ -558,6 +558,20 @@ func (currentNodeQuestionLLMClient) ProviderCapabilities(context.Context) (llm.P
 	}, nil
 }
 
+func (f currentNodeQuestionFixture) answerWorkflowQuestion(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	askID string,
+	response askquestion.AskQuestionResponse,
+	submitErr error,
+) error {
+	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, response, submitErr)
+	if err != nil {
+		return err
+	}
+	return acceptance.AwaitSuccessor(ctx)
+}
+
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 	t.Helper()
 	home := t.TempDir()
