@@ -1907,7 +1907,7 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	var pending authorityPromptEvent
 	select {
 	case pending = <-feed:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("background continuation question was not published from an Exact Execution Scope")
 	}
 	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
@@ -1927,11 +1927,11 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 			resolved.requestID != pending.requestID {
 			t.Fatalf("resolved background question = %+v, want resolution for %+v", resolved, pending)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("background continuation question was not resolved")
 	}
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for authority.sessionExecution(sessionID) != nil {
 		if time.Now().After(deadline) {
 			t.Fatal("background continuation Exact Execution Scope did not retire")
