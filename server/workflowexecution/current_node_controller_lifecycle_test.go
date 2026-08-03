@@ -14,6 +14,7 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
@@ -193,7 +194,13 @@ func TestCurrentNodeControllerQueuesNonLiveApprovalTargetWithoutSteering(t *test
 		_ = authority.Close(context.Background())
 	})
 
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+	preparation := LaunchPreparation{
+		Kind:                LaunchPreparationRestoreLockedTarget,
+		SourceWorkspaceID:   "workspace-approval",
+		SourceWorkspaceRoot: t.TempDir(),
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+	}
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, preparation); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
 	if got := steerer.references(); len(got) != 0 {
@@ -205,6 +212,11 @@ func TestCurrentNodeControllerQueuesNonLiveApprovalTargetWithoutSteering(t *test
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
 		deliveries[0] != workflowruntime.TaskPromptDeliveryAssignment {
 		t.Fatalf("runner prompt deliveries = %+v, want Assignment", deliveries)
+	}
+	if preparations := runner.launchPreparations(); len(preparations) != 1 ||
+		preparations[0].Kind != LaunchPreparationRestoreLockedTarget ||
+		preparations[0].SetupOperationID != preparation.SetupOperationID {
+		t.Fatalf("runner launch preparations = %+v, want locked-target restoration", preparations)
 	}
 }
 
@@ -238,7 +250,7 @@ func TestCurrentNodeControllerDoesNotDependOnApprovalAssignmentSteering(t *testi
 		_ = authority.Close(context.Background())
 	})
 
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); err != nil {
 		t.Fatalf("ApplyPendingApproval error = %v, want no steering error", err)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
@@ -505,7 +517,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}); err != nil {
 		t.Fatalf("complete approval source: %v", err)
 	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
 	snapshot := controller.Snapshot()

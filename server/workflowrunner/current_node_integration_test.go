@@ -51,12 +51,6 @@ type currentNodeRunnerFixture struct {
 	clientErr      error
 }
 
-type fixtureExecutionTargetPreparer func(context.Context, workflow.CurrentNodeReference, workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error)
-
-func (f fixtureExecutionTargetPreparer) PrepareExecutionTarget(ctx context.Context, reference workflow.CurrentNodeReference, preparation workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error) {
-	return f(ctx, reference, preparation)
-}
-
 type currentNodeRunnerStepLifecycle struct {
 	runtimes *registry.RuntimeRegistry
 }
@@ -198,19 +192,6 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 				return nil, err
 			}
 			return fixture.client, nil
-		}),
-		ExecutionTarget: fixtureExecutionTargetPreparer(func(ctx context.Context, reference workflow.CurrentNodeReference, _ workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error) {
-			root := workflowstore.ExecutionRoot{
-				SourceWorkspaceID:   fixture.workspaceID,
-				SourceWorkspaceRoot: fixture.workspace,
-			}
-			return fixture.store.LockTaskExecutionTarget(ctx, reference.TaskID, &workflowstore.ExecutionTargetCandidate{
-				Snapshot: workflowstore.ExecutionTargetSnapshot{
-					Mode:       workflow.ExecutionTargetModeNone,
-					Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-				},
-				Root: root,
-			})
 		}),
 	})
 	if err != nil {
@@ -594,7 +575,11 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	if err != nil {
 		t.Fatalf("resolve previous target Session: %v", err)
 	}
-	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+	if _, err := f.controller.ApplyPendingApproval(
+		context.Background(),
+		approval.ID,
+		workflowexecution.LaunchPreparation{Kind: workflowexecution.LaunchPreparationEstablishedRoot},
+	); err != nil {
 		t.Fatalf("apply pending Approval: %v", err)
 	}
 	requests := f.waitForModelRequests(t, 3)

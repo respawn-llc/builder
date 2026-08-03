@@ -42,7 +42,7 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	return s.ApplyManualMove(ctx, prepared, nil)
+	return s.ApplyManualMove(ctx, prepared)
 }
 
 func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreparation, error) {
@@ -98,7 +98,7 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 	return currentNodeDefinitionNode(definition, nodeID)
 }
 
-func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (ManualMoveResult, error) {
+func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation) (ManualMoveResult, error) {
 	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || (!prepared.noOp && prepared.target == nil) {
 		return ManualMoveResult{}, errors.New("manual move preparation is invalid")
 	}
@@ -158,37 +158,11 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 			return ManualMoveResult{}, err
 		}
-		targetMutation, err := s.prepareExecutionTargetMutation(ctx, task, executionTarget)
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		executionRoot := targetMutation.executionRoot
-		if targetMutation.candidateToLock != nil {
-			executionRoot = targetMutation.candidateToLock.Root
-		}
-		for _, edge := range choice.Edges {
-			targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
-			if err != nil {
-				return ManualMoveResult{}, err
-			}
-			if targetNode.Kind() == workflow.NodeKindScript &&
-				(targetMutation.candidateToLock != nil || targetMutation.executionRoot != (ExecutionRoot{})) {
-				if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(targetNode), &executionRoot); err != nil {
-					return ManualMoveResult{}, err
-				}
-			}
-		}
 		targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, s.now().UnixMilli()); err != nil {
-			return ManualMoveResult{}, err
-		}
 	} else {
-		if executionTarget != nil {
-			return ManualMoveResult{}, errors.New("manual move to a non-executable target does not accept an execution target")
-		}
 		targets = []workflow.CurrentNode{{
 			Reference: workflow.CurrentNodeReference{},
 		}}

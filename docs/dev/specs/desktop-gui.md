@@ -101,7 +101,7 @@
 - Selecting an Approval-gated Transition in the Manual Move dialog acts as the Approval and does not open another Approval surface.
 - Starting or manually moving to executable work opens Execution Target selection only when the Workflow asks on first execution or its configured target is unavailable. For Manual Move, its dialog closes before Execution Target selection opens. A usable fixed policy is not overridden.
 - Execution Target selection offers no managed worktree, source `HEAD`, repository default branch, and custom Git ref, defaulting to repository default branch. An unavailable configured target explains the failure and preserves the useful prior selection and custom ref where possible.
-- Closing Execution Target selection leaves the Task unchanged. Manual Move does not interrupt live work until required target selection succeeds. During resolution or setup, preserve the selection, prevent duplicate submission, and keep actionable failure with Retry and Cancel in the same dialog.
+- Closing Execution Target selection leaves the Task unchanged. Manual Move does not interrupt live work until required target selection succeeds. While selection or pre-movement confirmation is pending, preserve the selection and prevent duplicate submission.
 - Resume after an unresolved Execution Target preparation failure uses this same selection flow.
 - Desktop acknowledges Start, executable Manual Move, Resume, and Approval after the durable Workflow change without waiting for preparation.
 - Preparation failure uses the existing interrupted-Current-Node Task attention, Task Detail error details, Resume action, and attention notifications. Desktop adds no preparation-specific state or setup-failure surface.

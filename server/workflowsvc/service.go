@@ -35,7 +35,7 @@ type Service struct {
 	currentNodeExecution interface {
 		StartTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.LaunchPreparation) (workflowstore.StartTaskResult, error)
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.LaunchPreparation) ([]workflow.CurrentNode, error)
-		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
+		ApplyPendingApproval(context.Context, workflow.ApprovalID, workflowexecution.LaunchPreparation) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMoveWithPreparation(context.Context, workflowstore.ManualMovePreparation, workflowexecution.LaunchPreparation) (workflowstore.ManualMoveResult, error)
 		ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
@@ -96,7 +96,7 @@ type Option func(*Service)
 func WithCurrentNodeExecution(execution interface {
 	StartTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.LaunchPreparation) (workflowstore.StartTaskResult, error)
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.LaunchPreparation) ([]workflow.CurrentNode, error)
-	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
+	ApplyPendingApproval(context.Context, workflow.ApprovalID, workflowexecution.LaunchPreparation) (workflowstore.PendingApprovalApplyResult, error)
 	ApplyManualMoveWithPreparation(context.Context, workflowstore.ManualMovePreparation, workflowexecution.LaunchPreparation) (workflowstore.ManualMoveResult, error)
 	ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
@@ -931,6 +931,7 @@ func launchPreparationForTarget(
 			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
 			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 			SetupOperationID:    setupOperationID,
+			Coordinator:         workflowexecution.NewLaunchPreparationCoordinator(),
 		}, nil
 	}
 	if preflight.selection.Mode == workflow.ExecutionTargetModeNone {
@@ -1159,16 +1160,30 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	approval, err := s.store.PendingApproval(ctx, approvalID)
+	if err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
 	if req.InvokingSessionID != nil {
-		approval, err := s.store.PendingApproval(ctx, approvalID)
-		if err != nil {
-			return serverapi.WorkflowTaskApproveResponse{}, err
-		}
 		if err := s.authorizeWorkflowTaskMutation(ctx, approval.Source.TaskID, req.InvokingSessionID); err != nil {
 			return serverapi.WorkflowTaskApproveResponse{}, err
 		}
 	}
-	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
+	targetContext, err := s.store.GetTaskExecutionTargetContext(ctx, approval.Source.TaskID)
+	if err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
+	if targetContext.Task.ExecutionTarget == nil {
+		return serverapi.WorkflowTaskApproveResponse{}, errors.New("pending approval task has no locked execution target")
+	}
+	preparation, err := launchPreparationForTarget(
+		initiatingActionTargetPreflight{context: targetContext},
+		serverapi.NewWorktreeSetupOperationID(),
+	)
+	if err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
+	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID, preparation)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}

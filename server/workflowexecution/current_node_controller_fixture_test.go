@@ -346,7 +346,7 @@ func (*currentNodeControllerStore) TaskExecutionScope(context.Context, workflow.
 	return workflowstore.TaskExecutionScope{ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID}, nil
 }
 
-func (s *currentNodeControllerStore) StartTaskWithExecutionTarget(ctx context.Context, _ workflow.TaskID, _ *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
+func (s *currentNodeControllerStore) StartTask(ctx context.Context, _ workflow.TaskID) (workflowstore.StartTaskResult, error) {
 	if s.startTaskStarted != nil {
 		s.startTaskOnce.Do(func() {
 			close(s.startTaskStarted)
@@ -377,7 +377,7 @@ func (s *currentNodeControllerStore) ApplyPendingApproval(context.Context, workf
 	return s.approvalApplied, nil
 }
 
-func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
+func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation) (workflowstore.ManualMoveResult, error) {
 	return s.manualMoved, nil
 }
 
@@ -859,14 +859,16 @@ func (r *blockingCurrentNodeRunner) StartCurrentNodeWithPreparation(context.Cont
 }
 
 type countingCurrentNodeRunner struct {
-	mu         sync.Mutex
-	count      int
-	deliveries []workflowruntime.TaskPromptDelivery
+	mu           sync.Mutex
+	count        int
+	preparations []LaunchPreparation
+	deliveries   []workflowruntime.TaskPromptDelivery
 }
 
-func (r *countingCurrentNodeRunner) StartCurrentNodeWithPreparation(_ context.Context, _ workflow.CurrentNodeReference, _ LaunchPreparation, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *countingCurrentNodeRunner) StartCurrentNodeWithPreparation(_ context.Context, _ workflow.CurrentNodeReference, preparation LaunchPreparation, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	r.mu.Lock()
 	r.count++
+	r.preparations = append(r.preparations, preparation)
 	r.deliveries = append(r.deliveries, delivery)
 	r.mu.Unlock()
 	return nil
@@ -882,6 +884,12 @@ func (r *countingCurrentNodeRunner) promptDeliveries() []workflowruntime.TaskPro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]workflowruntime.TaskPromptDelivery(nil), r.deliveries...)
+}
+
+func (r *countingCurrentNodeRunner) launchPreparations() []LaunchPreparation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]LaunchPreparation(nil), r.preparations...)
 }
 
 type recordingScriptRunner struct {

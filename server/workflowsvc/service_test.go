@@ -606,6 +606,87 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	}
 }
 
+func TestServiceApprovalQueuesLockedTargetRestoration(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "next")
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	target, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	worktreeID := "approval-worktree-" + task.Task.ID
+	worktreeRoot := t.TempDir()
+	if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   target.SourceWorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Managed:       true,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	worktreeRecord, err := metadataStore.GetWorktreeRecordByID(ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	requestedRef := "HEAD"
+	commitOID := "0123456789abcdef"
+	if _, err := service.store.LockTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID), &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   target.SourceWorkspaceID,
+			SourceWorkspaceRoot: target.SourceWorkspaceRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRecord.CanonicalRoot,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	execution := &currentNodeCompletionExecutionStub{store: service.store}
+	service.currentNodeExecution = execution
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           task.Task.ID,
+	})
+	if err != nil || started.Applied == nil || len(started.Applied.CurrentNodes) != 1 {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want one Current Node", started, err)
+	}
+	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(task.Task.ID), started.Applied.CurrentNodes[0])
+	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "approved plan"},
+	})
+	if err != nil || completed.PendingApproval == nil {
+		t.Fatalf("CompleteCurrentNode = %+v, %v; want pending Approval", completed, err)
+	}
+	if _, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		ApprovalID: completed.PendingApproval.ID.String(),
+	}); err != nil {
+		t.Fatalf("ApproveWorkflowTask: %v", err)
+	}
+	preparation := execution.approvalPreparation
+	if preparation == nil ||
+		preparation.Kind != workflowexecution.LaunchPreparationRestoreLockedTarget ||
+		preparation.SourceWorkspaceID != target.SourceWorkspaceID ||
+		preparation.SourceWorkspaceRoot != target.SourceWorkspaceRoot ||
+		preparation.Coordinator == nil {
+		t.Fatalf("approval launch preparation = %+v, want coordinated locked-target restoration", preparation)
+	}
+	if err := preparation.SetupOperationID.Validate(); err != nil {
+		t.Fatalf("approval setup operation ID: %v", err)
+	}
+}
+
 func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -1246,8 +1327,8 @@ func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
 	}
 }
 
-func (s *manualMoveExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
-	applied, err := s.currentNodeCompletionExecutionStub.ApplyPendingApproval(ctx, approvalID)
+func (s *manualMoveExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID, preparation workflowexecution.LaunchPreparation) (workflowstore.PendingApprovalApplyResult, error) {
+	applied, err := s.currentNodeCompletionExecutionStub.ApplyPendingApproval(ctx, approvalID, preparation)
 	if err == nil {
 		s.recordStarted(applied.Mutation.Created)
 	}

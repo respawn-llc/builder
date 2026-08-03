@@ -87,73 +87,35 @@ func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.Tas
 	if err != nil {
 		return ExecutionRoot{}, err
 	}
-	prepared, err := s.prepareExecutionTargetMutation(ctx, task, candidate)
+	snapshot, err := executionTargetSnapshotFromTask(task)
 	if err != nil {
 		return ExecutionRoot{}, err
 	}
-	if prepared.candidateToLock == nil {
+	if snapshot != nil {
 		return ExecutionRoot{}, ErrExecutionTargetAlreadyLocked
+	}
+	if err := validateExecutionTargetCandidateForTask(ctx, s.queries, task, *candidate); err != nil {
+		return ExecutionRoot{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ExecutionRoot{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := applyPreparedExecutionTargetMutation(ctx, s.queries.WithTx(tx), task, prepared, s.now().UnixMilli()); err != nil {
+	locked, err := s.queries.WithTx(tx).LockTaskExecutionTarget(ctx, executionTargetLockParams(task, *candidate, s.now().UnixMilli()))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ExecutionRoot{}, ErrExecutionTargetAlreadyLocked
+		}
 		return ExecutionRoot{}, err
+	}
+	if locked != 1 {
+		return ExecutionRoot{}, ErrExecutionTargetAlreadyLocked
 	}
 	if err := tx.Commit(); err != nil {
 		return ExecutionRoot{}, err
 	}
-	return prepared.executionRoot, nil
-}
-
-type preparedExecutionTargetMutation struct {
-	executionRoot   ExecutionRoot
-	candidateToLock *ExecutionTargetCandidate
-}
-
-func (s *Store) prepareExecutionTargetMutation(ctx context.Context, task sqlitegen.TaskRecord, candidate *ExecutionTargetCandidate) (preparedExecutionTargetMutation, error) {
-	snapshot, err := executionTargetSnapshotFromTask(task)
-	if err != nil {
-		return preparedExecutionTargetMutation{}, err
-	}
-	if snapshot == nil {
-		if candidate == nil {
-			return preparedExecutionTargetMutation{}, nil
-		}
-		if err := validateExecutionTargetCandidateForTask(ctx, s.queries, task, *candidate); err != nil {
-			return preparedExecutionTargetMutation{}, err
-		}
-		return preparedExecutionTargetMutation{
-			executionRoot:   candidate.Root,
-			candidateToLock: candidate,
-		}, nil
-	}
-	if candidate != nil {
-		return preparedExecutionTargetMutation{}, ErrExecutionTargetAlreadyLocked
-	}
-	root, err := executionRootForTask(ctx, s.queries, task)
-	if err != nil {
-		return preparedExecutionTargetMutation{}, err
-	}
-	return preparedExecutionTargetMutation{executionRoot: root}, nil
-}
-
-func applyPreparedExecutionTargetMutation(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord, prepared preparedExecutionTargetMutation, now int64) error {
-	if prepared.candidateToLock != nil {
-		locked, err := q.LockTaskExecutionTarget(ctx, executionTargetLockParams(task, *prepared.candidateToLock, now))
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrExecutionTargetAlreadyLocked
-			}
-			return err
-		}
-		if locked != 1 {
-			return ErrExecutionTargetAlreadyLocked
-		}
-	}
-	return nil
+	return candidate.Root, nil
 }
 
 func (c ExecutionTargetCandidate) Validate() error {
@@ -314,23 +276,6 @@ func executionRootForTask(ctx context.Context, q *sqlitegen.Queries, task sqlite
 		return ExecutionRoot{}, &ExecutionRootError{Kind: ExecutionRootErrorManagedRelationMissing}
 	}
 	return executionRootForManagedWorktree(ctx, q, sourceWorkspace, worktreeID)
-}
-
-// executionRootForLockedTaskIfPresent returns the derived execution root only
-// after target selection has been locked to the task.
-func executionRootForLockedTaskIfPresent(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (*ExecutionRoot, error) {
-	snapshot, err := executionTargetSnapshotFromTask(task)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot == nil {
-		return nil, nil
-	}
-	root, err := executionRootForTask(ctx, q, task)
-	if err != nil {
-		return nil, err
-	}
-	return &root, nil
 }
 
 func sourceWorkspaceForExecutionTarget(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.Workspace, error) {

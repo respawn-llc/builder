@@ -42,13 +42,12 @@ const (
 )
 
 type RuntimeStore interface {
+	executionTargetStore
 	ResolveCurrentNodeStartContext(context.Context, workflow.CurrentNodeReference) (workflowstore.CurrentNodeStartContext, error)
 	BindSessionToCurrentNode(context.Context, workflowstore.CurrentNodeSessionBindingRequest) (workflowstore.TaskSessionAssociation, error)
 	ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 }
-
-type ExecutionTargetPreparer = workflowexecution.LaunchTargetPreparer
 
 type WorkflowAttentionRegistry interface {
 	workflowattention.QuestionAttentionRegistry
@@ -66,7 +65,7 @@ type Starter struct {
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	mutationPermit       *workflowexecution.MutationPermit
 	taskAwarenessSource  workflowruntime.TaskAwarenessSource
-	executionTarget      ExecutionTargetPreparer
+	executionTarget      workflowexecution.LaunchTargetPreparer
 	closed               atomic.Bool
 }
 
@@ -75,7 +74,8 @@ type StarterOptions struct {
 	RuntimeAuthority     *sessionruntime.Authority
 	MutationPermit       *workflowexecution.MutationPermit
 	TaskDependencies     TaskDependencyCounter
-	ExecutionTarget      ExecutionTargetPreparer
+	WorktreeService      *worktree.Service
+	GitInspector         *worktree.GitInspector
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
@@ -100,7 +100,12 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		mutationPermit:       opts.MutationPermit,
 		taskAwarenessSource:  taskAwarenessSource,
-		executionTarget:      opts.ExecutionTarget,
+		executionTarget: newExecutionTargetPreparer(
+			store,
+			opts.MutationPermit,
+			opts.WorktreeService,
+			opts.GitInspector,
+		),
 	}, nil
 }
 

@@ -141,7 +141,7 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, other); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("start during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID, LaunchPreparation{Kind: LaunchPreparationEstablishedRoot}); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("approval during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {

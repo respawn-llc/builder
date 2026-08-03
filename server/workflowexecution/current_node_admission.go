@@ -999,7 +999,7 @@ func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQu
 	return starts
 }
 
-func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueuedStart, error) {
+func currentNodeExplicitStarts(nodes []workflow.CurrentNode, preparation LaunchPreparation) ([]currentNodeQueuedStart, error) {
 	starts := make([]currentNodeQueuedStart, 0, len(nodes))
 	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(nodes))
 	for index, currentNode := range nodes {
@@ -1016,7 +1016,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		seen[key] = struct{}{}
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
-			launchPreparation:  LaunchPreparation{Kind: LaunchPreparationEstablishedRoot},
+			launchPreparation:  preparation,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
 		})
 	}

@@ -70,7 +70,7 @@ func TestExecutableManualMoveCanPlaceScriptBeforeExecutionRootValidation(t *test
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	moved, err := store.ApplyManualMove(ctx, prepared)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}

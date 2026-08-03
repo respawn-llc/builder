@@ -290,18 +290,19 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 }
 
 type currentNodeCompletionExecutionStub struct {
-	store             *workflowstore.Store
-	sessionID         runtimeids.SessionID
-	sessionResult     workflowstore.CurrentNodeCompletionResult
-	sessionErr        error
-	idleSelector      workflowstore.IdleCurrentNodeSelector
-	idleResult        workflowstore.CurrentNodeCompletionResult
-	idleErr           error
-	questionTaskID    workflow.TaskID
-	questionAskID     string
-	questionResponse  askquestion.AskQuestionResponse
-	questionSubmitErr error
-	questionErr       error
+	store               *workflowstore.Store
+	sessionID           runtimeids.SessionID
+	sessionResult       workflowstore.CurrentNodeCompletionResult
+	sessionErr          error
+	idleSelector        workflowstore.IdleCurrentNodeSelector
+	idleResult          workflowstore.CurrentNodeCompletionResult
+	idleErr             error
+	questionTaskID      workflow.TaskID
+	questionAskID       string
+	questionResponse    askquestion.AskQuestionResponse
+	questionSubmitErr   error
+	questionErr         error
+	approvalPreparation *workflowexecution.LaunchPreparation
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
@@ -330,7 +331,7 @@ func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
 			return workflowstore.StartTaskResult{}, err
 		}
 	}
-	return s.store.StartTaskWithExecutionTarget(ctx, taskID, nil)
+	return s.store.StartTask(ctx, taskID)
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
@@ -353,10 +354,11 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(ctx conte
 	return s.ResumeTask(ctx, taskID)
 }
 
-func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
+func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID, preparation workflowexecution.LaunchPreparation) (workflowstore.PendingApprovalApplyResult, error) {
 	if s.store == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("workflow store is required")
 	}
+	s.approvalPreparation = &preparation
 	return s.store.ApplyPendingApproval(ctx, approvalID)
 }
 
@@ -368,7 +370,7 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMoveWithPreparation(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, nil)
+	return s.store.ApplyManualMove(ctx, prepared)
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

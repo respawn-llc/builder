@@ -53,6 +53,20 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 				}
 			},
 		},
+		{
+			name: "script validation deferred",
+			create: func(t *testing.T) fixture {
+				t.Helper()
+				scripts := newScriptExecutionFixture(t, "scripts/missing", nil)
+				return fixture{
+					store:      scripts.store,
+					ctx:        scripts.ctx,
+					task:       scripts.task,
+					workflowID: scripts.workflowID,
+					targetID:   scripts.scriptID,
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {

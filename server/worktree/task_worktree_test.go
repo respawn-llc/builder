@@ -1282,7 +1282,10 @@ func lockTaskWorktreeExecutionTarget(t *testing.T, env *serviceTestEnv, store *w
 	t.Helper()
 	requestedRef := resolvedTarget.RequestedRef
 	commitOID := resolvedTarget.CommitOID
-	_, err := store.StartTaskWithExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+	if _, err := store.StartTask(env.ctx, task.ID); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	_, err := store.LockTaskExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
 			Mode:         workflow.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
@@ -1300,7 +1303,7 @@ func lockTaskWorktreeExecutionTarget(t *testing.T, env *serviceTestEnv, store *w
 		},
 	})
 	if err != nil {
-		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
 	}
 }
 

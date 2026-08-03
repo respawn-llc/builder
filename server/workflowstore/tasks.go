@@ -426,37 +426,9 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 }
 
 func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTaskResult, error) {
-	return s.startTask(ctx, taskID, nil, false)
-}
-
-func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (StartTaskResult, error) {
-	return s.startTask(ctx, taskID, candidate, true)
-}
-
-func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
-	}
-	var targetMutation preparedExecutionTargetMutation
-	if requireTarget {
-		targetMutation, err = s.prepareExecutionTargetMutation(ctx, prepared.task, candidate)
-		if err != nil {
-			return StartTaskResult{}, err
-		}
-	}
-	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	if targetMutation.candidateToLock != nil {
-		root := targetMutation.candidateToLock.Root
-		executionRoot = &root
-	}
-	if prepared.target.Kind() == workflow.NodeKindScript && executionRoot != nil {
-		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
-			return StartTaskResult{}, err
-		}
 	}
 	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID)
 	if err != nil {
@@ -469,11 +441,6 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	now := s.now().UnixMilli()
-	if requireTarget {
-		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
-			return StartTaskResult{}, err
-		}
-	}
 	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{TaskID: string(taskID), NodeID: string(workflow.NodeIDOf(prepared.start))})
 	if err != nil {
 		return StartTaskResult{}, err
