@@ -67,6 +67,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionUserTurnMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return serverapi.RuntimeSubmitUserTurnResponse{}, err
 		}
 		textMemo := sessionTextMemoRequest{SessionID: memoReq.SessionID, Text: projection.ExecutionText}

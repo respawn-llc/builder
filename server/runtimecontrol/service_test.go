@@ -1604,6 +1604,27 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	}
 }
 
+func TestServiceSubmitUserTurnPromptResolutionFailureRecordsFailedWithRestore(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	resolver := &runtimeControlPromptCommandResolver{err: errors.New("prompt command disappeared")}
+	service.WithPromptCommandResolver(resolver)
+	operations := runtimeops.NewCoordinator()
+	service.WithOperationCoordinator(operations)
+	req := runtimeControlUserTurnRequest(store, "missing-prompt", "unused")
+	req.Input = serverapi.NewRuntimeBuiltinPromptCommandInput(runtimeinput.BuiltinPromptCommandReview, "")
+
+	if _, err := service.SubmitUserTurn(context.Background(), req); err == nil {
+		t.Fatal("SubmitUserTurn missing prompt command succeeded")
+	}
+	assertRuntimeControlReconciliation(
+		t,
+		operations,
+		store.Meta().SessionID,
+		req.OperationRef,
+		clientui.RuntimeInputReconciliationFailedWithRestore,
+	)
+}
+
 func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
