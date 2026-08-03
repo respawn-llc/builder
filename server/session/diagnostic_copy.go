@@ -18,7 +18,15 @@ type DiagnosticSessionCopy struct {
 	mu    sync.Mutex
 	root  string
 	store *Store
+	state diagnosticSessionCopyState
 }
+
+type diagnosticSessionCopyState uint8
+
+const (
+	diagnosticSessionCopyOpen diagnosticSessionCopyState = iota + 1
+	diagnosticSessionCopyClosed
+)
 
 var ErrDiagnosticLegacyEventLogUnsupported = errors.New(
 	"diagnostic request inspection does not support legacy session event logs",
@@ -77,7 +85,11 @@ func OpenDiagnosticSessionCopy(
 	if err != nil {
 		return nil, fmt.Errorf("open diagnostic Session copy: %w", err)
 	}
-	return &DiagnosticSessionCopy{root: root, store: store}, nil
+	return &DiagnosticSessionCopy{
+		root:  root,
+		store: store,
+		state: diagnosticSessionCopyOpen,
+	}, nil
 }
 
 func (c *DiagnosticSessionCopy) Store() *Store {
@@ -86,7 +98,17 @@ func (c *DiagnosticSessionCopy) Store() *Store {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.store
+	switch c.state {
+	case diagnosticSessionCopyOpen:
+		if c.root == "" || c.store == nil {
+			panic("open diagnostic Session copy has invalid owned state")
+		}
+		return c.store
+	case diagnosticSessionCopyClosed:
+		return nil
+	default:
+		panic(fmt.Sprintf("diagnostic Session copy has invalid state %d", c.state))
+	}
 }
 
 func (c *DiagnosticSessionCopy) Close() error {
@@ -94,14 +116,23 @@ func (c *DiagnosticSessionCopy) Close() error {
 		return nil
 	}
 	c.mu.Lock()
-	root := c.root
-	c.root = ""
-	c.store = nil
-	c.mu.Unlock()
-	if root == "" {
+	defer c.mu.Unlock()
+	switch c.state {
+	case diagnosticSessionCopyClosed:
 		return nil
+	case diagnosticSessionCopyOpen:
+		if c.root == "" || c.store == nil {
+			panic("open diagnostic Session copy has invalid owned state")
+		}
+	default:
+		panic(fmt.Sprintf("diagnostic Session copy has invalid state %d", c.state))
 	}
-	return os.RemoveAll(root)
+	if err := os.RemoveAll(c.root); err != nil {
+		return err
+	}
+	c.store = nil
+	c.state = diagnosticSessionCopyClosed
+	return nil
 }
 
 func copyDiagnosticSessionEvents(

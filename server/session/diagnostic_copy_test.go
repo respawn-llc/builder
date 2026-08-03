@@ -90,6 +90,22 @@ func TestDiagnosticSessionCopyLeavesSourceUntouched(t *testing.T) {
 	}
 }
 
+func TestDiagnosticSessionCopyFailedCloseRetainsStore(t *testing.T) {
+	store := &Store{}
+	inspection := &DiagnosticSessionCopy{
+		root:  string([]byte{0}),
+		store: store,
+		state: diagnosticSessionCopyOpen,
+	}
+
+	if err := inspection.Close(); err == nil {
+		t.Fatal("close diagnostic Session copy with invalid root unexpectedly succeeded")
+	}
+	if got := inspection.Store(); got != store {
+		t.Fatalf("store after failed close = %p, want retained store %p", got, store)
+	}
+}
+
 func TestDiagnosticSessionCopyContainsOnlyTheActiveEventSegment(t *testing.T) {
 	persisted := newSessionTestStore(t)
 	persistedLog, err := persisted.MaterializeEventLog()
