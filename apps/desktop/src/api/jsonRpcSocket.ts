@@ -36,12 +36,12 @@ export async function openSocket(
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
-      reject(new TransportError(`Connection to ${endpoint} was canceled.`));
+      reject(new TransportError("Kent service connection was canceled."));
       return;
     }
     const socket = new WebSocket(endpoint);
     const timeout = setTimeout(() => {
-      fail(new TransportError(`Connection to ${endpoint} timed out.`));
+      fail(new TransportError("Kent service connection timed out."));
     }, timeoutMilliseconds);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -60,13 +60,13 @@ export async function openSocket(
       resolve(socket);
     };
     const error = () => {
-      fail(new TransportError(`Unable to connect to ${endpoint}.`));
+      fail(new TransportError("Unable to connect to Kent service."));
     };
     const close = () => {
-      fail(new TransportError(`Connection to ${endpoint} closed before opening.`));
+      fail(new TransportError("Kent service connection closed before opening."));
     };
     const abort = () => {
-      fail(new TransportError(`Connection to ${endpoint} was canceled.`));
+      fail(new TransportError("Kent service connection was canceled."));
     };
     socket.addEventListener("open", open, { once: true });
     socket.addEventListener("error", error, { once: true });
