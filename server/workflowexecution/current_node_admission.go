@@ -65,6 +65,8 @@ type currentNodeQueuedStart struct {
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
+	ctx                context.Context
+	cancel             context.CancelFunc
 	done               chan struct{}
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
@@ -73,6 +75,7 @@ type currentNodeAdmissionGate struct {
 	reference          workflow.CurrentNodeReference
 	lease              sessionruntime.WorkflowExecutionLease
 	policy             currentNodeAdmissionPolicy
+	cancel             context.CancelFunc
 	done               <-chan struct{}
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
@@ -167,6 +170,12 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
+	if ctx == nil {
+		ctx = c.workerContext
+	}
+	if start.ctx != nil {
+		ctx = start.ctx
+	}
 	reference := start.reference
 	if err := reference.Validate(); err != nil {
 		return err
@@ -252,6 +261,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 			reference:          reference,
 			lease:              next,
 			policy:             start.policy,
+			cancel:             start.cancel,
 			done:               start.done,
 			agentCapacityLease: start.agentCapacityLease,
 		}
@@ -591,6 +601,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 		return
 	}
 	for _, start := range starts {
+		c.prepareAdmissionContextLocked(&start)
 		var err error
 		if start.policy.isAutomatic() {
 			err = c.queueAutomaticStartLocked(start)
@@ -616,6 +627,7 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
+	c.prepareAdmissionContextLocked(&start)
 	c.explicitQueue = append(c.explicitQueue, start)
 	c.explicitQueued[key] = struct{}{}
 	c.wakeAdmissionWorker()
@@ -633,6 +645,7 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 	if c.currentNodeOwnedLocked(key) {
 		return nil
 	}
+	c.prepareAdmissionContextLocked(&start)
 	c.automaticQueue.append(start)
 	c.queued[key] = struct{}{}
 	c.wakeAdmissionWorker()
@@ -692,7 +705,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	defer close(start.done)
 	defer c.finishTaskInterruptAdmission(start.reference)
 	defer c.finishAdmissionWorker(start)
-	if err := c.admit(c.workerContext, start); err != nil {
+	if err := c.admit(start.ctx, start); err != nil {
 		key, keyErr := start.reference.Key()
 		if keyErr != nil {
 			panic(fmt.Sprintf("inspect failed current node admission: %v", keyErr))
@@ -711,6 +724,12 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
 		c.handleAdmissionFailure(start.reference, failure.admitted, failure.cause)
+	}
+}
+
+func (c *CurrentNodeController) prepareAdmissionContextLocked(start *currentNodeQueuedStart) {
+	if start.ctx == nil {
+		start.ctx, start.cancel = context.WithCancel(c.workerContext)
 	}
 }
 

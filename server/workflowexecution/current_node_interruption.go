@@ -37,6 +37,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cleanupCancel()
 	for _, gate := range state.drainedGates {
+		cancelAdmission(gate.cancel)
 		gate.lease.Cancel()
 	}
 	c.wakeAdmissionWorker()
@@ -477,6 +478,7 @@ func drainTaskControllerWorkLocked(
 			return fmt.Errorf("drain explicit queue for task %s: %w", taskID, err)
 		}
 		delete(c.explicitQueued, key)
+		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -495,6 +497,7 @@ func drainTaskControllerWorkLocked(
 			return fmt.Errorf("drain automatic queue for task %s: %w", taskID, err)
 		}
 		delete(c.queued, key)
+		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -512,6 +515,7 @@ func drainTaskControllerWorkLocked(
 			if err != nil {
 				return fmt.Errorf("drain held start for task %s: %w", taskID, err)
 			}
+			cancelAdmission(start.cancel)
 			c.interrupts.addCurrentNode(fence, key)
 			*references = append(*references, start.reference)
 			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
@@ -528,6 +532,7 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		delete(c.explicitReservations, key)
+		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
@@ -537,6 +542,7 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		delete(c.automaticReservations, key)
+		cancelAdmission(start.cancel)
 		c.releaseAgentCapacityLocked(start.agentCapacityLease)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
@@ -547,6 +553,7 @@ func drainTaskControllerWorkLocked(
 			continue
 		}
 		c.stopping[gate.lease.ScopeID()] = struct{}{}
+		cancelAdmission(gate.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*drainedGates = append(*drainedGates, gate)
 		*references = append(*references, gate.reference)
@@ -556,11 +563,18 @@ func drainTaskControllerWorkLocked(
 		if start.reference.TaskID != taskID {
 			continue
 		}
+		cancelAdmission(start.cancel)
 		c.interrupts.addCurrentNode(fence, key)
 		*references = append(*references, start.reference)
 		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
 	}
 	return nil
+}
+
+func cancelAdmission(cancel context.CancelFunc) {
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func interruptCurrentNodeReferences(

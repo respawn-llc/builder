@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/shared/apicontract"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -33,9 +34,30 @@ func TestWorkflowTaskRunWaitReportsProjectedInterruptedAttention(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	writeWorkflowTaskRunWaitError(&stdout, &stderr, &workflowTaskRunWaitInterruption{attention: attention})
+	writeWorkflowTaskRunWaitError(&stdout, &stderr, false, &workflowTaskRunWaitInterruption{attention: attention})
 	if got := stdout.String(); got != message+"\n"+detail+"\n" {
 		t.Fatalf("stdout = %q, want existing interruption fields", got)
+	}
+}
+
+func TestWorkflowTaskRunWaitErrorKeepsJSONOnStdout(t *testing.T) {
+	message := "target resolution failed"
+	attention := serverapi.WorkflowAttentionItem{Message: &message, WorkflowID: runtimeids.NewWorkflowID()}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	writeWorkflowTaskRunWaitError(&stdout, &stderr, true, &workflowTaskRunWaitInterruption{attention: attention})
+	if stdout.String() == "" || stderr.String() != "" {
+		t.Fatalf("stdout = %q, stderr = %q, want JSON stdout and empty stderr", stdout.String(), stderr.String())
+	}
+}
+
+func TestWorkflowTaskRunWaitErrorFallsBackWhenAttentionHasNoDetails(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := &workflowTaskRunWaitInterruption{}
+	writeWorkflowTaskRunWaitError(&stdout, &stderr, false, err)
+	if stdout.String() != "" || stderr.String() != err.Error()+"\n" {
+		t.Fatalf("stdout = %q, stderr = %q, want fallback error on stderr", stdout.String(), stderr.String())
 	}
 }
 

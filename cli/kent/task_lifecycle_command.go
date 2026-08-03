@@ -364,7 +364,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		}
 		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			writeWorkflowTaskRunWaitError(stdout, stderr, *jsonOut, err)
 			return 1
 		}
 		if *jsonOut {
@@ -529,7 +529,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			writeWorkflowTaskRunWaitError(stdout, stderr, *jsonOut, err)
 			return 1
 		}
 		if *jsonOut {
@@ -637,7 +637,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		}
 		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, applied.TaskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			writeWorkflowTaskRunWaitError(stdout, stderr, false, err)
 			return 1
 		}
 		writeTaskLifecycleResult(stdout, "Approved", detail)
@@ -822,7 +822,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 		if err != nil {
-			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			writeWorkflowTaskRunWaitError(stdout, stderr, *jsonOut, err)
 			return 1
 		}
 		if *jsonOut {
@@ -1172,9 +1172,17 @@ func containsString(values []string, value string) bool {
 	return false
 }
 
-func writeWorkflowTaskRunWaitError(stdout io.Writer, stderr io.Writer, err error) {
+func writeWorkflowTaskRunWaitError(stdout io.Writer, stderr io.Writer, jsonOut bool, err error) {
 	var interrupted *workflowTaskRunWaitInterruption
 	if errors.As(err, &interrupted) {
+		if jsonOut {
+			_ = writeCommandJSON(stdout, stderr, interrupted.attention)
+			return
+		}
+		if interrupted.attention.Message == nil && interrupted.attention.DetailJSON == nil {
+			fmt.Fprintln(stderr, interrupted.Error())
+			return
+		}
 		if interrupted.attention.Message != nil {
 			fmt.Fprintln(stdout, *interrupted.attention.Message)
 		}

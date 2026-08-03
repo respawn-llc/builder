@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
@@ -126,6 +126,9 @@ export function TaskDetailContent({
       });
     },
   });
+  useEffect(() => {
+    resumeContinuation.close();
+  }, [detail.id, resumeContinuation.close]);
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
 
