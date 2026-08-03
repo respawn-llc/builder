@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/prompts"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
@@ -160,6 +161,38 @@ func TestCatalogReadFailureIsTypedAndRedacted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), workspaceRoot) {
 		t.Fatalf("error exposes source path: %v", err)
+	}
+}
+
+func TestCatalogSkipsBrokenBuiltInShadowFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".kent", "prompts")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, identifier := range []string{
+		runtimeinput.PromptCommandReviewIdentifier,
+		runtimeinput.PromptCommandInitIdentifier,
+	} {
+		if err := os.Symlink("missing.md", filepath.Join(root, identifier+".md")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	entries, err := New(t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		seen[entry.Name] = true
+	}
+	for _, name := range []string{
+		runtimeinput.PromptCommandReviewName,
+		runtimeinput.PromptCommandInitName,
+	} {
+		if !seen[name] {
+			t.Fatalf("catalog omitted built-in %q: %+v", name, entries)
+		}
 	}
 }
 

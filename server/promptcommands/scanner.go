@@ -38,6 +38,9 @@ func (s Service) scan() ([]CatalogEntry, error) {
 			if !ok {
 				continue
 			}
+			if _, builtin := runtimeinput.BuiltinPromptCommandForName(*name); builtin {
+				continue
+			}
 			command := name.String()
 			if _, ok := seen[command]; ok {
 				continue
