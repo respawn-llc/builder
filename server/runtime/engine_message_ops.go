@@ -477,6 +477,16 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	reason QueuedUserMessageFailureReason,
 	restore bool,
 ) {
+	e.emitQueuedUserMessageStatusWithPrompt(item, status, reason, restore, nil)
+}
+
+func (e *Engine) emitQueuedUserMessageStatusWithPrompt(
+	item QueuedUserMessage,
+	status QueuedUserMessageStatus,
+	reason QueuedUserMessageFailureReason,
+	restore bool,
+	promptCommand *string,
+) {
 	if e == nil || item.ID == "" {
 		return
 	}
@@ -486,6 +496,12 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		ClientRequestID: item.ClientRequestID,
 		Status:          status,
 		FailureReason:   reason,
+	}
+	if promptCommand != nil {
+		command := strings.TrimSpace(*promptCommand)
+		if command != "" {
+			event.PromptCommand = &command
+		}
 	}
 	if restore {
 		event.RestoreText = item.Text

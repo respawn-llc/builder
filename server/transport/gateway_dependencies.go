@@ -86,14 +86,17 @@ func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectio
 	return binding, err
 }
 
-func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state *connectionState) (string, error) {
+func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
 	if state == nil {
 		return "", errors.New("connection state is required")
 	}
-	if state.attachedSession == nil {
+	if sessionID == nil {
+		sessionID = state.attachedSession
+	}
+	if sessionID == nil {
 		return state.attachedWorkspaceRoot, nil
 	}
-	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, state.attachedSession.String())
+	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID.String())
 	if err != nil {
 		return "", err
 	}
@@ -102,13 +105,9 @@ func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state 
 
 func (g *Gateway) promptCommandWorkspaceRootForCatalog(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
 	if sessionID != nil {
-		target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID.String())
-		if err != nil {
-			return "", err
-		}
-		return clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
+		return g.promptCommandWorkspaceRootForState(ctx, state, sessionID)
 	}
-	return g.promptCommandWorkspaceRootForState(ctx, state)
+	return g.promptCommandWorkspaceRootForState(ctx, state, nil)
 }
 
 func (g *Gateway) sessionLaunchClientForState(ctx context.Context, state *connectionState) (apicontract.SessionLaunchService, error) {

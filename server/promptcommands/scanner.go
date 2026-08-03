@@ -140,9 +140,6 @@ func (s Service) findCandidate(command string) (candidate, bool, error) {
 	err = s.walkCandidates(func(command string) bool {
 		return command == name.String()
 	}, func(entry candidateEntry) (candidateDecision, error) {
-		if entry.name != name.String() {
-			return candidateSkip, nil
-		}
 		content, readErr := os.ReadFile(entry.path)
 		if readErr != nil {
 			commandName := name.String()

@@ -326,6 +326,7 @@ func transcriptQueuedMessageStateMessages(evt runtime.Event) []clientui.Transcri
 		ClientRequestID: mustTranscriptClientRequestID(status.ClientRequestID, "queued-message state"),
 		QueueItemID:     mustTranscriptQueueItemID(status.QueueItemID, "queued-message state"),
 		Status:          clientui.QueuedUserMessageStatus(status.Status),
+		PromptCommand:   textutil.Pointer(status.PromptCommand),
 	}
 	switch status.Status {
 	case runtime.QueuedUserMessageAccepted:

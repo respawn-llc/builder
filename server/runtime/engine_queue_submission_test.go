@@ -47,6 +47,48 @@ func TestDeferredQueuedUserMessageResolvesAtFlush(t *testing.T) {
 	}
 }
 
+func TestDeferredPromptCommandNotFoundFailsQueueWithRefreshIdentity(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var statuses []QueuedUserMessageStatusEvent
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+			}
+		},
+	})
+	engine.pauseQueuedUserAutoDrain()
+	t.Cleanup(engine.resumeQueuedUserAutoDrain)
+	command := "prompt:missing"
+	engine.QueueUserMessageForAutoDrainWithResolver(
+		"/prompt:missing src",
+		"request-id",
+		func() (string, error) {
+			return "", &DeferredUserMessageResolutionError{
+				Reason:        QueuedUserMessageFailurePromptCommandNotFound,
+				PromptCommand: &command,
+			}
+		},
+	)
+	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
+		t.Fatalf("SubmitQueuedUserMessages: %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("deferred missing command remained queued")
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("queued statuses = %+v, want acceptance and typed failure", statuses)
+	}
+	failed := statuses[1]
+	if failed.Status != QueuedUserMessageFailed ||
+		failed.FailureReason != QueuedUserMessageFailurePromptCommandNotFound ||
+		failed.PromptCommand == nil ||
+		*failed.PromptCommand != command {
+		t.Fatalf("deferred missing-command status = %+v", failed)
+	}
+}
+
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

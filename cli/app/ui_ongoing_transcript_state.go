@@ -270,6 +270,11 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	if state.Status != clientui.QueuedUserMessageFailed || state.Text == nil {
 		return cmd
 	}
+	if state.FailureReason != nil &&
+		*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound &&
+		state.PromptCommand != nil {
+		return tea.Batch(cmd, m.startPromptCatalogRefresh(*state.PromptCommand))
+	}
 	m.inputController().restoreInjectedTextIntoInput(*state.Text)
 	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
 		"queued message was not submitted; restored to input",

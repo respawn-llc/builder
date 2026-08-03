@@ -176,6 +176,17 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 		resolve := func() (string, error) {
 			projection, err := s.resolveUserTurnInput(resolveContext, req.SessionID, req.Input)
 			if err != nil {
+				var commandErr *serverapi.PromptCommandError
+				if errors.As(err, &commandErr) &&
+					commandErr.Kind == serverapi.PromptCommandErrorKindCommandNotFound &&
+					commandErr.Command != nil {
+					command := *commandErr.Command
+					return "", &runtime.DeferredUserMessageResolutionError{
+						Reason:        runtime.QueuedUserMessageFailurePromptCommandNotFound,
+						PromptCommand: &command,
+						Cause:         err,
+					}
+				}
 				return "", err
 			}
 			return projection.ExecutionText, nil

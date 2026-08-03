@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -410,12 +411,28 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
 	pending = e.dropStoppedLiveRunQueueItems(pending)
-	for index := range pending {
+	for index := 0; index < len(pending); index++ {
 		if pending[index].resolve == nil {
 			continue
 		}
 		text, err := pending[index].resolve()
 		if err != nil {
+			var resolutionErr *DeferredUserMessageResolutionError
+			if errors.As(err, &resolutionErr) {
+				item := pending[index].message
+				e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+				e.emitQueuedUserMessageStatusWithPrompt(
+					item,
+					QueuedUserMessageFailed,
+					resolutionErr.Reason,
+					true,
+					resolutionErr.PromptCommand,
+				)
+				e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
+				pending = append(pending[:index], pending[index+1:]...)
+				index--
+				continue
+			}
 			m.queue.RestoreFront(pending)
 			return result, err
 		}
