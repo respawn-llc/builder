@@ -5,12 +5,11 @@ import { queryKeys } from "@/app-facade";
 
 export type ProjectCatalogAuthority = Readonly<{
   read(signal: AbortSignal): Promise<ProjectLabelCatalog>;
+  supersedeReads(): void;
   applyCreate(label: ProjectLabel): void;
-  applyReorder(labelIDs: readonly string[]): void;
   applyRename(label: ProjectLabel): void;
   applyDelete(labelID: string): void;
-  acceptCatalog(catalog: ProjectLabelCatalog): void;
-  restoreCatalog(catalog: ProjectLabelCatalog): void;
+  installCatalog(catalog: ProjectLabelCatalog): void;
   requestRefresh(): void;
 }>;
 
@@ -65,28 +64,6 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
-  applyReorder(labelIDs: readonly string[]): void {
-    this.#advance(false);
-    const catalog = this.#queryClient.getQueryData<ProjectLabelCatalog>(this.#queryKey);
-    if (catalog === undefined) {
-      return;
-    }
-    const labelsByID = new Map(catalog.labels.map((label) => [label.id, label]));
-    const labels: ProjectLabel[] = [];
-    for (const labelID of labelIDs) {
-      const label = labelsByID.get(labelID);
-      if (label === undefined) {
-        throw new Error(`Cannot reorder unknown Project label ${labelID} in Project ${this.#projectID}.`);
-      }
-      labels.push(label);
-      labelsByID.delete(labelID);
-    }
-    if (labels.length !== catalog.labels.length || labelsByID.size !== 0) {
-      throw new Error(`Project label reorder omitted a catalog label in Project ${this.#projectID}.`);
-    }
-    this.#queryClient.setQueryData(this.#queryKey, { ...catalog, labels });
-  }
-
   applyRename(label: ProjectLabel): void {
     this.#advance(true);
     this.#patchLabel(label, false);
@@ -118,14 +95,14 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
-  acceptCatalog(catalog: ProjectLabelCatalog): void {
-    this.#assertProject(catalog);
-    this.#deletedLabelIDs.clear();
-    this.#queryClient.setQueryData(this.#queryKey, catalog);
+  supersedeReads(): void {
+    this.#advance(false);
   }
 
-  restoreCatalog(catalog: ProjectLabelCatalog): void {
+  installCatalog(catalog: ProjectLabelCatalog): void {
     this.#assertProject(catalog);
+    this.#advance(false);
+    this.#deletedLabelIDs.clear();
     this.#queryClient.setQueryData(this.#queryKey, catalog);
   }
 

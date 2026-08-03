@@ -13,7 +13,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
-import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
+import { errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
 import { useStatusController } from "@/app-facade";
 import {
   Button,
@@ -37,14 +37,11 @@ import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
 import {
   handleLabelChooserSearchKeyDown,
   labelResultRowSelection,
-  projectLabelReorderFailureNotice,
-  submitProjectLabelReorder,
   selectLabel,
   selectUnlabeled,
   useLabelChooserMutationActions,
-  useProjectLabelCatalog,
-  useProjectLabelCatalogMutations,
-} from "./projectLabelHooks";
+} from "./labelChooserActions";
+import { useProjectLabelCatalog, useProjectLabelCatalogMutations } from "./projectLabelHooks";
 
 export type LabelChooserInvocation =
   | Readonly<{
@@ -306,14 +303,17 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           setRename,
           t,
           unlabeledName,
+          showUnlabeledChoice,
           labels,
           onReorder(nextLabels) {
-            void submitProjectLabelReorder({
-              labelIDs: nextLabels.map((label) => label.id),
-              mutateAsync: mutations.reorder.mutateAsync,
-              onError: (error) => {
-                push(projectLabelReorderFailureNotice(error, t));
-              },
+            void mutations.reorder.mutateAsync(nextLabels.map((label) => label.id)).catch((error: unknown) => {
+              push({
+                body: errorMessage(error),
+                durationMs: Infinity,
+                id: "project-label-reorder-error",
+                title: t("labels.mutationFailed"),
+                tone: "danger",
+              });
             });
           },
           reorderEnabled,
@@ -338,6 +338,7 @@ function renderLabelChooserResults({
   setRename,
   t,
   unlabeledName,
+  showUnlabeledChoice,
   labels,
   onReorder,
   reorderEnabled,
@@ -356,11 +357,13 @@ function renderLabelChooserResults({
   setRename: Dispatch<SetStateAction<RenameState | null>>;
   t: TFunction;
   unlabeledName: string;
+  showUnlabeledChoice: boolean;
   labels: readonly ProjectLabel[];
   onReorder(nextLabels: readonly ProjectLabel[]): void;
   reorderEnabled: boolean;
   catalogMutationPending: boolean;
 }>) {
+  const labelIndexes = new Map(labels.map((label, index) => [label.id, index]));
   if (catalog.isPending) {
     return (
       <div className="grid min-h-20 place-items-center" role="status">
@@ -391,7 +394,7 @@ function renderLabelChooserResults({
       }}
       role="list"
     >
-      {reorderEnabled && showUnlabeledChoice(choices) ? (
+      {reorderEnabled && showUnlabeledChoice ? (
         <UnlabeledResultRow
           highlighted={keyboardHighlightedIndex === 0}
           name={unlabeledName}
@@ -406,7 +409,9 @@ function renderLabelChooserResults({
           disabled={catalogMutationPending}
           getItemID={(label) => label.id}
           items={labels}
-          onCommit={onReorder}
+          onCommit={({ items }) => {
+            onReorder(items);
+          }}
           renderItem={(label, sortable) =>
             renderLabelChooserChoiceRow({
               choice: { kind: "label", label },
@@ -415,8 +420,7 @@ function renderLabelChooserResults({
               deletion,
               highlighted:
                 keyboardHighlightedIndex ===
-                labels.findIndex((candidate) => candidate.id === label.id) +
-                  (showUnlabeledChoice(choices) ? 1 : 0),
+                (labelIndexes.get(label.id) ?? -1) + (showUnlabeledChoice ? 1 : 0),
               invocation,
               rename,
               setDeletion,
@@ -446,10 +450,6 @@ function renderLabelChooserResults({
       )}
     </div>
   );
-}
-
-function showUnlabeledChoice(choices: readonly LabelChooserChoice[]): boolean {
-  return choices.some((choice) => choice.kind === "unlabeled");
 }
 
 function renderLabelChooserChoiceRow({
@@ -553,7 +553,7 @@ function renderLabelChooserChoiceRow({
     return row;
   }
   return (
-    <div ref={sortable.itemRef} style={sortable.style}>
+    <div data-testid={`label-reorder-item-${label.id}`} ref={sortable.itemRef} style={sortable.style}>
       {row}
     </div>
   );

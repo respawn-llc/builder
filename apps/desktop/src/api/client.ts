@@ -365,10 +365,7 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", {
-        workflow_id: workflowIDSchema.parse(workflowID),
-        mode,
-      }),
+      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
     );
   }
 
@@ -456,9 +453,7 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", {
-        workflow_id: workflowIDSchema.parse(workflowID),
-      }),
+      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
     );
   }
 

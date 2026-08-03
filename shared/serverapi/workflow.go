@@ -1633,8 +1633,8 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 		switch action {
 		case WorkflowProjectEventActionCreated,
 			WorkflowProjectEventActionRenamed,
-			WorkflowProjectEventActionDeleted,
-			WorkflowProjectEventActionReordered:
+			WorkflowProjectEventActionReordered,
+			WorkflowProjectEventActionDeleted:
 			return true
 		}
 	}

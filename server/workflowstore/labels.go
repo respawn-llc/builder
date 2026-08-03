@@ -114,16 +114,6 @@ func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id lab
 		return ProjectLabelRecord{}, err
 	}
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
-		current, err := loadProjectLabelCatalog(ctx, q, trimmedProjectID)
-		if err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		if !containsProjectLabel(current, id) {
-			return ProjectLabelRecord{}, ProjectLabelNotFoundError{
-				ProjectID: trimmedProjectID,
-				LabelID:   id.String(),
-			}
-		}
 		row, err := q.RenameProjectLabel(ctx, sqlitegen.RenameProjectLabelParams{
 			Name:            name.String(),
 			UpdatedAtUnixMs: s.now().UnixMilli(),
@@ -204,10 +194,7 @@ func (s *Store) ReorderProjectLabels(ctx context.Context, projectID string, ids 
 			return ProjectLabelReorderResult{}, err
 		}
 		if len(ids) != len(current) {
-			return ProjectLabelReorderResult{}, ProjectLabelReorderError{
-				ProjectID: trimmedProjectID,
-				Reason:    ProjectLabelReorderWrongCount,
-			}
+			return ProjectLabelReorderResult{}, ProjectLabelOrderError{ProjectID: trimmedProjectID}
 		}
 		recordsByID := make(map[label.ID]ProjectLabelRecord, len(current))
 		for _, record := range current {
@@ -216,16 +203,11 @@ func (s *Store) ReorderProjectLabels(ctx context.Context, projectID string, ids 
 		seen := make(map[label.ID]struct{}, len(ids))
 		for _, id := range ids {
 			if _, ok := seen[id]; ok {
-				labelID := id.String()
-				return ProjectLabelReorderResult{}, ProjectLabelReorderError{
-					ProjectID: trimmedProjectID,
-					LabelID:   &labelID,
-					Reason:    ProjectLabelReorderDuplicateID,
-				}
+				return ProjectLabelReorderResult{}, ProjectLabelOrderError{ProjectID: trimmedProjectID}
 			}
 			seen[id] = struct{}{}
 			if _, ok := recordsByID[id]; !ok {
-				return ProjectLabelReorderResult{}, projectLabelReorderReferenceError(ctx, q, trimmedProjectID, id)
+				return ProjectLabelReorderResult{}, ProjectLabelOrderError{ProjectID: trimmedProjectID}
 			}
 		}
 		unchanged := true
@@ -275,11 +257,7 @@ func loadProjectLabelCatalog(ctx context.Context, q *sqlitegen.Queries, projectI
 		)
 	}
 	records := make([]ProjectLabelRecord, 0, len(rows))
-	seenIDs := make(map[label.ID]struct{}, len(rows))
 	for index, row := range rows {
-		if row.ProjectID != projectID {
-			return nil, fmt.Errorf("project label %q belongs to project %q, want %q", row.ID, row.ProjectID, projectID)
-		}
 		if row.Ordinal != int64(index+1) {
 			return nil, fmt.Errorf("project %q label ordinal %d is not contiguous at position %d", projectID, row.Ordinal, index+1)
 		}
@@ -287,39 +265,9 @@ func loadProjectLabelCatalog(ctx context.Context, q *sqlitegen.Queries, projectI
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := seenIDs[record.ID]; exists {
-			return nil, fmt.Errorf("project %q label catalog contains duplicate label ID %q", projectID, record.ID)
-		}
-		seenIDs[record.ID] = struct{}{}
 		records = append(records, record)
 	}
 	return records, nil
-}
-
-func containsProjectLabel(records []ProjectLabelRecord, id label.ID) bool {
-	for _, record := range records {
-		if record.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func projectLabelReorderReferenceError(ctx context.Context, q *sqlitegen.Queries, projectID string, id label.ID) error {
-	rows, err := q.ListProjectLabelsByIDs(ctx, []string{id.String()})
-	if err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		labelID := id.String()
-		return ProjectLabelReorderError{ProjectID: projectID, LabelID: &labelID, Reason: ProjectLabelReorderUnknownID}
-	}
-	if rows[0].ProjectID != projectID {
-		labelID := id.String()
-		return ProjectLabelReorderError{ProjectID: projectID, LabelID: &labelID, Reason: ProjectLabelReorderWrongProject}
-	}
-	labelID := id.String()
-	return ProjectLabelReorderError{ProjectID: projectID, LabelID: &labelID, Reason: ProjectLabelReorderUnknownID}
 }
 
 func projectLabelRecord(id string, projectID string, name string, ordinal int64) (ProjectLabelRecord, error) {

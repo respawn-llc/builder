@@ -102,10 +102,10 @@ func TestTaskLabelListNameUsesUnicodeFoldWithoutUUIDSelectorAmbiguity(t *testing
 	}
 }
 
-func TestTaskLabelListPreservesServerCatalogSequence(t *testing.T) {
+func TestTaskLabelListPreservesAuthoritativeCatalogOrder(t *testing.T) {
 	labels := []serverapi.WorkflowProjectLabel{
-		{ID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Name: "Second"},
-		{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Name: "First"},
+		{ID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Name: "Zulu"},
+		{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Name: "alpha"},
 	}
 	remote := &taskLabelCommandRemote{
 		catalogResponse: serverapi.WorkflowProjectLabelCatalogResponse{
@@ -132,6 +132,6 @@ func TestTaskLabelListPreservesServerCatalogSequence(t *testing.T) {
 		t.Fatalf("decode output: %v; output=%q", err, stdout.String())
 	}
 	if !reflect.DeepEqual(output.Catalog.Labels, labels) {
-		t.Fatalf("labels = %+v, want server sequence %+v", output.Catalog.Labels, labels)
+		t.Fatalf("labels = %+v, want authoritative order %+v", output.Catalog.Labels, labels)
 	}
 }

@@ -47,40 +47,6 @@ func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.W
 	}, nil
 }
 
-func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
-		return serverapi.WorkflowProjectLabelCatalogResponse{}, err
-	}
-	ids := make([]label.ID, 0, len(req.LabelIDs))
-	for _, rawID := range req.LabelIDs {
-		id, err := label.ParseID(rawID)
-		if err != nil {
-			return serverapi.WorkflowProjectLabelCatalogResponse{}, err
-		}
-		ids = append(ids, id)
-	}
-	result, err := s.store.ReorderProjectLabels(ctx, req.ProjectID, ids)
-	if err != nil {
-		return serverapi.WorkflowProjectLabelCatalogResponse{}, workflowLabelError(err, workflowLabelErrorScope{
-			projectID: &req.ProjectID,
-		})
-	}
-	labels := make([]serverapi.WorkflowProjectLabel, 0, len(result.Labels))
-	for _, record := range result.Labels {
-		labels = append(labels, workflowProjectLabel(record))
-	}
-	response := serverapi.WorkflowProjectLabelCatalogResponse{
-		Catalog: serverapi.WorkflowProjectLabelCatalog{
-			ProjectID: req.ProjectID,
-			Labels:    labels,
-		},
-	}
-	if result.Changed {
-		s.publishProjectEvent(ctx, req.ProjectID, serverapi.WorkflowProjectEventResourceLabel, serverapi.WorkflowProjectEventActionReordered, req.ProjectID)
-	}
-	return response, nil
-}
-
 func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
@@ -146,6 +112,15 @@ func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverap
 			ProjectID: req.ProjectID,
 			Labels:    labels,
 		},
+	}
+	if result.Changed {
+		s.publishProjectEvent(
+			ctx,
+			req.ProjectID,
+			serverapi.WorkflowProjectEventResourceLabel,
+			serverapi.WorkflowProjectEventActionReordered,
+			req.ProjectID,
+		)
 	}
 	return response, nil
 }
@@ -255,7 +230,6 @@ func workflowLabelError(err error, scope workflowLabelErrorScope) error {
 		return &serverapi.WorkflowLabelError{
 			Reason:    serverapi.WorkflowLabelErrorReasonInvalidMutation,
 			ProjectID: &projectID,
-			LabelID:   orderErr.LabelID,
 			Field:     &field,
 		}
 	}
@@ -296,17 +270,6 @@ func workflowLabelError(err error, scope workflowLabelErrorScope) error {
 			LabelID: mutationErr.LabelID,
 			Field:   &field,
 			Limit:   mutationErr.Limit,
-		}
-	}
-	var reorderErr workflowstore.ProjectLabelReorderError
-	if errors.As(err, &reorderErr) {
-		field := "label_ids"
-		projectID := reorderErr.ProjectID
-		return &serverapi.WorkflowLabelError{
-			Reason:    serverapi.WorkflowLabelErrorReasonInvalidMutation,
-			ProjectID: &projectID,
-			LabelID:   reorderErr.LabelID,
-			Field:     &field,
 		}
 	}
 	if errors.Is(err, serverapi.ErrProjectNotFound) {

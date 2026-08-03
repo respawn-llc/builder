@@ -116,7 +116,7 @@ RETURNING id, project_id, name, ordinal;
 SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE project_id = sqlc.arg(project_id)
-ORDER BY ordinal ASC, id ASC
+ORDER BY ordinal ASC
 LIMIT 101;
 
 -- name: SetProjectLabelOrdinal :exec
@@ -150,13 +150,13 @@ SELECT tla.task_id, pl.id AS label_id
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
 WHERE tla.task_id IN (sqlc.slice('task_ids'))
-ORDER BY tla.task_id ASC, pl.ordinal ASC;
+ORDER BY tla.task_id ASC, pl.ordinal ASC, pl.id ASC;
 
 -- name: ListProjectLabelsByIDs :many
-SELECT id, project_id, name
+SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE id IN (sqlc.slice('label_ids'))
-ORDER BY id ASC;
+ORDER BY ordinal ASC, id ASC;
 
 -- name: InsertTaskLabelAssignment :exec
 INSERT INTO task_label_assignments (task_id, label_id)
@@ -3643,12 +3643,6 @@ WHERE task_id = sqlc.arg(task_id)
       OR transition_branch_key = sqlc.narg(transition_branch_key)
   )
   AND scheduling_state = 'interrupted';
-
--- name: AcquireManualMoveTaskWriteLock :execrows
-UPDATE tasks
-SET updated_at_unix_ms = updated_at_unix_ms
-WHERE id = sqlc.arg(task_id);
-
 
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (

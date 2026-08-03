@@ -61,6 +61,17 @@ func TestWorkflowProjectEventValidatesTypedResourceActionAndScope(t *testing.T) 
 			valid: true,
 		},
 		{
+			name: "project label reorder event",
+			event: WorkflowProjectEvent{
+				ProjectID:        eventID("project-1"),
+				Resource:         WorkflowProjectEventResourceLabel,
+				Action:           WorkflowProjectEventActionReordered,
+				PrimaryEntityID:  "project-1",
+				OccurredAtUnixMs: 1,
+			},
+			valid: true,
+		},
+		{
 			name: "action forbidden for resource",
 			event: WorkflowProjectEvent{
 				ProjectID:        eventID("project-1"),

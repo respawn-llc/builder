@@ -1,17 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as AppFacade from "@/app-facade";
 import { createLabelFilterState, type LabelFilterAction } from "./labelFilterState";
 import { LabelChooser } from "./LabelChooser";
 import type * as ProjectLabelHooks from "./projectLabelHooks";
-import { projectLabelReorderFailureNotice, submitProjectLabelReorder } from "./projectLabelHooks";
-import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 
 const createdLabelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
-const testT = (key: string) => key;
 
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   configurable: true,
@@ -159,7 +155,7 @@ describe("LabelChooser", () => {
     await waitFor(() => {
       expect(actions).toEqual([]);
     });
-  }, 15_000);
+  });
 
   it("shows handle-only reorder controls in catalog order and hides them during search", async () => {
     const user = userEvent.setup();
@@ -266,168 +262,77 @@ describe("LabelChooser", () => {
     expect(screen.queryByRole("button", { name: "Reorder Alpha" })).not.toBeInTheDocument();
   });
 
-  it("builds the visible reorder failure notice", () => {
-    statusPush(projectLabelReorderFailureNotice(new Error("save failed"), testT));
-    expect(statusPush).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "save failed", tone: "danger" }),
+  it("commits a keyboard reorder through the Label handle", async () => {
+    const user = userEvent.setup();
+    render(
+      <LabelChooser
+        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        trigger={<button type="button">Open label chooser</button>}
+      />,
     );
-  });
+    await user.click(screen.getByRole("button", { name: "Open label chooser" }));
 
-  it("submits the complete chooser sequence and receives the authoritative catalog", async () => {
-    const authoritative = {
-      projectID: "project-1",
-      labels: [...hooks.catalog.data.labels].reverse(),
-    };
-    const mutateAsync = vi.fn(async (labelIDs: readonly string[]) => {
-      expect(labelIDs).toEqual(authoritative.labels.map((label) => label.id));
-      return authoritative;
-    });
-
-    await expect(
-      submitProjectLabelReorder({
-        labelIDs: authoritative.labels.map((label) => label.id),
-        mutateAsync,
-        onError: statusPush,
-      }),
-    ).resolves.toEqual(authoritative);
-    expect(statusPush).not.toHaveBeenCalled();
-  });
-
-  it("routes chooser reorder failure to its visible error callback", async () => {
-    const error = new Error("save failed");
-    await expect(
-      submitProjectLabelReorder({
-        labelIDs: ["label-1", "label-2"],
-        mutateAsync: async () => {
-          throw error;
-        },
-        onError: (failure) => {
-          statusPush(projectLabelReorderFailureNotice(failure, testT));
-        },
-      }),
-    ).resolves.toBeNull();
-    expect(statusPush).toHaveBeenCalledWith(expect.objectContaining({ body: "save failed", tone: "danger" }));
-  });
-
-});
-
-type ReorderableTestItem = Readonly<{
-  id: string;
-  name: string;
-}>;
-
-const reorderableInitialItems: readonly ReorderableTestItem[] = [
-  { id: "first", name: "First" },
-  { id: "second", name: "Second" },
-  { id: "third", name: "Third" },
-];
-
-function ReorderableTestList({
-  disabled = false,
-  items: initial = reorderableInitialItems,
-  onCommit = vi.fn(),
-}: Readonly<{
-  disabled?: boolean;
-  items?: readonly ReorderableTestItem[];
-  onCommit?: (items: readonly ReorderableTestItem[]) => void;
-}>) {
-  const [items, setItems] = useState(initial);
-  return (
-    <ReorderableList
-      disabled={disabled}
-      getItemID={(item) => item.id}
-      items={items}
-      onCommit={(nextItems) => {
-        setItems(nextItems);
-        onCommit(nextItems);
-      }}
-      renderItem={(item, props) => <ReorderableTestRow item={item} {...props} />}
-    />
-  );
-}
-
-function ReorderableTestRow({
-  item,
-  ...props
-}: Readonly<{ item: ReorderableTestItem }> & ReorderableListItemRenderProps) {
-  const { activatorAttributes, activatorListeners, activatorRef, itemRef } = props;
-  return (
-    <div data-testid={`row-${item.id}`} ref={itemRef}>
-      <button
-        aria-label={`Move ${item.name}`}
-        ref={activatorRef}
-        {...activatorAttributes}
-        {...activatorListeners}
-      >
-        Move
-      </button>
-      <span>{item.name}</span>
-    </div>
-  );
-}
-
-async function startKeyboardReorder(label: string) {
-  const handle = screen.getByRole("button", { name: label });
-  handle.focus();
-  fireEvent.keyDown(handle, { code: "Space", key: " " });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  return handle;
-}
-
-function mockVerticalRects() {
-  ["first", "second", "third"].forEach((id, index) => {
-    const top = index * 40;
-    Object.defineProperty(screen.getByTestId(`row-${id}`), "getBoundingClientRect", {
-      configurable: true,
-      value: () => ({
-        bottom: top + 40,
-        height: 40,
-        left: 0,
-        right: 200,
-        top,
-        width: 200,
-        x: 0,
-        y: top,
-        toJSON: () => ({}),
-      }),
-    });
-  });
-}
-
-describe("ReorderableList", () => {
-  it("commits one stable-ID keyboard reorder after move and drop", async () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList onCommit={onCommit} />);
-    mockVerticalRects();
-
-    const handle = await startKeyboardReorder("Move First");
+    mockLabelRowRects();
+    const handle = screen.getByRole("button", { name: "Reorder Alpha" });
+    handle.focus();
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
     fireEvent.keyDown(handle, { code: "Space", key: " " });
 
-    expect(onCommit).toHaveBeenCalledTimes(1);
-    expect(onCommit).toHaveBeenCalledWith([
-      { id: "second", name: "Second" },
-      { id: "first", name: "First" },
-      { id: "third", name: "Third" },
-    ]);
+    await waitFor(() => {
+      expect(hooks.reorder).toHaveBeenCalledWith([
+        "942495c2-5958-4959-8445-94046ad74fbd",
+        "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
+      ]);
+    });
   });
 
-  it("commits a pointer reorder from the consumer activator", async () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList onCommit={onCommit} />);
-    mockVerticalRects();
+  it("surfaces a reorder failure through the status controller", async () => {
+    const user = userEvent.setup();
+    hooks.reorder.mockRejectedValueOnce(new Error("save failed"));
+    render(
+      <LabelChooser
+        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        trigger={<button type="button">Open label chooser</button>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Open label chooser" }));
+    mockLabelRowRects();
+    const handle = screen.getByRole("button", { name: "Reorder Alpha" });
+    handle.focus();
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+
+    await waitFor(() => {
+      expect(statusPush).toHaveBeenCalledWith(expect.objectContaining({ body: "save failed", tone: "danger" }));
+    });
+  });
+
+  it("commits a pointer reorder from the Label handle", async () => {
+    const user = userEvent.setup();
+    render(
+      <LabelChooser
+        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        trigger={<button type="button">Open label chooser</button>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Open label chooser" }));
+    mockLabelRowRects();
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
     Object.defineProperty(Element.prototype, "setPointerCapture", {
       configurable: true,
-      value: vi.fn(),
+      value: setPointerCapture,
     });
     Object.defineProperty(Element.prototype, "releasePointerCapture", {
       configurable: true,
-      value: vi.fn(),
+      value: releasePointerCapture,
     });
 
-    const handle = screen.getByRole("button", { name: "Move First" });
+    const handle = screen.getByRole("button", { name: "Reorder Alpha" });
     fireEvent.pointerDown(handle, {
       buttons: 1,
       clientX: 10,
@@ -436,9 +341,7 @@ describe("ReorderableList", () => {
       pointerId: 1,
       pointerType: "mouse",
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     fireEvent.pointerMove(handle, {
       buttons: 1,
       clientX: 10,
@@ -447,113 +350,51 @@ describe("ReorderableList", () => {
       pointerId: 1,
       pointerType: "mouse",
     });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     fireEvent.pointerMove(handle, {
       buttons: 1,
       clientX: 10,
-      clientY: 60,
+      clientY: 100,
       isPrimary: true,
       pointerId: 1,
       pointerType: "mouse",
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(screen.getAllByTestId("row-first")).toHaveLength(2);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(screen.getAllByRole("button", { hidden: true, name: "Reorder Alpha" })).toHaveLength(2);
     fireEvent.pointerUp(handle, { isPrimary: true, pointerId: 1, pointerType: "mouse" });
 
     await waitFor(() => {
-      expect(onCommit).toHaveBeenCalledWith([
-        { id: "second", name: "Second" },
-        { id: "first", name: "First" },
-        { id: "third", name: "Third" },
+      expect(hooks.reorder).toHaveBeenCalledWith([
+        "942495c2-5958-4959-8445-94046ad74fbd",
+        "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
       ]);
     });
+    Reflect.deleteProperty(Element.prototype, "setPointerCapture");
+    Reflect.deleteProperty(Element.prototype, "releasePointerCapture");
   });
 
-  it("cancels a keyboard reorder without committing", async () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList onCommit={onCommit} />);
-    mockVerticalRects();
-
-    const handle = await startKeyboardReorder("Move First");
-    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-    fireEvent.keyDown(handle, { code: "Escape", key: "Escape" });
-
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getAllByText("First")).toHaveLength(1);
-    expect(screen.getByText("Second")).toBeInTheDocument();
-  });
-
-  it("suppresses an unchanged keyboard drop", async () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList onCommit={onCommit} />);
-    mockVerticalRects();
-
-    const handle = await startKeyboardReorder("Move First");
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-
-    expect(onCommit).not.toHaveBeenCalled();
-  });
-
-  it("requires the consumer activator and leaves row content inert", () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList onCommit={onCommit} />);
-
-    const row = screen.getByTestId("row-first");
-    fireEvent.pointerDown(row, { pointerId: 1, clientX: 0, clientY: 0 });
-    fireEvent.pointerMove(row, { pointerId: 1, clientX: 0, clientY: 80 });
-    fireEvent.pointerUp(row, { pointerId: 1, clientX: 0, clientY: 80 });
-
-    expect(onCommit).not.toHaveBeenCalled();
-  });
-
-  it("does not expose reorder interaction while disabled", async () => {
-    const onCommit = vi.fn();
-    render(<ReorderableTestList disabled onCommit={onCommit} />);
-
-    const handle = await startKeyboardReorder("Move First");
-    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-
-    expect(onCommit).not.toHaveBeenCalled();
-  });
-
-  it("scrolls a keyboard destination into view", async () => {
-    const scrollIntoView = vi.fn();
-    HTMLElement.prototype.scrollIntoView = scrollIntoView;
-    render(<ReorderableTestList />);
-    mockVerticalRects();
-
-    const handle = await startKeyboardReorder("Move First");
-    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-
-    expect(scrollIntoView).toHaveBeenCalled();
-  });
-
-  it("keeps reorder behavior available when reduced motion is preferred", async () => {
-    const onCommit = vi.fn();
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: vi.fn(),
-    });
-    const matchMedia = vi.spyOn(window, "matchMedia").mockReturnValue({
-      matches: true,
-      media: "(prefers-reduced-motion: reduce)",
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    });
-    render(<ReorderableTestList onCommit={onCommit} />);
-    mockVerticalRects();
-
-    const handle = await startKeyboardReorder("Move First");
-    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-
-    expect(onCommit).toHaveBeenCalledTimes(1);
-    matchMedia.mockRestore();
-  });
 });
+
+function mockLabelRowRects(): void {
+  [
+    "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
+    "942495c2-5958-4959-8445-94046ad74fbd",
+  ].forEach((labelID, index) => {
+    const sortableRow = screen.getByTestId(`label-reorder-item-${labelID}`);
+    const top = index * 40;
+    Object.defineProperty(sortableRow, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: top + 40,
+        height: 40,
+        left: 0,
+        right: 320,
+        top,
+        width: 320,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      }),
+    });
+  });
+}

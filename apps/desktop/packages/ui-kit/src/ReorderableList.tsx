@@ -29,6 +29,7 @@ import {
   type ReactElement,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 export type ReorderableListItemRenderProps = Readonly<{
   activatorAttributes: Partial<DraggableAttributes>;
@@ -36,20 +37,23 @@ export type ReorderableListItemRenderProps = Readonly<{
   activatorRef: (element: HTMLElement | null) => void;
   itemRef: (element: HTMLElement | null) => void;
   style: CSSProperties;
-  isDragging: boolean;
+}>;
+
+export type ReorderableListCommit<Item, ID extends UniqueIdentifier = UniqueIdentifier> = Readonly<{
+  activeID: ID;
+  destinationID: ID;
+  items: readonly Item[];
 }>;
 
 export type ReorderableListProps<Item, ID extends UniqueIdentifier = UniqueIdentifier> = Readonly<{
-  activationDistance?: number;
   disabled?: boolean;
   getItemID: (item: Item) => ID;
   items: readonly Item[];
-  onCommit: (items: readonly Item[]) => void;
+  onCommit: (commit: ReorderableListCommit<Item, ID>) => void;
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>;
 
 export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdentifier>({
-  activationDistance = 6,
   disabled = false,
   getItemID,
   items,
@@ -81,7 +85,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
     [itemIDs],
   );
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: activationDistance } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: keyboardCoordinates }),
   );
   const handleDragEnd = useCallback(
@@ -95,11 +99,20 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       if (activeIndex < 0 || overIndex < 0) {
         return;
       }
+      const activeID = itemIDs[activeIndex];
+      const destinationID = itemIDs[overIndex];
+      if (activeID === undefined || destinationID === undefined) {
+        return;
+      }
       const nextItems = arrayMove([...items], activeIndex, overIndex);
       if (nextItems.every((item, index) => getItemID(item) === itemIDs[index])) {
         return;
       }
-      onCommit(nextItems);
+      onCommit({
+        activeID,
+        destinationID,
+        items: nextItems,
+      });
     },
     [getItemID, itemIDs, items, onCommit],
   );
@@ -164,7 +177,7 @@ function ReorderableListDragOverlay<Item>({
     return null;
   }
   const activeItem = active === null ? undefined : items.find((item) => getItemID(item) === active.id);
-  return (
+  return createPortal(
     <DragOverlay dropAnimation={reducedMotion ? null : undefined}>
       <div aria-hidden="true" className="pointer-events-none" inert>
         {activeItem === undefined
@@ -173,12 +186,12 @@ function ReorderableListDragOverlay<Item>({
               activatorAttributes: {},
               activatorListeners: undefined,
               activatorRef: noopRef,
-              isDragging: true,
               itemRef: noopRef,
               style: {},
             })}
       </div>
-    </DragOverlay>
+    </DragOverlay>,
+    document.body,
   );
 }
 
@@ -227,7 +240,6 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
     activatorAttributes: attributes,
     activatorListeners: listeners,
     activatorRef: setActivatorNodeRef,
-    isDragging,
     itemRef: setTrackedNodeRef,
     style,
   });

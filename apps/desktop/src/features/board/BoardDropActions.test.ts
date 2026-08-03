@@ -62,7 +62,6 @@ describe("toKanbanCardVM", () => {
         canInterrupt: false,
         canResume: false,
         canStart: true,
-        manualMoveTargetNodeIDs: [],
       },
       activeNodeIDs: [],
       dependencyProgress: null,

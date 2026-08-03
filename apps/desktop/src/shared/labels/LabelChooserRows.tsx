@@ -189,13 +189,13 @@ export function LabelResultRow({
         reorder === undefined ? undefined : (
           <Button
             aria-label={t("labels.reorder", { name: label.name })}
-            className="hover:text-[var(--color-on-island)]"
+            className="text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
             disabled={catalogMutationPending}
             ref={reorderActivatorRef}
             {...reorderAttributes}
             {...reorderListeners}
             size="icon-sm"
-            variant="ghost-muted"
+            variant="ghost"
           >
             <GripVertical aria-hidden="true" size={15} strokeWidth={1.8} />
           </Button>

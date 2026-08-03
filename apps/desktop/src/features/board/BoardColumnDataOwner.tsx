@@ -202,12 +202,11 @@ export function BoardColumnDataOwner({
 
   useEffect(() => {
     const activeFilterGeneration = filterGeneration.snapshot.active.generation;
-    const cause: BoardColumnUpdateCause =
-      hydratedFilterGenerationRef.current !== activeFilterGeneration
-        ? "hydration"
-        : paginationInFlightRef.current
-          ? "pagination"
-          : "domain";
+    const cause: BoardColumnUpdateCause = hydratedFilterGenerationRef.current !== activeFilterGeneration
+      ? "hydration"
+      : paginationInFlightRef.current
+        ? "pagination"
+        : "domain";
     generationRef.current += 1;
     onReportColumnSnapshot(column.id, {
       cause,

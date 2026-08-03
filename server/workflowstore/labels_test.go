@@ -496,7 +496,7 @@ func isSQLiteBusy(err error) bool {
 }
 
 func isProjectLabelReorderValidation(err error) bool {
-	var reorderErr ProjectLabelReorderError
+	var reorderErr ProjectLabelOrderError
 	return errors.As(err, &reorderErr)
 }
 
@@ -600,7 +600,7 @@ func TestTaskLabelsReadEmptyAndAddOne(t *testing.T) {
 	}
 }
 
-func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T) {
+func TestTaskLabelUpdateIsIdempotentAtomicAndProjectOrdered(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -616,6 +616,9 @@ func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateProjectLabel absent: %v", err)
 	}
+	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{zulu.ID, absent.ID, alpha.ID}); err != nil {
+		t.Fatalf("ReorderProjectLabels: %v", err)
+	}
 
 	assigned, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
 		TaskID:      task.ID,
@@ -624,8 +627,8 @@ func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T)
 	if err != nil {
 		t.Fatalf("UpdateTaskLabels add batch: %v", err)
 	}
-	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
-		t.Fatalf("ordered assigned labels = %+v, want alpha then Zulu", assigned)
+	if len(assigned) != 2 || assigned[0] != zulu.ID || assigned[1] != alpha.ID {
+		t.Fatalf("ordered assigned labels = %+v, want Zulu then alpha", assigned)
 	}
 	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
 		TaskID:         task.ID,
@@ -635,7 +638,7 @@ func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T)
 	if err != nil {
 		t.Fatalf("UpdateTaskLabels idempotent add/remove: %v", err)
 	}
-	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
+	if len(assigned) != 2 || assigned[0] != zulu.ID || assigned[1] != alpha.ID {
 		t.Fatalf("idempotent assigned labels = %+v", assigned)
 	}
 	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
@@ -911,6 +914,9 @@ func TestTaskCreateCommitsLabelsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProjectLabel alpha: %v", err)
 	}
+	if _, err := store.ReorderProjectLabels(ctx, binding.ProjectID, []label.ID{zulu.ID, alpha.ID}); err != nil {
+		t.Fatalf("ReorderProjectLabels: %v", err)
+	}
 
 	task, err := store.CreateTask(ctx, CreateTaskRequest{
 		ProjectID: binding.ProjectID,
@@ -925,8 +931,8 @@ func TestTaskCreateCommitsLabelsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTaskLabelIDs: %v", err)
 	}
-	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
-		t.Fatalf("created task labels = %+v, want alpha then Zulu", assigned)
+	if len(assigned) != 2 || assigned[0] != zulu.ID || assigned[1] != alpha.ID {
+		t.Fatalf("created task labels = %+v, want Zulu then alpha", assigned)
 	}
 }
 

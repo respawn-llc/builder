@@ -25,7 +25,6 @@ import {
   type PromptTemplatePlaceholder,
 } from "./workflowPromptTemplatePlaceholders";
 import { derivedNodeWiring, joinProviderOptions } from "./workflowInspectorWiring";
-import { reorderDraftRows } from "./workflowEditorDraftRows";
 
 export function PromptTemplateEditor({
   onPromptChange,
@@ -213,11 +212,18 @@ export function EditableEdgeParameters({
         ) : null}
         <div className="grid gap-[var(--space-3)]">
           <ReorderableList
-            activationDistance={6}
             getItemID={(parameter) => parameter.rowID}
             items={parameters}
-            onCommit={(nextParameters) => {
-              reorderEdgeParameter(controller, edge.id, parameters, nextParameters);
+            onCommit={({ activeID, destinationID }) => {
+              if (activeID === destinationID) {
+                return;
+              }
+              controller.dispatch({
+                activeRowID: activeID,
+                edgeID: edge.id,
+                overRowID: destinationID,
+                type: "reorderEdgeParameter",
+              });
             }}
             renderItem={(parameter, sortable) => (
               <SortableEdgeParameter
@@ -342,37 +348,6 @@ function SortableEdgeParameter({
       </div>
     </IslandSurface>
   );
-}
-
-function reorderEdgeParameter(
-  controller: WorkflowEditorDraftController,
-  edgeID: string,
-  current: readonly (WorkflowParameter & Readonly<{ rowID: string }>)[],
-  next: readonly (WorkflowParameter & Readonly<{ rowID: string }>)[],
-): void {
-  const currentIDs = current.map((parameter) => parameter.rowID);
-  const nextIDs = next.map((parameter) => parameter.rowID);
-  for (const activeRowID of currentIDs) {
-    const destinationIndex = nextIDs.indexOf(activeRowID);
-    const overRowID = currentIDs[destinationIndex];
-    if (overRowID === undefined) {
-      continue;
-    }
-    const projected = reorderDraftRows(current, activeRowID, overRowID).map((parameter) => parameter.rowID);
-    if (projected.length !== nextIDs.length || projected.some((id, index) => id !== nextIDs[index])) {
-      continue;
-    }
-    if (activeRowID === overRowID) {
-      return;
-    }
-    controller.dispatch({
-      activeRowID,
-      edgeID,
-      overRowID,
-      type: "reorderEdgeParameter",
-    });
-    return;
-  }
 }
 
 export function EditableJoinProviders({

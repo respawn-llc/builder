@@ -165,8 +165,8 @@ WHERE name = 'ordinal'`).Scan(&ordinalNotNull); err != nil {
 	if ordinalNotNull != 1 {
 		t.Fatalf("project_labels.ordinal not-null flag = %d, want 1", ordinalNotNull)
 	}
-	if !indexExists(t, store.db, "project_labels_project_ordinal_unique") {
-		t.Fatal("project_labels_project_ordinal_unique should support per-project order uniqueness")
+	if !indexExists(t, store.db, "project_labels_project_ordinal_idx") {
+		t.Fatal("project_labels_project_ordinal_idx should support per-project order uniqueness")
 	}
 	if !indexExists(t, store.db, "task_label_assignments_label_task_idx") {
 		t.Fatal("task_label_assignments_label_task_idx should support reverse label membership")
@@ -207,7 +207,7 @@ WHERE name = 'ordinal'`).Scan(&ordinalNotNull); err != nil {
 	}
 }
 
-func TestProjectLabelsOrderMigrationBackfillsExistingCatalogInLegacyOrder(t *testing.T) {
+func TestProjectLabelsOrderMigrationBackfillsExistingCatalog(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
@@ -266,10 +266,22 @@ ORDER BY ordinal ASC`)
 	if len(got) != 3 {
 		t.Fatalf("migrated label rows = %+v, want 3 rows", got)
 	}
-	for index, wantID := range []string{"label-alpha", "label-beta", "label-zulu"} {
-		if got[index].id != wantID || got[index].ordinal != int64(index+1) {
-			t.Fatalf("migrated row %d = %+v, want id=%s ordinal=%d", index, got[index], wantID, index+1)
+	remaining := map[string]struct{}{
+		"label-zulu":  {},
+		"label-alpha": {},
+		"label-beta":  {},
+	}
+	for index, row := range got {
+		if row.ordinal != int64(index+1) {
+			t.Fatalf("migrated row %d ordinal = %d, want %d", index, row.ordinal, index+1)
 		}
+		if _, ok := remaining[row.id]; !ok {
+			t.Fatalf("migrated row %d has unexpected or duplicate ID %q", index, row.id)
+		}
+		delete(remaining, row.id)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("migration lost legacy labels: %+v", remaining)
 	}
 }
 

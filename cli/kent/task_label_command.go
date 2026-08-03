@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -18,23 +17,6 @@ type workflowProjectLabelCatalogSnapshot struct {
 	ProjectID          string
 	LabelsByID         map[string]serverapi.WorkflowProjectLabel
 	LabelsByFoldedName map[string]serverapi.WorkflowProjectLabel
-}
-
-const taskLabelMovePlainAcknowledgement = "ok"
-
-type taskLabelMovePlacementKind uint8
-
-const (
-	taskLabelMovePlacementFirst taskLabelMovePlacementKind = iota
-	taskLabelMovePlacementLast
-	taskLabelMovePlacementBefore
-	taskLabelMovePlacementAfter
-)
-
-type taskLabelMovePlacement struct {
-	Kind             taskLabelMovePlacementKind
-	RelativeSelector *string
-	RelativeID       *string
 }
 
 type taskLabelAssignmentOperation uint8
@@ -53,156 +35,10 @@ func taskLabelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			"create": taskLabelCreateSubcommand,
 			"delete": taskLabelDeleteSubcommand,
 			"list":   taskLabelListSubcommand,
-			"move":   taskLabelMoveSubcommand,
 			"remove": taskLabelRemoveSubcommand,
 			"rename": taskLabelRenameSubcommand,
 		},
 	})
-}
-
-func taskLabelMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task label move", stderr, taskLabelMoveUsage)
-	projectRef := fs.String("project", ".", "project ID or attached workspace path")
-	selector := fs.String("label", "", "label name or canonical UUIDv4")
-	first := fs.Bool("first", false, "move the label to the first position")
-	last := fs.Bool("last", false, "move the label to the last position")
-	before := fs.String("before", "", "place the label immediately before another label")
-	after := fs.String("after", "", "place the label immediately after another label")
-	jsonOut := fs.Bool("json", false, "write the resulting Project label catalog as JSON")
-	if ok, exitCode := parseCommandFlags(fs, args); !ok {
-		return exitCode
-	}
-	if len(fs.Args()) != 0 {
-		fmt.Fprintln(stderr, "task label move does not accept positional arguments")
-		return 2
-	}
-	if !flagExplicit(fs, "label") {
-		fmt.Fprintln(stderr, "task label move requires --label <name-or-uuid>")
-		return 2
-	}
-	placementCount := 0
-	var placement taskLabelMovePlacement
-	if *first {
-		placementCount++
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementFirst}
-	}
-	if *last {
-		placementCount++
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementLast}
-	}
-	if flagExplicit(fs, "before") {
-		placementCount++
-		relativeSelector := *before
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementBefore, RelativeSelector: &relativeSelector}
-	}
-	if flagExplicit(fs, "after") {
-		placementCount++
-		relativeSelector := *after
-		placement = taskLabelMovePlacement{Kind: taskLabelMovePlacementAfter, RelativeSelector: &relativeSelector}
-	}
-	if placementCount == 0 {
-		fmt.Fprintln(stderr, "task label move requires exactly one of --first, --last, --before, or --after")
-		return 2
-	}
-	if placementCount > 1 {
-		fmt.Fprintln(stderr, "task label move accepts exactly one of --first, --last, --before, or --after")
-		return 2
-	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		catalog, snapshot, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		groups := [][]string{{*selector}}
-		if placement.Kind == taskLabelMovePlacementBefore || placement.Kind == taskLabelMovePlacementAfter {
-			groups = append(groups, []string{*placement.RelativeSelector})
-		}
-		resolved, err := resolveWorkflowProjectLabelSelectorGroups(snapshot, groups)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if len(resolved) > 1 {
-			relativeID := resolved[1].IDs[0]
-			placement.RelativeID = &relativeID
-		}
-		labelIDs := workflowProjectLabelMovePermutation(catalog.Catalog.Labels, resolved[0].IDs[0], placement)
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		response, err := remote.ReorderWorkflowProjectLabels(ctx, serverapi.WorkflowProjectLabelReorderRequest{
-			ProjectID: projectID,
-			LabelIDs:  labelIDs,
-		})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if _, err := workflowProjectLabelCatalogSnapshotFromResponse(response.Catalog, projectID); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		responseIDs := make([]string, len(response.Catalog.Labels))
-		for index, record := range response.Catalog.Labels {
-			responseIDs[index] = record.ID
-		}
-		if !slices.Equal(responseIDs, labelIDs) {
-			fmt.Fprintln(stderr, "Project label reorder response does not match the requested order")
-			return 1
-		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, response)
-		}
-		fmt.Fprintln(stdout, taskLabelMovePlainAcknowledgement)
-		return 0
-	})
-}
-
-func workflowProjectLabelMovePermutation(labels []serverapi.WorkflowProjectLabel, movedID string, placement taskLabelMovePlacement) []string {
-	original := make([]string, len(labels))
-	for index, label := range labels {
-		original[index] = label.ID
-	}
-	if placement.RelativeID != nil {
-		if *placement.RelativeID == movedID {
-			return original
-		}
-	}
-	remaining := make([]string, 0, len(original)-1)
-	for _, id := range original {
-		if id != movedID {
-			remaining = append(remaining, id)
-		}
-	}
-	position := len(remaining)
-	switch placement.Kind {
-	case taskLabelMovePlacementFirst:
-		position = 0
-	case taskLabelMovePlacementBefore:
-		for index, id := range remaining {
-			if placement.RelativeID != nil && id == *placement.RelativeID {
-				position = index
-				break
-			}
-		}
-	case taskLabelMovePlacementAfter:
-		for index, id := range remaining {
-			if placement.RelativeID != nil && id == *placement.RelativeID {
-				position = index + 1
-				break
-			}
-		}
-	}
-	result := make([]string, 0, len(original))
-	result = append(result, remaining[:position]...)
-	result = append(result, movedID)
-	result = append(result, remaining[position:]...)
-	return result
 }
 
 func taskLabelAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

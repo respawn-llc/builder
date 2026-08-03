@@ -27,11 +27,6 @@ type WorkflowProjectLabelCatalogRequest struct {
 	ProjectID string `json:"project_id"`
 }
 
-type WorkflowProjectLabelReorderRequest struct {
-	ProjectID string   `json:"project_id"`
-	LabelIDs  []string `json:"label_ids"`
-}
-
 type WorkflowProjectLabelCatalogResponse struct {
 	Catalog WorkflowProjectLabelCatalog `json:"catalog"`
 }
@@ -283,17 +278,6 @@ func validWorkflowLabelErrorString(value *string) bool {
 
 func (r WorkflowProjectLabelCatalogRequest) Validate() error {
 	return validateRequired("project_id", r.ProjectID)
-}
-
-func (r WorkflowProjectLabelReorderRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	return validateLabelIDs("label_ids", r.LabelIDs)
-}
-
-func (r WorkflowProjectLabelReorderRequest) ValidateRPC() error {
-	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", false)
 }
 
 func (r WorkflowProjectLabel) Validate() error {
