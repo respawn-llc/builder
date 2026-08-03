@@ -133,12 +133,13 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
       if (catalog === undefined) {
         return undefined;
       }
-      const index = catalog.labels.findIndex((candidate) => candidate.id === label.id);
-      if (!prepend && index < 0) {
+      const indexByID = new Map(catalog.labels.map((candidate, candidateIndex) => [candidate.id, candidateIndex]));
+      const index = indexByID.get(label.id);
+      if (!prepend && index === undefined) {
         return catalog;
       }
       const labels =
-        index < 0
+        index === undefined
           ? [label, ...catalog.labels]
           : catalog.labels.map((candidate, candidateIndex) => (candidateIndex === index ? label : candidate));
       return {
