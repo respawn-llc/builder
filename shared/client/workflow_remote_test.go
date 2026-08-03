@@ -438,6 +438,7 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 	dedicatedClosed := make(chan struct{})
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		connectionIndex := connectionCount.Add(1)
 		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive handshake: %w", err)
@@ -451,7 +452,7 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 			handlerErr <- fmt.Errorf("send handshake response: %w", err)
 			return
 		}
-		if connectionCount.Add(1) == 1 {
+		if connectionIndex == 1 {
 			return
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -526,6 +527,7 @@ func TestRemoteWorkflowTaskSearchRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
+		connectionIndex := connectionCount.Add(1)
 		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive handshake: %w", err)
@@ -537,7 +539,7 @@ func TestRemoteWorkflowTaskSearchRejectsInvalidResponse(t *testing.T) {
 			handlerErr <- fmt.Errorf("send handshake response: %w", err)
 			return
 		}
-		if connectionCount.Add(1) == 1 {
+		if connectionIndex == 1 {
 			return
 		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
