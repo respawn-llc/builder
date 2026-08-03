@@ -18,10 +18,7 @@ const newTask: SidebarDestination = {
   boardQueryWorkflowID: undefined,
 };
 
-function apply(
-  state: ReturnType<typeof createSidebarStack> | null,
-  action: SidebarStackAction,
-) {
+function apply(state: ReturnType<typeof createSidebarStack> | null, action: SidebarStackAction) {
   return sidebarStackReducer(state, action);
 }
 
@@ -31,16 +28,13 @@ function entryIDs(entries: readonly SidebarStackEntry[]) {
 
 describe("sidebarStackReducer", () => {
   it("creates a root entry with the supplied lifecycle and entry IDs", () => {
-    const state = apply(
-      null,
-      {
-        type: "open",
-        activationID: "activation-1",
-        lifecycleID: "lifecycle-1",
-        entryID: "entry-1",
-        destination: task("task-1"),
-      },
-    );
+    const state = apply(null, {
+      type: "open",
+      activationID: "activation-1",
+      lifecycleID: "lifecycle-1",
+      entryID: "entry-1",
+      destination: task("task-1"),
+    });
 
     expect(state).toEqual({
       activationID: "activation-1",
@@ -67,9 +61,7 @@ describe("sidebarStackReducer", () => {
     });
 
     expect(replaced?.lifecycleID).toBe("lifecycle-1");
-    expect(replaced?.entries).toEqual([
-      { entryID: "entry-2", destination: task("task-2") },
-    ]);
+    expect(replaced?.entries).toEqual([{ entryID: "entry-2", destination: task("task-2") }]);
   });
 
   it("preserves preceding entries when replacing the current destination", () => {
@@ -89,6 +81,28 @@ describe("sidebarStackReducer", () => {
     });
 
     expect(entryIDs(replaced?.entries ?? [])).toEqual(["entry-1", "entry-3"]);
+  });
+
+  it("returns to a retained Task Detail when replacement targets an earlier entry", () => {
+    const opened = createSidebarStack("lifecycle-1", {
+      entryID: "entry-1",
+      destination: task("task-1"),
+    });
+    const pushed = apply(opened, {
+      type: "push",
+      entryID: "entry-2",
+      destination: task("task-2"),
+    });
+    const replaced = apply(pushed, {
+      type: "replace",
+      activationID: "activation-3",
+      entryID: "entry-3",
+      destination: task("task-1"),
+    });
+
+    expect(entryIDs(replaced?.entries ?? [])).toEqual(["entry-1"]);
+    expect(replaced?.entries[0]?.entryID).toBe("entry-1");
+    expect(replaced?.activationID).toBe("activation-3");
   });
 
   it("ignores stale directional actions after the current token changes", () => {

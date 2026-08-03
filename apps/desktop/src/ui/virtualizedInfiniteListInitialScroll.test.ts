@@ -1,6 +1,5 @@
 import {
   resolveVirtualizedInitialScroll,
-  shouldDeferVirtualizedInitialScrollOffset,
   virtualizedInitialScrollIndex,
 } from "./virtualizedInfiniteListInitialScroll";
 
@@ -35,29 +34,5 @@ describe("virtualized initial scroll", () => {
         items: [{ key: "dependencies" }],
       }),
     ).toBe(0);
-  });
-
-  it("defers an offset that needs another loaded page", () => {
-    expect(
-      shouldDeferVirtualizedInitialScrollOffset({
-        hasNextPage: true,
-        maxScrollOffset: 400,
-        offset: 401,
-      }),
-    ).toBe(true);
-    expect(
-      shouldDeferVirtualizedInitialScrollOffset({
-        hasNextPage: true,
-        maxScrollOffset: 400,
-        offset: 400,
-      }),
-    ).toBe(false);
-    expect(
-      shouldDeferVirtualizedInitialScrollOffset({
-        hasNextPage: false,
-        maxScrollOffset: 400,
-        offset: 401,
-      }),
-    ).toBe(false);
   });
 });

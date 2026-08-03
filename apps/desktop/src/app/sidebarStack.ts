@@ -106,16 +106,22 @@ function reduceReplace(
   state: SidebarStackState | null,
   action: Extract<SidebarStackAction, { type: "replace" }>,
 ): SidebarStackState | null {
-  return state === null || state.entries.length === 0
-    ? state
-    : {
-        ...state,
-        activationID: action.activationID ?? state.activationID,
-        entries: [
-          ...state.entries.slice(0, -1),
-          { entryID: action.entryID, destination: action.destination },
-        ],
-      };
+  if (state === null || state.entries.length === 0) {
+    return state;
+  }
+  const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
+  if (existingTaskIndex !== undefined) {
+    return {
+      ...state,
+      activationID: action.activationID ?? state.activationID,
+      entries: state.entries.slice(0, existingTaskIndex + 1),
+    };
+  }
+  return {
+    ...state,
+    activationID: action.activationID ?? state.activationID,
+    entries: [...state.entries.slice(0, -1), { entryID: action.entryID, destination: action.destination }],
+  };
 }
 
 function reducePush(

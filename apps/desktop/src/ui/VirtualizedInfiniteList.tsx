@@ -4,10 +4,7 @@ import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-vi
 import { cx } from "./classes";
 import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
-import {
-  resolveVirtualizedInitialScroll,
-  shouldDeferVirtualizedInitialScrollOffset,
-} from "./virtualizedInfiniteListInitialScroll";
+import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
@@ -269,21 +266,14 @@ export function VirtualizedInfiniteList<TItem>({
     if (element === null) {
       return;
     }
+    // Restoration is deliberately one-shot. If evicted pages make the saved
+    // offset unreachable, the browser clamps to the currently available range;
+    // ordinary infinite-scroll loading remains user-driven.
     const offset = Math.max(0, initialScrollOffset);
-    if (
-      shouldDeferVirtualizedInitialScrollOffset({
-        hasNextPage,
-        maxScrollOffset: element.scrollHeight - element.clientHeight,
-        offset,
-      })
-    ) {
-      requestNextPageIfNeeded(true);
-      return;
-    }
     lastInitialScrollOffsetRequestKeyRef.current = initialScrollOffsetRequestKey;
     element.scrollTop = offset;
     virtualizer.scrollToOffset(offset, { behavior: "auto" });
-  }, [hasNextPage, initialScrollOffset, initialScrollOffsetRequestKey, requestNextPageIfNeeded, virtualizer]);
+  }, [initialScrollOffset, initialScrollOffsetRequestKey, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);
