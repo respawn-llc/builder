@@ -13,7 +13,6 @@ import (
 	"core/server/session"
 	sessionruntime "core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -25,7 +24,7 @@ type sessionRetargetMetadata interface {
 }
 
 type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error
+	PublishSessionIdentity(sessionID string) error
 }
 
 type sessionProcessSource interface {
@@ -156,13 +155,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	closeErr := releaseStarts.Close(context.Background())
 	var publicationErr error
 	if err == nil {
-		publicationErr = s.publisher.PublishSessionIdentity(plan.SessionID, &clientui.SessionExecutionTarget{
-			WorkspaceID:      result.Binding.WorkspaceID,
-			WorkspaceName:    result.Binding.WorkspaceName,
-			WorkspaceRoot:    result.Binding.CanonicalRoot,
-			CwdRelpath:       ".",
-			EffectiveWorkdir: result.Binding.CanonicalRoot,
-		})
+		publicationErr = s.publisher.PublishSessionIdentity(plan.SessionID)
 	}
 	return result, errors.Join(err, publicationErr, closeErr)
 }

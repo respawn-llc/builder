@@ -498,6 +498,7 @@ func (e *Engine) emitQueuedUserMessageStatus(
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
+	e.outputMutationMu.Lock()
 	pending := e.messageFlow.DrainPendingUserInjections()
 	messages := make([]QueuedUserMessage, 0, len(pending))
 	for _, item := range pending {
@@ -505,6 +506,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
+	e.outputMutationMu.Unlock()
 	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
@@ -538,6 +540,7 @@ func (e *Engine) emitStreamingAssistantCleanupEventsRaw(
 	streamID *uuid.UUID,
 	abortReason *AssistantStreamAbortReason,
 ) error {
+	e.transcriptRuntimeState().ClearReasoningState(stepID)
 	emissionErrors := []error{
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	}

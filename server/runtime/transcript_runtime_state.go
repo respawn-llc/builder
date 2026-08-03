@@ -22,6 +22,7 @@ type transcriptRuntimeState struct {
 	cwd                     string
 	chat                    *chatStore
 	liveTools               *transcriptLiveToolLedger
+	reasoning               *TranscriptReasoningState
 	latestRollbackCandidate *rollbacktarget.CandidateLocator
 }
 
@@ -137,6 +138,50 @@ func (s *transcriptRuntimeState) AbortLiveTools() []TranscriptLiveToolStart {
 		return ledger.AbortAll()
 	}
 	return nil
+}
+
+func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
+	if s == nil {
+		return nil
+	}
+	if ledger := s.liveToolLedger(); ledger != nil {
+		return ledger.Snapshot()
+	}
+	return nil
+}
+
+func (s *transcriptRuntimeState) SetReasoningState(stepID string, delta llm.ReasoningSummaryDelta) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.reasoning = &TranscriptReasoningState{
+		StepID:        strings.TrimSpace(stepID),
+		Key:           strings.TrimSpace(delta.Key),
+		Text:          delta.Text,
+		CurrentStatus: cloneReasoningStatus(delta.CurrentStatus),
+	}
+	s.mu.Unlock()
+}
+
+func (s *transcriptRuntimeState) ClearReasoningState(stepID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.reasoning != nil && s.reasoning.StepID == strings.TrimSpace(stepID) {
+		s.reasoning = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *transcriptRuntimeState) ReasoningSnapshot() *TranscriptReasoningState {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneTranscriptReasoningState(s.reasoning)
 }
 
 func (s *transcriptRuntimeState) SnapshotMessages() []llm.Message {

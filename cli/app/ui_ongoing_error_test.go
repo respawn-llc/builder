@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"net"
 	"testing"
 
 	"core/cli/tui/ongoing"
@@ -54,6 +55,12 @@ func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
 	}
 	if !m.Transition().Exit {
 		t.Fatal("transcript-open failure did not request clear TUI exit")
+	}
+	m = newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
+	err := &net.OpError{Err: errors.New("connection refused")}
+	_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventFailure, Err: err})
+	if m.transientStatus == err.Error() {
+		t.Fatal("connection failure leaked transport detail")
 	}
 }
 

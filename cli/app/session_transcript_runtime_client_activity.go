@@ -84,13 +84,11 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 	case clientui.TranscriptMessageSessionStatus:
 		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, message.Payload().(clientui.TranscriptSessionStatus))
 	case clientui.TranscriptMessageSessionIdentity:
-		applyTranscriptSessionIdentityToRuntimeView(&view.Session, message.Payload().(clientui.TranscriptSessionIdentity))
+		applyTranscriptSessionIdentityToRuntimeMainView(view, message.Payload().(clientui.TranscriptSessionIdentity))
 	case clientui.TranscriptMessageContextUsage:
 		view.Status.ContextUsage = runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
 		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus))
-	case clientui.TranscriptMessageCompactionStatus:
-		view.Status.CompactionCount = message.Payload().(clientui.TranscriptCompactionStatus).Count
 	default:
 		return false
 	}
@@ -99,7 +97,7 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 
 func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
 	applyTranscriptSessionStatusToRuntimeStatus(&view.Status, hydration.SessionStatus)
-	applyTranscriptSessionIdentityToRuntimeView(&view.Session, hydration.SessionIdentity)
+	applyTranscriptSessionIdentityToRuntimeMainView(view, hydration.SessionIdentity)
 	view.Status.ContextUsage = clientui.RuntimeContextUsage{}
 	if hydration.ContextUsage != nil {
 		view.Status.ContextUsage = runtimeContextUsageFromTranscript(*hydration.ContextUsage)
@@ -107,9 +105,6 @@ func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, 
 	view.Status.Goal = nil
 	if hydration.GoalStatus != nil {
 		view.Status.Goal = runtimeGoalFromTranscript(*hydration.GoalStatus)
-	}
-	if hydration.ActiveCompaction != nil {
-		view.Status.CompactionCount = hydration.ActiveCompaction.Count
 	}
 }
 
@@ -122,6 +117,7 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	status.FastModeEnabled = update.FastModeEnabled
 	status.ThinkingLevel = update.ThinkingLevel
 	status.CompactionMode = update.CompactionMode
+	status.CompactionCount = update.CompactionCount
 	status.PreviousSessionID = textutil.Pointer(update.PreviousSessionID)
 	status.ParentAgentSessionID = textutil.Pointer(update.ParentAgentSessionID)
 	status.NavigationTargetSessionID = textutil.Pointer(update.NavigationTargetSessionID)
@@ -134,16 +130,17 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	}
 }
 
-func applyTranscriptSessionIdentityToRuntimeView(view *clientui.RuntimeSessionView, identity clientui.TranscriptSessionIdentity) {
-	view.SessionID = identity.SessionID.String()
-	view.SessionName = ""
+func applyTranscriptSessionIdentityToRuntimeMainView(view *clientui.RuntimeMainView, identity clientui.TranscriptSessionIdentity) {
+	view.Session.SessionID = identity.SessionID.String()
+	view.Session.SessionName = ""
 	if identity.SessionName != nil {
-		view.SessionName = *identity.SessionName
+		view.Session.SessionName = *identity.SessionName
 	}
-	view.ConversationFreshness = identity.ConversationFreshness
-	view.ExecutionTarget = clientui.SessionExecutionTarget{}
+	view.Session.ConversationFreshness = identity.ConversationFreshness
+	view.Status.ConversationFreshness = identity.ConversationFreshness
+	view.Session.ExecutionTarget = clientui.SessionExecutionTarget{}
 	if identity.ExecutionTarget != nil {
-		view.ExecutionTarget = clientui.NormalizeSessionExecutionTarget(*identity.ExecutionTarget)
+		view.Session.ExecutionTarget = clientui.NormalizeSessionExecutionTarget(*identity.ExecutionTarget)
 	}
 }
 

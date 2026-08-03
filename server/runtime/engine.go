@@ -545,6 +545,8 @@ func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestI
 func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
+		e.outputMutationMu.Lock()
+		defer e.outputMutationMu.Unlock()
 		item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return item
@@ -555,8 +557,10 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
+			e.outputMutationMu.Lock()
 			item := e.messageFlow.QueueUserMessageWithID(liveItem)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
 				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -572,11 +576,15 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
+		e.outputMutationMu.Lock()
 		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		e.outputMutationMu.Unlock()
 		return liveItem
 	}
+	e.outputMutationMu.Lock()
 	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+	e.outputMutationMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
 	return item
@@ -608,6 +616,8 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)

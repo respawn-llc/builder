@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"container/list"
 	"strings"
 	"sync"
 
@@ -18,10 +19,16 @@ type TranscriptLiveToolStart struct {
 type transcriptLiveToolLedger struct {
 	mu       sync.Mutex
 	inFlight map[string]TranscriptLiveToolStart
+	order    *list.List
+	nodes    map[string]*list.Element
 }
 
 func newTranscriptLiveToolLedger() *transcriptLiveToolLedger {
-	return &transcriptLiveToolLedger{inFlight: make(map[string]TranscriptLiveToolStart)}
+	return &transcriptLiveToolLedger{
+		inFlight: make(map[string]TranscriptLiveToolStart),
+		order:    list.New(),
+		nodes:    make(map[string]*list.Element),
+	}
 }
 
 func (l *transcriptLiveToolLedger) RecordStart(start TranscriptLiveToolStart) error {
@@ -37,10 +44,17 @@ func (l *transcriptLiveToolLedger) RecordStart(start TranscriptLiveToolStart) er
 	if l.inFlight == nil {
 		l.inFlight = make(map[string]TranscriptLiveToolStart)
 	}
+	if l.order == nil {
+		l.order = list.New()
+	}
+	if l.nodes == nil {
+		l.nodes = make(map[string]*list.Element)
+	}
 	if _, ok := l.inFlight[normalized.ToolCallID]; ok {
 		return nil
 	}
 	l.inFlight[normalized.ToolCallID] = normalized
+	l.nodes[normalized.ToolCallID] = l.order.PushBack(normalized.ToolCallID)
 	return nil
 }
 
@@ -54,6 +68,10 @@ func (l *transcriptLiveToolLedger) Complete(callID string) {
 	}
 	l.mu.Lock()
 	delete(l.inFlight, callID)
+	if node := l.nodes[callID]; node != nil {
+		l.order.Remove(node)
+		delete(l.nodes, callID)
+	}
 	l.mu.Unlock()
 }
 
@@ -67,9 +85,33 @@ func (l *transcriptLiveToolLedger) AbortAll() []TranscriptLiveToolStart {
 		return nil
 	}
 	out := make([]TranscriptLiveToolStart, 0, len(l.inFlight))
-	for callID, start := range l.inFlight {
-		out = append(out, cloneTranscriptLiveToolStart(start))
-		delete(l.inFlight, callID)
+	for node := l.order.Front(); node != nil; node = node.Next() {
+		callID := node.Value.(string)
+		if start, ok := l.inFlight[callID]; ok {
+			out = append(out, cloneTranscriptLiveToolStart(start))
+		}
+	}
+	l.inFlight = make(map[string]TranscriptLiveToolStart)
+	l.order.Init()
+	clear(l.nodes)
+	return out
+}
+
+func (l *transcriptLiveToolLedger) Snapshot() []TranscriptLiveToolStart {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.order == nil || l.order.Len() == 0 {
+		return nil
+	}
+	out := make([]TranscriptLiveToolStart, 0, l.order.Len())
+	for node := l.order.Front(); node != nil; node = node.Next() {
+		callID := node.Value.(string)
+		if start, ok := l.inFlight[callID]; ok {
+			out = append(out, cloneTranscriptLiveToolStart(start))
+		}
 	}
 	return out
 }
@@ -100,6 +142,12 @@ func (l *transcriptLiveToolLedger) Seed(starts []TranscriptLiveToolStart) {
 	if l.inFlight == nil {
 		l.inFlight = make(map[string]TranscriptLiveToolStart, len(starts))
 	}
+	if l.order == nil {
+		l.order = list.New()
+	}
+	if l.nodes == nil {
+		l.nodes = make(map[string]*list.Element)
+	}
 	for _, start := range starts {
 		normalized, err := normalizeTranscriptLiveToolStart(start)
 		if err != nil {
@@ -107,6 +155,7 @@ func (l *transcriptLiveToolLedger) Seed(starts []TranscriptLiveToolStart) {
 		}
 		if _, exists := l.inFlight[normalized.ToolCallID]; !exists {
 			l.inFlight[normalized.ToolCallID] = normalized
+			l.nodes[normalized.ToolCallID] = l.order.PushBack(normalized.ToolCallID)
 		}
 	}
 }
@@ -140,6 +189,26 @@ func cloneTranscriptLiveToolStart(start TranscriptLiveToolStart) TranscriptLiveT
 		ToolName:     start.ToolName,
 		Presentation: cloneTranscriptToolCallMeta(start.Presentation),
 	}
+}
+
+func cloneTranscriptReasoningState(state *TranscriptReasoningState) *TranscriptReasoningState {
+	if state == nil {
+		return nil
+	}
+	return &TranscriptReasoningState{
+		StepID:        state.StepID,
+		Key:           state.Key,
+		Text:          state.Text,
+		CurrentStatus: cloneReasoningStatus(state.CurrentStatus),
+	}
+}
+
+func cloneReasoningStatus(status *llm.ReasoningStatus) *llm.ReasoningStatus {
+	if status == nil {
+		return nil
+	}
+	copyStatus := *status
+	return &copyStatus
 }
 
 func cloneTranscriptToolCallMeta(meta *transcript.ToolCallMeta) *transcript.ToolCallMeta {

@@ -111,6 +111,7 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 		FastModeEnabled:           engine.FastModeEnabled(),
 		ThinkingLevel:             engine.ThinkingLevel(),
 		CompactionMode:            engine.CompactionMode(),
+		CompactionCount:           engine.CompactionCount(),
 		PreviousSessionID:         engine.PreviousSessionID(),
 		ParentAgentSessionID:      engine.ParentAgentSessionID(),
 		NavigationTargetSessionID: engine.NavigationTargetSessionID(),

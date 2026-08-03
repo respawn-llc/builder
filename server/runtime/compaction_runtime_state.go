@@ -1,12 +1,16 @@
 package runtime
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 type compactionRuntimeState struct {
 	mu                 sync.Mutex
 	count              int
 	soonReminderIssued bool
 	manualEligible     bool
+	active             *TranscriptCompactionState
 }
 
 func (s *compactionRuntimeState) ManualCompactionEligible() bool {
@@ -29,6 +33,43 @@ func (s *compactionRuntimeState) SetManualCompactionEligible(eligible bool) {
 
 func newCompactionRuntimeState() *compactionRuntimeState {
 	return &compactionRuntimeState{}
+}
+
+func (s *compactionRuntimeState) SetActive(stepID, mode string, count int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.active = &TranscriptCompactionState{
+		StepID: strings.TrimSpace(stepID),
+		Mode:   strings.TrimSpace(mode),
+		Count:  count,
+	}
+	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) ClearActive(stepID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.active != nil && s.active.StepID == strings.TrimSpace(stepID) {
+		s.active = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) ActiveSnapshot() *TranscriptCompactionState {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		return nil
+	}
+	active := *s.active
+	return &active
 }
 
 func (s *compactionRuntimeState) Count() int {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui/ongoing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -63,6 +64,9 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	case ongoingTranscriptEventFailure:
 		err = fmt.Errorf("open transcript subscription: %w", event.Err)
 		m.logf("ongoing.transcript.open.error err=%q", err.Error())
+		if runtimeattach.IsRuntimeConnectionError(event.Err) {
+			return m.exitWithUIError("server connection lost")
+		}
 		return m.handleFatalUIError(fmt.Sprintf("ongoing transcript failed: %v", err), err)
 	default:
 		if m.debugMode {

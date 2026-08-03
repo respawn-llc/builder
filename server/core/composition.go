@@ -176,7 +176,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
-	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
+	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
+	if runtimeSupport.Background != nil {
+		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
+	}
 	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).

@@ -13,10 +13,49 @@ type reviewerRuntimeState struct {
 	mu              sync.Mutex
 	client          llm.Client
 	resumeFrequency string
+	active          *TranscriptReviewerState
 }
 
 func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
 	return &reviewerRuntimeState{client: client}
+}
+
+func (s *reviewerRuntimeState) SetActiveStep(stepID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	normalized := strings.TrimSpace(stepID)
+	if normalized == "" {
+		s.mu.Unlock()
+		panic("reviewer active step id is required")
+	}
+	s.active = &TranscriptReviewerState{StepID: normalized}
+	s.mu.Unlock()
+}
+
+func (s *reviewerRuntimeState) ClearActiveStep(stepID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.active != nil && s.active.StepID == strings.TrimSpace(stepID) {
+		s.active = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *reviewerRuntimeState) ActiveStepSnapshot() *TranscriptReviewerState {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		return nil
+	}
+	state := *s.active
+	return &state
 }
 
 func (s *reviewerRuntimeState) Client() llm.Client {

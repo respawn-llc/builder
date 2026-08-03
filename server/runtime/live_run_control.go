@@ -232,8 +232,10 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 		return QueuedUserMessage{}, false, context.Canceled
 	}
 	committed = true
+	e.outputMutationMu.Lock()
 	item = e.messageFlow.QueueUserMessageWithID(item)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+	e.outputMutationMu.Unlock()
 	queueItemID := mustQueueItemID(item.ID)
 	if e.liveRun.finishQueueItemPublication(queueItemID) {
 		e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -300,11 +302,13 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		rawIDs = append(rawIDs, id)
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
+	e.outputMutationMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
 	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 	}
+	e.outputMutationMu.Unlock()
 	e.liveRun.clearStoppedQueueItems(failed)
 }
 
@@ -321,6 +325,7 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) 
 		return items
 	}
 	filtered := items[:0]
+	e.outputMutationMu.Lock()
 	for _, item := range items {
 		id := mustQueueItemID(item.message.ID)
 		if _, ok := stopped[id]; ok {
@@ -330,6 +335,7 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) 
 		}
 		filtered = append(filtered, item)
 	}
+	e.outputMutationMu.Unlock()
 	return filtered
 }
 

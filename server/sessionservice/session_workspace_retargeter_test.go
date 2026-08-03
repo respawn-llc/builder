@@ -15,7 +15,6 @@ import (
 	"core/server/session"
 	sessionruntime "core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -28,14 +27,10 @@ func (s retargetProcessSource) List() []shelltool.Snapshot {
 	return append([]shelltool.Snapshot(nil), s...)
 }
 
-type retargetIdentityPublisher map[string]clientui.SessionExecutionTarget
+type retargetIdentityPublisher map[string]int
 
-func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error {
-	if target == nil {
-		delete(p, sessionID)
-		return nil
-	}
-	p[sessionID] = *target
+func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string) error {
+	p[sessionID]++
 	return nil
 }
 
@@ -315,9 +310,8 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if !projectContainsWorkspaceRoot(t, fixture.metadata, targetProjectID, result.Binding.CanonicalRoot) {
 		t.Fatalf("target project does not contain auto-attached workspace %q", result.Binding.CanonicalRoot)
 	}
-	published, ok := fixture.publisher[fixture.child.Meta().SessionID]
-	if !ok || published.EffectiveWorkdir != result.Binding.CanonicalRoot {
-		t.Fatalf("published identity = %+v, present=%t", published, ok)
+	if published := fixture.publisher[fixture.child.Meta().SessionID]; published != 1 {
+		t.Fatalf("identity publication count = %d, want one", published)
 	}
 	if workdir := fixture.runtimeWorkdir(t); workdir != result.Binding.CanonicalRoot {
 		t.Fatalf("runtime workdir = %q, want %q", workdir, result.Binding.CanonicalRoot)
