@@ -81,17 +81,18 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     queryByColumn.set("column-1", queryState({ error: new Error(), isError: true, refetch }));
     view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary?.state).toBe("error"));
-    expect(loggerAppend).toHaveBeenCalledWith(
-      "warn",
-      expect.any(String),
+    const logCall = loggerAppend.mock.calls[0];
+    expect(logCall?.[0]).toBe("warn");
+    expect(typeof logCall?.[1]).toBe("string");
+    expect(logCall?.[2]).toEqual(
       expect.objectContaining({
         columnID: "column-1",
-        error: expect.any(String),
         filterGeneration: "3",
         projectID: "project-1",
         workflowID: "workflow-1",
       }),
     );
+    expect(typeof (logCall?.[2] as { error?: unknown } | undefined)?.error).toBe("string");
     latestView?.replacementBoundary?.state === "error" && latestView.replacementBoundary.onRetry();
     const staleRetry = latestView?.replacementBoundary;
     runtime.snapshot = {
