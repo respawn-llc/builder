@@ -127,6 +127,9 @@ export function BoardColumnDataOwner({
       void refetch();
     }
   }, [refetch, requestEnabled]);
+  const replacementDataRetained =
+    cardsQuery.data !== undefined &&
+    hydratedFilterGenerationRef.current !== activeFilterGeneration.generation;
   const mountedRef = useRef(true);
   const noticeRef = useRef<Readonly<{ generation: number; noticeID: string }> | null>(null);
   const noticeID = boardColumnNoticeID(
@@ -239,10 +242,10 @@ export function BoardColumnDataOwner({
   }, [dataView, stableOnDataViewChange]);
 
   useEffect(() => {
-    if (isError && !isPlaceholderData) {
+    if (isError && !replacementDataRetained) {
       stableOnCardsLoadError(error);
     }
-  }, [error, isError, isPlaceholderData, stableOnCardsLoadError]);
+  }, [error, isError, replacementDataRetained, stableOnCardsLoadError]);
 
   useEffect(() => {
     const notice = noticeRef.current;
@@ -263,7 +266,7 @@ export function BoardColumnDataOwner({
   ]);
 
   useEffect(() => {
-    if (isError && isPlaceholderData && cardsQuery.data !== undefined && requestEnabled) {
+    if (isError && replacementDataRetained && requestEnabled) {
       noticeRef.current = { generation: activeFilterGeneration.generation, noticeID };
       stableOnBoardColumnNotice({
         kind: "failure",
@@ -293,6 +296,7 @@ export function BoardColumnDataOwner({
     noticeID,
     stableOnBoardColumnNotice,
     requestEnabled,
+    replacementDataRetained,
     retryReplacement,
   ]);
 

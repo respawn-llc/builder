@@ -70,9 +70,13 @@ describe("BoardColumnDataOwner retained replacement notices", () => {
       </StrictMode>,
     );
 
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      active: { ...runtime.snapshot.active, generation: 3 },
+    };
     queryByColumn.set(
       "column-1",
-      queryState({ error: new Error("replacement failed"), isError: true, isPlaceholderData: true, refetch }),
+      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
     );
     view.rerender(
       <StrictMode>
@@ -90,14 +94,14 @@ describe("BoardColumnDataOwner retained replacement notices", () => {
 
     runtime.snapshot = {
       ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 3 },
+      active: { ...runtime.snapshot.active, generation: 4 },
     };
     failure?.retry();
     expect(refetch).toHaveBeenCalledOnce();
 
     runtime.snapshot = {
       active: {
-        generation: 3,
+        generation: 4,
         filter: canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true }),
         retiring: false,
       },

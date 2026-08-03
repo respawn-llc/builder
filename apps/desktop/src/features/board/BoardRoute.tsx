@@ -29,7 +29,7 @@ import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import type { BoardColumnNoticeEvent } from "./BoardColumnDataOwner";
-import { boardColumnNoticeStatusNotice } from "./BoardColumnNotice";
+import { boardColumnNoticeDiagnostic, boardColumnNoticeStatusNotice } from "./BoardColumnNotice";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 import type { BoardColumnDropState } from "./BoardDragTypes";
@@ -237,7 +237,7 @@ function BoardContent({
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
   >(() => ({ ids: new Set(), scope: "" }));
   const { dismiss, push } = useStatusController();
-  const { api, nativeBridge } = useAppServices();
+  const { api, logger, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
   const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
@@ -340,6 +340,13 @@ function BoardContent({
   );
   const reportColumnNotice = useCallback(
     (event: BoardColumnNoticeEvent) => {
+      const diagnostic = boardColumnNoticeDiagnostic(event, {
+        projectID: board.projectID,
+        workflowID: board.selectedWorkflow.id,
+      });
+      if (diagnostic !== null) {
+        void logger.append("warn", diagnostic.message, diagnostic.context);
+      }
       const notice = boardColumnNoticeStatusNotice(event, {
         cardsLoadRetryBody: t("board.cardsLoadRetryBody"),
         cardsLoadFailed: t("board.cardsLoadFailed"),
@@ -351,7 +358,7 @@ function BoardContent({
       }
       push(notice);
     },
-    [dismiss, push, t],
+    [board.projectID, board.selectedWorkflow.id, dismiss, logger, push, t],
   );
   const reportNavigationError = useCallback(
     (error: unknown) => {
