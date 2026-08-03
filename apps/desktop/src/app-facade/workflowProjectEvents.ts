@@ -12,7 +12,7 @@ export function workflowProjectQuestionTaskID(event: WorkflowProjectEvent): stri
 }
 
 export function workflowProjectEventCanChangeTaskSearch(event: WorkflowProjectEvent): boolean {
-  return event.resource === "task";
+  return event.resource === "task" || (event.resource === "workflow" && event.action === "deleted");
 }
 
 // workflowProjectEventAffectsTask reports whether a project event mutates the
