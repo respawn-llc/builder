@@ -14,6 +14,8 @@ import {
 
 const optionalSearchString = z.string().catch("");
 const optionalWorkflowSelector = workflowIDSchema.optional();
+const legacyEmptyTaskSelectorMessage =
+  "This legacy project URL contains an empty task selector. Remove '?taskId=' from the URL and reload the project.";
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
@@ -35,7 +37,7 @@ const homeRoute = createRoute({
 const projectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$projectId",
-  validateSearch: (search: Record<string, unknown>) => projectSearchSchema.parse(search),
+  validateSearch: validateProjectSearch,
   component: ProjectRoute,
 });
 
@@ -78,6 +80,13 @@ export type AppRouter = ReturnType<typeof createAppRouter>;
 
 export function shouldSkipNativeDialogStartupGate(pathname: string): boolean {
   return pathname === workspaceUnlinkNativeDialogPath;
+}
+
+function validateProjectSearch(search: Record<string, unknown>) {
+  if (search.taskId === "") {
+    throw new Error(legacyEmptyTaskSelectorMessage);
+  }
+  return projectSearchSchema.parse(search);
 }
 
 declare module "@tanstack/react-router" {
