@@ -278,7 +278,25 @@ func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workf
 	if marshalErr != nil {
 		t.Fatalf("Current Nodes = %+v did not reach expected state", nodes)
 	}
-	t.Fatalf("Current Nodes = %s did not reach expected state", encoded)
+	controller, controllerMarshalErr := json.Marshal(f.controller.Snapshot())
+	if controllerMarshalErr != nil {
+		t.Fatalf("Current Nodes = %s did not reach expected state; controller snapshot = %+v", encoded, f.controller.Snapshot())
+	}
+	executionState, executionStateErr := f.authority.CurrentWorkflowTaskExecutionState(taskID)
+	if executionStateErr != nil {
+		t.Fatalf(
+			"Current Nodes = %s did not reach expected state; controller snapshot = %s; execution state error = %v",
+			encoded,
+			controller,
+			executionStateErr,
+		)
+	}
+	t.Fatalf(
+		"Current Nodes = %s did not reach expected state; controller snapshot = %s; execution state = %+v",
+		encoded,
+		controller,
+		executionState,
+	)
 	return nil
 }
 
@@ -1185,7 +1203,15 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	if err != nil {
 		t.Fatalf("subscribe source transcript: %v", err)
 	}
-	t.Cleanup(func() { _ = transcript.Close() })
+	var closeTranscript sync.Once
+	closeTranscriptSubscription := func() {
+		closeTranscript.Do(func() {
+			if err := transcript.Close(); err != nil {
+				t.Errorf("close source transcript subscription: %v", err)
+			}
+		})
+	}
+	t.Cleanup(closeTranscriptSubscription)
 
 	releaseSource.Do(func() { close(sourceResponseRelease) })
 	successorNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
@@ -1211,7 +1237,7 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	}
 	if err := os.WriteFile(
 		laterScriptPath,
-		[]byte("#!/bin/sh\n: > "+workflowRunnerShellQuote(laterScriptMarker)+"\nprintf '%s' '{\"commentary\":\"later script done\"}'\n"),
+		[]byte("#!/bin/sh\nprintf '%s' '{\"commentary\":\"later script done\"}'\n: > "+workflowRunnerShellQuote(laterScriptMarker)+"\n"),
 		0o755,
 	); err != nil {
 		t.Fatalf("write later automatic script: %v", err)
@@ -1225,6 +1251,7 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 
 	releaseSuccessor.Do(func() { close(successorResponseRelease) })
 	f.waitForPath(t, laterScriptMarker)
+	closeTranscriptSubscription()
 	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
