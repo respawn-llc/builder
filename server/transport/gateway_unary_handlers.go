@@ -119,7 +119,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if err != nil {
 			return responseForError(req.ID, err)
 		}
-		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+		workspaceRoot, err := g.promptCommandWorkspaceRootForState(ctx, state)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 		if err != nil {
 			return responseForError(req.ID, err)
 		}

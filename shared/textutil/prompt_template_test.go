@@ -13,3 +13,10 @@ func TestExpandPromptTemplateReplacesEveryArgumentsTokenOrAppendsTrailingArgumen
 		t.Fatalf("empty args = %q", got)
 	}
 }
+
+func TestExpandPromptTemplateOnlyExpandsExactArgumentsTokens(t *testing.T) {
+	prompt := "prefix$ARGUMENTS $ARGUMENTS_SUFFIX $ARGUMENTS, $ARGUMENTS"
+	if got := ExpandPromptTemplate(prompt, "src"); got != "prefix$ARGUMENTS $ARGUMENTS_SUFFIX src, src" {
+		t.Fatalf("exact-token expansion = %q", got)
+	}
+}

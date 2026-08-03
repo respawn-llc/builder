@@ -37,14 +37,7 @@ type promptCommandEffectiveWorkspaceResolver struct {
 }
 
 func promptCommandWorkspaceRoot(target clientui.SessionExecutionTarget, fallback string) (string, error) {
-	if target.Worktree == nil {
-		return fallback, nil
-	}
-	root := strings.TrimSpace(target.Worktree.Root)
-	if root == "" {
-		return "", errors.New("session execution worktree root is required")
-	}
-	return root, nil
+	return clientui.SessionExecutionWorkspaceRoot(target, fallback)
 }
 
 func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspace(ctx context.Context, workspaceRoot, name, arguments string) (string, error) {

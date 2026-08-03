@@ -29,7 +29,7 @@ type onboardingImportDiscovery struct {
 	skillChoices            []onboardingImportChoice
 	commandChoices          []onboardingImportChoice
 	skillRecommendationID   string
-	commandRecommendationID string
+	commandRecommendationID *string
 	skillSymlinkItems       map[onboardingImportProviderID][]onboardingSkillImportItem
 	skillEnablementByChoice map[string][]onboardingSkillImportItem
 	generatedSkillItems     []onboardingSkillImportItem
@@ -60,10 +60,10 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 	}
 	discovery.skipSkills = facts.Skills.Target.Skip
 	discovery.skipCommands = facts.Commands.Target.Skip
-	if importErr, ok := skillImportError(facts.Errors); ok {
+	if importErr, ok := firstImportError(facts.Errors, serverapi.ImportErrorItemKindSkill, true); ok {
 		discovery.err = errors.New(importErr.Message)
 	}
-	if importErr, ok := commandImportError(facts.Errors); ok {
+	if importErr, ok := firstImportError(facts.Errors, serverapi.ImportErrorItemKindCommand, false); ok {
 		discovery.commandErr = errors.New(importErr.Message)
 	}
 	discovery.skillChoices = importChoicesFromFacts(facts.Skills.Choices)
@@ -75,9 +75,9 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 		discovery.skillRecommendationID = id
 	}
 	if id, ok := importChoiceIDFromRecommendation(facts.Recommendations.Commands, discovery.commandChoices); ok {
-		discovery.commandRecommendationID = id
+		discovery.commandRecommendationID = textutil.Value(id)
 	} else if id, ok := noneChoiceID(discovery.commandChoices); ok {
-		discovery.commandRecommendationID = id
+		discovery.commandRecommendationID = textutil.Value(id)
 	}
 	for _, item := range facts.Skills.Items {
 		converted := skillImportItemFromFact(item)
@@ -101,18 +101,15 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 	return discovery
 }
 
-func commandImportError(errors []serverapi.ImportErrorFact) (serverapi.ImportErrorFact, bool) {
+func firstImportError(errors []serverapi.ImportErrorFact, wanted serverapi.ImportErrorItemKind, includeUnscoped bool) (serverapi.ImportErrorFact, bool) {
 	for _, importErr := range errors {
-		if importErr.ItemKind != nil && *importErr.ItemKind == serverapi.ImportErrorItemKindCommand {
-			return importErr, true
+		if importErr.ItemKind == nil {
+			if includeUnscoped {
+				return importErr, true
+			}
+			continue
 		}
-	}
-	return serverapi.ImportErrorFact{}, false
-}
-
-func skillImportError(errors []serverapi.ImportErrorFact) (serverapi.ImportErrorFact, bool) {
-	for _, importErr := range errors {
-		if importErr.ItemKind == nil || *importErr.ItemKind == serverapi.ImportErrorItemKindSkill {
+		if *importErr.ItemKind == wanted {
 			return importErr, true
 		}
 	}
@@ -350,7 +347,10 @@ func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
 		}
 		return screen
 	}
-	defaultID := state.imports.commandRecommendationID
+	defaultID := options[0].ID
+	if state.imports.commandRecommendationID != nil {
+		defaultID = *state.imports.commandRecommendationID
+	}
 	if selectedID, ok := optionIDForSelection(state.imports.commandChoices, state.selections.commandImport); ok {
 		defaultID = selectedID
 	}

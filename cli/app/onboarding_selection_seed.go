@@ -34,9 +34,9 @@ func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsRespo
 		imports:       onboardingImportDiscoveryFromFacts(facts.Imports),
 		debug:         cfg.Settings.Debug,
 	}
-	if id := state.imports.commandRecommendationID; id != "" {
+	if id := state.imports.commandRecommendationID; id != nil {
 		for _, choice := range state.imports.commandChoices {
-			if choice.OptionID == id {
+			if choice.OptionID == *id {
 				state.selections.commandImport = onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
 				break
 			}
