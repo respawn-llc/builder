@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useState, type ComponentProps, type CSSProperties } from "react";
-import { bundledLanguages, bundledLanguagesInfo, getSingletonHighlighter, type BundledLanguage, type ThemedTokenWithVariants } from "shiki";
+import { bundledLanguages, bundledLanguagesInfo, getSingletonHighlighter, type BundledLanguage, type Highlighter, type ThemedTokenWithVariants } from "shiki";
 import { Streamdown, type Components, type CustomRendererProps, type ExtraProps } from "streamdown";
 
 import { Checkbox } from "./radix/checkbox";
 import { projectMarkdownText } from "./taskBodyMarkdownText";
+import "streamdown/styles.css";
 import "./MarkdownText.css";
 import "./StreamdownMarkdown.css";
 
@@ -21,10 +22,7 @@ export type TaskBodyMarkdownProps = Readonly<{ value: string }>;
 type MarkdownTaskListItemContextValue = Readonly<{ onChange: StaticMarkdownProps["onTaskListChange"]; sourceOffset: number | undefined; taskListItemToggleLabel: StaticMarkdownProps["taskListItemToggleLabel"]; value: string; disabled: boolean }>;
 
 const MarkdownTaskListItemContext = createContext<MarkdownTaskListItemContextValue | null>(null);
-const highlighterPromise = getSingletonHighlighter({
-  langs: [],
-  themes: ["github-light", "github-dark"],
-});
+let highlighterPromise: Promise<Highlighter> | undefined;
 const languageLookup = languageMetadata();
 const languageKeys = [...languageLookup.keys()];
 const richComponents = {
@@ -43,19 +41,7 @@ export function TaskBodyMarkdown({ value }: TaskBodyMarkdownProps) {
   return <span className="markdown-plain-text">{projectMarkdownText(value)}</span>;
 }
 
-function MarkdownCore({
-  animated,
-  disabled = false,
-  onChange,
-  taskListItemToggleLabel,
-  value,
-}: Readonly<{
-  animated: boolean;
-  disabled?: boolean;
-  onChange?: StaticMarkdownProps["onTaskListChange"];
-  taskListItemToggleLabel?: StaticMarkdownProps["taskListItemToggleLabel"];
-  value: string;
-}>) {
+function MarkdownCore({ animated, disabled = false, onChange, taskListItemToggleLabel, value }: Readonly<{ animated: boolean; disabled?: boolean; onChange?: StaticMarkdownProps["onTaskListChange"]; taskListItemToggleLabel?: StaticMarkdownProps["taskListItemToggleLabel"]; value: string }>) {
   const interaction = { disabled, onChange, taskListItemToggleLabel, value };
   return (
     <MarkdownTaskListItemContext.Provider value={{ ...interaction, sourceOffset: undefined }}>
@@ -75,28 +61,13 @@ function MarkdownCore({
   );
 }
 
-function MarkdownTaskListItem({
-  children,
-  node,
-  ...props
-}: ComponentProps<"li"> & ExtraProps) {
+function MarkdownTaskListItem({ children, node, ...props }: ComponentProps<"li"> & ExtraProps) {
   const taskListItem = useContext(MarkdownTaskListItemContext);
   const className = node?.properties.className;
-  const isTaskItem =
-    className === "task-list-item" ||
-    (Array.isArray(className) && className.includes("task-list-item"));
+  const isTaskItem = className === "task-list-item" || (Array.isArray(className) && className.includes("task-list-item"));
   if (!isTaskItem) return <li {...props}>{children}</li>;
   if (taskListItem === null) return <li {...props}>{children}</li>;
-  return (
-    <MarkdownTaskListItemContext.Provider
-      value={{
-        ...taskListItem,
-        sourceOffset: node?.position?.start.offset,
-      }}
-    >
-      <li {...props}>{children}</li>
-    </MarkdownTaskListItemContext.Provider>
-  );
+  return <MarkdownTaskListItemContext.Provider value={{ ...taskListItem, sourceOffset: node?.position?.start.offset }}><li {...props}>{children}</li></MarkdownTaskListItemContext.Provider>;
 }
 
 function MarkdownTaskListCheckbox({ checked, type }: ComponentProps<"input"> & ExtraProps) {
@@ -106,20 +77,9 @@ function MarkdownTaskListCheckbox({ checked, type }: ComponentProps<"input"> & E
   const sourceOffset = taskListItem?.sourceOffset;
   const editable = taskListItem?.onChange !== undefined && sourceOffset !== undefined;
   const checkedFromSource = editable ? taskListChecked(taskListItem.value, sourceOffset) : checkedValue;
-  return (
-    <Checkbox
-      checked={checkedFromSource}
-      className="markdown-task-list-checkbox"
-      disabled={taskListItem?.disabled !== false || !editable}
-      onCheckedChange={(nextChecked) => {
-        if (nextChecked === "indeterminate" || !editable) return;
-        taskListItem.onChange(toggleTaskListMarker(taskListItem.value, sourceOffset, nextChecked));
-      }}
-      {...(taskListItem?.taskListItemToggleLabel === undefined
-        ? {}
-        : { "aria-label": taskListItem.taskListItemToggleLabel(checkedValue) })}
-    />
-  );
+  return <Checkbox checked={checkedFromSource} className="markdown-task-list-checkbox" disabled={taskListItem?.disabled !== false || !editable}
+    onCheckedChange={(nextChecked) => { if (nextChecked === "indeterminate" || !editable) return; taskListItem.onChange(toggleTaskListMarker(taskListItem.value, sourceOffset, nextChecked)); }}
+    {...(taskListItem?.taskListItemToggleLabel === undefined ? {} : { "aria-label": taskListItem.taskListItemToggleLabel(checkedValue) })} />;
 }
 
 function taskListChecked(value: string, sourceOffset: number): boolean {
@@ -129,47 +89,43 @@ function taskListChecked(value: string, sourceOffset: number): boolean {
 
 function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) {
   const canonicalLanguage = languageLookup.get(language);
-  const [highlighted, setHighlighted] = useState<{
-    language: BundledLanguage;
-    source: string;
-    tokens: readonly (readonly ThemedTokenWithVariants[])[];
-  } | null>(null);
+  const [highlighted, setHighlighted] = useState<{ language: BundledLanguage; source: string; tokens: readonly (readonly ThemedTokenWithVariants[])[] } | null>(null);
+  const [failure, setFailure] = useState<{ language: BundledLanguage; source: string; error: unknown } | null>(null);
   useEffect(() => {
     let active = true;
     if (isIncomplete || canonicalLanguage === undefined) return () => void (active = false);
-    void highlighterPromise.then(async (highlighter) => {
-      await highlighter.loadLanguage(canonicalLanguage);
-      if (!active) return;
-      const tokens = highlighter.codeToTokensWithThemes(code, {
-        lang: canonicalLanguage,
-        themes: { dark: "github-dark", light: "github-light" },
-      });
-      setHighlighted({ language: canonicalLanguage, source: code, tokens });
-    });
+    void highlightCode(code, canonicalLanguage).then((tokens) => { if (active) setHighlighted({ language: canonicalLanguage, source: code, tokens }); })
+      .catch((error: unknown) => { if (active) setFailure({ language: canonicalLanguage, source: code, error }); });
     return () => void (active = false);
   }, [canonicalLanguage, code, isIncomplete]);
+  const currentFailure = failure;
+  if (!isIncomplete && currentFailure !== null && currentFailure.language === canonicalLanguage && currentFailure.source === code) throw currentFailure.error;
   const current = highlighted;
-  const tokens =
-    current !== null && current.language === canonicalLanguage && current.source === code
-      ? current.tokens
-      : null;
+  const tokens = current !== null && current.language === canonicalLanguage && current.source === code ? current.tokens : null;
   if (tokens === null || isIncomplete) return <PlainCode code={code} />;
   return (
     <pre>
       <code>
         {tokens.map((line, lineIndex) => (
           <span key={lineIndex}>
-            {line.map((token, tokenIndex) => (
-              <span key={tokenIndex} className="streamdown-code-token" style={tokenStyle(token)}>
-                {token.content}
-              </span>
-            ))}
+            {line.map((token, tokenIndex) => <span key={tokenIndex} className="streamdown-code-token" style={tokenStyle(token)}>{token.content}</span>)}
             {lineIndex < tokens.length - 1 ? "\n" : null}
           </span>
         ))}
       </code>
     </pre>
   );
+}
+
+async function highlightCode(code: string, language: BundledLanguage): Promise<readonly (readonly ThemedTokenWithVariants[])[]> {
+  const highlighter = await getHighlighter();
+  await highlighter.loadLanguage(language);
+  return highlighter.codeToTokensWithThemes(code, { lang: language, themes: { dark: "github-dark", light: "github-light" } });
+}
+
+async function getHighlighter(): Promise<Highlighter> {
+  highlighterPromise ??= getSingletonHighlighter({ langs: [], themes: ["github-light", "github-dark"] }).catch((error: unknown) => { highlighterPromise = undefined; throw error; });
+  return highlighterPromise;
 }
 
 function PlainCode({ code }: Readonly<{ code: string }>) {
@@ -195,19 +151,22 @@ function languageMetadata(): Map<string, BundledLanguage> {
   const result = new Map<string, BundledLanguage>();
   for (const info of bundledLanguagesInfo) {
     if (!isBundledLanguage(info.id)) continue;
-    result.set(info.id, info.id);
-    for (const alias of info.aliases ?? []) result.set(alias, info.id);
+    addLanguageForms(result, info.id, info.id);
+    addLanguageForms(result, info.name, info.id);
+    for (const alias of info.aliases ?? []) addLanguageForms(result, alias, info.id);
   }
   return result;
 }
 
-function singleMarkdownBlock(markdown: string): string[] {
-  return [markdown];
+function addLanguageForms(lookup: Map<string, BundledLanguage>, display: string, canonical: BundledLanguage): void {
+  lookup.set(display, canonical);
+  lookup.set(display.toLowerCase(), canonical);
+  lookup.set(display.toUpperCase(), canonical);
 }
 
-function isBundledLanguage(value: string): value is BundledLanguage {
-  return value in bundledLanguages;
-}
+function singleMarkdownBlock(markdown: string): string[] { return [markdown]; }
+
+function isBundledLanguage(value: string): value is BundledLanguage { return value in bundledLanguages; }
 
 function toggleTaskListMarker(value: string, sourceOffset: number, checked: boolean): string {
   const markerOffset = taskListMarkerOffset(value, sourceOffset);

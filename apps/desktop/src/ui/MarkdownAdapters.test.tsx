@@ -5,19 +5,20 @@ import { describe, expect, it } from "vitest";
 import { StaticMarkdown, StreamingMarkdown, TaskBodyMarkdown } from "@/ui";
 
 function taskBodyText(expected: string): HTMLElement {
-  return screen.getByText(expected);
+  return screen.getByText(expected, { selector: "span" });
 }
 
-function markdownText(value: string): HTMLElement {
-  return screen.getByText(
-    (_, element) =>
-      element !== null && element.classList.contains("markdown-text") && element.textContent.includes(value),
-  );
+function renderedText(view: ReturnType<typeof render>): string {
+  return view.container.textContent;
+}
+
+function codeText(view: ReturnType<typeof render>): string[] {
+  return Array.from(view.container.getElementsByTagName("code"), (element) => element.textContent);
 }
 
 describe("Markdown adapters", () => {
   it("exposes static, streaming, and task-body adapters", () => {
-    render(
+    const view = render(
       <>
         <StaticMarkdown value="static value" />
         <StreamingMarkdown value="streaming value" />
@@ -26,7 +27,7 @@ describe("Markdown adapters", () => {
     );
 
     expect(screen.getByText("static value")).toBeInTheDocument();
-    expect(markdownText("streaming value")).toBeInTheDocument();
+    expect(renderedText(view)).toBe("static valuestreaming valuetask-body value");
     expect(screen.getByText("task-body value")).toBeInTheDocument();
   });
 
@@ -41,10 +42,10 @@ describe("Markdown adapters", () => {
   });
 
   it("mounts streaming content from its accumulated current value", async () => {
-    render(<StreamingMarkdown value="accumulated value" />);
+    const view = render(<StreamingMarkdown value="accumulated value" />);
 
     await waitFor(() => {
-      expect(markdownText("accumulated value")).toBeInTheDocument();
+      expect(renderedText(view)).toBe("accumulated value");
     });
   });
 
@@ -53,6 +54,17 @@ describe("Markdown adapters", () => {
 
     expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
+  });
+
+  it("uses the approved character-separated blurIn streaming presentation", () => {
+    render(<StreamingMarkdown value="stream" />);
+
+    const firstCharacter = screen.getByText("s", { exact: true });
+    expect(firstCharacter).toHaveAttribute("data-sd-animate", "true");
+    expect(firstCharacter).toHaveStyle({
+      "--sd-duration": "50ms",
+      "--sd-easing": "ease",
+    });
   });
 
   it("uses Streamdown's default sanitized HTML and link behavior", async () => {
@@ -82,30 +94,37 @@ describe("Markdown adapters", () => {
     expect(code).toBeInTheDocument();
   });
 
-  it.each(["javascript", "js"])("highlights completed %s code", async (language) => {
-    render(<StaticMarkdown value={`\`\`\`${language}\nconst answer = 1;\n\`\`\``} />);
+  it.each(["javascript", "js", "JavaScript", "JS", "python", "py", "Python", "PY"])(
+    "highlights completed %s code",
+    async (language) => {
+    const view = render(<StaticMarkdown value={`\`\`\`${language}\nconst answer = 1;\n\`\`\``} />);
 
     await waitFor(() => {
-      expect(screen.getAllByText("const", { exact: true }).length).toBeGreaterThan(0);
+      expect(codeText(view)).toEqual(["const answer = 1;\n"]);
     });
   });
 
+  it.each(["JS", "PY"])("keeps mixed-case incomplete %s code plain", async (language) => {
+    render(<StreamingMarkdown value={`\`\`\`${language}\nconst answer = 1;`} />);
+
+    expect(await screen.findByText("const answer = 1;")).toBeInTheDocument();
+    expect(screen.queryByText("const", { exact: true })).not.toBeInTheDocument();
+  });
+
   it("keeps collision-shaped completed blocks exact", async () => {
-    render(
+    const view = render(
       <StaticMarkdown
         value={"```javascript\nconst first = 1;\n```\n\n```javascript\nconst second = 2;\n```"}
       />,
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText("const", { exact: true })).toHaveLength(2);
+      expect(codeText(view)).toEqual(["const first = 1;\n", "const second = 2;\n"]);
     });
-    expect(screen.getByText("first", { exact: true })).toBeInTheDocument();
-    expect(screen.getByText("second", { exact: true })).toBeInTheDocument();
   });
 
   it("keeps canonical and alias highlighting stable under StrictMode", async () => {
-    render(
+    const view = render(
       <StrictMode>
         <StreamingMarkdown
           value={"```javascript\nconst canonical = 1;\n```\n\n```js\nconst alias = 2;\n```"}
@@ -114,7 +133,7 @@ describe("Markdown adapters", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText("const", { exact: true }).length).toBeGreaterThan(1);
+      expect(codeText(view)).toEqual(["const canonical = 1;\n", "const alias = 2;\n"]);
     });
   });
 
@@ -124,8 +143,7 @@ describe("Markdown adapters", () => {
     );
 
     await waitFor(() => {
-      expect(markdownText("tail-A")).toBeInTheDocument();
-      expect(screen.getAllByText("const", { exact: true }).length).toBeGreaterThan(0);
+      expect(renderedText(view)).toBe("const answer = 1;\ntail-A");
     });
 
     view.rerender(
@@ -133,7 +151,7 @@ describe("Markdown adapters", () => {
     );
 
     await waitFor(() => {
-      expect(markdownText("tail-A tail-B")).toBeInTheDocument();
+      expect(renderedText(view)).toBe("const answer = 1;\ntail-A tail-B");
     });
   });
 });
@@ -147,7 +165,7 @@ describe("TaskBodyMarkdown", () => {
   ])("projects %s to readable plain text", (_name, value, expected) => {
     render(<TaskBodyMarkdown value={value} />);
 
-    expect(taskBodyText(expected)).toHaveTextContent(expected);
+    expect(taskBodyText(expected).textContent).toBe(expected);
   });
 
   it("keeps the server-bounded value intact and renders one plain span", () => {
@@ -171,10 +189,13 @@ describe("TaskBodyMarkdown", () => {
     ["quoted tag terminator", 'before <span title="1 > 0">visible</span> after', "before visible after"],
     ["multiline raw-text body", "before <script>\nhidden\n</script> after", "before after"],
     ["raw-text suffix", "before <style>\nhidden\n</style>visible after", "before visible after"],
+    ["raw HTML block", "<div>visible</div>", "visible"],
+    ["raw-text block suffix", "<script>hidden</script>visible", "visible"],
+    ["CRLF raw-text suffix", "<script>hidden\r\n</script>\r\nvisible", "visible"],
   ])("strips the %s while preserving visible suffixes", (_name, value, expected) => {
     render(<TaskBodyMarkdown value={value} />);
 
-    expect(taskBodyText(expected)).toHaveTextContent(expected);
+    expect(taskBodyText(expected).textContent).toBe(expected);
   });
 
   it.each([
@@ -183,6 +204,6 @@ describe("TaskBodyMarkdown", () => {
   ])("does not classify %s tag-shaped text as HTML", (_name, value, expected) => {
     render(<TaskBodyMarkdown value={value} />);
 
-    expect(taskBodyText(expected)).toHaveTextContent(expected);
+    expect(taskBodyText(expected).textContent).toBe(expected);
   });
 });

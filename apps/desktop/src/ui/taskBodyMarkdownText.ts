@@ -1,41 +1,20 @@
 import { unified } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
-type HtmlState =
-  | { kind: "comment" }
-  | { kind: "cdata" }
-  | { kind: "declaration" | "processing" | "tag"; name?: string; quote?: string }
-  | { kind: "rawText"; name: string };
-interface Projection {
-  html: HtmlState | undefined;
-  output: string[];
-  sourceCursor: number;
-}
-const parser = unified().use(remarkParse).use(remarkGfm);
-const blockTypes = new Set(["paragraph", "heading", "blockquote", "list", "listItem", "table", "tableRow", "code", "thematicBreak"]);
-const whitespace = new Set([" ", "\t", "\n", "\r"]);
-type MarkdownNode = ReturnType<typeof parser.parse>["children"][number];
-export function projectMarkdownText(source: string): string {
-  const projection: Projection = { html: undefined, output: [], sourceCursor: 0 }; walk(parser.parse(source), source, projection); return projection.output.join("").trim();
-}
-function walk(node: ReturnType<typeof parser.parse> | MarkdownNode, source: string, projection: Projection): void {
-  syncCursor(node, source, projection); projectNode(node, source, projection); if (blockTypes.has(node.type)) space(projection);
-}
+type HtmlState = { kind: "comment" } | { kind: "cdata" } | { kind: "declaration" | "processing" | "tag"; name?: string; quote?: string } | { kind: "rawText"; name: string };
+interface Projection { html: HtmlState | undefined; output: string[]; sourceCursor: number; }
+const parser = unified().use(remarkParse).use(remarkGfm); const blockTypes = new Set(["paragraph", "heading", "blockquote", "list", "listItem", "table", "tableRow", "code", "thematicBreak"]); const whitespace = new Set([" ", "\t", "\n", "\r"]); type MarkdownNode = ReturnType<typeof parser.parse>["children"][number];
+export function projectMarkdownText(source: string): string { const projection: Projection = { html: undefined, output: [], sourceCursor: 0 }; walk(parser.parse(source), source, projection); return projection.output.join("").trim(); }
+function walk(node: ReturnType<typeof parser.parse> | MarkdownNode, source: string, projection: Projection): void { syncCursor(node, source, projection); projectNode(node, source, projection); if (blockTypes.has(node.type)) space(projection); }
 function syncCursor(node: ReturnType<typeof parser.parse> | MarkdownNode, source: string, projection: Projection): void {
-  const start = node.position?.start.offset;
-  const end = node.position?.end.offset;
-  if (start === undefined || end === undefined) return;
+  const start = node.position?.start.offset; const end = node.position?.end.offset; if (start === undefined || end === undefined) return;
   if (projection.html !== undefined && start > projection.sourceCursor) feed(source.slice(projection.sourceCursor, start), projection, false);
   projection.sourceCursor = end;
 }
 function projectNode(node: ReturnType<typeof parser.parse> | MarkdownNode, source: string, projection: Projection): void {
-  if (node.type === "text") { visitText(node.value, node.position, source, projection); return; }
-  if (node.type === "html") { feed(node.value, projection, false); return; }
-  if (node.type === "inlineCode" || node.type === "code") emit(node.value, projection);
-  else if (node.type === "image" || node.type === "imageReference") emit(node.alt, projection);
-  else if (node.type === "break") space(projection);
-  else if (node.type === "definition") return;
-  else if ("children" in node) for (const child of node.children) walk(child, source, projection);
+  if (node.type === "text") { visitText(node.value, node.position, source, projection); return; } if (node.type === "html") { feed(node.value, projection, true); return; }
+  if (node.type === "inlineCode" || node.type === "code") emit(node.value, projection); else if (node.type === "image" || node.type === "imageReference") emit(node.alt, projection);
+  else if (node.type === "break") space(projection); else if (node.type === "definition") return; else if ("children" in node) for (const child of node.children) walk(child, source, projection);
 }
 function visitText(value: string, position: MarkdownNode["position"], source: string, projection: Projection): void {
   const start = position?.start.offset;
@@ -58,9 +37,20 @@ function feed(value: string, projection: Projection, visible: boolean): void {
 }
 function htmlStart(value: string, start: number): { index: number; state: HtmlState } | undefined {
   if (value.charAt(start) !== "<") return;
-  if (value.startsWith("<!--", start)) return { index: start + 4, state: { kind: "comment" } };
-  if (value.startsWith("<![CDATA[", start)) return { index: start + 9, state: { kind: "cdata" } };
-  if (value.charAt(start + 1) === "!") return { index: start + 2, state: { kind: "declaration" } }; if (value.charAt(start + 1) === "?") return { index: start + 2, state: { kind: "processing" } };
+  const special = specialHtmlStart(value, start);
+  if (special !== undefined) return special;
+  return ordinaryHtmlStart(value, start);
+}
+function specialHtmlStart(value: string, start: number): { index: number; state: HtmlState } | undefined {
+  if (value.charAt(start + 1) !== "!") {
+    return value.charAt(start + 1) === "?" ? { index: start + 2, state: { kind: "processing" } } : undefined;
+  }
+  if (value.charAt(start + 2) === "-" && value.charAt(start + 3) === "-") return { index: start + 4, state: { kind: "comment" } };
+  if (cdataStart(value, start)) return { index: start + 9, state: { kind: "cdata" } };
+  return { index: start + 2, state: { kind: "declaration" } };
+}
+function cdataStart(value: string, start: number): boolean { return value.charAt(start + 2) === "[" && value.charAt(start + 3) === "C" && value.charAt(start + 4) === "D" && value.charAt(start + 5) === "A" && value.charAt(start + 6) === "T" && value.charAt(start + 7) === "A" && value.charAt(start + 8) === "["; }
+function ordinaryHtmlStart(value: string, start: number): { index: number; state: HtmlState } | undefined {
   const closing = value.charAt(start + 1) === "/";
   let index = start + (closing ? 2 : 1);
   const nameStart = index; while (isNameChar(value.charAt(index))) index += 1;
@@ -69,29 +59,38 @@ function htmlStart(value: string, start: number): { index: number; state: HtmlSt
 }
 type TagState = Extract<HtmlState, { kind: "declaration" | "processing" | "tag" }>; function htmlAdvance(value: string, start: number, state: HtmlState): { index: number; state: HtmlState | undefined } {
   if (state.kind === "rawText") { const close = rawTextClose(value, start, state.name); return close === undefined ? { index: start + 1, state } : { index: close, state: undefined }; }
-  if (state.kind === "comment" || state.kind === "cdata") return closeAt(value, start, state.kind === "comment" ? "-->" : "]]>", state);
+  if (state.kind === "comment") return closeDelimited(value, start, "-", state);
+  if (state.kind === "cdata") return closeDelimited(value, start, "]", state);
   return advanceTag(value, start, state);
 }
 function advanceTag(value: string, start: number, state: TagState): { index: number; state: HtmlState | undefined } {
   if (state.quote !== undefined) return value.charAt(start) === state.quote ? { index: start + 1, state: clearQuote(state) } : { index: start + 1, state };
   if (value.charAt(start) === "'" || value.charAt(start) === '"') return { index: start + 1, state: { ...state, quote: value.charAt(start) } };
-  const terminator = state.kind === "processing" ? "?>" : ">";
-  if (!value.startsWith(terminator, start)) return { index: start + 1, state };
+  const terminator = tagTerminator(value, start, state);
+  if (terminator === undefined) return { index: start + 1, state };
   const nextState: HtmlState | undefined =
     state.kind === "tag" && state.name !== undefined && hiddenRawText(state.name)
       ? { kind: "rawText", name: state.name }
       : undefined;
-  return { index: start + terminator.length, state: nextState };
+  return { index: start + terminator, state: nextState };
+}
+function tagTerminator(value: string, start: number, state: TagState): number | undefined {
+  if (state.kind === "processing") return value.charAt(start) === "?" && value.charAt(start + 1) === ">" ? 2 : undefined;
+  return value.charAt(start) === ">" ? 1 : undefined;
 }
 function clearQuote(state: TagState): TagState {
   if (state.kind === "tag") return state.name === undefined ? { kind: "tag" } : { kind: "tag", name: state.name };
   return { kind: state.kind };
 }
-function closeAt(value: string, start: number, terminator: string, state: HtmlState): { index: number; state: HtmlState | undefined } { return value.startsWith(terminator, start) ? { index: start + terminator.length, state: undefined } : { index: start + 1, state }; }
+function closeDelimited(value: string, start: number, character: "-" | "]", state: HtmlState): { index: number; state: HtmlState | undefined } {
+  return value.charAt(start) === character && value.charAt(start + 1) === character && value.charAt(start + 2) === ">"
+    ? { index: start + 3, state: undefined }
+    : { index: start + 1, state };
+}
 function rawTextClose(value: string, start: number, name: string): number | undefined {
   if (value.charAt(start) !== "<" || value.charAt(start + 1) !== "/") return;
   let index = start + 2; for (let offset = 0; offset < name.length; offset += 1) if (value.charAt(index + offset).toLowerCase() !== name.charAt(offset)) return; index += name.length;
-  while (value.charAt(index) === " " || value.charAt(index) === "\t" || value.charAt(index) === "\n") index += 1;
+  while (value.charAt(index) === " " || value.charAt(index) === "\t" || value.charAt(index) === "\n" || value.charAt(index) === "\r") index += 1;
   return value.charAt(index) === ">" ? index + 1 : undefined;
 }
 function emit(value: string | null | undefined, projection: Projection): void {
