@@ -326,8 +326,19 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 	current := resource.current
 	resource.mu.Unlock()
 	if queueNotice && current == nil {
+		delivered := false
+		err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
+			if recordErr := engine.RecordBackgroundShellUpdate(backgroundEvent); recordErr != nil {
+				return recordErr
+			}
+			delivered = true
+			return nil
+		})
+		if err != nil || !delivered {
+			return delivered, err
+		}
 		if resourceSessionHasWorkflowContract(resource) {
-			queueNotice = false
+			return true, nil
 		} else {
 			a.startBackgroundContinuation(resource, backgroundEvent)
 			return true, nil
@@ -364,7 +375,7 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 		}
 		if errors.Is(err, ErrSessionRunActive) {
 			err = a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-				engine.HandleBackgroundShellUpdate(event, true)
+				engine.QueueBackgroundShellContinuation(event)
 				return nil
 			})
 			if err == nil {
@@ -372,7 +383,6 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 			}
 		}
 		fallbackErr := a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			engine.HandleBackgroundShellUpdate(event, false)
 			engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed to start: %v", err))
 			return nil
 		})

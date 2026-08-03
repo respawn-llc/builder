@@ -66,6 +66,10 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
+func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
+	return nil
+}
+func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
 func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
 	return nil
 }

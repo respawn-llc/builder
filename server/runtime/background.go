@@ -33,30 +33,49 @@ func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNoti
 	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
 }
 
+func (e *Engine) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RecordBackgroundShellUpdate(evt)
+}
+
+func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
+	e.ensureOrchestrationCollaborators()
+	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
+}
+
 func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
 	e.ensureOrchestrationCollaborators()
 	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	b.recordBackgroundShellUpdate(evt, queueNotice, true)
+	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
+		b.engine.surfaceRunError(err)
+		return
+	}
+	if queueNotice {
+		b.QueueBackgroundShellContinuation(evt)
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+}
+
+func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
+	if !evt.Type.IsTerminal() {
+		return
+	}
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), true)
 }
 
 func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
-	if !b.recordBackgroundShellUpdate(evt, true, false) {
+	if !evt.Type.IsTerminal() {
 		return nil
 	}
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), false)
 	_, err := b.runQueuedNotices(ctx)
 	return err
-}
-
-func (b *defaultBackgroundNoticeScheduler) recordBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool, schedule bool) bool {
-	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-	if !queueNotice || !evt.Type.IsTerminal() {
-		return false
-	}
-	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), schedule)
-	return true
 }
 
 func backgroundShellDeveloperNotice(evt BackgroundShellEvent) llm.Message {

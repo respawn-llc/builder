@@ -504,6 +504,10 @@ type recoverySchedulingObserver struct {
 }
 
 func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
+func (s *recoverySchedulingObserver) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
+	return nil
+}
+func (s *recoverySchedulingObserver) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
 func (s *recoverySchedulingObserver) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
 	return nil
 }
