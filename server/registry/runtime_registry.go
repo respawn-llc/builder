@@ -381,7 +381,9 @@ func (r *RuntimeRegistry) RuntimeActivityRegistrySnapshot(sessionID string) runt
 		return runtimeactivity.RegistrySnapshot{}
 	}
 	if authorityEntry := r.authorityEntryBySession(id); authorityEntry != nil {
+		authorityEntry.mu.Lock()
 		lifecycle := authorityEntry.lifecycle
+		authorityEntry.mu.Unlock()
 		switch lifecycle {
 		case authorityRuntimeEntryReady:
 			return runtimeactivity.RegistrySnapshot{
@@ -719,7 +721,10 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID s
 	if id == "" {
 		return false
 	}
-	if entry.lifecycle == authorityRuntimeEntryRetired && activeForControl {
+	entry.mu.Lock()
+	lifecycle := entry.lifecycle
+	entry.mu.Unlock()
+	if lifecycle == authorityRuntimeEntryRetired && activeForControl {
 		return false
 	}
 	r.authorityMu.RLock()
