@@ -39,7 +39,6 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
   onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
@@ -87,7 +86,6 @@ export function BoardColumnMotionBoundary({
   onCardDragEnd,
   onCardDragStart,
   onBoardColumnNotice,
-  onCardsLoadError,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
@@ -175,7 +173,6 @@ export function BoardColumnMotionBoundary({
           board={board}
           column={column}
           onBoardColumnNotice={onBoardColumnNotice}
-          onCardsLoadError={onCardsLoadError}
           onDataViewChange={setDataView}
           onDataViewRelease={releaseDataView}
           onReportColumnSnapshot={onReportColumnSnapshot}

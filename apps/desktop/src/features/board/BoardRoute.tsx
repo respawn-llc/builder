@@ -332,12 +332,6 @@ function BoardContent({
       ? expandedEmptyColumns.ids
       : emptyExpandedEmptyColumnIDs;
   useWindowChromeTitle(board.selectedWorkflow.name || board.projectName);
-  const reportCardsLoadError = useCallback(
-    (error: unknown) => {
-      reportActionError("board-cards-load-error", t("board.cardsLoadFailed"), error);
-    },
-    [reportActionError, t],
-  );
   const reportColumnNotice = useCallback(
     (event: BoardColumnNoticeEvent) => {
       const diagnostic = boardColumnNoticeDiagnostic(event, {
@@ -621,7 +615,6 @@ function BoardContent({
               setActiveDrag(drag);
             }}
             onBoardColumnNotice={reportColumnNotice}
-            onCardsLoadError={reportCardsLoadError}
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
             onExpandColumn={expandColumn}

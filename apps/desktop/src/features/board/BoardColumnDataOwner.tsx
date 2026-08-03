@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next";
 
 import { boardFiltersEqual, type BoardColumn, type BoardFilter, type SelectedWorkflowBoard } from "@/api";
-import { errorMessage } from "@/api";
 import { useProjectLabelCatalog } from "@/shared/labels";
 import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
@@ -60,7 +59,6 @@ export function BoardColumnDataOwner({
   board,
   column,
   onBoardColumnNotice,
-  onCardsLoadError,
   onDataViewChange,
   onDataViewRelease,
   onReportColumnSnapshot,
@@ -68,7 +66,6 @@ export function BoardColumnDataOwner({
   board: SelectedWorkflowBoard;
   column: BoardColumn;
   onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
@@ -77,7 +74,6 @@ export function BoardColumnDataOwner({
   const labelCatalog = useProjectLabelCatalog();
   const filterGeneration = useBoardFilterGeneration();
   const stableOnBoardColumnNotice = useStableCallback(onBoardColumnNotice);
-  const stableOnCardsLoadError = useStableCallback(onCardsLoadError);
   const stableOnDataViewChange = useStableCallback(onDataViewChange);
   const stableOnDataViewRelease = useStableCallback(onDataViewRelease);
   const stableOnReportColumnSnapshot = useStableCallback(onReportColumnSnapshot);
@@ -122,14 +118,6 @@ export function BoardColumnDataOwner({
   } = cardsQuery;
   const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
-  const retryInitial = useCallback(() => {
-    if (requestEnabled) {
-      void refetch();
-    }
-  }, [refetch, requestEnabled]);
-  const replacementDataRetained =
-    cardsQuery.data !== undefined &&
-    hydratedFilterGenerationRef.current !== activeFilterGeneration.generation;
   const mountedRef = useRef(true);
   const noticeRef = useRef<Readonly<{ generation: number; noticeID: string }> | null>(null);
   const noticeID = boardColumnNoticeID(
@@ -138,7 +126,7 @@ export function BoardColumnDataOwner({
     column.id,
     activeFilterGeneration.generation,
   );
-  const retryReplacement = useCallback(() => {
+  const retryCards = useCallback(() => {
     if (!mountedRef.current) {
       return;
     }
@@ -174,23 +162,23 @@ export function BoardColumnDataOwner({
         ? isError
           ? {
               state: "error",
-              message: errorMessage(error),
+              message: t("board.cardsLoadRetryBody"),
               retryLabel: t("app.retry"),
-              onRetry: retryInitial,
+              onRetry: retryCards,
             }
           : {
               state: "loading",
               label: t("states.loading"),
             }
         : undefined,
-    [cardsQuery.data, error, isError, retryInitial, t],
+    [cardsQuery.data, isError, retryCards, t],
   );
   const previousBoundary = useMemo(
     () =>
       directionalBoundary({
-        error,
         failed: isFetchPreviousPageError,
         loading: isFetchingPreviousPage,
+        message: t("board.cardsLoadRetryBody"),
         loadingLabel: t("app.loadingMore"),
         onRetry: loadNewer,
         retryLabel: t("app.retry"),
@@ -200,9 +188,9 @@ export function BoardColumnDataOwner({
   const nextBoundary = useMemo(
     () =>
       directionalBoundary({
-        error,
         failed: isFetchNextPageError,
         loading: isFetchingNextPage,
+        message: t("board.cardsLoadRetryBody"),
         loadingLabel: t("app.loadingMore"),
         onRetry: loadOlder,
         retryLabel: t("app.retry"),
@@ -242,12 +230,6 @@ export function BoardColumnDataOwner({
   }, [dataView, stableOnDataViewChange]);
 
   useEffect(() => {
-    if (isError && !replacementDataRetained) {
-      stableOnCardsLoadError(error);
-    }
-  }, [error, isError, replacementDataRetained, stableOnCardsLoadError]);
-
-  useEffect(() => {
     const notice = noticeRef.current;
     if (
       notice !== null &&
@@ -266,7 +248,7 @@ export function BoardColumnDataOwner({
   ]);
 
   useEffect(() => {
-    if (isError && replacementDataRetained && requestEnabled) {
+    if (isError && requestEnabled) {
       noticeRef.current = { generation: activeFilterGeneration.generation, noticeID };
       stableOnBoardColumnNotice({
         kind: "failure",
@@ -275,7 +257,7 @@ export function BoardColumnDataOwner({
         filter: activeFilterGeneration.filter,
         generation: activeFilterGeneration.generation,
         noticeID,
-        retry: retryReplacement,
+        retry: retryCards,
       });
       return;
     }
@@ -296,8 +278,7 @@ export function BoardColumnDataOwner({
     noticeID,
     stableOnBoardColumnNotice,
     requestEnabled,
-    replacementDataRetained,
-    retryReplacement,
+    retryCards,
   ]);
 
   useEffect(() => {
@@ -375,10 +356,10 @@ function boardColumnNoticeID(
 
 function directionalBoundary(
   input: Readonly<{
-    error: unknown;
     failed: boolean;
     loading: boolean;
     loadingLabel: string;
+    message: string;
     onRetry: () => void;
     retryLabel: string;
   }>,
@@ -386,7 +367,7 @@ function directionalBoundary(
   if (input.failed) {
     return {
       state: "error",
-      message: errorMessage(input.error),
+      message: input.message,
       retryLabel: input.retryLabel,
       onRetry: input.onRetry,
     };

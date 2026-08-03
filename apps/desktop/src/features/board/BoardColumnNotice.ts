@@ -21,7 +21,7 @@ export function boardColumnNoticeDiagnostic(
     return null;
   }
   return {
-    message: "Board task-card replacement failed.",
+    message: "Board task-card load failed.",
     context: {
       columnID: event.columnID,
       error: errorMessage(event.error),
