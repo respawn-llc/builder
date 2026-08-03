@@ -82,7 +82,8 @@ const (
 )
 
 type WorktreeTransitionFailure struct {
-	Diagnostic string
+	Diagnostic         string
+	DeletePrecondition *WorktreeDirtyState
 }
 
 type WorktreeTransitionOutcome struct {
@@ -112,6 +113,14 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 		}
 		if strings.TrimSpace(outcome.Failure.Diagnostic) == "" {
 			return errors.New("worktree transition failure diagnostic is required")
+		}
+		if outcome.Failure.DeletePrecondition != nil {
+			if outcome.Transition != WorktreeTransitionDelete {
+				return errors.New("delete precondition is only valid for delete transitions")
+			}
+			if err := outcome.Failure.DeletePrecondition.ValidateDeletePrecondition(); err != nil {
+				return err
+			}
 		}
 	default:
 		return errors.New("worktree transition state is invalid")

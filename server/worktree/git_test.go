@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/serverapi"
+	"core/shared/clientui"
 )
 
 type canceledGitCommandRunner struct{}
@@ -262,17 +262,17 @@ func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
 	}
 }
 
-func TestGitInspectorDirtyFileCountUsesPorcelainStatus(t *testing.T) {
+func TestGitInspectorProbeDirtyStateCountsMixedStatusWithoutDuplicateRenameOrCopyEntries(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{output: []byte(" M changed.go\x00?? new.go\x00R  renamed.go\x00old.go\x00")}
+	runner := &stubGitCommandRunner{output: []byte(" M changed.go\x00?? new.go\x00R  renamed.go\x00old.go\x00C  copied.go\x00source.go\x00")}
 	inspector := NewGitInspector(runner)
 
-	count, err := inspector.DirtyFileCount(context.Background(), worktreeRoot)
+	state, err := inspector.ProbeDirtyState(context.Background(), worktreeRoot)
 	if err != nil {
-		t.Fatalf("DirtyFileCount: %v", err)
+		t.Fatalf("ProbeDirtyState: %v", err)
 	}
-	if count != 3 {
-		t.Fatalf("dirty count = %d, want 3", count)
+	if state.Kind != clientui.WorktreeDirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 4 {
+		t.Fatalf("dirty state = %+v, want dirty count 4", state)
 	}
 	if got, want := runner.args, []string{"status", "--porcelain=v1", "-z"}; !slices.Equal(got, want) {
 		t.Fatalf("git args=%v want=%v", got, want)
@@ -286,19 +286,19 @@ func TestGitInspectorProbeDirtyStateUsesTypedCleanDirtyAndUnknownResults(t *test
 	root := t.TempDir()
 	clean := NewGitInspector(&stubGitCommandRunner{})
 	state, err := clean.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != serverapi.WorktreeDirtyStateClean || state.DirtyFileCount == nil || *state.DirtyFileCount != 0 {
+	if err != nil || state.Kind != clientui.WorktreeDirtyStateClean || state.DirtyFileCount != nil {
 		t.Fatalf("clean state = %+v err=%v", state, err)
 	}
 
 	dirty := NewGitInspector(&stubGitCommandRunner{output: []byte(" M changed.go\x00")})
 	state, err = dirty.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != serverapi.WorktreeDirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
+	if err != nil || state.Kind != clientui.WorktreeDirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
 		t.Fatalf("dirty state = %+v err=%v", state, err)
 	}
 
 	unknown := NewGitInspector(&stubGitCommandRunner{err: errors.New("status unavailable"), exitCode: 1})
 	state, err = unknown.ProbeDirtyState(context.Background(), root)
-	if err != nil || state.Kind != serverapi.WorktreeDirtyStateUnknown || state.DirtyFileCount != nil || state.UnknownCause == nil {
+	if err != nil || state.Kind != clientui.WorktreeDirtyStateUnknown || state.DirtyFileCount != nil || state.UnknownCause == nil {
 		t.Fatalf("unknown state = %+v err=%v", state, err)
 	}
 }

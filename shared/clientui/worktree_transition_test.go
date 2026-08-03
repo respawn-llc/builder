@@ -45,4 +45,34 @@ func TestWorktreeTransitionOutcomeIsProcessLocalTerminalState(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("completed outcome with failure facts validated")
 	}
+
+	dirtyCount := 2
+	failedDelete := WorktreeTransitionOutcome{
+		OperationID: operationID,
+		Transition:  WorktreeTransitionDelete,
+		State:       WorktreeTransitionFailed,
+		Failure: &WorktreeTransitionFailure{
+			Diagnostic: "delete precondition",
+			DeletePrecondition: &WorktreeDirtyState{
+				Kind:           WorktreeDirtyStateDirty,
+				DirtyFileCount: &dirtyCount,
+			},
+		},
+	}
+	if err := failedDelete.Validate(); err != nil {
+		t.Fatalf("failed delete with typed precondition rejected: %v", err)
+	}
+	invalidNonDelete := failedDelete
+	invalidNonDelete.Transition = WorktreeTransitionLeave
+	if err := invalidNonDelete.Validate(); err == nil {
+		t.Fatal("non-delete transition accepted delete precondition")
+	}
+	invalidClean := failedDelete
+	invalidClean.Failure = &WorktreeTransitionFailure{
+		Diagnostic:         failedDelete.Failure.Diagnostic,
+		DeletePrecondition: &WorktreeDirtyState{Kind: WorktreeDirtyStateClean},
+	}
+	if err := invalidClean.Validate(); err == nil {
+		t.Fatal("clean delete precondition validated")
+	}
 }

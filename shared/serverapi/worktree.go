@@ -77,6 +77,28 @@ type WorktreeTopologyEntry struct {
 	Missing    *WorktreeMissingFacts    `json:"missing,omitempty"`
 }
 
+func (entry WorktreeTopologyEntry) DeletionSelector() (string, error) {
+	if err := entry.Validate(); err != nil {
+		return "", err
+	}
+	switch entry.Variant {
+	case WorktreeTopologyVariantRegistered:
+		if entry.Registered.Git.IsMain {
+			return "", ErrWorktreeBlocked
+		}
+		return entry.Registered.Kent.WorktreeID, nil
+	case WorktreeTopologyVariantExternal:
+		if entry.External.Git.IsMain {
+			return "", ErrWorktreeBlocked
+		}
+		return entry.External.Git.CanonicalRoot, nil
+	case WorktreeTopologyVariantMissing:
+		return entry.Missing.Kent.WorktreeID, nil
+	default:
+		return "", errors.New("worktree topology variant is invalid")
+	}
+}
+
 type WorktreeListProjection struct {
 	Selector  string `json:"selector"`
 	IsCurrent bool   `json:"is_current"`
@@ -164,6 +186,17 @@ type WorktreeSelectorPreviewRequest struct {
 type WorktreeSelectorPreviewResponse struct {
 	Worktree WorktreeTopologyEntry `json:"worktree"`
 	Selector string                `json:"selector"`
+}
+
+type WorktreeDeletePreviewRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+}
+
+type WorktreeDeletePreviewResponse struct {
+	Worktree         WorktreeTopologyEntry       `json:"worktree"`
+	DeletionSelector string                      `json:"deletion_selector"`
+	Cleanliness      clientui.WorktreeDirtyState `json:"cleanliness"`
 }
 
 // WorktreeTransitionHeader is the shared execution identity for every
@@ -397,11 +430,40 @@ func (outcome WorktreeBranchCleanupOutcome) Validate() error {
 }
 
 func (request WorktreeSelectorPreviewRequest) Validate() error {
-	if err := validateRequiredSessionID(request.SessionID); err != nil {
+	return validateWorktreeSelectorPreview(request.SessionID, request.Selector)
+}
+
+func (request WorktreeDeletePreviewRequest) Validate() error {
+	return validateWorktreeSelectorPreview(request.SessionID, request.Selector)
+}
+
+func validateWorktreeSelectorPreview(sessionID string, selector string) error {
+	if err := validateRequiredSessionID(sessionID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(request.Selector) == "" {
+	if strings.TrimSpace(selector) == "" {
 		return errors.New("selector is required")
+	}
+	return nil
+}
+
+func (response WorktreeDeletePreviewResponse) Validate() error {
+	deletionSelector, err := response.Worktree.DeletionSelector()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(response.DeletionSelector) == "" {
+		return errors.New("deletion_selector is required")
+	}
+	if response.DeletionSelector != deletionSelector {
+		return errors.New("deletion_selector does not match worktree")
+	}
+	if err := response.Cleanliness.Validate(); err != nil {
+		return err
+	}
+	if response.Worktree.Variant == WorktreeTopologyVariantMissing &&
+		response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		return errors.New("missing worktree deletion preview must be clean")
 	}
 	return nil
 }

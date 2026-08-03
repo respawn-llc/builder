@@ -73,6 +73,34 @@ type syncedWorktree struct {
 	git    GitWorktree
 }
 
+func (s *Service) evaluateDeleteCleanliness(ctx context.Context, entry serverapi.WorktreeTopologyEntry) (clientui.WorktreeDirtyState, error) {
+	if s == nil || s.git == nil {
+		return clientui.WorktreeDirtyState{}, errors.New("worktree service dependencies are required")
+	}
+	if err := entry.Validate(); err != nil {
+		return clientui.WorktreeDirtyState{}, err
+	}
+	if entry.Variant == serverapi.WorktreeTopologyVariantMissing {
+		return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}, nil
+	}
+	root := topologyRoot(entry)
+	if strings.TrimSpace(root) == "" {
+		return clientui.WorktreeDirtyState{}, errors.New("worktree topology root is required")
+	}
+	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
+	if err == nil {
+		return dirtyState, nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return clientui.WorktreeDirtyState{}, err
+	}
+	cause := err.Error()
+	return clientui.WorktreeDirtyState{
+		Kind:         clientui.WorktreeDirtyStateUnknown,
+		UnknownCause: &cause,
+	}, nil
+}
+
 type deleteTargetActivityLease struct {
 	ctx   context.Context
 	close func()
@@ -824,7 +852,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		if err != nil {
 			return DeleteTaskWorktreeResponse{}, err
 		}
-		forceRemoval = dirtyState.Kind != serverapi.WorktreeDirtyStateClean
+		forceRemoval = dirtyState.Kind != clientui.WorktreeDirtyStateClean
 	}
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,

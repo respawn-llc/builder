@@ -61,6 +61,10 @@ func (c *worktreeCommandTestClient) ResolveWorktreeSelector(ctx context.Context,
 	return c.selectorResp, c.selectorErr
 }
 
+func (c *worktreeCommandTestClient) PreviewWorktreeDelete(context.Context, serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
+	return serverapi.WorktreeDeletePreviewResponse{}, errors.New("unexpected worktree delete preview request")
+}
+
 func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
 	c.resolveCtx = ctx
 	c.resolveRequests = append(c.resolveRequests, req)

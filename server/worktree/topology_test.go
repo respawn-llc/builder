@@ -1,13 +1,18 @@
 package worktree
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"core/server/metadata"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -58,6 +63,299 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	}
 	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal || response.Selector == "" {
 		t.Fatalf("selector preview = %+v", response)
+	}
+}
+
+func TestPreviewWorktreeDeleteResolvesCleanNonCurrentRegisteredTarget(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-preview-clean")
+
+	response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		SessionID: env.session.Meta().SessionID,
+		Selector:  created.WorktreeID,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorktreeDelete: %v", err)
+	}
+	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered {
+		t.Fatalf("preview topology = %+v, want registered", response.Worktree)
+	}
+	if response.DeletionSelector != created.WorktreeID {
+		t.Fatalf("preview deletion selector = %q, want %q", response.DeletionSelector, created.WorktreeID)
+	}
+	if response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		t.Fatalf("preview cleanliness = %+v, want clean", response.Cleanliness)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("preview response validation: %v", err)
+	}
+}
+
+func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	branch := "feature/delete-preview-external-binding"
+	rootA := filepath.Join(t.TempDir(), "external-a")
+	rootB := filepath.Join(t.TempDir(), "external-b")
+	runGit(t, env.workspaceRoot, "worktree", "add", "-b", branch, rootA, "HEAD")
+	t.Cleanup(func() {
+		if _, err := os.Stat(rootA); err == nil {
+			runGit(t, env.workspaceRoot, "worktree", "remove", "--force", rootA)
+		}
+		if _, err := os.Stat(rootB); err == nil {
+			runGit(t, env.workspaceRoot, "worktree", "remove", "--force", rootB)
+		}
+	})
+
+	preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		SessionID: env.session.Meta().SessionID,
+		Selector:  branch,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorktreeDelete: %v", err)
+	}
+	canonicalRootA := canonicalTestPath(t, rootA)
+	if preview.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal ||
+		preview.DeletionSelector != canonicalRootA {
+		t.Fatalf("external preview = %+v, want root %q", preview, canonicalRootA)
+	}
+
+	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", rootA)
+	runGit(t, env.workspaceRoot, "worktree", "add", rootB, branch)
+
+	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+		},
+		Selector:            preview.DeletionSelector,
+		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
+	})
+	var selectorErr *serverapi.WorktreeSelectorError
+	if !errors.As(err, &selectorErr) || selectorErr.Kind != serverapi.WorktreeSelectorErrorKindNotFound {
+		t.Fatalf("DeleteWorktree error = %v, want typed selector-not-found for root A", err)
+	}
+	if _, err := os.Stat(rootB); err != nil {
+		t.Fatalf("replacement external root B = %v, want untouched", err)
+	}
+}
+
+func TestPreviewWorktreeDeleteClassifiesModifiedUntrackedAndMixedDirtyStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, string)
+		wantCount int
+	}{
+		{
+			name: "modified",
+			prepare: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("modified\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile modified file: %v", err)
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "untracked",
+			prepare: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile untracked file: %v", err)
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "mixed",
+			prepare: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("modified\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile modified file: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile untracked file: %v", err)
+				}
+			},
+			wantCount: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := newServiceTestEnv(t)
+			created := mustCreateWorktree(t, env, "feature/delete-preview-"+test.name)
+			test.prepare(t, created.CanonicalRoot)
+
+			response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+				SessionID: env.session.Meta().SessionID,
+				Selector:  created.WorktreeID,
+			})
+			if err != nil {
+				t.Fatalf("PreviewWorktreeDelete: %v", err)
+			}
+			if response.Cleanliness.Kind != clientui.WorktreeDirtyStateDirty ||
+				response.Cleanliness.DirtyFileCount == nil ||
+				*response.Cleanliness.DirtyFileCount != test.wantCount {
+				t.Fatalf("preview cleanliness = %+v, want dirty count %d", response.Cleanliness, test.wantCount)
+			}
+		})
+	}
+}
+
+func TestPreviewWorktreeDeleteHandlesInspectionFailureCancellationAndMainWorkspace(t *testing.T) {
+	t.Run("inspection failure becomes unknown", func(t *testing.T) {
+		env := newServiceTestEnv(t)
+		createExternalWorktree(t, env, "feature/delete-preview-unknown")
+		env.service.git = NewGitInspector(&previewStatusRunner{
+			listOutput: []byte(runGit(t, env.workspaceRoot, "worktree", "list", "--porcelain")),
+			outputErr:  errors.New("status inspection failed"),
+		})
+
+		response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+			SessionID: env.session.Meta().SessionID,
+			Selector:  "feature/delete-preview-unknown",
+		})
+		if err != nil {
+			t.Fatalf("PreviewWorktreeDelete: %v", err)
+		}
+		if response.Cleanliness.Kind != clientui.WorktreeDirtyStateUnknown ||
+			response.Cleanliness.UnknownCause == nil ||
+			strings.TrimSpace(*response.Cleanliness.UnknownCause) == "" {
+			t.Fatalf("preview cleanliness = %+v, want unknown diagnostic", response.Cleanliness)
+		}
+	})
+
+	t.Run("cancellation remains an error", func(t *testing.T) {
+		env := newServiceTestEnv(t)
+		ctx, cancel := context.WithCancel(env.ctx)
+		defer cancel()
+		createExternalWorktree(t, env, "feature/delete-preview-canceled")
+		env.service.git = NewGitInspector(&previewStatusRunner{
+			listOutput: []byte(runGit(t, env.workspaceRoot, "worktree", "list", "--porcelain")),
+			outputErr:  errors.New("status inspection canceled"),
+			cancel:     cancel,
+		})
+
+		_, err := env.service.PreviewWorktreeDelete(ctx, serverapi.WorktreeDeletePreviewRequest{
+			SessionID: env.session.Meta().SessionID,
+			Selector:  "feature/delete-preview-canceled",
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PreviewWorktreeDelete error = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("main workspace is blocked", func(t *testing.T) {
+		env := newServiceTestEnv(t)
+		_, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+			SessionID: env.session.Meta().SessionID,
+			Selector:  env.workspaceRoot,
+		})
+		if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+			t.Fatalf("PreviewWorktreeDelete error = %v, want ErrWorktreeBlocked", err)
+		}
+	})
+}
+
+func TestPreviewWorktreeDeleteLeavesTopologyAndSubsequentOperationsUnchanged(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-preview-read-only")
+	before, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+		SessionID: env.session.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorktrees before preview: %v", err)
+	}
+
+	if _, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+		SessionID: env.session.Meta().SessionID,
+		Selector:  created.WorktreeID,
+	}); err != nil {
+		t.Fatalf("PreviewWorktreeDelete: %v", err)
+	}
+
+	after, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
+		SessionID: env.session.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorktrees after preview: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("worktree list changed after read-only preview:\nbefore=%+v\nafter=%+v", before, after)
+	}
+	if _, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
+		SessionID: env.session.Meta().SessionID,
+		Selector:  created.WorktreeID,
+	}); err != nil {
+		t.Fatalf("ResolveWorktreeSelector after preview: %v", err)
+	}
+}
+
+func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-preview-mutation-lane")
+	runner := newPreviewMutationStatusRunner()
+	env.service.git = NewGitInspector(runner)
+
+	type previewResult struct {
+		response serverapi.WorktreeDeletePreviewResponse
+		err      error
+	}
+	previewDone := make(chan previewResult, 1)
+	go func() {
+		response, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+			SessionID: env.session.Meta().SessionID,
+			Selector:  target.WorktreeID,
+		})
+		previewDone <- previewResult{response: response, err: err}
+	}()
+
+	select {
+	case <-runner.statusStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview did not reach cleanliness inspection")
+	}
+
+	createDone := make(chan struct {
+		response serverapi.WorktreeCreateResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			ClientRequestID:  "req-create-preview-mutation-lane",
+			SessionID:        env.session.Meta().SessionID,
+			BaseRef:          "HEAD",
+			CreateBranch:     true,
+			BranchName:       "feature/delete-preview-independent-mutation",
+		})
+		createDone <- struct {
+			response serverapi.WorktreeCreateResponse
+			err      error
+		}{response: response, err: err}
+	}()
+
+	var created serverapi.WorktreeCreateResponse
+	select {
+	case result := <-createDone:
+		if result.err != nil {
+			t.Fatalf("independent CreateWorktree: %v", result.err)
+		}
+		created = result.response
+	case <-time.After(3 * time.Second):
+		t.Fatal("independent mutation waited for preview mutation lane")
+	}
+	if created.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantRegistered {
+		t.Fatalf("independent mutation worktree = %+v, want registered", created.Worktree)
+	}
+
+	runner.ReleaseStatus()
+	select {
+	case result := <-previewDone:
+		if result.err != nil {
+			t.Fatalf("PreviewWorktreeDelete: %v", result.err)
+		}
+		if result.response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+			t.Fatalf("preview cleanliness = %+v, want clean", result.response.Cleanliness)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview did not complete after cleanliness inspection release")
 	}
 }
 
@@ -200,4 +498,61 @@ func topologies(entries []serverapi.WorktreeListEntry) []serverapi.WorktreeTopol
 		out = append(out, entry.Topology)
 	}
 	return out
+}
+
+type previewStatusRunner struct {
+	listOutput []byte
+	outputErr  error
+	cancel     context.CancelFunc
+}
+
+type previewMutationStatusRunner struct {
+	statusStarted chan struct{}
+	releaseStatus chan struct{}
+	startOnce     sync.Once
+	releaseOnce   sync.Once
+}
+
+func newPreviewMutationStatusRunner() *previewMutationStatusRunner {
+	return &previewMutationStatusRunner{
+		statusStarted: make(chan struct{}),
+		releaseStatus: make(chan struct{}),
+	}
+}
+
+func (r *previewMutationStatusRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if len(args) == 3 && args[0] == "status" && args[1] == "--porcelain=v1" && args[2] == "-z" {
+		r.startOnce.Do(func() { close(r.statusStarted) })
+		select {
+		case <-r.releaseStatus:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return execGitCommandRunner{}.Output(ctx, dir, args...)
+}
+
+func (r *previewMutationStatusRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
+	return execGitCommandRunner{}.Run(ctx, dir, args...)
+}
+
+func (r *previewMutationStatusRunner) ReleaseStatus() {
+	r.releaseOnce.Do(func() { close(r.releaseStatus) })
+}
+
+func (r *previewStatusRunner) Output(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) == 3 && args[0] == "status" {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		return nil, r.outputErr
+	}
+	return append([]byte(nil), r.listOutput...), nil
+}
+
+func (r *previewStatusRunner) Run(_ context.Context, _ string, args ...string) ([]byte, int, error) {
+	if len(args) == 3 && args[0] == "worktree" && args[1] == "list" && args[2] == "--porcelain" {
+		return append([]byte(nil), r.listOutput...), 0, nil
+	}
+	return nil, 1, errors.New("unexpected Git command")
 }

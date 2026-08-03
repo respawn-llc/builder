@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -436,4 +437,128 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 	if _, err := env.store.GetWorktreeRecordByID(env.ctx, target.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("scheduled target metadata = %v, want sql.ErrNoRows", err)
 	}
+}
+
+func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testing.T) {
+	tests := []struct {
+		name              string
+		secondStatusError error
+		wantKind          clientui.WorktreeDirtyStateKind
+		wantCount         int
+	}{
+		{name: "dirty", wantKind: clientui.WorktreeDirtyStateDirty, wantCount: 1},
+		{name: "unknown", secondStatusError: errors.New("status inspection failed"), wantKind: clientui.WorktreeDirtyStateUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := newServiceTestEnv(t)
+			target := mustCreateWorktree(t, env, "feature/delete-scheduled-race-"+test.name)
+			updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+			state := captureDeleteTargetState(t, env, env.session.Meta().SessionID, target)
+			preview, err := env.service.PreviewWorktreeDelete(env.ctx, serverapi.WorktreeDeletePreviewRequest{
+				SessionID: env.session.Meta().SessionID,
+				Selector:  target.WorktreeID,
+			})
+			if err != nil {
+				t.Fatalf("PreviewWorktreeDelete: %v", err)
+			}
+			if preview.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+				t.Fatalf("preview cleanliness = %+v, want clean", preview.Cleanliness)
+			}
+
+			runner := newScheduledDeleteStatusRunner(test.secondStatusError)
+			env.service.git = NewGitInspector(runner)
+			deleteResult := make(chan deleteActivityResult, 1)
+			go func() {
+				result, deleteErr := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, preview.DeletionSelector))
+				deleteResult <- deleteActivityResult{result: result, err: deleteErr}
+			}()
+			select {
+			case result := <-deleteResult:
+				if result.err != nil ||
+					result.result.Kind != serverapi.WorktreeDeleteResultKindScheduled ||
+					result.result.Scheduled == nil {
+					t.Fatalf("DeleteWorktree = %+v, %v; want scheduled", result.result, result.err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("DeleteWorktree did not return scheduled acknowledgement")
+			}
+			select {
+			case <-runner.secondStatusReached:
+			case <-time.After(3 * time.Second):
+				t.Fatal("scheduled delete did not reach execution-time cleanliness check")
+			}
+			if test.secondStatusError == nil {
+				if err := os.WriteFile(filepath.Join(target.CanonicalRoot, "dirty-after-schedule.txt"), []byte("dirty"), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}
+			runner.ReleaseSecondStatus()
+
+			outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
+			if outcome.State != clientui.WorktreeTransitionFailed ||
+				outcome.Failure == nil ||
+				outcome.Failure.DeletePrecondition == nil ||
+				outcome.Failure.DeletePrecondition.Kind != test.wantKind {
+				t.Fatalf("scheduled delete outcome = %+v, want typed %s precondition", outcome, test.wantKind)
+			}
+			if test.wantCount != 0 {
+				if outcome.Failure.DeletePrecondition.DirtyFileCount == nil ||
+					*outcome.Failure.DeletePrecondition.DirtyFileCount != test.wantCount {
+					t.Fatalf("scheduled dirty precondition = %+v, want count %d", outcome.Failure.DeletePrecondition, test.wantCount)
+				}
+			}
+			state.assertUnchanged(t, env, env.session.Meta().SessionID, target.WorktreeID)
+		})
+	}
+}
+
+type scheduledDeleteStatusRunner struct {
+	secondStatusError   error
+	secondStatusReached chan struct{}
+	releaseSecondStatus chan struct{}
+	releaseOnce         sync.Once
+	mu                  sync.Mutex
+	statusCalls         int
+}
+
+func newScheduledDeleteStatusRunner(secondStatusError error) *scheduledDeleteStatusRunner {
+	return &scheduledDeleteStatusRunner{
+		secondStatusError:   secondStatusError,
+		secondStatusReached: make(chan struct{}),
+		releaseSecondStatus: make(chan struct{}),
+	}
+}
+
+func (r *scheduledDeleteStatusRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if len(args) == 3 && args[0] == "status" && args[1] == "--porcelain=v1" && args[2] == "-z" {
+		r.mu.Lock()
+		r.statusCalls++
+		call := r.statusCalls
+		if call == 2 {
+			close(r.secondStatusReached)
+		}
+		r.mu.Unlock()
+		if call == 2 {
+			select {
+			case <-r.releaseSecondStatus:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if r.secondStatusError != nil {
+				return nil, r.secondStatusError
+			}
+		}
+	}
+	return execGitCommandRunner{}.Output(ctx, dir, args...)
+}
+
+func (r *scheduledDeleteStatusRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
+	return execGitCommandRunner{}.Run(ctx, dir, args...)
+}
+
+func (r *scheduledDeleteStatusRunner) ReleaseSecondStatus() {
+	r.releaseOnce.Do(func() {
+		close(r.releaseSecondStatus)
+	})
 }

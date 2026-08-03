@@ -8,10 +8,11 @@ import (
 )
 
 type TranscriptWorktreeTransitionOutcome struct {
-	OperationID WorktreeTransitionID
-	Transition  WorktreeTransitionKind
-	State       WorktreeTransitionState
-	Failure     *TranscriptDiagnostic
+	OperationID        WorktreeTransitionID
+	Transition         WorktreeTransitionKind
+	State              WorktreeTransitionState
+	Failure            *TranscriptDiagnostic
+	DeletePrecondition *WorktreeDirtyState
 }
 
 type OperationalDiagnosticCode string
@@ -40,7 +41,7 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 	}
 	switch o.State {
 	case WorktreeTransitionCompleted:
-		if o.Failure != nil {
+		if o.Failure != nil || o.DeletePrecondition != nil {
 			return fmt.Errorf("completed worktree transition cannot carry failure")
 		}
 		return nil
@@ -48,7 +49,18 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 		if o.Failure == nil {
 			return fmt.Errorf("failed worktree transition requires failure diagnostic")
 		}
-		return o.Failure.Validate()
+		if err := o.Failure.Validate(); err != nil {
+			return err
+		}
+		if o.DeletePrecondition != nil {
+			if o.Transition != WorktreeTransitionDelete {
+				return fmt.Errorf("delete precondition is only valid for delete transitions")
+			}
+			if err := o.DeletePrecondition.ValidateDeletePrecondition(); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown worktree transition state %q", o.State)
 	}

@@ -250,6 +250,7 @@
 - A Missing row places a `Missing` error-colored chip after its title.
 - Every deletable row has an icon-only trash action. Activating it opens the delete popup in a loading state and requests an authoritative typed deletion preview for that target.
 - The deletion preview reports Clean, Dirty with the modified-or-untracked file count, or Unknown with an authoritative diagnostic.
+- A Missing target previews as Clean because deleting it preserves any leftover recorded directory.
 - The popup shows a Dirty or Unknown warning before its action items. Worktree List and Worktree Status remain lightweight and do not add dirty state.
 - After preview, a branch-backed target offers `Confirm` and `Confirm + Branch`.
 - The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.

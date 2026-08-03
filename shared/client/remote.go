@@ -704,6 +704,17 @@ func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.Work
 	return resp, c.call(ctx, protocol.MethodWorktreeSelectorResolve, req, &resp)
 }
 
+func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
+	var resp serverapi.WorktreeDeletePreviewResponse
+	if err := c.call(ctx, protocol.MethodWorktreeDeletePreview, req, &resp); err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, fmt.Errorf("validate worktree delete preview response: %w", err)
+	}
+	return resp, nil
+}
+
 func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
 	var resp serverapi.WorktreeCreateTargetResolveResponse
 	return resp, c.call(ctx, protocol.MethodWorktreeCreateTargetResolve, req, &resp)

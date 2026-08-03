@@ -192,6 +192,8 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"WorktreeTransitionKind":                           {},
 		"WorktreeTransitionOutcome":                        {},
 		"WorktreeTransitionState":                          {},
+		"WorktreeDirtyState":                               {},
+		"WorktreeDirtyStateKind":                           {},
 	}
 	allowedFuncs := map[string]struct{}{
 		"NewTranscriptEvent":                                      {},
@@ -322,6 +324,8 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"WorktreeTransitionID.UnmarshalJSON":                      {},
 		"WorktreeTransitionID.Validate":                           {},
 		"WorktreeTransitionOutcome.Validate":                      {},
+		"WorktreeDirtyState.Validate":                             {},
+		"WorktreeDirtyState.ValidateDeletePrecondition":           {},
 		"validateHydrationBackgrounds":                            {},
 		"validateHydrationPrompts":                                {},
 		"validateHydrationQueuedMessages":                         {},
