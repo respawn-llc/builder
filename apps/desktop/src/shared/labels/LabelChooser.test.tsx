@@ -369,6 +369,9 @@ describe("LabelChooser", () => {
         "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
       ]);
     });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { hidden: true, name: "Reorder Alpha" })).toHaveLength(1);
+    });
     Reflect.deleteProperty(Element.prototype, "setPointerCapture");
     Reflect.deleteProperty(Element.prototype, "releasePointerCapture");
   });
