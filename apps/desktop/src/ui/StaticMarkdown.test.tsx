@@ -2,17 +2,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import { MarkdownText } from "./MarkdownText";
+import { StaticMarkdown } from "./MarkdownText";
 
-describe("MarkdownText task lists", () => {
+describe("StaticMarkdown task lists", () => {
   it("toggles the selected task marker without rewriting surrounding Markdown", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     const value = "Before\n\n3. [X] **Keep this formatting**\n\nAfter";
 
     render(
-      <MarkdownText
-        onChange={onChange}
+      <StaticMarkdown
+        onTaskListChange={onChange}
         taskListItemToggleLabel={() => "Toggle item"}
         value={value}
       />,

@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { QuestionAttentionItem } from "@/api";
-import { useOpenExternalLink } from "@/app-facade";
 import { Island } from "@/ui";
 import {
   anchorQuestionSelection,
@@ -41,8 +40,6 @@ export function QuestionBox({
   const presentation = questionPresentation(attention, pendingAsk, pendingAskLookupSettled);
   const selection = selectionForAsk(selectionState, attention.questionID);
   const effectiveSelection = anchorQuestionSelection(selection, presentation.defaultSelection);
-  const openLink = useOpenExternalLink();
-
   useEffect(() => {
     if (effectiveSelection !== selection) {
       onSelectionStateChange(effectiveSelection);
@@ -55,7 +52,6 @@ export function QuestionBox({
         answerQuestion={answerQuestion}
         attention={attention}
         disabled={disabled}
-        onOpenLink={openLink}
         onSelectionStateChange={onSelectionStateChange}
         presentation={presentation}
         selectionState={effectiveSelection}

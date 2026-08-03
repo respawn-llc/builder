@@ -1,0 +1,18 @@
+.markdown-plain-text {
+  display: contents;
+}
+
+.markdown-text .streamdown-code-token {
+  color: var(--shiki-light);
+}
+
+[data-theme="dark"] .markdown-text .streamdown-code-token {
+  color: var(--shiki-dark);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-text-streaming [data-sd-animate="true"] {
+    animation: none !important;
+    transition: none !important;
+  }
+}

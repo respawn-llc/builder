@@ -34,7 +34,6 @@ export function TaskDetailContent({
   detail,
   initialFocus,
   onMutated,
-  openLink,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
@@ -42,7 +41,6 @@ export function TaskDetailContent({
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
-  openLink: (url: string) => void;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -181,7 +179,6 @@ export function TaskDetailContent({
         setQuestionSelections((previous) => new Map(previous).set(askID, selection));
       }}
       onSaveDraft={saveDraft}
-      openLink={openLink}
       questionSelections={questionSelections}
       selectedTab={selectedTab}
       setTab={setSelectedTab}

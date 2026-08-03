@@ -1,172 +1,212 @@
-import { createContext, useContext } from "react";
-import type { Components } from "react-markdown";
-import ReactMarkdown from "react-markdown";
-import rehypeSanitize from "rehype-sanitize";
-import remarkGfm from "remark-gfm";
+import { createContext, useContext, useEffect, useState, type ComponentProps, type CSSProperties } from "react";
+import { bundledLanguages, bundledLanguagesInfo, getSingletonHighlighter, type BundledLanguage, type ThemedTokenWithVariants } from "shiki";
+import { Streamdown, type Components, type CustomRendererProps, type ExtraProps } from "streamdown";
 
 import { Checkbox } from "./radix/checkbox";
-import { safeExternalUrl } from "./externalLinks";
+import { projectMarkdownText } from "./taskBodyMarkdownText";
 import "./MarkdownText.css";
+import "./StreamdownMarkdown.css";
 
-export type MarkdownTextProps = Readonly<{
-  value: string;
-  onChange?: (value: string) => void;
-  onOpenLink?: (url: string) => void;
+// @streamdown/code@1.1.1 has a lossy unbounded token-result cache; Chat can
+// re-evaluate a newer official highlighter when it adopts this seam.
+export type StaticMarkdownProps = Readonly<{
+  disabled?: boolean;
+  onTaskListChange?: (value: string) => void;
   taskListItemToggleLabel?: (checked: boolean) => string;
-  inline?: boolean;
-}>;
-
-type MarkdownTaskListItemContextValue = Readonly<{
-  onChange: MarkdownTextProps["onChange"];
-  sourceOffset: number | undefined;
-  taskListItemToggleLabel: MarkdownTextProps["taskListItemToggleLabel"];
   value: string;
 }>;
+export type StreamingMarkdownProps = Readonly<{ value: string }>;
+export type TaskBodyMarkdownProps = Readonly<{ value: string }>;
+
+type MarkdownTaskListItemContextValue = Readonly<{ onChange: StaticMarkdownProps["onTaskListChange"]; sourceOffset: number | undefined; taskListItemToggleLabel: StaticMarkdownProps["taskListItemToggleLabel"]; value: string; disabled: boolean }>;
 
 const MarkdownTaskListItemContext = createContext<MarkdownTaskListItemContextValue | null>(null);
+const highlighterPromise = getSingletonHighlighter({
+  langs: [],
+  themes: ["github-light", "github-dark"],
+});
+const languageLookup = languageMetadata();
+const languageKeys = [...languageLookup.keys()];
+const richComponents = {
+  input: MarkdownTaskListCheckbox,
+  li: MarkdownTaskListItem,
+  p: "div",
+} satisfies Pick<Components, "input" | "li" | "p">;
 
-export function MarkdownText({
-  value,
-  onChange,
-  onOpenLink,
-  taskListItemToggleLabel,
-  inline = false,
-}: MarkdownTextProps) {
-  const rendered = (
-    <ReactMarkdown
-      components={markdownComponents({
-        inline,
-        onChange,
-        onOpenLink,
-        taskListItemToggleLabel,
-        value,
-      })}
-      rehypePlugins={[rehypeSanitize]}
-      remarkPlugins={[remarkGfm]}
-      skipHtml
-    >
-      {value}
-    </ReactMarkdown>
-  );
-  if (inline) {
-    return (
-      <span className="markdown-text markdown-text-inline" data-testid="markdown-text-inline">
-        {rendered}
-      </span>
-    );
-  }
-  return (
-    <div className="markdown-text" data-testid="markdown-text">
-      {rendered}
-    </div>
-  );
+export function StaticMarkdown({ disabled = false, onTaskListChange, taskListItemToggleLabel, value }: StaticMarkdownProps) {
+  return <MarkdownCore animated={false} disabled={disabled} onChange={onTaskListChange} taskListItemToggleLabel={taskListItemToggleLabel} value={value} />;
 }
 
-function markdownComponents({
-  inline,
+export function StreamingMarkdown({ value }: StreamingMarkdownProps) { return <MarkdownCore animated value={value} />; }
+
+export function TaskBodyMarkdown({ value }: TaskBodyMarkdownProps) {
+  return <span className="markdown-plain-text">{projectMarkdownText(value)}</span>;
+}
+
+function MarkdownCore({
+  animated,
+  disabled = false,
   onChange,
-  onOpenLink,
   taskListItemToggleLabel,
   value,
 }: Readonly<{
-  inline: boolean;
-  onChange: MarkdownTextProps["onChange"];
-  onOpenLink: MarkdownTextProps["onOpenLink"];
-  taskListItemToggleLabel: MarkdownTextProps["taskListItemToggleLabel"];
+  animated: boolean;
+  disabled?: boolean;
+  onChange?: StaticMarkdownProps["onTaskListChange"];
+  taskListItemToggleLabel?: StaticMarkdownProps["taskListItemToggleLabel"];
   value: string;
-}>): Components {
-  return {
-    ...(inline
-      ? {
-          p({ children }) {
-            return <span>{children}</span>;
-          },
-        }
-      : {}),
-    a({ children, href }) {
-      const safeHref = safeExternalUrl(href);
-      if (safeHref === undefined) {
-        return <span>{children}</span>;
-      }
-      return (
-        <a
-          href={safeHref}
-          onClick={(event) => {
-            if (onOpenLink === undefined) {
-              return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            onOpenLink(safeHref);
-          }}
-          rel="noreferrer"
-          target="_blank"
-        >
-          {children}
-        </a>
-      );
-    },
-    code({ children }) {
-      return <code>{children}</code>;
-    },
-    pre({ children }) {
-      return <pre>{children}</pre>;
-    },
-    li({ children, node, ...props }) {
-      const className = node?.properties.className;
-      const taskListItem =
-        className === "task-list-item" ||
-        (Array.isArray(className) && className.some((value) => value === "task-list-item"));
-      if (!taskListItem) {
-        return <li {...props}>{children}</li>;
-      }
-      return (
-        <MarkdownTaskListItemContext.Provider
-          value={{
-            onChange,
-            sourceOffset: node?.position?.start.offset,
-            taskListItemToggleLabel,
-            value,
-          }}
-        >
-          <li {...props}>{children}</li>
-        </MarkdownTaskListItemContext.Provider>
-      );
-    },
-    input({ checked, type }) {
-      if (type !== "checkbox") {
-        return null;
-      }
-      return <MarkdownTaskListCheckbox checked={checked === true} />;
-    },
-  };
+}>) {
+  const interaction = { disabled, onChange, taskListItemToggleLabel, value };
+  return (
+    <MarkdownTaskListItemContext.Provider value={{ ...interaction, sourceOffset: undefined }}>
+      <Streamdown
+        animated={animated ? { animation: "blurIn", duration: 50, easing: "ease", sep: "char", stagger: 13 } : false}
+        className={`markdown-text${animated ? " markdown-text-streaming" : ""}`}
+        components={richComponents}
+        controls={false}
+        isAnimating={animated}
+        mode="streaming"
+        plugins={{ renderers: [{ component: HighlightedCode, language: languageKeys }] }}
+        {...(onChange === undefined ? {} : { parseMarkdownIntoBlocksFn: singleMarkdownBlock })}
+      >
+        {value}
+      </Streamdown>
+    </MarkdownTaskListItemContext.Provider>
+  );
 }
 
-function MarkdownTaskListCheckbox({ checked }: Readonly<{ checked: boolean }>) {
+function MarkdownTaskListItem({
+  children,
+  node,
+  ...props
+}: ComponentProps<"li"> & ExtraProps) {
   const taskListItem = useContext(MarkdownTaskListItemContext);
-  const onChange = taskListItem?.onChange;
+  const className = node?.properties.className;
+  const isTaskItem =
+    className === "task-list-item" ||
+    (Array.isArray(className) && className.includes("task-list-item"));
+  if (!isTaskItem) return <li {...props}>{children}</li>;
+  if (taskListItem === null) return <li {...props}>{children}</li>;
+  return (
+    <MarkdownTaskListItemContext.Provider
+      value={{
+        ...taskListItem,
+        sourceOffset: node?.position?.start.offset,
+      }}
+    >
+      <li {...props}>{children}</li>
+    </MarkdownTaskListItemContext.Provider>
+  );
+}
+
+function MarkdownTaskListCheckbox({ checked, type }: ComponentProps<"input"> & ExtraProps) {
+  const checkedValue = checked === true;
+  const taskListItem = useContext(MarkdownTaskListItemContext);
+  if (type !== "checkbox") return null;
   const sourceOffset = taskListItem?.sourceOffset;
-  const editable = onChange !== undefined && sourceOffset !== undefined;
-  const ariaLabel = taskListItem?.taskListItemToggleLabel?.(checked);
+  const editable = taskListItem?.onChange !== undefined && sourceOffset !== undefined;
+  const checkedFromSource = editable ? taskListChecked(taskListItem.value, sourceOffset) : checkedValue;
   return (
     <Checkbox
-      checked={checked}
+      checked={checkedFromSource}
       className="markdown-task-list-checkbox"
-      disabled={!editable}
+      disabled={taskListItem?.disabled !== false || !editable}
       onCheckedChange={(nextChecked) => {
-        if (
-          nextChecked === "indeterminate" ||
-          onChange === undefined ||
-          sourceOffset === undefined ||
-          taskListItem === null
-        ) {
-          return;
-        }
-        onChange(toggleTaskListMarker(taskListItem.value, sourceOffset, nextChecked));
+        if (nextChecked === "indeterminate" || !editable) return;
+        taskListItem.onChange(toggleTaskListMarker(taskListItem.value, sourceOffset, nextChecked));
       }}
-      {...(ariaLabel === undefined ? {} : { "aria-label": ariaLabel })}
+      {...(taskListItem?.taskListItemToggleLabel === undefined
+        ? {}
+        : { "aria-label": taskListItem.taskListItemToggleLabel(checkedValue) })}
     />
   );
+}
+
+function taskListChecked(value: string, sourceOffset: number): boolean {
+  const markerOffset = taskListMarkerOffset(value, sourceOffset);
+  return value[markerOffset] === "x" || value[markerOffset] === "X";
+}
+
+function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) {
+  const canonicalLanguage = languageLookup.get(language);
+  const [highlighted, setHighlighted] = useState<{
+    language: BundledLanguage;
+    source: string;
+    tokens: readonly (readonly ThemedTokenWithVariants[])[];
+  } | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (isIncomplete || canonicalLanguage === undefined) return () => void (active = false);
+    void highlighterPromise.then(async (highlighter) => {
+      await highlighter.loadLanguage(canonicalLanguage);
+      if (!active) return;
+      const tokens = highlighter.codeToTokensWithThemes(code, {
+        lang: canonicalLanguage,
+        themes: { dark: "github-dark", light: "github-light" },
+      });
+      setHighlighted({ language: canonicalLanguage, source: code, tokens });
+    });
+    return () => void (active = false);
+  }, [canonicalLanguage, code, isIncomplete]);
+  const current = highlighted;
+  const tokens =
+    current !== null && current.language === canonicalLanguage && current.source === code
+      ? current.tokens
+      : null;
+  if (tokens === null || isIncomplete) return <PlainCode code={code} />;
+  return (
+    <pre>
+      <code>
+        {tokens.map((line, lineIndex) => (
+          <span key={lineIndex}>
+            {line.map((token, tokenIndex) => (
+              <span key={tokenIndex} className="streamdown-code-token" style={tokenStyle(token)}>
+                {token.content}
+              </span>
+            ))}
+            {lineIndex < tokens.length - 1 ? "\n" : null}
+          </span>
+        ))}
+      </code>
+    </pre>
+  );
+}
+
+function PlainCode({ code }: Readonly<{ code: string }>) {
+  return (
+    <pre>
+      <code>{code}</code>
+    </pre>
+  );
+}
+
+interface TokenStyle extends CSSProperties {
+  "--shiki-light"?: string;
+  "--shiki-dark"?: string;
+}
+function tokenStyle(token: ThemedTokenWithVariants): TokenStyle {
+  const style: TokenStyle = {};
+  if (token.variants.light?.color !== undefined) style["--shiki-light"] = token.variants.light.color;
+  if (token.variants.dark?.color !== undefined) style["--shiki-dark"] = token.variants.dark.color;
+  return style;
+}
+
+function languageMetadata(): Map<string, BundledLanguage> {
+  const result = new Map<string, BundledLanguage>();
+  for (const info of bundledLanguagesInfo) {
+    if (!isBundledLanguage(info.id)) continue;
+    result.set(info.id, info.id);
+    for (const alias of info.aliases ?? []) result.set(alias, info.id);
+  }
+  return result;
+}
+
+function singleMarkdownBlock(markdown: string): string[] {
+  return [markdown];
+}
+
+function isBundledLanguage(value: string): value is BundledLanguage {
+  return value in bundledLanguages;
 }
 
 function toggleTaskListMarker(value: string, sourceOffset: number, checked: boolean): string {

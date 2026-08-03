@@ -2,7 +2,6 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail, type TaskLabelAssignment } from "@/api";
-import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
@@ -36,8 +35,6 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
   const attention = useTaskAttention(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
-  const openLink = useOpenExternalLink();
-
   if (detail.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
@@ -54,7 +51,6 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
           detail={detail.data}
           initialFocus={initialFocus}
           onMutated={onMutated}
-          openLink={openLink}
         />
       </TaskDetailAssignmentScope>
     </ProjectLabelsProvider>
