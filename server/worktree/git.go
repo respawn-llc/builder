@@ -397,9 +397,9 @@ func (i *GitInspector) resolveRevision(ctx context.Context, workspaceRoot string
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return GitRevision{}, ctxErr
 		}
-		kind := GitRevisionResolutionErrorNonCommit
-		if exitCode < 0 {
-			kind = GitRevisionResolutionErrorGitFailure
+		kind := GitRevisionResolutionErrorGitFailure
+		if exitCode == 1 {
+			kind = GitRevisionResolutionErrorNonCommit
 		}
 		return GitRevision{}, &GitRevisionResolutionError{
 			Kind:         kind,

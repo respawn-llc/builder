@@ -222,6 +222,42 @@ func TestCreateWorktreeGitBaseRefResolutionFailureIsFormOwned(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeCommitResolutionInfrastructureFailureIsFormOwned(t *testing.T) {
+	env := newServiceTestEnv(t)
+	resolveErr := errors.New("git object database is inaccessible")
+	runner := &recordingGitCommandRunner{
+		delegate: &stubGitCommandRunner{
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{object}"): {
+					output: []byte("object\n"),
+				},
+				gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{commit}"): {
+					err:      resolveErr,
+					exitCode: 2,
+				},
+			},
+		},
+	}
+	env.service.git = NewGitInspector(runner)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "resolve-commit-git-failure",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/resolve-commit-git-failure",
+	})
+	var typed *serverapi.WorktreeCreateError
+	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
+	}
+	var revisionErr *GitRevisionResolutionError
+	if !errors.As(err, &revisionErr) || revisionErr.Kind != GitRevisionResolutionErrorGitFailure {
+		t.Fatalf("CreateWorktree error = %T %v, want GitFailure resolution error", err, err)
+	}
+}
+
 func TestCreateWorktreePostResolutionAddFailureIsFormOwned(t *testing.T) {
 	env := newServiceTestEnv(t)
 	addErr := errors.New("worktree add lost resolved object")
