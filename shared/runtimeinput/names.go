@@ -65,16 +65,7 @@ func BuiltinPromptCommandForName(name PromptCommandName) (*BuiltinPromptCommand,
 }
 
 func BuiltinPromptCommandForAlias(alias string) (*BuiltinPromptCommand, bool) {
-	switch alias {
-	case PromptCommandReviewIdentifier:
-		command := BuiltinPromptCommandReview
-		return &command, true
-	case PromptCommandInitIdentifier:
-		command := BuiltinPromptCommandInit
-		return &command, true
-	default:
-		return nil, false
-	}
+	return BuiltinPromptCommandForName(PromptCommandName{Identifier: alias})
 }
 
 type CommandToken struct {

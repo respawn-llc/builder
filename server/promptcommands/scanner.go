@@ -19,16 +19,41 @@ type candidate struct {
 	content string
 }
 
-func (s Service) scan() ([]CatalogEntry, error) {
+type candidateEntry struct {
+	name string
+	path string
+}
+
+type candidateDecision uint8
+
+const (
+	candidateSkip candidateDecision = iota
+	candidateClaim
+	candidateStop
+)
+
+type candidateTraversalError struct {
+	dir   string
+	cause error
+}
+
+func (e *candidateTraversalError) Error() string {
+	return fmt.Sprintf("read prompt directory %s: %v", e.dir, e.cause)
+}
+
+func (e *candidateTraversalError) Unwrap() error {
+	return e.cause
+}
+
+func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, error)) error {
 	seen := make(map[string]struct{})
-	result := make([]CatalogEntry, 0)
 	for _, dir := range s.searchDirs() {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, &Error{Kind: ErrorKindCatalogRead, cause: fmt.Errorf("read prompt directory %s: %w", dir, err)}
+			return &candidateTraversalError{dir: dir, cause: err}
 		}
 		sort.Slice(entries, func(i, j int) bool {
 			return entries[i].Name() < entries[j].Name()
@@ -45,18 +70,41 @@ func (s Service) scan() ([]CatalogEntry, error) {
 			if _, ok := seen[command]; ok {
 				continue
 			}
-			path := filepath.Join(dir, entry.Name())
-			preview, err := previewFile(path)
+			decision, err := fn(candidateEntry{name: command, path: filepath.Join(dir, entry.Name())})
 			if err != nil {
-				commandName := command
-				return nil, &Error{Kind: ErrorKindCatalogRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", path, err)}
+				return err
 			}
-			if preview == "" {
-				continue
+			switch decision {
+			case candidateClaim:
+				seen[command] = struct{}{}
+			case candidateStop:
+				return nil
 			}
-			seen[command] = struct{}{}
-			result = append(result, CatalogEntry{Name: command, Preview: preview})
 		}
+	}
+	return nil
+}
+
+func (s Service) scan() ([]CatalogEntry, error) {
+	result := make([]CatalogEntry, 0)
+	err := s.walkCandidates(func(entry candidateEntry) (candidateDecision, error) {
+		preview, err := previewFile(entry.path)
+		if err != nil {
+			commandName := entry.name
+			return candidateSkip, &Error{Kind: ErrorKindCatalogRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", entry.path, err)}
+		}
+		if preview == "" {
+			return candidateSkip, nil
+		}
+		result = append(result, CatalogEntry{Name: entry.name, Preview: preview})
+		return candidateClaim, nil
+	})
+	if err != nil {
+		var traversalErr *candidateTraversalError
+		if errors.As(err, &traversalErr) {
+			return nil, &Error{Kind: ErrorKindCatalogRead, cause: traversalErr}
+		}
+		return nil, err
 	}
 	return result, nil
 }
@@ -66,35 +114,35 @@ func (s Service) findCandidate(command string) (candidate, bool, error) {
 	if err != nil {
 		return candidate{}, false, nil
 	}
-	for _, dir := range s.searchDirs() {
-		entries, readErr := os.ReadDir(dir)
+	var found *candidate
+	err = s.walkCandidates(func(entry candidateEntry) (candidateDecision, error) {
+		if entry.name != name.String() {
+			return candidateSkip, nil
+		}
+		content, readErr := os.ReadFile(entry.path)
 		if readErr != nil {
-			if errors.Is(readErr, os.ErrNotExist) {
-				continue
-			}
 			commandName := name.String()
-			return candidate{}, false, &Error{Kind: ErrorKindCommandRead, Command: &commandName, cause: fmt.Errorf("read prompt directory %s: %w", dir, readErr)}
+			return candidateSkip, &Error{Kind: ErrorKindCommandRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", entry.path, readErr)}
 		}
-		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].Name() < entries[j].Name()
-		})
-		for _, entry := range entries {
-			candidateName, ok := commandNameForEntry(entry.Name(), entry.IsDir())
-			if !ok || candidateName.String() != name.String() {
-				continue
-			}
-			content, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
-			if readErr != nil {
-				commandName := name.String()
-				return candidate{}, false, &Error{Kind: ErrorKindCommandRead, Command: &commandName, cause: fmt.Errorf("read prompt file %s: %w", filepath.Join(dir, entry.Name()), readErr)}
-			}
-			if strings.TrimSpace(string(content)) == "" {
-				continue
-			}
-			return candidate{name: candidateName.String(), content: string(content)}, true, nil
+		if strings.TrimSpace(string(content)) == "" {
+			return candidateSkip, nil
 		}
+		value := candidate{name: entry.name, content: string(content)}
+		found = &value
+		return candidateStop, nil
+	})
+	if err != nil {
+		var traversalErr *candidateTraversalError
+		if errors.As(err, &traversalErr) {
+			commandName := name.String()
+			return candidate{}, false, &Error{Kind: ErrorKindCommandRead, Command: &commandName, cause: traversalErr}
+		}
+		return candidate{}, false, err
 	}
-	return candidate{}, false, nil
+	if found == nil {
+		return candidate{}, false, nil
+	}
+	return *found, true, nil
 }
 
 func commandNameForEntry(entryName string, directory bool) (*runtimeinput.PromptCommandName, bool) {

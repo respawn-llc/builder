@@ -16,6 +16,24 @@ func TestInputAndCanonicalCommandProjection(t *testing.T) {
 	}
 }
 
+func TestBuiltinPromptCommandAliasesUseCanonicalBuiltInLookup(t *testing.T) {
+	for _, test := range []struct {
+		alias string
+		want  BuiltinPromptCommand
+	}{
+		{alias: PromptCommandReviewIdentifier, want: BuiltinPromptCommandReview},
+		{alias: PromptCommandInitIdentifier, want: BuiltinPromptCommandInit},
+	} {
+		command, ok := BuiltinPromptCommandForAlias(test.alias)
+		if !ok || command == nil || *command != test.want {
+			t.Fatalf("alias %q = (%v, %t), want %v", test.alias, command, ok, test.want)
+		}
+	}
+	if _, ok := BuiltinPromptCommandForAlias("unknown"); ok {
+		t.Fatal("unknown alias resolved as a built-in prompt command")
+	}
+}
+
 func TestCommandTokenParsesNamespaceStructurally(t *testing.T) {
 	token, err := ParseCommandToken("prompt:review")
 	if err != nil {
