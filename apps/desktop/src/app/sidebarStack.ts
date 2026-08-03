@@ -29,19 +29,19 @@ export type SidebarStackAction =
     }>
   | Readonly<{
       type: "replace";
-      activationID?: string;
+      activationID: string;
       entryID: string;
       destination: SidebarDestination;
     }>
   | Readonly<{
       type: "push";
-      activationID?: string;
+      activationID: string;
       entryID: string;
       lifecycleID: string;
       sourceEntryID: string;
       destination: SidebarDestination;
     }>
-  | Readonly<{ type: "back"; activationID?: string; lifecycleID: string; entryID: string }>
+  | Readonly<{ type: "back"; activationID: string; lifecycleID: string; entryID: string }>
   | Readonly<{
       type: "remove";
       activationID?: string;
@@ -118,7 +118,7 @@ function reduceReplace(
     const isCurrentEntry = existingTaskIndex === state.entries.length - 1;
     return {
       ...state,
-      activationID: action.activationID ?? state.activationID,
+      activationID: action.activationID,
       entries: [
         ...state.entries.slice(0, isCurrentEntry ? -1 : existingTaskIndex),
         {
@@ -131,7 +131,7 @@ function reduceReplace(
   }
   return {
     ...state,
-    activationID: action.activationID ?? state.activationID,
+    activationID: action.activationID,
     entries: [...state.entries.slice(0, -1), { entryID: action.entryID, destination: action.destination }],
   };
 }
@@ -148,7 +148,7 @@ function reducePush(
   if (existingTaskIndex !== undefined) {
     return {
       ...state,
-      activationID: action.activationID ?? state.activationID,
+      activationID: action.activationID,
       entries: state.entries.slice(0, existingTaskIndex + 1),
     };
   }
@@ -158,7 +158,7 @@ function reducePush(
     state.entries.length >= sidebarStackCapacity ? [root, ...state.entries.slice(2)] : state.entries;
   return {
     ...state,
-    activationID: action.activationID ?? state.activationID,
+    activationID: action.activationID,
     entries: [
       ...entries.map((entry, index) => (index === entries.length - 1 ? deactivateEntry(entry) : entry)),
       { entryID: action.entryID, destination: action.destination },
@@ -176,7 +176,7 @@ function reduceBack(
     ? state
     : {
         ...state,
-        activationID: action.activationID ?? state.activationID,
+        activationID: action.activationID,
         entries: state.entries.slice(0, -1),
       };
 }

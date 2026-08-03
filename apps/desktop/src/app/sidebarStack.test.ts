@@ -56,6 +56,7 @@ describe("sidebarStackReducer", () => {
 
     const replaced = apply(opened, {
       type: "replace",
+      activationID: "activation-2",
       entryID: "entry-2",
       destination: task("task-2"),
     });
@@ -71,6 +72,7 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(opened, {
       type: "push",
+      activationID: "activation-2",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-1",
       entryID: "entry-2",
@@ -78,6 +80,7 @@ describe("sidebarStackReducer", () => {
     });
     const replaced = apply(pushed, {
       type: "replace",
+      activationID: "activation-3",
       entryID: "entry-3",
       destination: task("task-3"),
     });
@@ -99,6 +102,7 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(opened, {
       type: "push",
+      activationID: "activation-2",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-1",
       entryID: "entry-2",
@@ -160,6 +164,7 @@ describe("sidebarStackReducer", () => {
     });
     const pushed = apply(state, {
       type: "push",
+      activationID: "activation-2",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-1",
       entryID: "entry-2",
@@ -226,6 +231,7 @@ describe("sidebarStackReducer", () => {
     });
     state = apply(state, {
       type: "push",
+      activationID: "activation-2",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-1",
       entryID: "entry-2",
@@ -233,6 +239,7 @@ describe("sidebarStackReducer", () => {
     });
     state = apply(state, {
       type: "push",
+      activationID: "activation-3",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-2",
       entryID: "entry-3",
@@ -241,6 +248,7 @@ describe("sidebarStackReducer", () => {
 
     const returned = apply(state, {
       type: "push",
+      activationID: "activation-4",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-3",
       entryID: "entry-4",
@@ -260,6 +268,7 @@ describe("sidebarStackReducer", () => {
     for (let index = 1; index < 50; index += 1) {
       state = apply(state, {
         type: "push",
+        activationID: `activation-${index.toString()}`,
         lifecycleID: "lifecycle-1",
         sourceEntryID: `entry-${(index - 1).toString()}`,
         entryID: `entry-${index.toString()}`,
@@ -273,6 +282,7 @@ describe("sidebarStackReducer", () => {
 
     const bounded = apply(state, {
       type: "push",
+      activationID: "activation-50",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-49",
       entryID: "entry-50",
@@ -292,6 +302,7 @@ describe("sidebarStackReducer", () => {
     });
     state = apply(state, {
       type: "push",
+      activationID: "activation-2",
       lifecycleID: "lifecycle-1",
       sourceEntryID: "entry-1",
       entryID: "entry-2",
@@ -340,6 +351,7 @@ describe("sidebarStackReducer", () => {
     expect(
       apply(state, {
         type: "push",
+        activationID: "activation-stale-lifecycle",
         sourceEntryID: "entry-1",
         entryID: "entry-2",
         destination: task("task-2"),
