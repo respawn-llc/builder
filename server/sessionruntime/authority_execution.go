@@ -354,15 +354,8 @@ type promptSuccessorObservation struct {
 }
 
 type executionPromptEntry struct {
-	snapshot        ExecutionPromptSnapshot
-	response        chan executionPromptResult
-	publicationDone chan struct{}
-}
-
-type executionPromptClosure struct {
-	err          error
-	entries      []*executionPromptEntry
-	observations []*promptSuccessorObservation
+	snapshot ExecutionPromptSnapshot
+	response chan executionPromptResult
 }
 
 type PromptBatchInvariantError struct {
@@ -410,9 +403,8 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		CreatedAt: time.Now().UTC(),
 	}
 	entry := &executionPromptEntry{
-		snapshot:        snapshot,
-		response:        make(chan executionPromptResult, 1),
-		publicationDone: make(chan struct{}),
+		snapshot: snapshot,
+		response: make(chan executionPromptResult, 1),
 	}
 	if s.authority == nil {
 		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
@@ -427,12 +419,9 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
-	s.mu.Unlock()
-	s.publishPending(snapshot)
-	close(entry.publicationDone)
-	s.mu.Lock()
 	s.observePromptSuccessorLocked(requestID)
 	s.mu.Unlock()
+	s.publishPending(snapshot)
 	defer func() {
 		s.mu.Lock()
 		current := s.pending[requestID]
@@ -500,7 +489,6 @@ func (s *executionPromptStore) submit(
 	if err != nil {
 		delete(s.pending, requestID)
 		s.mu.Unlock()
-		<-entry.publicationDone
 		s.publishResolved(entry.snapshot)
 		entry.response <- executionPromptResult{err: err}
 		return PromptResponseAcceptance{}, err
@@ -516,7 +504,6 @@ func (s *executionPromptStore) submit(
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
-	<-entry.publicationDone
 	s.publishResolved(entry.snapshot)
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
 	return acceptance, nil
@@ -594,27 +581,30 @@ func (s *executionPromptStore) Close(err error) {
 		return
 	}
 	s.mu.Lock()
-	closure := s.closeLocked(err)
+	snapshots := s.closeAndSignalLocked(err)
 	s.mu.Unlock()
-	s.publishClosure(closure)
-	s.releaseClosure(closure)
+	for _, snapshot := range snapshots {
+		s.publishResolved(snapshot)
+	}
 }
 
-func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
+func (s *executionPromptStore) closeAndSignalLocked(err error) []ExecutionPromptSnapshot {
 	if err == nil {
 		err = context.Canceled
 	}
 	if s.closed {
-		return executionPromptClosure{}
+		return nil
 	}
 	s.closed = true
-	closure := executionPromptClosure{
-		err:     err,
-		entries: make([]*executionPromptEntry, 0, len(s.pending)),
-	}
+	entries := make([]*executionPromptEntry, 0, len(s.pending))
+	snapshots := make([]ExecutionPromptSnapshot, 0, len(s.pending))
 	for requestID, entry := range s.pending {
-		closure.entries = append(closure.entries, entry)
+		entries = append(entries, entry)
+		snapshots = append(snapshots, entry.snapshot)
 		delete(s.pending, requestID)
+	}
+	for _, entry := range entries {
+		entry.response <- executionPromptResult{err: err}
 	}
 	observations := make(map[*promptSuccessorObservation]struct{})
 	for _, byObservation := range s.successorObservations {
@@ -622,29 +612,10 @@ func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
 			observations[observation] = struct{}{}
 		}
 	}
-	closure.observations = make([]*promptSuccessorObservation, 0, len(observations))
 	for observation := range observations {
-		closure.observations = append(closure.observations, observation)
-	}
-	return closure
-}
-
-func (s *executionPromptStore) publishClosure(closure executionPromptClosure) {
-	for _, entry := range closure.entries {
-		<-entry.publicationDone
-		s.publishResolved(entry.snapshot)
-	}
-}
-
-func (s *executionPromptStore) releaseClosure(closure executionPromptClosure) {
-	for _, entry := range closure.entries {
-		entry.response <- executionPromptResult{err: closure.err}
-	}
-	s.mu.Lock()
-	for _, observation := range closure.observations {
 		s.markPromptSuccessorObservedLocked(observation)
 	}
-	s.mu.Unlock()
+	return snapshots
 }
 
 func (s *executionPromptStore) registerPromptSuccessorObservationLocked(

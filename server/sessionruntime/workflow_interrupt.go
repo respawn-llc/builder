@@ -105,26 +105,25 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		}
 		return err
 	}
-	closures := make([]struct {
-		store   *executionPromptStore
-		closure executionPromptClosure
+	resolved := make([]struct {
+		store     *executionPromptStore
+		snapshots []ExecutionPromptSnapshot
 	}, 0, len(locked))
 	for _, execution := range locked {
-		closures = append(closures, struct {
-			store   *executionPromptStore
-			closure executionPromptClosure
-		}{store: &execution.prompts, closure: execution.prompts.closeLocked(context.Canceled)})
+		resolved = append(resolved, struct {
+			store     *executionPromptStore
+			snapshots []ExecutionPromptSnapshot
+		}{store: &execution.prompts, snapshots: execution.prompts.closeAndSignalLocked(context.Canceled)})
 	}
 	for _, execution := range locked {
 		execution.prompts.mu.Unlock()
 	}
 	a.mu.Unlock()
 	unlocked = true
-	for _, item := range closures {
-		item.store.publishClosure(item.closure)
-	}
-	for _, item := range closures {
-		item.store.releaseClosure(item.closure)
+	for _, item := range resolved {
+		for _, snapshot := range item.snapshots {
+			item.store.publishResolved(snapshot)
+		}
 	}
 	return nil
 }
