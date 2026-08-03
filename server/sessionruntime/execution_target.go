@@ -319,52 +319,119 @@ func (a *Authority) routeTerminalBackgroundEvent(sessionID runtimeids.SessionID,
 }
 
 func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shelltool.Event) (bool, error) {
+	backgroundEvent := runtimeBackgroundShellEvent(resource, event)
+	terminal := event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled
+	queueNotice := terminal && !event.NoticeSuppressed
+	resource.mu.Lock()
+	current := resource.current
+	resource.mu.Unlock()
+	if queueNotice && current == nil {
+		if resourceSessionHasWorkflowContract(resource) {
+			queueNotice = false
+		} else {
+			a.startBackgroundContinuation(resource, backgroundEvent)
+			return true, nil
+		}
+	}
 	delivered := false
 	err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-		summary := shelltool.BackgroundNoticeSummary{}
-		if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
-			var summaryErr error
-			summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
-				MaxChars:          resource.backgroundLimit,
-				SuccessOutputMode: resource.backgroundMode,
-			})
-			if summaryErr != nil {
-				if resource.logger != nil {
-					resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
-				}
-				summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
-			}
-		}
-		eventType := runtime.BackgroundShellEventBackgrounded
-		switch event.Type {
-		case shelltool.EventCompleted:
-			eventType = runtime.BackgroundShellEventCompleted
-		case shelltool.EventKilled:
-			eventType = runtime.BackgroundShellEventKilled
-		}
-		preview, previewRemoved := summary.RuntimePreview()
-		engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
-			Type:              eventType,
-			ID:                event.Snapshot.ID,
-			ActivityID:        event.Snapshot.ActivityID,
-			OwnerRunID:        event.Snapshot.OwnerRunID,
-			OwnerStepID:       event.Snapshot.OwnerStepID,
-			State:             event.Snapshot.State,
-			Command:           event.Snapshot.Command,
-			Workdir:           event.Snapshot.Workdir,
-			LogPath:           event.Snapshot.LogPath,
-			NoticeText:        summary.DetailText,
-			CompactText:       summary.CondensedText,
-			Preview:           preview,
-			PreviewRemoved:    previewRemoved,
-			ExitCode:          event.Snapshot.ExitCode,
-			UserRequestedKill: event.Snapshot.KillRequested,
-			NoticeSuppressed:  event.NoticeSuppressed,
-		}, !event.NoticeSuppressed)
+		engine.HandleBackgroundShellUpdate(backgroundEvent, queueNotice)
 		delivered = true
 		return nil
 	})
 	return delivered, err
+}
+
+func (a *Authority) startBackgroundContinuation(resource *agentResource, event runtime.BackgroundShellEvent) {
+	// Retried terminal events can arrive while OpenRuntime still holds the
+	// Session admission gate. Defer only admission; model work starts inside the
+	// Agent Execution Scope created below.
+	go func() {
+		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
+		if err == nil {
+			_, err = a.StartAgentExecution(context.Background(), AgentExecutionRequest{
+				Descriptor: descriptor,
+				Resource:   CurrentAgentResource{},
+				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+					return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
+						return engine.RunBackgroundShellContinuation(engineCtx, event)
+					})
+				},
+			})
+		}
+		if err == nil {
+			return
+		}
+		if errors.Is(err, ErrSessionRunActive) {
+			err = a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+				engine.HandleBackgroundShellUpdate(event, true)
+				return nil
+			})
+			if err == nil {
+				return
+			}
+		}
+		fallbackErr := a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			engine.HandleBackgroundShellUpdate(event, false)
+			engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed to start: %v", err))
+			return nil
+		})
+		err = errors.Join(err, fallbackErr)
+		if resource.logger != nil {
+			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
+		}
+	}()
+}
+
+func resourceSessionHasWorkflowContract(resource *agentResource) bool {
+	if resource == nil || resource.store == nil {
+		return false
+	}
+	locked := resource.store.Meta().Locked
+	return locked != nil && locked.WorkflowCompletionMode != nil
+}
+
+func runtimeBackgroundShellEvent(resource *agentResource, event shelltool.Event) runtime.BackgroundShellEvent {
+	summary := shelltool.BackgroundNoticeSummary{}
+	if event.Type == shelltool.EventCompleted || event.Type == shelltool.EventKilled {
+		var summaryErr error
+		summary, summaryErr = shelltool.SummarizeBackgroundEvent(event, shelltool.BackgroundNoticeOptions{
+			MaxChars:          resource.backgroundLimit,
+			SuccessOutputMode: resource.backgroundMode,
+		})
+		if summaryErr != nil {
+			if resource.logger != nil {
+				resource.logger.Logf("runtime.background.summary.failed process_id=%s error=%q", event.Snapshot.ID, summaryErr.Error())
+			}
+			summary = shelltool.InvariantFailureBackgroundNotice(event, summaryErr)
+		}
+	}
+	eventType := runtime.BackgroundShellEventBackgrounded
+	switch event.Type {
+	case shelltool.EventCompleted:
+		eventType = runtime.BackgroundShellEventCompleted
+	case shelltool.EventKilled:
+		eventType = runtime.BackgroundShellEventKilled
+	}
+	preview, previewRemoved := summary.RuntimePreview()
+	return runtime.BackgroundShellEvent{
+		Type:              eventType,
+		ID:                event.Snapshot.ID,
+		ActivityID:        event.Snapshot.ActivityID,
+		OwnerRunID:        event.Snapshot.OwnerRunID,
+		OwnerStepID:       event.Snapshot.OwnerStepID,
+		State:             event.Snapshot.State,
+		Command:           event.Snapshot.Command,
+		Workdir:           event.Snapshot.Workdir,
+		LogPath:           event.Snapshot.LogPath,
+		NoticeText:        summary.DetailText,
+		CompactText:       summary.CondensedText,
+		Preview:           preview,
+		PreviewRemoved:    previewRemoved,
+		ExitCode:          event.Snapshot.ExitCode,
+		UserRequestedKill: event.Snapshot.KillRequested,
+		NoticeSuppressed:  event.NoticeSuppressed,
+	}
 }
 
 func ParseSessionIDs(raw []string) ([]runtimeids.SessionID, error) {

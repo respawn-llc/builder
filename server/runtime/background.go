@@ -33,15 +33,34 @@ func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNoti
 	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
 }
 
+func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
+}
+
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
+	b.recordBackgroundShellUpdate(evt, queueNotice, true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	if !b.recordBackgroundShellUpdate(evt, true, false) {
+		return nil
+	}
+	_, err := b.runQueuedNotices(ctx)
+	return err
+}
+
+func (b *defaultBackgroundNoticeScheduler) recordBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool, schedule bool) bool {
 	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-	if !queueNotice {
-		return
+	if !queueNotice || !evt.Type.IsTerminal() {
+		return false
 	}
-	if !evt.Type.IsTerminal() {
-		return
-	}
-	b.QueueDeveloperNotice(llm.Message{
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), schedule)
+	return true
+}
+
+func backgroundShellDeveloperNotice(evt BackgroundShellEvent) llm.Message {
+	return llm.Message{
 		Role:                 llm.RoleDeveloper,
 		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:                 textutil.OptionalTrimmedString(evt.ID),
@@ -49,7 +68,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
 		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
-	})
+	}
 }
 
 func formatBackgroundShellNotice(evt BackgroundShellEvent) string {
@@ -82,6 +101,10 @@ func formatBackgroundShellCompact(evt BackgroundShellEvent) string {
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message) {
+	b.queueDeveloperNotice(msg, true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool) {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
@@ -93,7 +116,7 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	}
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
-	if !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
 		b.scheduled = true
 		shouldSchedule = true
 	}

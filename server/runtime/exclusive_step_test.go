@@ -66,10 +66,13 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)                       {}
-func (s *stubBackgroundNoticeScheduler) flushPendingNotices(string) (int, error)                { return 0, nil }
-func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                                { return false }
-func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool             { return false }
+func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
+	return nil
+}
+func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}
+func (s *stubBackgroundNoticeScheduler) flushPendingNotices(string) (int, error)    { return 0, nil }
+func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                    { return false }
+func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool { return false }
 func (s *stubBackgroundNoticeScheduler) ScheduleIfIdle() {
 	if s != nil && s.scheduleIfIdle != nil {
 		s.scheduleIfIdle()

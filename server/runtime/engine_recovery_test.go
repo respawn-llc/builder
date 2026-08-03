@@ -504,10 +504,13 @@ type recoverySchedulingObserver struct {
 }
 
 func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
-func (s *recoverySchedulingObserver) flushPendingNotices(string) (int, error)                { return 0, nil }
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                                { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool             { return false }
+func (s *recoverySchedulingObserver) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
+	return nil
+}
+func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)           {}
+func (s *recoverySchedulingObserver) flushPendingNotices(string) (int, error)    { return 0, nil }
+func (s *recoverySchedulingObserver) HasPendingNotices() bool                    { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool { return false }
 
 func (s *recoverySchedulingObserver) ScheduleIfIdle() {
 	if s != nil && s.onSchedule != nil {

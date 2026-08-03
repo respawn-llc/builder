@@ -1839,6 +1839,164 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	}
 }
 
+func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	feed := make(authorityPromptFeed, 2)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      feed,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("I need a decision."),
+				Phase:   textutil.Value(llm.MessagePhaseCommentary),
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-background-question",
+				Name:  string(toolspec.ToolAskQuestion),
+				Input: json.RawMessage(`{"question":"Proceed?"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("done"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.Reviewer.Frequency = "off"
+	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings:     settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		Workdir:      fixture.config.WorkspaceRoot,
+		Client:       client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !authority.routeBackgroundEvent(event) {
+		t.Fatal("terminal background event was not delivered")
+	}
+
+	var pending authorityPromptEvent
+	select {
+	case pending = <-feed:
+	case <-time.After(time.Second):
+		t.Fatal("background continuation question was not published from an Exact Execution Scope")
+	}
+	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
+		t.Fatalf("pending background question = %+v", pending)
+	}
+	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
+		RequestID: pending.requestID,
+		Answer:    "yes",
+	}, nil); err != nil {
+		t.Fatalf("submit background question response: %v", err)
+	}
+	select {
+	case resolved := <-feed:
+		if !resolved.resolved ||
+			resolved.resource != pending.resource ||
+			resolved.scopeID != pending.scopeID ||
+			resolved.requestID != pending.requestID {
+			t.Fatalf("resolved background question = %+v, want resolution for %+v", resolved, pending)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background continuation question was not resolved")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for authority.sessionExecution(sessionID) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("background continuation Exact Execution Scope did not retire")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	mode := sessioncontract.WorkflowCompletionModeTool
+	if err := fixture.store.MarkModelDispatchLocked(session.LockedContract{
+		Model:                  "gpt-5",
+		Temperature:            1,
+		ContextWindow:          200000,
+		ContextPercent:         95,
+		EnabledTools:           []string{string(toolspec.ToolAskQuestion)},
+		HasEnabledTools:        true,
+		WorkflowCompletionMode: &mode,
+	}); err != nil {
+		t.Fatalf("mark workflow Session contract locked: %v", err)
+	}
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	client := make(lifecycleRequestCaptureClient, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &client, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	correlation, err := runtimeids.NewExecutionCorrelation(
+		runtimeids.NewExecutionScopeID(),
+		attachment.Resource().Generation(),
+	)
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	event.Snapshot.ExecutionCorrelation = &correlation
+	if !fixture.authority.routeBackgroundEvent(event) {
+		t.Fatal("workflow terminal background event was not delivered")
+	}
+
+	select {
+	case update := <-updates:
+		if update.Type != runtime.BackgroundShellEventCompleted ||
+			update.ID != event.Snapshot.ID ||
+			update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("workflow background completion update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("workflow background completion was not appended to the Session")
+	}
+	select {
+	case request := <-client:
+		t.Fatalf("completed Workflow Session started another model turn: %+v", request)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if execution := fixture.authority.sessionExecution(sessionID); execution != nil {
+		t.Fatalf("completed Workflow Session started Exact Execution Scope %s", execution.scope.ID())
+	}
+}
+
 func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
