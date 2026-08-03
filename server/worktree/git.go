@@ -349,6 +349,14 @@ func (i *GitInspector) ResolveHEAD(ctx context.Context, workspaceRoot string) (G
 }
 
 func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string, revision string) (GitRevision, error) {
+	return i.resolveRevision(ctx, workspaceRoot, revision, true)
+}
+
+func (i *GitInspector) ResolveRevisionCommit(ctx context.Context, workspaceRoot string, revision string) (GitRevision, error) {
+	return i.resolveRevision(ctx, workspaceRoot, revision, false)
+}
+
+func (i *GitInspector) resolveRevision(ctx context.Context, workspaceRoot string, revision string, resolveCanonicalRef bool) (GitRevision, error) {
 	if i == nil {
 		return GitRevision{}, fmt.Errorf("git inspector is required")
 	}
@@ -406,6 +414,12 @@ func (i *GitInspector) ResolveRevision(ctx context.Context, workspaceRoot string
 			RequestedRef: requestedRef,
 			Cause:        fmt.Errorf("git %s returned no commit oid", strings.Join(commitArgs, " ")),
 		}
+	}
+	if !resolveCanonicalRef {
+		return GitRevision{
+			RequestedRef: requestedRef,
+			CommitOID:    commitOID,
+		}, nil
 	}
 
 	symbolicArgs := []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", requestedRef}

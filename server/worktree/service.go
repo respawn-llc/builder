@@ -1076,13 +1076,21 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 	}()
 	if createSpec.CreateBranch {
-		resolved, resolveErr := s.git.ResolveRevision(ctx, workspaceCtx.workspaceRoot, createSpec.BaseRef)
+		resolved, resolveErr := s.git.ResolveRevisionCommit(ctx, workspaceCtx.workspaceRoot, createSpec.BaseRef)
 		if resolveErr != nil {
 			if errors.Is(resolveErr, context.Canceled) || errors.Is(resolveErr, context.DeadlineExceeded) {
 				return serverapi.WorktreeCreateResponse{}, resolveErr
 			}
+			owner := serverapi.WorktreeCreateErrorOwnerForm
+			var revisionErr *GitRevisionResolutionError
+			if errors.As(resolveErr, &revisionErr) {
+				switch revisionErr.Kind {
+				case GitRevisionResolutionErrorInvalidRevision, GitRevisionResolutionErrorNonCommit:
+					owner = serverapi.WorktreeCreateErrorOwnerBaseRef
+				}
+			}
 			return serverapi.WorktreeCreateResponse{}, serverapi.NewWorktreeCreateError(
-				serverapi.WorktreeCreateErrorOwnerBaseRef,
+				owner,
 				resolveErr.Error(),
 				resolveErr,
 			)

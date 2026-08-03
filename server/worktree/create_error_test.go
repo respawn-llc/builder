@@ -110,9 +110,11 @@ func TestCreateWorktreeResolvesBaseRefOnceAndUsesCommitOIDForAdd(t *testing.T) {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
 	if !hasGitCall(runner.calls, []string{"rev-parse", "--verify", "--quiet", "HEAD^{object}"}) ||
-		!hasGitCall(runner.calls, []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}) ||
-		!hasGitCall(runner.calls, []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", "HEAD"}) {
+		!hasGitCall(runner.calls, []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}) {
 		t.Fatalf("Base-ref resolution calls = %v, want one authoritative resolution", runner.calls)
+	}
+	if hasGitCall(runner.calls, []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", "HEAD"}) {
+		t.Fatalf("Base-ref resolution followed the moving ref after capturing its commit: %v", runner.calls)
 	}
 	resolutionCount := 0
 	for _, call := range runner.calls {
@@ -184,6 +186,39 @@ func TestCreateWorktreeBaseRefResolutionFailuresAreBaseRefOwned(t *testing.T) {
 				t.Fatalf("CreateWorktree error = %T %v, want resolver cause", err, err)
 			}
 		})
+	}
+}
+
+func TestCreateWorktreeGitBaseRefResolutionFailureIsFormOwned(t *testing.T) {
+	env := newServiceTestEnv(t)
+	resolveErr := errors.New("git object database is inaccessible")
+	runner := &recordingGitCommandRunner{
+		delegate: &stubGitCommandRunner{
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{object}"): {
+					err:      resolveErr,
+					exitCode: 2,
+				},
+			},
+		},
+	}
+	env.service.git = NewGitInspector(runner)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "resolve-git-failure",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/resolve-git-failure",
+	})
+	var typed *serverapi.WorktreeCreateError
+	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerForm {
+		t.Fatalf("CreateWorktree error = %T %v, want form-owned error", err, err)
+	}
+	var revisionErr *GitRevisionResolutionError
+	if !errors.As(err, &revisionErr) || revisionErr.Kind != GitRevisionResolutionErrorGitFailure {
+		t.Fatalf("CreateWorktree error = %T %v, want GitFailure resolution error", err, err)
 	}
 }
 

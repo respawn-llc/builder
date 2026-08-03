@@ -527,6 +527,26 @@ func TestGitInspectorResolveRevisionPeelsCommitAndReportsCanonicalRef(t *testing
 	}
 }
 
+func TestGitInspectorResolveRevisionCommitStopsAfterCommitOID(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	commitOID := "abc123"
+	runner := &stubGitCommandRunner{results: map[string]stubGitCommandResult{
+		gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{object}"): {output: []byte("object\n")},
+		gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{commit}"): {output: []byte(commitOID + "\n")},
+	}}
+
+	resolved, err := NewGitInspector(runner).ResolveRevisionCommit(context.Background(), workspaceRoot, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveRevisionCommit: %v", err)
+	}
+	if resolved.RequestedRef != "HEAD" || resolved.CommitOID != commitOID || resolved.CanonicalRef != nil {
+		t.Fatalf("resolved revision = %+v, want commit-only resolution", resolved)
+	}
+	if slices.Equal(runner.args, []string{"rev-parse", "--symbolic-full-name", "--verify", "--quiet", "HEAD"}) {
+		t.Fatalf("ResolveRevisionCommit followed moving ref after commit capture: %v", runner.args)
+	}
+}
+
 func TestGitInspectorResolveDefaultBranchUsesConfiguredRemoteHEAD(t *testing.T) {
 	newRepositoryWithRemoteHEAD := func(t *testing.T, remoteName string, branchName string) string {
 		t.Helper()
