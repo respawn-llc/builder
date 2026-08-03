@@ -3803,23 +3803,8 @@ WHERE (
 AND
     (
         label_filter_args.dependency_filter IS NULL
-        OR (
-            CAST(label_filter_args.dependency_filter AS INTEGER) != 0
-            AND NOT EXISTS (
-                SELECT 1
-                FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
-                WHERE dependency.blocked_task_id = effective_current_nodes.task_id
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM workflow_task_status_records status
-                      WHERE status.task_id = dependency.blocker_task_id
-                        AND status.is_done != 0
-                  )
-            )
-        )
-        OR (
-            CAST(label_filter_args.dependency_filter AS INTEGER) = 0
-            AND EXISTS (
+        OR CAST(label_filter_args.dependency_filter AS INTEGER) = (
+            NOT EXISTS (
                 SELECT 1
                 FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
                 WHERE dependency.blocked_task_id = effective_current_nodes.task_id
@@ -3969,23 +3954,8 @@ WITH board_node_tasks AS (
       AND
           (
               ?7 IS NULL
-              OR (
-                  CAST(?7 AS INTEGER) != 0
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
-                      WHERE dependency.blocked_task_id = t.id
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM workflow_task_status_records status
-                            WHERE status.task_id = dependency.blocker_task_id
-                              AND status.is_done != 0
-                        )
-                  )
-              )
-              OR (
-                  CAST(?7 AS INTEGER) = 0
-                  AND EXISTS (
+              OR CAST(?7 AS INTEGER) = (
+                  NOT EXISTS (
                       SELECT 1
                       FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
                       WHERE dependency.blocked_task_id = t.id
@@ -8032,23 +8002,8 @@ eligible_rows AS (
       AND
           (
               args.dependency_filter IS NULL
-              OR (
-                  CAST(args.dependency_filter AS INTEGER) != 0
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
-                      WHERE dependency.blocked_task_id = t.id
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM workflow_task_status_records status
-                            WHERE status.task_id = dependency.blocker_task_id
-                              AND status.is_done != 0
-                        )
-                  )
-              )
-              OR (
-                  CAST(args.dependency_filter AS INTEGER) = 0
-                  AND EXISTS (
+              OR CAST(args.dependency_filter AS INTEGER) = (
+                  NOT EXISTS (
                       SELECT 1
                       FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
                       WHERE dependency.blocked_task_id = t.id

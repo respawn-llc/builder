@@ -143,7 +143,7 @@ export function BoardColumnDataOwner({
         ? isError
           ? {
               state: "error",
-              message: t("board.cardsLoadRetryBody"),
+              message: errorMessage(error),
               retryLabel: t("app.retry"),
               onRetry: retryCards,
             }
@@ -152,31 +152,31 @@ export function BoardColumnDataOwner({
               label: t("states.loading"),
             }
         : undefined,
-    [cardsQuery.data, isError, retryCards, t],
+    [cardsQuery.data, error, isError, retryCards, t],
   );
   const previousBoundary = useMemo(
     () =>
       directionalBoundary({
+        error,
         failed: isFetchPreviousPageError,
         loading: isFetchingPreviousPage,
-        message: t("board.cardsLoadRetryBody"),
         loadingLabel: t("app.loadingMore"),
         onRetry: loadNewer,
         retryLabel: t("app.retry"),
       }),
-    [isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
+    [error, isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
   );
   const nextBoundary = useMemo(
     () =>
       directionalBoundary({
+        error,
         failed: isFetchNextPageError,
         loading: isFetchingNextPage,
-        message: t("board.cardsLoadRetryBody"),
         loadingLabel: t("app.loadingMore"),
         onRetry: loadOlder,
         retryLabel: t("app.retry"),
       }),
-    [isFetchNextPageError, isFetchingNextPage, loadOlder, t],
+    [error, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
   );
   const replacementBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
@@ -295,10 +295,10 @@ export function BoardColumnDataOwner({
 
 function directionalBoundary(
   input: Readonly<{
+    error: unknown;
     failed: boolean;
     loading: boolean;
     loadingLabel: string;
-    message: string;
     onRetry: () => void;
     retryLabel: string;
   }>,
@@ -306,7 +306,7 @@ function directionalBoundary(
   if (input.failed) {
     return {
       state: "error",
-      message: input.message,
+      message: errorMessage(input.error),
       retryLabel: input.retryLabel,
       onRetry: input.onRetry,
     };
