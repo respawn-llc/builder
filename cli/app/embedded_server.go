@@ -217,6 +217,21 @@ func (s *embeddedAppServer) RunPromptClient() apicontract.RunPromptService {
 	return s.inner.RunPromptClient()
 }
 
+func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context) (apicontract.PromptCommandCatalogService, error) {
+	if s == nil || s.inner == nil {
+		return nil, errors.New("embedded server is required")
+	}
+	workspaceRoot := s.Config().WorkspaceRoot
+	if strings.TrimSpace(s.boundWorkspaceID) != "" {
+		binding, err := s.inner.MetadataStore().LookupWorkspaceBindingByID(ctx, s.boundWorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		workspaceRoot = binding.CanonicalRoot
+	}
+	return s.inner.PromptCommandCatalogClientForProjectWorkspace(ctx, s.ProjectID(), workspaceRoot)
+}
+
 func (s *embeddedAppServer) Reauthenticate(ctx context.Context, interactor authInteractor, interactiveAuth bool) error {
 	if s == nil || s.inner == nil {
 		return errors.New("embedded server is required")

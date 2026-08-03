@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/server/metadata"
@@ -11,6 +13,7 @@ import (
 	"core/server/runtimecontrol"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -113,11 +116,41 @@ func (e *promptCommandPublicError) RPCErrorData() json.RawMessage {
 }
 
 func (s *Core) PromptCommandCatalogClientForProjectWorkspace(ctx context.Context, projectID, workspaceRoot string) (apicontract.PromptCommandCatalogService, error) {
-	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
+	projectCtx, err := s.resolvePromptCommandCatalogContext(ctx, projectID, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 	return promptCommandCatalogService{
 		catalog: promptcommands.New(projectCtx.config.PersistenceRoot, projectCtx.projectRoot),
 	}, nil
+}
+
+func (s *Core) resolvePromptCommandCatalogContext(ctx context.Context, projectID, workspaceRoot string) (projectContext, error) {
+	if s == nil || s.safeBundles().Persistence.metadataStore == nil {
+		return projectContext{}, errors.New("metadata store is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return projectContext{}, err
+	}
+	worktree, err := s.safeBundles().Persistence.metadataStore.GetWorktreeRecordByCanonicalRoot(ctx, canonicalRoot)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return projectContext{}, err
+		}
+		return s.resolveProjectContext(ctx, projectID, "", canonicalRoot)
+	}
+	binding, err := s.safeBundles().Persistence.metadataStore.LookupWorkspaceBindingByID(ctx, worktree.WorkspaceID)
+	if err != nil {
+		return projectContext{}, err
+	}
+	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(projectID) {
+		return projectContext{}, fmt.Errorf("worktree %q is not bound to project %q", canonicalRoot, projectID)
+	}
+	projectCtx, err := s.resolveProjectContext(ctx, projectID, binding.WorkspaceID, "")
+	if err != nil {
+		return projectContext{}, err
+	}
+	projectCtx.projectRoot = canonicalRoot
+	return projectCtx, nil
 }

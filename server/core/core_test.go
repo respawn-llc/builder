@@ -108,6 +108,49 @@ func TestPromptCommandCatalogUsesRequestedWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestPromptCommandCatalogUsesRegisteredWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	worktree := filepath.Join(t.TempDir(), "feature")
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree: %v", err)
+	}
+	if err := appCore.MetadataStore().UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID:            "worktree-catalog-test",
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktree,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	writeCorePromptFixture(t, worktree, "only_worktree", "worktree")
+
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), binding.ProjectID, worktree)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("GetPromptCommandCatalog: %v", err)
+	}
+	for _, command := range response.Commands {
+		if command.Name == "prompt:only_worktree" && command.Preview == "worktree" {
+			return
+		}
+	}
+	t.Fatalf("worktree catalog = %+v, want prompt:only_worktree", response.Commands)
+}
+
 func TestPromptCommandEffectiveWorkspaceResolverUsesSuppliedWorkspace(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspace := t.TempDir()
