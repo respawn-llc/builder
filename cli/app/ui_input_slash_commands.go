@@ -6,6 +6,7 @@ import (
 
 	"core/cli/app/commands"
 	tuiinput "core/cli/tui/input"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -18,6 +19,9 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 		return true, m, nil
 	}
 	if !selection.hasCommand || selection.commandText() == "" {
+		if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+			return true, m, cmd
+		}
 		return false, m, nil
 	}
 	if errText, blocked := m.blockedDeferredSlashCommand(selection.commandText()); blocked {
@@ -31,6 +35,9 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
 	if !selection.hasCommand {
+		if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+			return true, m, cmd
+		}
 		return false, m, nil
 	}
 	commandText := selection.commandText()
@@ -46,14 +53,52 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 	}
-	if commandResult := m.commandRegistry.Execute(commandText); commandResult.Handled {
+	commandResult := m.commandRegistry.Execute(commandText)
+	if commandResult.Handled {
 		draft := m.capturePromptHistoryDraftForReuse()
-		recordCmd := m.recordPromptHistory(commandText)
+		var recordCmd tea.Cmd
+		if commandResult.PromptCommand == nil {
+			recordCmd = m.recordPromptHistory(commandText)
+		}
 		m.clearCommandInput(command, draft)
 		next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}
 	return false, m, nil
+}
+
+func (c uiInputController) rejectUnavailablePromptCommand(text string) (tea.Cmd, bool) {
+	if _, reserved := promptCommandToken(text); !reserved {
+		return nil, false
+	}
+	return c.model.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""), true
+}
+
+func promptCommandToken(text string) (runtimeinput.CommandToken, bool) {
+	parsed := parseSlashCommandInput(text)
+	if !parsed.active || parsed.token == "" {
+		return runtimeinput.CommandToken{}, false
+	}
+	token, err := runtimeinput.ParseCommandToken(parsed.token)
+	if err == nil && token.Namespace == runtimeinput.NamespacePrompt {
+		return token, true
+	}
+	return runtimeinput.CommandToken{}, false
+}
+
+func promptCommandInput(text string) (runtimeinput.Input, bool) {
+	parsed := parseSlashCommandInput(text)
+	if !parsed.active {
+		return runtimeinput.Input{}, false
+	}
+	if builtin, ok := runtimeinput.BuiltinPromptCommandForAlias(parsed.token); ok {
+		return runtimeinput.BuiltinCommand(*builtin, parsed.args), true
+	}
+	name, err := runtimeinput.ParsePromptCommandName(parsed.token)
+	if err != nil {
+		return runtimeinput.Input{}, false
+	}
+	return runtimeinput.Command(name.String(), parsed.args), true
 }
 
 func (m *uiModel) clearCommandInput(command commands.Command, draft *tuiinput.EditorSnapshot) {

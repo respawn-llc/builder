@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
@@ -35,12 +36,15 @@ type sessionWorkspaceChangeServer interface {
 	sessionConfigProvider
 }
 
+type promptCommandCatalogServer interface {
+	PromptCommandCatalogClient(context.Context, string, clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error)
+}
+
 type interactiveSessionServer interface {
 	appServerCore
 	launchPlannerServer
 	sessionWorkspaceChangeServer
 	sessionTransitionServer
-	ClientPromptRoots() (commands.ClientPromptRoots, error)
 	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
@@ -264,13 +268,31 @@ func prepareSessionUIRun(
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}
-	promptRoots, err := server.ClientPromptRoots()
-	if err != nil {
-		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
-	}
-	commandRegistry, err := commands.NewDefaultRegistryWithClientPromptRoots(promptRoots)
-	if err != nil {
-		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
+	commandRegistry := commands.NewDefaultRegistry()
+	var catalogStatus *string
+	var promptCatalog apicontract.PromptCommandCatalogService
+	var catalogEntries []commands.PromptCommandCatalogEntry
+	if catalogServer, ok := server.(promptCommandCatalogServer); ok {
+		catalogClient, catalogErr := catalogServer.PromptCommandCatalogClient(ctx, plan.SessionID, plan.ExecutionTarget)
+		if catalogErr != nil {
+			notice := "Custom prompt commands are unavailable for this session."
+			catalogStatus = &notice
+		} else if catalogClient != nil {
+			promptCatalog = catalogClient
+			response, catalogErr := catalogClient.GetPromptCommandCatalog(ctx, serverapi.PromptCommandCatalogRequest{})
+			if catalogErr == nil {
+				var entries []commands.PromptCommandCatalogEntry
+				entries, catalogErr = promptCatalogSnapshot(response)
+				catalogEntries = entries
+				if catalogErr == nil {
+					commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(entries)
+				}
+			}
+			if catalogErr != nil {
+				notice := "Custom prompt commands are unavailable for this session."
+				catalogStatus = &notice
+			}
+		}
 	}
 	initialState, err := sessionLaunchInitialStateFromServer(
 		ctx,
@@ -295,6 +317,9 @@ func prepareSessionUIRun(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
+		initialTransientStatus:       catalogStatus,
+		promptCatalog:                promptCatalog,
+		promptCatalogEntries:         catalogEntries,
 	}, nil
 }
 

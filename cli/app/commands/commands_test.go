@@ -1,8 +1,9 @@
 package commands
 
 import (
-	"strings"
 	"testing"
+
+	"core/shared/runtimeinput"
 )
 
 func TestExecuteBuiltins(t *testing.T) {
@@ -53,20 +54,49 @@ func TestExecuteBuiltins(t *testing.T) {
 
 func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 	registry := NewDefaultRegistry()
-	for input, suffix := range map[string]string{
-		"/review src/cli/app": "src/cli/app",
-		"/init starter repo":  "starter repo",
+	for _, test := range []struct {
+		input   string
+		command runtimeinput.BuiltinPromptCommand
+		suffix  string
+	}{
+		{input: "/review src/cli/app", command: runtimeinput.BuiltinPromptCommandReview, suffix: "src/cli/app"},
+		{input: "/init starter repo", command: runtimeinput.BuiltinPromptCommandInit, suffix: "starter repo"},
 	} {
-		got := registry.Execute(input)
-		if !got.Handled || !got.SubmitUser || got.Action != ActionNone || !got.FreshConversation {
-			t.Fatalf("Execute(%q) = %+v, want fresh user submission", input, got)
+		got := registry.Execute(test.input)
+		if !got.Handled || got.PromptCommand == nil || got.Action != ActionNone || !got.FreshConversation {
+			t.Fatalf("Execute(%q) = %+v, want fresh user submission", test.input, got)
 		}
-		if got.User == "" || got.User == input || !strings.HasSuffix(got.User, suffix) {
-			t.Fatalf("Execute(%q) user payload = %q, want injected prompt ending in %q", input, got.User, suffix)
+		if got.PromptCommand.Name != test.command.Name() ||
+			got.PromptCommand.Arguments != test.suffix {
+			t.Fatalf("Execute(%q) prompt command = %+v, want %s", test.input, got.PromptCommand, test.command.Name())
 		}
-		if got.Text != "" || got.Args != "" {
-			t.Fatalf("Execute(%q) leaked system text or args: %+v", input, got)
+		if got.User != "" || got.Text != "" || got.Args != "" {
+			t.Fatalf("Execute(%q) leaked system text or args: %+v", test.input, got)
 		}
+	}
+}
+
+func TestPromptCatalogProxiesExposeOnlyPreviewAndTypedInvocation(t *testing.T) {
+	registry := NewDefaultRegistryWithPromptCatalog([]PromptCommandCatalogEntry{
+		{Name: "prompt:review_plan", Preview: "Review **changed** files"},
+		{Name: "prompt:review", Preview: "server review"},
+	})
+	command, ok := registry.Command("/prompt:review_plan")
+	if !ok || command.Description != "Review **changed** files" {
+		t.Fatalf("command = %+v, ok = %v", command, ok)
+	}
+	result := registry.Execute("/prompt:review_plan src")
+	if !result.Handled || result.PromptCommand == nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.PromptCommand.Name != "prompt:review_plan" || result.PromptCommand.Arguments != "src" {
+		t.Fatalf("invocation = %+v", result.PromptCommand)
+	}
+	if command, ok := registry.Command("/review"); !ok || command.Description != "server review" {
+		t.Fatalf("built-in command = %+v, %v", command, ok)
+	}
+	if command, ok := registry.Command("/prompt:review"); ok {
+		t.Fatalf("server built-in leaked namespaced picker command: %+v", command)
 	}
 }
 

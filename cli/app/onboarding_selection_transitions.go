@@ -114,6 +114,12 @@ func (state *onboardingFlowState) chooseSkillImport(choiceID string) error {
 	})
 }
 
+func (state *onboardingFlowState) chooseCommandImport(choiceID string) error {
+	return state.updateSelections("apply_choice", onboardingStepCommandsImport, func(selections *onboardingSelections) error {
+		return applyImportChoice(&selections.commandImport, choiceID, state.imports.commandChoices)
+	})
+}
+
 func (state *onboardingFlowState) chooseSkillEnablement(selection map[string]bool) error {
 	candidates := skillSelectionCandidates(state)
 	return state.updateSelections("apply_multi_select", onboardingStepSkillsEnabled, func(selections *onboardingSelections) error {
@@ -125,6 +131,9 @@ func (state *onboardingFlowState) refreshSkillSelectionsAfterDiscovery() error {
 	return state.updateSelections("import_discovery", onboardingStepSkillsImport, func(selections *onboardingSelections) error {
 		if state.imports.skipSkills {
 			selections.skillImport = onboardingImportSelection{Mode: onboardingImportModeNone}
+		}
+		if state.imports.skipCommands {
+			selections.commandImport = onboardingImportSelection{Mode: onboardingImportModeNone}
 		}
 		state.recomputeSkillEnablement(selections)
 		return nil

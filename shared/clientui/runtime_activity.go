@@ -3,6 +3,8 @@ package clientui
 import (
 	"fmt"
 	"strings"
+
+	"core/shared/runtimeinput"
 )
 
 type ReadModelVersion struct {
@@ -159,7 +161,7 @@ func (r RuntimeInputReconciliation) Ambiguous() bool {
 type RuntimeSubmitRequest struct {
 	OperationRef                    RuntimeOperationRef
 	PreSubmitCompactionOperationRef RuntimeOperationRef
-	Text                            string
+	Input                           runtimeinput.Input
 }
 
 func (r RuntimeSubmitRequest) Validate() error {
@@ -169,10 +171,7 @@ func (r RuntimeSubmitRequest) Validate() error {
 	if err := validateOperationRefKind(r.PreSubmitCompactionOperationRef, RuntimeOperationKindPreSubmitCompact); err != nil {
 		return err
 	}
-	if strings.TrimSpace(r.Text) == "" {
-		return fmt.Errorf("submit text is required")
-	}
-	return nil
+	return r.Input.Validate()
 }
 
 type RuntimeShellRequest struct {

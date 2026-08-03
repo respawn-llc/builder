@@ -188,6 +188,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore)
+	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
+		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
+			persistenceRoot: cfg.PersistenceRoot,
+		},
+		metadataStore: metadataStore,
+	})
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,

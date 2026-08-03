@@ -258,7 +258,8 @@
 - After whitespace, command enters argument mode and picker hides.
 - `Enter` runs the selected slash command, including default first match for partial input.
 - `Tab` on partial selected command autocompletes it and inserts trailing space.
-- Unknown slash commands are sent to the model as normal user prompts.
+- Unknown slash commands are sent to the model as normal user prompts, except the reserved `/prompt:` namespace.
+- An unavailable or unknown `/prompt:` command reports a command error and is never submitted as model input.
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
@@ -276,9 +277,25 @@
 - `/fast`, `/supervisor`, and `/questions` feedback is a committed transcript entry in an active Session.
 - `/status` opens a read-only detail overlay and refreshes progressively.
 - `/status` shows previous-session and parent-agent-session provenance as separate labeled facts when each relationship is present.
-- Built-in prompt commands use embedded Markdown templates.
-- File-backed prompts come from local/global `.kent/prompts` and `.kent/commands`; scan is non-recursive `.md`, namespace precedence is local over global and prompts over commands.
-- File command ID is `prompt:<filename-without-extension>` and submits file content verbatim as user message.
+- Built-in prompt commands `/review` and `/init` are canonical server-resolved prompt identities backed by embedded Markdown templates. Clients do not expand their templates.
+- Kent owns file-backed prompt-command discovery, file reads, precedence, normalization, prompt expansion, and submission.
+- Kent includes built-in prompt identities in the prompt-command catalog. The TUI presents their user-facing aliases together with the catalog projection.
+- Kent reads file-backed prompt commands from these roots in descending precedence: Workspace `.kent/prompts`, Workspace `.kent/commands`, persistence-root `prompts`, persistence-root `commands`, persistence-root `.generated/prompts`, and persistence-root `.generated/commands`.
+- Discovery is non-recursive and includes only `.md` files with non-blank content. A blank higher-precedence file does not hide a valid lower-precedence command.
+- A prompt command ID is `prompt:<normalized-base-name>`. Normalization lowercases letters, keeps letters and digits, collapses whitespace and underscores into one underscore, and discards other characters.
+- The first valid file for a normalized command ID wins.
+- The TUI reads one catalog snapshot containing command IDs and previews for each Session launch. Moving to another Session reads another snapshot. Kent does not send prompt bodies in the catalog.
+- A prompt preview is the first 256 Unicode characters after line breaks and repeated whitespace collapse to single spaces. Markdown punctuation remains unchanged.
+- The slash-command picker displays the prompt preview instead of a generic custom-prompt description.
+- If catalog reading fails, the TUI opens the Session with built-in commands and shows one transient status-line error.
+- Kent does not refresh a successful catalog continuously. Added or renamed commands appear after the next catalog read.
+- Invoking a prompt command sends the command ID and trailing input to Kent. Kent reads the current command content, expands it, and submits the result through the ordinary user-turn operation without a command-specific loading state.
+- If the prompt contains the exact `$ARGUMENTS` token, Kent replaces every occurrence with the trimmed trailing input. Otherwise, Kent appends non-empty trailing input after the prompt, separated by one blank line.
+- The TUI does not retain prompt bodies in its command registry. The expanded prompt remains an ordinary user message and appears in live and durable transcript history.
+- For a `/prompt:` command, prompt history stores the canonical command and its arguments exactly once. It does not store the expanded prompt body.
+- A body edit can take effect before the launch snapshot preview changes.
+- If invocation reports that the command is missing, the TUI reports the error and reads the catalog once. A successful read replaces all Kent-supplied prompt commands. A failed read reports the refresh error and keeps built-in commands and the remaining launch snapshot. Kent does not retry the invocation automatically.
+- Prompt-command catalog entries and client-visible prompt-command errors do not expose server file paths or source provenance.
 
 ## Notifications
 

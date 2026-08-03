@@ -295,10 +295,14 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	ctx := context.Background()
 
 	transcriptRoute := routeForTest(t, protocol.MethodSessionSubscribeTranscript)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
+	ownSessionID, err := runtimeids.ParseSessionID(fixture.ownSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: &ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("attached transcript subscription: %v", err)
 	}
-	err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID})
+	err = executor.authorizeScope(ctx, &connectionState{attachedSession: &ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID})
 	var routeErr gatewayRouteError
 	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("attached transcript mismatch error = %v, want invalid request route error", err)

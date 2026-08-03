@@ -34,11 +34,72 @@ Translate client/server compatibility changes into user actions, such as upgradi
 
 Announce only capabilities available through released Kent artifacts or public documentation. Exclude private repository helpers, operator scripts, and internal automation.
 
+The exact workflow-generated changelog appendix described below is the sole exception to this curated audience boundary. Keep it collapsed and verbatim, and do not copy its internal commit terminology into the curated notes.
+
 ### Editorial Structure
 
 GitHub renders the release name and tag above the body. Start the body with its opening summary; do not repeat the release title as a Markdown H1.
 
 Lead with the release's new capabilities and user-visible improvements. Put routine coordinated-upgrade guidance after the highlights. Lead with an upgrade warning only when users must act before upgrading to prevent data loss, outage, security exposure, or a broken installation.
+
+Use release voice in the curated body. The opening says what the version adds or changes, and entries use verbs such as `Added`, `Changed`, `Removed`, and `Fixed`. Do not apply evergreen documentation voice to a versioned changelog. Avoid `now` and `no longer`; write `Changed` or `Removed` and name the previous public behavior when migration requires it.
+
+Curated entries describe outcomes, not mechanisms. Name what users can do, what they see, what failed in the previous release, or what action they must take. Terms such as transactions, schedulers, projections, runtime ownership, transport streams, RPCs, protocol versions, DTOs, and review remediation do not belong in the curated body unless a documented third-party integration makes the term part of the public contract.
+
+Examples:
+
+- `Added Project-scoped Task Search across Task titles, bodies, and Comments.`
+- `Fixed resumed TUI Sessions crashing when their transcript was temporarily unavailable.`
+- `Removed --page-token; use --offset and --limit.`
+
+Do not write:
+
+- `Task Search supports...` — evergreen documentation voice does not identify the release change.
+- `Reserved a write transaction before interruption.` — implementation mechanics do not state the user outcome.
+- `Improved Task Search selection stability.` — stabilization of a capability first shipped in this release is not a separate release item.
+
+### Rejected Curated-Note Details
+
+The following 25 entries quote the actual wording from rejected `v2.5.0` curated revisions. They demonstrate implementation mechanics, generic interaction details, unsupported surfaces, duplicate facts, and same-release stabilization that do not belong in curated release notes.
+
+1. **Rejected:** “Desktop boards include a Project-scoped Task Search command palette across every linked Workflow. Search covers Task titles, complete bodies, and Comments; preserves ranked Task grouping; loads results through infinite scroll; and opens the selected Task in Task Detail. `Command-S`, `Control-S`, and `Alt-Space` open Search, with stable keyboard and pointer selection.” **Rule:** announce the searchable content and result destination; omit infinite scroll and standard list-navigation mechanics.
+2. **Rejected:** “`kent task search` provides global or Project-scoped search with status filters, optional Comment matching, case-sensitive literal matching, raw FTS5 queries, JSON output, and offset-based infinite pagination.” **Rule:** keep supported query modes and migration-relevant flags; remove the `infinite pagination` label.
+3. **Rejected:** “Searches can include Comments, filter by Task status, span several Projects, return structured JSON, and continue through bounded offsets without retaining server-side pagination state.” **Rule:** keep public filters and continuation; omit server state-management mechanics.
+4. **Rejected:** “Search uses the same live-aware Task status as Task List, Workflow Board, and Task Detail, and successful Task or Comment changes become searchable in the same operation.” **Rule:** omit read-model and transaction guarantees from highlights; document them on the owning reference page.
+5. **Rejected:** “Tasks own their active Workflow state directly through Current Nodes. A Task normally has one Current Node and can have several during fan-out; Agent Current Nodes bind to retained Sessions, while Script Current Nodes retain the state required to resume their script. Task Detail exposes Current Nodes, retained Session count, exact live work, and an infinite-scroll activity stream.” **Rule:** announce the added Task Detail and Activity information; omit ownership, persistence, and infinite-scroll mechanics.
+6. **Rejected:** “Workflow transitions preserve Session assignment, agent role, completion mode, incoming values, continuation sources, and previous-target Sessions across sequential work, loops, fan-out, joins, approval, interruption, and resume.” **Rule:** summarize the observable Session-continuity improvement instead of enumerating retained state.
+7. **Rejected:** “Script Nodes do not consume `workflow.concurrency`; that setting limits automatically scheduled Agent Nodes. Explicit Resume and Approval operations remain available independently of automatic Agent scheduling capacity.” **Rule:** state the configuration change; omit scheduler behavior that does not change user action.
+8. **Rejected:** “Manual Move can select any valid incoming Workflow Transition instead of requiring a direct edge from the Task's Current Node. It supports authored Transition keys, required values, fan-out destinations, editable resolved values, Execution Target selection, no-op detection, and authoritative preview. The move reserves its write transaction before interrupting active work, preserves supplied values and commentary, and leaves the Task unmoved when validation or startup fails.” **Rule:** announce the added Manual Move choices and inputs; omit transaction sequencing and same-release stabilization.
+9. **Rejected:** “Automatic managed-worktree paths use compact Project parents and numeric or Task Short ID leaves. Existing recorded roots and explicit roots remain authoritative. Automatic roots must stay outside the source workspace, collision handling is bounded, and failed creation removes only an empty reserved leaf while retaining partial Git state for diagnosis.” **Rule:** announce shorter generated paths; keep allocation and cleanup rules in Worktree documentation.
+10. **Rejected:** “Worktree Create resolves a new branch's Base ref before mutation and places Base-ref errors beside that field in the TUI; other failures remain form-level errors with their Git diagnostics. Worktree deletion previews use the resolved topology target and report Clean, Dirty, or Unknown state, while the actual deletion rechecks the target before mutation.” **Rule:** announce visible Base-ref feedback; omit mutation ordering and unavailable client surfaces.
+11. **Rejected:** “Model-visible shell post-processing limits each line to 1,000 Unicode code points in `builtin`, `user`, and `all` modes while preserving full captured logs. Local image reads run in an interruptible worker and return a recoverable error after 10 seconds instead of hanging the Session.” **Rule:** preserve the limits and user benefit; omit mode enumeration and worker implementation.
+12. **Rejected:** “Manual compaction accepts requests only after completed agent work, admits queued requests at Agent Step boundaries, and preserves request order through reviewer completion and continuation.” **Rule:** state that premature Manual Compaction is rejected; omit scheduling boundaries and reviewer ordering.
+13. **Rejected:** “Resume returns after durable requeue and scheduler admission instead of waiting for Session setup, Execution Target restoration, Script launch, or agent startup. A rejected enqueue restores the interrupted state.” **Rule:** write that Resume returns without waiting for startup and leaves failed work interrupted.
+14. **Rejected:** “Workflow successors wait for the completed execution scope to retire, preventing overlapping ownership, stale assignments, and continuation deadlocks.” **Rule:** state a verified previous-release overlap symptom once, or omit the runtime ownership model.
+15. **Rejected:** “Concurrent Project, workspace, and Workflow mutations revalidate their prepared state before commit, preventing stale operations from overwriting newer changes.” **Rule:** write that concurrent edits do not overwrite newer work.
+16. **Rejected:** “The TUI hydrates the canonical transcript before waiting for runtime activity. A dormant or resumed Session waits for a wake or resume event instead of failing when a live transcript stream is unavailable.” **Rule:** write the resumed-TUI crash that users encountered; omit hydration and stream mechanics.
+17. **Rejected:** “Accepted Steers survive disconnects, and background shell completions remain deliverable across runtime transitions and transient delivery failures.” **Rule:** write the lost-message or missing-notification symptom without runtime and delivery machinery.
+18. **Rejected:** “Failed streamed attempts produce one reset for the active assistant stream without a duplicate terminal reset or a fabricated final assistant response.” **Rule:** write the duplicated or partial assistant-output defect.
+19. **Rejected:** “Dangling tool-call repair preserves the original Agent Step when available, rejects conflicting ownership before persistence, and avoids reopening a malformed transcript that can crash projection.” **Rule:** write the transcript-corruption or reopen crash fixed for users.
+20. **Rejected:** “Transcript batches reject invalid variants before publication, preventing partially applied prompt, tool, and assistant updates.” **Rule:** describe a visible partial-transcript defect only when users could encounter it; otherwise omit.
+21. **Rejected:** “Fast Mode reports effective provider support without constructing a runtime that can panic on missing capabilities.” **Rule:** write that Fast Mode no longer fails during startup for unsupported providers.
+22. **Rejected:** “Local and custom OpenAI-compatible endpoints use third-party-compatible message behavior instead of first-party OpenAI-only phase semantics. The corrected classification applies when creating a new Session; existing Sessions retain their original provider contract.” **Rule:** state the new-Session action without provider-classification or phase terminology.
+23. **Rejected:** “CLI and Desktop surfaces omit internal prefixed Workflow identifiers that cannot be used as selectors.” **Rule:** omit internal identifiers; document only accepted public selectors when migration requires it.
+24. **Rejected:** “The Current Node cutover removes public Workflow Run and Placement selectors. `kent task cancel` is replaced by `kent task interrupt`, Manual Move, or Task deletion according to intent. `kent task complete --run` is removed; forced completion selects `--session` or `--task`. `kent task approve` accepts the pending Approval ID, and Task List no longer supports `run_count` sorting.” **Rule:** list the concrete CLI changes without naming the internal cutover or removed architecture.
+25. **Rejected:** “Task Detail now clears obsolete actions after refresh and treats empty Session and Script collections as valid results.” **Rule:** omit same-release stabilization of Task Detail behavior first shipped in this release.
+
+### Curated Notes And Generated Changelog
+
+The release workflow creates a generated changelog. A rewritten release body has two distinct parts:
+
+1. A curated public section that follows the Audience Boundary and Coverage Gate.
+2. The workflow-generated changelog preserved verbatim under `<details><summary>Generated changelog</summary>`.
+
+The generated appendix is source history, not authority for curated product claims. Do not promote its commit titles into the curated body without independently passing the public-surface and previous-release-baseline checks.
+
+Keep the generated appendix byte-for-byte unchanged while editing the curated section. Label a GitHub comparison link `Source comparison`; do not call the link a full changelog when the generated changelog is absent.
+
+If the appendix was lost or overwritten, regenerate it with the exact action version and configuration pinned by the release workflow for that tag range. Do not hand-reconstruct it from local commit subjects.
 
 ### Coverage Gate
 
@@ -57,6 +118,21 @@ Preserve exact verified measurements and explain their user benefit. Treat prote
 Use the previous public release as the baseline for `Bug Fixes`. Fixes made while developing features first shipped in the same release are stabilization work, not public bug fixes; describe the final capability once under the appropriate highlight.
 
 The remaining sections document internal release operations. Their repository scripts and local cleanup commands are not public release-note content unless they produce a separately verified public product capability.
+
+### Draft, Review, And Publication Gate
+
+Do not draft by repeatedly editing a published release.
+
+1. Capture the existing release body and exact generated changelog before making an edit.
+2. Build the coverage ledger and complete the curated body in a scratch file.
+3. Append or preserve the exact generated changelog according to the section above.
+4. Verify every curated capability against a released client surface or public documentation. An internal API, specification-only design, or unreleased client implementation is insufficient.
+5. Run an independent general-purpose editorial reviewer with this document and the release-notes and docs-writing skills. Do not use a code-review role. Scope the review to the curated section and state the exact generated appendix exemption.
+6. Apply findings and continue the same reviewer until it returns exactly `CLEAN`.
+7. Publish the completed body once.
+8. Re-read the published body and verify the generated appendix still matches the workflow output byte-for-byte.
+
+If independent review is unavailable, do not rewrite an already-published release until a second cold editorial pass has checked the same criteria.
 
 ## What The App Release Workflow Does
 

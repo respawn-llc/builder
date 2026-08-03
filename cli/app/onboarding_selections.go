@@ -148,6 +148,7 @@ type onboardingSelections struct {
 	supervisor              onboardingSupervisorSelection
 	compaction              onboardingCompactionSelection
 	skillImport             onboardingImportSelection
+	commandImport           onboardingImportSelection
 	skillEnablement         map[string]bool
 	pendingPrimaryThinking  onboardingThinkingEdit
 	pendingReviewerThinking onboardingThinkingEdit

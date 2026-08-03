@@ -34,6 +34,14 @@ func newOnboardingFlowState(cfg config.App, facts serverapi.CapabilityFactsRespo
 		imports:       onboardingImportDiscoveryFromFacts(facts.Imports),
 		debug:         cfg.Settings.Debug,
 	}
+	if id := state.imports.commandRecommendationID; id != nil {
+		for _, choice := range state.imports.commandChoices {
+			if choice.OptionID == *id {
+				state.selections.commandImport = onboardingImportSelection{Mode: choice.Mode, ChoiceRef: choice.Ref}
+				break
+			}
+		}
+	}
 	state.recomputeSkillEnablement(&state.selections)
 	if err := state.validateInvariant("construction", "theme"); err != nil {
 		return onboardingFlowState{}, err
@@ -109,6 +117,7 @@ func onboardingSelectionsFromConfig(cfg config.App, facts serverapi.CapabilityFa
 		supervisor:              supervisor,
 		compaction:              compaction,
 		skillImport:             onboardingImportSelection{Mode: onboardingImportModeNone},
+		commandImport:           onboardingImportSelection{Mode: onboardingImportModeNone},
 		skillEnablement:         map[string]bool{},
 		pendingPrimaryThinking:  onboardingThinkingEdit{kind: onboardingThinkingEditNone},
 		pendingReviewerThinking: onboardingThinkingEdit{kind: onboardingThinkingEditNone},
@@ -331,10 +340,13 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 	}
 	for index, choice := range facts.Skills.Choices {
 		field := fmt.Sprintf("facts.imports.skills.choices[%d]", index)
-		if choice.ItemCount < 0 {
-			return conversionError(field+".item_count", choice.ItemCount, "must not be negative")
+		if err := validateImportChoice(field, choice, validateRef); err != nil {
+			return err
 		}
-		if err := validateRef(field+".ref", choice.Ref); err != nil {
+	}
+	for index, choice := range facts.Commands.Choices {
+		field := fmt.Sprintf("facts.imports.commands.choices[%d]", index)
+		if err := validateImportChoice(field, choice, validateRef); err != nil {
 			return err
 		}
 	}
@@ -352,6 +364,16 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 				)
 			}
 		}
+	}
+	return nil
+}
+
+func validateImportChoice(field string, choice serverapi.ImportChoiceFact, validateRef func(string, serverapi.ImportChoiceRef) error) error {
+	if choice.ItemCount < 0 {
+		return conversionError(field+".item_count", choice.ItemCount, "must not be negative")
+	}
+	if err := validateRef(field+".ref", choice.Ref); err != nil {
+		return err
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -128,7 +129,7 @@ func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientReq
 			ClientRequestID: clientRequestID,
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            text,
+		Input:                           runtimeinput.Text(text),
 	})
 	if err != nil {
 		return clientui.QueuedUserMessage{}, false, err
@@ -332,9 +333,16 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
 				}
 				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult, preSubmitQueueFront, activeSubmitOriginQueued)
-				return finalizeSlashCommandCmd(commandResult.Action, cmd, m.recordPromptHistory(text))
+				var recordCmd tea.Cmd
+				if commandResult.PromptCommand == nil {
+					recordCmd = m.recordPromptHistory(text)
+				}
+				return finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 			}
 		}
+	}
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
 	}
 	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(item.Text, preSubmitQueueFront, item.ID, activeSubmitOriginQueued)
 }
