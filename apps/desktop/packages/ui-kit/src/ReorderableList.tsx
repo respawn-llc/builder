@@ -23,6 +23,7 @@ import {
 } from "@dnd-kit/sortable";
 import {
   useCallback,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -65,7 +66,10 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   renderItem,
 }: ReorderableListProps<Item, ID>) {
   const itemIDs = items.map(getItemID);
-  const itemIndexByID = new Map<UniqueIdentifier, number>(itemIDs.map((id, index) => [id, index]));
+  const itemIndexByID = useMemo(
+    () => new Map<UniqueIdentifier, number>(itemIDs.map((id, index) => [id, index])),
+    [itemIDs],
+  );
   const itemNodes = useRef(new Map<ID, HTMLElement>());
   const reducedMotion = useReducedMotion();
   const [dragMode, setDragMode] = useState<"keyboard" | "pointer" | null>(null);
