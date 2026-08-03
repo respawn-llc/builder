@@ -152,6 +152,7 @@ export type SidebarController = Readonly<{
   setSidebarExitBlocked(token: SidebarEntryToken, blocked: boolean): void;
   closeSidebar(reason?: SidebarCancelReason): void;
   closeSidebarIfCurrent(token: SidebarEntryToken, reason?: SidebarCancelReason): void;
+  closeSidebarIfCurrentActivation(activationID: string, reason?: SidebarCancelReason): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   pushSidebar(destination: SidebarDestination): void;
   preserveSidebarOnNextRouteChange(

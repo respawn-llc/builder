@@ -426,6 +426,15 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [closeSidebar, isCurrentToken],
   );
 
+  const closeSidebarIfCurrentActivation = useCallback(
+    (activationID: string, reason: SidebarCancelReason = "closed"): void => {
+      if (stackStateRef.current?.activationID === activationID) {
+        closeSidebar(reason);
+      }
+    },
+    [closeSidebar],
+  );
+
   const setSidebarExitBlocked = useCallback(
     (token: SidebarEntryToken, blocked: boolean): void => {
       if (!isCurrentToken(token)) {
@@ -498,6 +507,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       setSidebarExitBlocked,
       closeSidebar,
       closeSidebarIfCurrent,
+      closeSidebarIfCurrentActivation,
       openSidebar,
       preserveSidebarOnNextRouteChange,
       clearSidebarRouteChangePreservation,
@@ -524,6 +534,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       exitBlockedToken,
       closeSidebar,
       closeSidebarIfCurrent,
+      closeSidebarIfCurrentActivation,
       openSidebar,
       preserveSidebarOnNextRouteChange,
       clearSidebarRouteChangePreservation,

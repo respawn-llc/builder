@@ -366,7 +366,7 @@ function SidebarPopOutSlot({
 function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindowOptions }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const { activeToken, closeSidebarIfCurrent } = useSidebar();
+  const { activeActivationID, closeSidebarIfCurrentActivation } = useSidebar();
   const { push } = useStatusController();
   if (!nativeBridge.capabilities.dialogWindows) {
     return null;
@@ -375,14 +375,14 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
     <IconTooltipButton
       label={t("app.popOut")}
       onClick={() => {
-        const openedToken = activeToken;
-        if (openedToken === null) {
+        const openedActivationID = activeActivationID;
+        if (openedActivationID === null) {
           return;
         }
         void nativeBridge.dialogs
           .openWindow(options)
           .then(() => {
-            closeSidebarIfCurrent(openedToken, "closed");
+            closeSidebarIfCurrentActivation(openedActivationID, "closed");
           })
           .catch((error: unknown) => {
             push({

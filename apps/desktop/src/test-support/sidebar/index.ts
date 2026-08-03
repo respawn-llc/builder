@@ -24,6 +24,9 @@ export function createTestSidebarController(
     closeSidebarIfCurrent() {
       return;
     },
+    closeSidebarIfCurrentActivation() {
+      return;
+    },
     async openSidebar(destination) {
       onOpen(destination);
       return { status: "canceled", reason: "closed" };

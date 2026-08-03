@@ -86,6 +86,42 @@ describe("SidebarProvider replacement", () => {
     expect(result.current.phase).toBe("closing");
     expect(result.current.activeActivationID).toBe(activationID);
   });
+
+  it("ignores a pop-out completion from an activation superseded by Back", () => {
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+      <SidebarProvider>{children}</SidebarProvider>
+    );
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const openedActivationID = result.current.activeActivationID;
+    if (openedActivationID === null) {
+      throw new Error("Sidebar activation was not created.");
+    }
+
+    act(() => {
+      result.current.pushSidebar({ kind: "taskDetail", taskID: "task-2" });
+    });
+    act(() => {
+      result.current.backSidebar();
+    });
+
+    expect(result.current.activeDestination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-1",
+    });
+    expect(result.current.activeActivationID).not.toBe(openedActivationID);
+
+    act(() => {
+      result.current.closeSidebarIfCurrentActivation(openedActivationID);
+    });
+
+    expect(result.current.activeDestination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-1",
+    });
+  });
 });
 
 describe("SidebarProvider stack contract", () => {

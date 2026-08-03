@@ -83,10 +83,17 @@ describe("sidebarStackReducer", () => {
     expect(entryIDs(replaced?.entries ?? [])).toEqual(["entry-1", "entry-3"]);
   });
 
-  it("returns to a retained Task Detail when replacement targets an earlier entry", () => {
+  it("applies requested focus while retaining an earlier Task Detail snapshot", () => {
+    const snapshot = {
+      kind: "taskDetail",
+      scrollTop: 240,
+      descriptionExpanded: true,
+      selectedTab: "comments",
+    } as const;
     const opened = createSidebarStack("lifecycle-1", {
       entryID: "entry-1",
       destination: task("task-1"),
+      snapshot,
     });
     const pushed = apply(opened, {
       type: "push",
@@ -97,11 +104,21 @@ describe("sidebarStackReducer", () => {
       type: "replace",
       activationID: "activation-3",
       entryID: "entry-3",
-      destination: task("task-1"),
+      destination: {
+        kind: "taskDetail",
+        taskID: "task-1",
+        initialFocus: { kind: "dependencies" },
+      },
     });
 
     expect(entryIDs(replaced?.entries ?? [])).toEqual(["entry-1"]);
     expect(replaced?.entries[0]?.entryID).toBe("entry-1");
+    expect(replaced?.entries[0]?.destination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-1",
+      initialFocus: { kind: "dependencies" },
+    });
+    expect(replaced?.entries[0]?.snapshot).toEqual(snapshot);
     expect(replaced?.activationID).toBe("activation-3");
   });
 
