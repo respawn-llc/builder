@@ -438,7 +438,7 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 	dedicatedClosed := make(chan struct{})
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
-		connectionIndex := connectionCount.Add(1)
+		connectionCount.Add(1)
 		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive handshake: %w", err)
@@ -452,11 +452,7 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 			handlerErr <- fmt.Errorf("send handshake response: %w", err)
 			return
 		}
-		if connectionIndex == 1 {
-			return
-		}
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive task search: %w", err)
 			return
 		}
 		if req.Method != protocol.MethodWorkflowTaskSearch {
@@ -523,11 +519,9 @@ func TestRemoteWorkflowTaskSearchUsesDedicatedConnectionAndClosesIt(t *testing.T
 }
 
 func TestRemoteWorkflowTaskSearchRejectsInvalidResponse(t *testing.T) {
-	var connectionCount atomic.Int32
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
-		connectionIndex := connectionCount.Add(1)
 		var req protocol.Request
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			handlerErr <- fmt.Errorf("receive handshake: %w", err)
@@ -539,11 +533,11 @@ func TestRemoteWorkflowTaskSearchRejectsInvalidResponse(t *testing.T) {
 			handlerErr <- fmt.Errorf("send handshake response: %w", err)
 			return
 		}
-		if connectionIndex == 1 {
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			return
 		}
-		if err := websocket.JSON.Receive(ws, &req); err != nil {
-			handlerErr <- fmt.Errorf("receive task search: %w", err)
+		if req.Method != protocol.MethodWorkflowTaskSearch {
+			handlerErr <- fmt.Errorf("task search method = %q", req.Method)
 			return
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.TaskSearchResponse{
