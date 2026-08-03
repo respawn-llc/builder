@@ -43,7 +43,7 @@ func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
 
 	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventFailure,
-		Err:  errors.New("canonical hydration is invalid"),
+		Err:  errors.New("dial tcp 127.0.0.1:53094: connect: connection refused"),
 	})
 
 	if cmd == nil {
@@ -54,6 +54,9 @@ func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
 	}
 	if !m.Transition().Exit {
 		t.Fatal("transcript-open failure did not request clear TUI exit")
+	}
+	if m.transientStatus != "server connection lost" {
+		t.Fatalf("transcript-open status = %q, want coherent recovery copy", m.transientStatus)
 	}
 }
 
