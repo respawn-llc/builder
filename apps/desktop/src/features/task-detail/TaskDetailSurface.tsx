@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, rpcErrorCodes, RpcError, type TaskDetail, type TaskLabelAssignment } from "@/api";
@@ -48,17 +48,8 @@ export function TaskDetailSurface({
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
   const openLink = useOpenExternalLink();
-  const restorationActivationKey =
-    sidebarSnapshot === undefined || sidebarActivationID === null || sidebarActivationID === undefined
-      ? null
-      : `${sidebarActivationID}:${taskId}`;
-  const restoredDataRefreshComplete = useTaskDetailRestorationRefresh({
-    activationKey: restorationActivationKey,
-    refetchActivity: activity.refetch,
-    refetchAttention: attention.refetch,
-    refetchComments: comments.refetch,
-    refetchDetail: detail.refetch,
-  });
+  const restoringSidebar =
+    sidebarSnapshot !== undefined && sidebarActivationID !== null && sidebarActivationID !== undefined;
   const missingTask = detail.isError && isWorkflowTaskNotFound(detail.error);
   useEffect(() => {
     if (missingTask) {
@@ -85,11 +76,8 @@ export function TaskDetailSurface({
           openLink={openLink}
           sidebarActivationID={sidebarActivationID}
           restoredDataReady={
-            restoredDataRefreshComplete &&
-            !detail.isFetching &&
-            !attention.isFetching &&
-            !activity.isFetching &&
-            !comments.isFetching
+            !restoringSidebar ||
+            (!detail.isFetching && !attention.isFetching && !activity.isFetching && !comments.isFetching)
           }
           sidebarSnapshot={sidebarSnapshot}
         />
@@ -114,46 +102,6 @@ export function TaskDetailSurface({
       <div className="min-h-0">{content}</div>
     </div>
   );
-}
-
-type RestorationRefetch = () => Promise<unknown>;
-
-function useTaskDetailRestorationRefresh({
-  activationKey,
-  refetchActivity,
-  refetchAttention,
-  refetchComments,
-  refetchDetail,
-}: Readonly<{
-  activationKey: string | null;
-  refetchActivity: RestorationRefetch;
-  refetchAttention: RestorationRefetch;
-  refetchComments: RestorationRefetch;
-  refetchDetail: RestorationRefetch;
-}>): boolean {
-  const [completedActivationKey, setCompletedActivationKey] = useState<string | null>(null);
-  useEffect(() => {
-    if (activationKey === null) {
-      return;
-    }
-    let canceled = false;
-    void Promise.all([refetchDetail(), refetchAttention(), refetchActivity(), refetchComments()]).then(
-      () => {
-        if (!canceled) {
-          setCompletedActivationKey(activationKey);
-        }
-      },
-      () => {
-        if (!canceled) {
-          setCompletedActivationKey(activationKey);
-        }
-      },
-    );
-    return () => {
-      canceled = true;
-    };
-  }, [activationKey, refetchActivity, refetchAttention, refetchComments, refetchDetail]);
-  return activationKey === null || completedActivationKey === activationKey;
 }
 
 function isWorkflowTaskNotFound(error: unknown): boolean {
