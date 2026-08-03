@@ -33,6 +33,8 @@ import {
 import { createPortal } from "react-dom";
 import { useReducedMotion } from "./motion";
 
+export { useReducedMotion };
+
 export type ReorderableListItemRenderProps = Readonly<{
   activatorAttributes: Partial<DraggableAttributes>;
   activatorListeners: DraggableSyntheticListeners;
