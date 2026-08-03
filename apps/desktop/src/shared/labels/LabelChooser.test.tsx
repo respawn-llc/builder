@@ -53,6 +53,7 @@ vi.mock("@/app-facade", async (importOriginal) => {
   const actual = await importOriginal<typeof AppFacade>();
   return {
     ...actual,
+    useAppServices: () => ({ nativeBridge: { capabilities: { platform: "macos" } } }),
     useStatusController: () => ({ dismiss: vi.fn(), push: statusPush }),
   };
 });

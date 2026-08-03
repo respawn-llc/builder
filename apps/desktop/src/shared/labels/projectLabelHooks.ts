@@ -54,7 +54,7 @@ export function useProjectLabelCatalogMutations() {
         return { generation, previous };
       },
       onError(_error, _labelIDs, context) {
-        if (context?.previous !== undefined) queryClient.setQueryData(queryKey, context.previous);
+        if (context?.previous !== undefined) authority.installCatalog(context.previous, context.generation);
         authority.requestRefresh();
       },
       onSuccess(catalog, _labelIDs, context) { authority.installCatalog(catalog, context.generation); },

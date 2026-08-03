@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 
 import { decodeWorkflowLabelError, errorMessage, type ProjectLabel } from "@/api";
+import { isTextFieldSubmitShortcut } from "@/app-facade";
 import type { LabelChooserInvocation } from "./LabelChooser";
 import type { DeleteState, LabelFilterCondition, LabelResultRowSelection, RenameState } from "./LabelChooserRows";
 import type { LabelFilterState } from "./labelFilterState";
@@ -41,6 +42,7 @@ export function handleLabelChooserSearchKeyDown({
   event,
   highlightedIndex,
   invocation,
+  platform,
   setHighlightedIndex,
 }: Readonly<{
   canCreate: boolean;
@@ -51,6 +53,7 @@ export function handleLabelChooserSearchKeyDown({
   event: KeyboardEvent<HTMLInputElement>;
   highlightedIndex: number | null;
   invocation: LabelChooserInvocation;
+  platform: Parameters<typeof isTextFieldSubmitShortcut>[1];
   setHighlightedIndex(update: (current: number | null) => number): void;
 }>): void {
   if (handleLabelChoiceNavigation(event, choices.length, setHighlightedIndex)) {
@@ -67,6 +70,11 @@ export function handleLabelChooserSearchKeyDown({
   if (canCreate && !catalogAtLimit && !catalogMutationPending) {
     event.preventDefault();
     void createLabel();
+    return;
+  }
+  if (isTextFieldSubmitShortcut(event, platform)) {
+    event.preventDefault();
+    event.stopPropagation();
   }
 }
 

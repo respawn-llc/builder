@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 import { errorMessage, workflowLabelMaxIDs, type ProjectLabel } from "@/api";
-import { useStatusController } from "@/app-facade";
+import { useAppServices, useStatusController } from "@/app-facade";
 import {
   Button,
   IconTooltipButton,
@@ -174,6 +174,7 @@ function renderLabelChooserSearch({
 
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
+  const { nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const catalog = useProjectLabelCatalog();
   const mutations = useProjectLabelCatalogMutations();
@@ -275,6 +276,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
               event,
               highlightedIndex: keyboardHighlightedIndex,
               invocation,
+              platform: nativeBridge.capabilities.platform,
               choices,
               setHighlightedIndex: setKeyboardHighlightedIndex,
             });

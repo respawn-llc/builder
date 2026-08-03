@@ -23,7 +23,6 @@ import {
 } from "@dnd-kit/sortable";
 import {
   useCallback,
-  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -31,6 +30,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { useReducedMotion } from "./motion";
 
 export type ReorderableListItemRenderProps = Readonly<{
   activatorAttributes: Partial<DraggableAttributes>;
@@ -65,6 +65,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   renderItem,
 }: ReorderableListProps<Item, ID>) {
   const itemIDs = items.map(getItemID);
+  const itemIndexByID = new Map<UniqueIdentifier, number>(itemIDs.map((id, index) => [id, index]));
   const itemNodes = useRef(new Map<ID, HTMLElement>());
   const reducedMotion = useReducedMotion();
   const [dragMode, setDragMode] = useState<"keyboard" | "pointer" | null>(null);
@@ -102,7 +103,10 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       const coordinates = sortableKeyboardCoordinates(event, args);
       if (coordinates !== undefined) {
         const currentID = args.context.over?.id ?? args.active;
-        const currentIndex = itemIDs.findIndex((id) => id === currentID);
+        const currentIndex = itemIndexByID.get(currentID);
+        if (currentIndex === undefined) {
+          return coordinates;
+        }
         const destinationIndex =
           event.code === "ArrowDown"
             ? currentIndex + 1
@@ -116,7 +120,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       }
       return coordinates;
     },
-    [itemIDs],
+    [itemIndexByID, itemIDs],
   );
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -128,9 +132,9 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       if (overID === undefined || event.active.id === overID) {
         return;
       }
-      const activeIndex = itemIDs.findIndex((id) => id === event.active.id);
-      const overIndex = itemIDs.findIndex((id) => id === overID);
-      if (activeIndex < 0 || overIndex < 0) {
+      const activeIndex = itemIndexByID.get(event.active.id);
+      const overIndex = itemIndexByID.get(overID);
+      if (activeIndex === undefined || overIndex === undefined) {
         return;
       }
       const activeID = itemIDs[activeIndex];
@@ -148,7 +152,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
         items: nextItems,
       });
     },
-    [getItemID, itemIDs, items, onCommit],
+    [getItemID, itemIndexByID, itemIDs, items, onCommit],
   );
   return (
     <DndContext
@@ -158,8 +162,8 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
         clearDropState();
       }}
       onDragEnd={(event) => {
-        const activeIndex = itemIDs.findIndex((id) => id === event.active.id);
-        const activeID = itemIDs[activeIndex];
+        const activeIndex = itemIndexByID.get(event.active.id);
+        const activeID = activeIndex === undefined ? undefined : itemIDs[activeIndex];
         const activeNode = activeID === undefined ? undefined : itemNodes.current.get(activeID);
         const destination =
           event.over?.id === undefined || event.over.id === event.active.id || activeNode === undefined
@@ -370,21 +374,4 @@ const noopRef = (): void => undefined;
 
 function formatTransform(transform: Readonly<{ x: number; y: number; scaleX: number; scaleY: number }>): string {
   return `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0) scale(${transform.scaleX.toString()}, ${transform.scaleY.toString()})`;
-}
-
-function useReducedMotion(): boolean {
-  const [reducedMotion, setReducedMotion] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const handleChange = () => {
-      setReducedMotion(media.matches);
-    };
-    media.addEventListener("change", handleChange);
-    return () => {
-      media.removeEventListener("change", handleChange);
-    };
-  }, []);
-  return reducedMotion;
 }
