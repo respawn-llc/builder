@@ -28,7 +28,11 @@ export function TaskSearchResultRow({
 }>) {
   const { t } = useTranslation();
   const visibleHits = result.group.hits.slice(0, visibleHitLimit);
-  const lastVisibleOrdinal = visibleHits.at(-1)?.ordinal ?? 0;
+  const lastVisibleHit = visibleHits.at(-1);
+  if (lastVisibleHit === undefined) {
+    throw new Error(`Task Search result group ${result.group.taskID} has no hits.`);
+  }
+  const lastVisibleOrdinal = lastVisibleHit.ordinal;
   const remainingHitCount = Math.max(0, result.group.totalHitCount - lastVisibleOrdinal);
   return (
     <div
