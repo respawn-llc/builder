@@ -56,10 +56,8 @@ describe("KanbanColumn retained replacement boundary", () => {
     const list = screen.getByTestId("kanban-column-scroll-column-1");
     const chrome = alert.closest(".pointer-events-none");
     expect(alert.closest("[data-testid='kanban-column-scroll-column-1']")).toBeNull();
-    expect(chrome).not.toBeNull();
     expect(chrome).toHaveClass("pointer-events-none");
     expect(alert.parentElement).toHaveClass("pointer-events-auto");
-    expect(list).not.toContainElement(alert);
     expect(screen.getByRole("alert")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button"));
     expect(boundary.onRetry).toHaveBeenCalledOnce();
