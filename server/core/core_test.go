@@ -65,6 +65,166 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	}
 }
 
+func TestPromptCommandCatalogUsesRequestedWorkspaceRoot(t *testing.T) {
+	home := t.TempDir()
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspaceA})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	bindingA, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspaceA)
+	if err != nil {
+		t.Fatalf("RegisterBinding A: %v", err)
+	}
+	bindingB, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspaceB)
+	if err != nil {
+		t.Fatalf("RegisterBinding B: %v", err)
+	}
+	writeCorePromptFixture(t, workspaceA, "only-a", "A")
+	writeCorePromptFixture(t, workspaceB, "only_b", "B")
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), bindingB.ProjectID, workspaceB)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("GetPromptCommandCatalog: %v", err)
+	}
+	foundWorkspaceB := false
+	for _, command := range response.Commands {
+		if command.Name == "prompt:only_b" && command.Preview == "B" {
+			foundWorkspaceB = true
+			break
+		}
+	}
+	if !foundWorkspaceB {
+		t.Fatalf("workspace B catalog = %+v, want prompt:only_b from B (A binding %q, B binding %q)", response.Commands, bindingA.ProjectID, bindingB.ProjectID)
+	}
+}
+
+func TestPromptCommandCatalogUsesRegisteredWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	worktree := filepath.Join(t.TempDir(), "feature")
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree: %v", err)
+	}
+	if err := appCore.MetadataStore().UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID:            "worktree-catalog-test",
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktree,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	writeCorePromptFixture(t, worktree, "only_worktree", "worktree")
+
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), binding.ProjectID, worktree)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("GetPromptCommandCatalog: %v", err)
+	}
+	for _, command := range response.Commands {
+		if command.Name == "prompt:only_worktree" && command.Preview == "worktree" {
+			return
+		}
+	}
+	t.Fatalf("worktree catalog = %+v, want prompt:only_worktree", response.Commands)
+}
+
+func TestPromptCommandEffectiveWorkspaceResolverUsesSuppliedWorkspace(t *testing.T) {
+	persistenceRoot := t.TempDir()
+	workspace := t.TempDir()
+	writeCorePromptFixture(t, workspace, "pre_session", "effective workspace body")
+
+	resolver := promptCommandEffectiveWorkspaceResolver{persistenceRoot: persistenceRoot}
+	got, err := resolver.ResolvePromptCommandForWorkspace(context.Background(), workspace, "prompt:pre_session", "")
+	if err != nil {
+		t.Fatalf("ResolvePromptCommandForWorkspace: %v", err)
+	}
+	if got != "effective workspace body" {
+		t.Fatalf("resolved body = %q, want effective workspace body", got)
+	}
+}
+
+func TestPromptCommandWorkspaceRootUsesCurrentWorktree(t *testing.T) {
+	target := clientui.SessionExecutionTarget{
+		Worktree: &clientui.SessionExecutionWorktreeTarget{Root: "/worktrees/feature"},
+	}
+	got, err := clientui.SessionExecutionWorkspaceRoot(target, "/workspace/main")
+	if err != nil {
+		t.Fatalf("SessionExecutionWorkspaceRoot: %v", err)
+	}
+	if got != "/worktrees/feature" {
+		t.Fatalf("workspace root = %q, want current worktree root", got)
+	}
+}
+
+func TestPromptCommandCatalogRedactsFilesystemCauseAtClientBoundary(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	promptRoot := filepath.Join(workspace, ".kent", "prompts")
+	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missingTarget := filepath.Join(promptRoot, "missing-target.md")
+	if err := os.Symlink(missingTarget, filepath.Join(promptRoot, "broken.md")); err != nil {
+		t.Fatal(err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	client, err := appCore.PromptCommandCatalogClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
+	if err != nil {
+		t.Fatalf("PromptCommandCatalogClientForProjectWorkspace: %v", err)
+	}
+	response, err := client.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
+	if err != nil {
+		t.Fatalf("catalog broken symlink: %v", err)
+	}
+	for _, entry := range response.Commands {
+		if entry.Name == "prompt:broken" {
+			t.Fatalf("catalog included broken symlink: %+v", response.Commands)
+		}
+	}
+}
+
+func writeCorePromptFixture(t *testing.T, workspace, name, content string) {
+	t.Helper()
+	root := filepath.Join(workspace, ".kent", "prompts")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, name+".md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
 	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
 		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")

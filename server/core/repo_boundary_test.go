@@ -220,6 +220,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"NewRuntimeConnectionLifecycle":                           {},
 		"NewWorktreeTransitionID":                                 {},
 		"NormalizeSessionExecutionTarget":                         {},
+		"SessionExecutionWorkspaceRoot":                           {},
 		"NormalizeThinkingLevel":                                  {},
 		"ParseWorktreeTransitionID":                               {},
 		"PromptID.Validate":                                       {},

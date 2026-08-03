@@ -5,10 +5,10 @@ import (
 	"errors"
 	"strings"
 
-	"core/cli/app/commands"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
@@ -21,10 +21,6 @@ func (s *embeddedAppServer) PresentationTheme() string {
 	return theme.Resolve(s.Config().Settings.Theme)
 }
 
-func (s *embeddedAppServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
-	return commands.NewClientPromptRoots()
-}
-
 type appServerCore interface {
 	Close() error
 	OwnsServer() bool
@@ -34,7 +30,6 @@ type appServerCore interface {
 type embeddedAppServer struct {
 	inner              *embeddedattach.Server
 	boundProjectID     string
-	boundWorkspaceID   string
 	boundSessionLaunch apicontract.SessionLaunchService
 	retarget           *sessionWorkspaceRetargetContext
 }
@@ -93,6 +88,9 @@ func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID 
 		return nil, err
 	}
 	nextWorkspaceID := strings.TrimSpace(workspaceID)
+	if nextWorkspaceID == "" {
+		return nil, errors.New("workspace id is required")
+	}
 	retargetContext, err := resolveSessionWorkspaceRetargetContext(
 		ctx,
 		s.ProjectViewClient(),
@@ -106,7 +104,6 @@ func (s *embeddedAppServer) BindProjectWorkspace(ctx context.Context, projectID 
 	return &embeddedAppServer{
 		inner:              s.inner,
 		boundProjectID:     bound.ProjectID,
-		boundWorkspaceID:   nextWorkspaceID,
 		boundSessionLaunch: bound.SessionLaunch,
 		retarget:           retargetContext,
 	}, nil
@@ -220,6 +217,13 @@ func (s *embeddedAppServer) RunPromptClient() apicontract.RunPromptService {
 		return nil
 	}
 	return s.inner.RunPromptClient()
+}
+
+func (s *embeddedAppServer) PromptCommandCatalogClient(ctx context.Context, sessionID string, _ clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
+	if s == nil || s.inner == nil {
+		return nil, errors.New("embedded server is required")
+	}
+	return s.inner.PromptCommandCatalogClientForSession(ctx, sessionID)
 }
 
 func (s *embeddedAppServer) Reauthenticate(ctx context.Context, interactor authInteractor, interactiveAuth bool) error {

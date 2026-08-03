@@ -14,6 +14,7 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -50,7 +51,7 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 					Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
 					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 				},
-				Text: "steer me",
+				Input: runtimeinput.Text("steer me"),
 			})
 			if err != nil {
 				t.Fatalf("SubmitUserTurn during active run: %v", err)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/cli/app/commands"
 	"core/shared/clientui"
 
 	"github.com/google/uuid"
@@ -31,6 +32,12 @@ func newSubmitDoneMsg(token uint64, message string, submittedText string, err er
 
 type promptHistoryPersistErrMsg struct {
 	err error
+}
+
+type promptCatalogRefreshDoneMsg struct {
+	token   *uuid.UUID
+	entries []commands.PromptCommandCatalogEntry
+	err     error
 }
 
 type committedEntryPersistDoneMsg struct {

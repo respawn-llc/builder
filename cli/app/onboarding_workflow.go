@@ -25,6 +25,7 @@ const (
 	onboardingStepCompaction             onboardingStepID = "compaction"
 	onboardingStepSkillsImport           onboardingStepID = "skills_import"
 	onboardingStepSkillsEnabled          onboardingStepID = "skills_enabled"
+	onboardingStepCommandsImport         onboardingStepID = "commands_import"
 	onboardingStepReview                 onboardingStepID = "review"
 )
 
@@ -289,6 +290,18 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 			build:   func(state *onboardingFlowState) onboardingScreen { return buildSkillSelectionScreen(state) },
 			applyMultiSelect: func(state *onboardingFlowState, selection map[string]bool) error {
 				return state.chooseSkillEnablement(selection)
+			},
+		},
+		onboardingStepDefinition{
+			id: onboardingStepCommandsImport,
+			visible: func(state *onboardingFlowState) bool {
+				return state.imports.pending || state.imports.commandErr != nil || (!state.imports.skipCommands && hasImportChoices(state.imports.commandChoices))
+			},
+			build: func(state *onboardingFlowState) onboardingScreen {
+				return buildCommandImportScreen(state)
+			},
+			apply: func(state *onboardingFlowState, choiceID string) error {
+				return state.chooseCommandImport(choiceID)
 			},
 		},
 		onboardingStepDefinition{

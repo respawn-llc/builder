@@ -141,11 +141,25 @@ func TestOnboardingCommandImportErrorsDoNotSurfaceInSkillsFlow(t *testing.T) {
 	if discovery.err != nil {
 		t.Fatalf("command-only import error must not become a skill error: %v", discovery.err)
 	}
+	if discovery.commandErr == nil {
+		t.Fatal("command-only import error was discarded")
+	}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = discovery
 	for _, step := range newOnboardingWorkflow(state).steps {
 		if step.id == "skills_import" && step.visible(state) {
 			t.Fatal("command-only import error must not make the skills import step visible")
+		}
+	}
+	for _, step := range newOnboardingWorkflow(state).steps {
+		if step.id == onboardingStepCommandsImport {
+			if !step.visible(state) {
+				t.Fatal("command-only import error must keep the command import step visible")
+			}
+			screen := step.build(state)
+			if screen.ErrorText == "" || len(screen.Options) != 1 {
+				t.Fatalf("command import error screen = %+v", screen)
+			}
 		}
 	}
 }
@@ -187,6 +201,34 @@ func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.
 	}
 	if state.selections.skillImport.Mode != onboardingImportModeNone {
 		t.Fatalf("expected none selection, got %+v", state.selections.skillImport)
+	}
+}
+
+func TestOnboardingCommandTargetSkipOffersOnlyNoneAfterImportError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "commands")
+	commandKind := serverapi.ImportErrorItemKindCommand
+	facts := serverapi.ImportCapabilityFacts{
+		Commands: serverapi.ImportItemGroupFact{
+			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
+			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
+		},
+		Errors: []serverapi.ImportErrorFact{{
+			Code:      "target_read_failed",
+			Scope:     "target",
+			ItemKind:  &commandKind,
+			Operation: "read_import_target",
+			Message:   "permission denied",
+		}},
+	}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscoveryFromFacts(facts)
+	screen := buildCommandImportScreen(state)
+	noneID, ok := noneChoiceID(state.imports.commandChoices)
+	if !ok || len(screen.Options) != 1 || screen.Options[0].ID != noneID {
+		t.Fatalf("expected only none option for skipped commands, got %+v", screen.Options)
+	}
+	if screen.ErrorText == "" {
+		t.Fatal("expected command import target error on skipped screen")
 	}
 }
 

@@ -205,7 +205,8 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.PromptControl ||
 		!capabilities.ProcessOutput ||
 		!capabilities.AttentionNotifications ||
-		!capabilities.OnboardingFinalize {
+		!capabilities.OnboardingFinalize ||
+		!capabilities.PromptCommands {
 		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
 	}
 }
@@ -226,8 +227,26 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 	}
 	if capabilities.AuthBootstrap ||
 		capabilities.RuntimeLiveControl ||
-		capabilities.AttentionNotifications {
+		capabilities.AttentionNotifications ||
+		capabilities.PromptCommands {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+	promptOnly := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog},
+		{Dependency: rpccontract.DependencyRuntimeControl},
+		{Method: protocol.MethodRuntimeSubmitUserTurn},
+	})
+	if !promptOnly.PromptCommands {
+		t.Fatalf("catalog/runtime/typed-submit routes should enable PromptCommands: %+v", promptOnly)
+	}
+	for _, routes := range [][]rpccontract.Route{
+		{{Dependency: rpccontract.DependencyRuntimeControl}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
+		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
+		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Dependency: rpccontract.DependencyRuntimeControl}},
+	} {
+		if got := serverCapabilityFlags(routes).PromptCommands; got {
+			t.Fatalf("incomplete prompt-command routes enabled capability: %+v", routes)
+		}
 	}
 }
 

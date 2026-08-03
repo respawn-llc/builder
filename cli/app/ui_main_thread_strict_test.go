@@ -80,7 +80,7 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 	return clientui.UserTurnSubmission{
 		Queued: clientui.QueuedUserMessage{
 			ID:              c.submitQueuedID,
-			Text:            request.Text,
+			Text:            runtimeSubmitInputText(request),
 			ClientRequestID: request.OperationRef.ClientRequestID.String(),
 		},
 	}, nil

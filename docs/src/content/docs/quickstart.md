@@ -108,7 +108,7 @@ Kent reads settings from `~/.kent/config.toml`. The full reference is on the [Co
 
 ## Skills and Slash Commands
 
-On first launch, the setup wizard can optionally symlink existing skills and slash-command directories from `~/.claude`, `~/.codex`, or `~/.agents` into Kent's `~/.kent` layout.
+On first launch, the setup wizard can optionally import existing skills and slash-command directories from supported providers.
 
 Kent discovers skills from:
 
@@ -126,14 +126,7 @@ creating-skills = false
 ```
 Changes take effect when a session starts or after compaction.
 
-Kent discovers custom slash commands from Markdown files in:
-
-- `<workspace>/.kent/prompts`
-- `<workspace>/.kent/commands`
-- `~/.kent/prompts`
-- `~/.kent/commands`
-
-More info on the [Slash commands](../slash-commands/) page.
+Custom slash commands are server-owned and appear in the picker with 256-character previews. See [Slash commands](../slash-commands/) for discovery precedence, argument expansion, and unavailable-command behavior.
 
 ## Supervisor
 

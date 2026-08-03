@@ -2,6 +2,7 @@ package clientui
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/shared/runtimeids"
@@ -159,6 +160,17 @@ func SessionExecutionTargetsEqual(a SessionExecutionTarget, b SessionExecutionTa
 		worktreesEqual &&
 		normalizedA.CwdRelpath == normalizedB.CwdRelpath &&
 		normalizedA.EffectiveWorkdir == normalizedB.EffectiveWorkdir
+}
+
+func SessionExecutionWorkspaceRoot(target SessionExecutionTarget, fallback string) (string, error) {
+	if target.Worktree == nil {
+		return fallback, nil
+	}
+	root := strings.TrimSpace(target.Worktree.Root)
+	if root == "" {
+		return "", errors.New("session execution worktree root is required")
+	}
+	return root, nil
 }
 
 type RuntimeSessionView struct {

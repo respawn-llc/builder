@@ -41,6 +41,11 @@ func onboardingFinalizeRequest(state onboardingFlowState, defaults bool) (server
 		req.Supervisor = &supervisor
 		req.Compaction = &compaction
 		req.SkillsImport = skillsImport
+		commandsImport, err := onboardingImportSelectionRequest(state.selections.commandImport)
+		if err != nil {
+			return serverapi.OnboardingFinalizeRequest{}, err
+		}
+		req.CommandsImport = commandsImport
 		askQuestion := state.selections.askQuestion
 		req.AskQuestion = &askQuestion
 		req.ToolOverrides = onboardingToolOverrides(state.selections.preserved.enabledTools)
@@ -152,7 +157,7 @@ func onboardingImportSelectionRequest(selection onboardingImportSelection) (*ser
 	case onboardingImportModeSymlinkSource:
 		ref := selection.ChoiceRef
 		if ref.ImportProviderID == nil || ref.SourceRootPath == nil {
-			return nil, errors.New("selected skill import is missing its server choice reference")
+			return nil, errors.New("selected import is missing its server choice reference")
 		}
 		return &serverapi.OnboardingImportSelection{
 			Mode:             serverapi.OnboardingImportModeSymlinkSource,

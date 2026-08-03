@@ -172,11 +172,12 @@ func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req c
 	f.submitCalls++
 	f.submitOperationRef = req.OperationRef
 	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
-	submission, err := f.submitUserMessage(ctx, req.Text)
+	text := runtimeSubmitInputText(req)
+	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
 			ID:              strings.TrimSpace(f.submitQueuedID),
-			Text:            req.Text,
+			Text:            text,
 			ClientRequestID: req.OperationRef.ClientRequestID.String(),
 		}
 	}
