@@ -114,7 +114,6 @@ SET ordinal = sqlc.arg(ordinal)
 WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id);
 
--- The temporary ordinal band must remain at least MaxProjectLabels wide.
 -- name: MoveProjectLabelOrdinalsToTemporaryBand :exec
 UPDATE project_labels
 SET ordinal = ordinal + CAST(sqlc.arg(temporary_band_offset) AS INTEGER)
