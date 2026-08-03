@@ -194,7 +194,10 @@ func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {
 	current := runtimeTupleTestView(10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	runtimeClient.storeMainView(current)
 	m := newProjectedTestUIModel(runtimeClient)
-	m.processList.entries = []clientui.BackgroundProcess{{ID: "completed-while-disconnected", Running: true, Backgrounded: true}}
+	m.processList.entries = []clientui.BackgroundProcess{
+		{ID: "completed-while-disconnected", OwnerSessionID: ongoingTestSessionID().String(), Running: true, Backgrounded: true},
+		{ID: "other-session", OwnerSessionID: "other-session", Running: true, Backgrounded: true},
+	}
 	m.ongoingTranscript = newOngoingTranscriptController(
 		&ongoingSurfaceSpy{},
 		m.ongoingFrameInput,
@@ -217,8 +220,8 @@ func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {
 	if _, _, err := m.ongoingTranscript.Accept(hydration); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if len(m.processList.entries) != 1 || m.processList.entries[0].ID != "still-running" {
-		t.Fatalf("hydrated process entries = %+v, want only fresh active process", m.processList.entries)
+	if len(m.processList.entries) != 2 || m.processList.entries[0].ID != "still-running" || m.processList.entries[1].ID != "other-session" {
+		t.Fatalf("hydrated process entries = %+v, want fresh current-session process plus other-session cache", m.processList.entries)
 	}
 }
 
