@@ -32,6 +32,6 @@
     "jsx": "react-jsx",
     "types": ["vitest/globals", "@testing-library/jest-dom/vitest"]
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "packages/ui-kit/src/jsx.d.ts"],
   "references": [{ "path": "./packages/native-bridge" }, { "path": "./packages/ui-kit" }]
 }

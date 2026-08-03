@@ -205,18 +205,20 @@ describe("LabelChooser", () => {
 
   it("keeps the keyboard highlight aligned with the fixed unlabeled row", async () => {
     const user = userEvent.setup();
+    const onAction = vi.fn();
     render(
       <LabelChooser
-        invocation={{ kind: "filter", onAction: vi.fn(), state: createLabelFilterState() }}
+        invocation={{ kind: "filter", onAction, state: createLabelFilterState() }}
         trigger={<button type="button">Open label chooser</button>}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Open label chooser" }));
-    await user.keyboard("{ArrowDown}{ArrowDown}");
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
 
-    expect(screen.getAllByRole("listitem")[1]).toHaveClass(
-      "bg-[var(--color-island-1)]",
-    );
+    expect(onAction).toHaveBeenCalledWith({
+      labelID: "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
+      type: "named.cycle",
+    });
   });
 
   it("selects an assignment-created label only after creation succeeds", async () => {
