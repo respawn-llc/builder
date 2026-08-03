@@ -143,7 +143,7 @@ export interface ApiService {
     direction?: TaskDependencyDirection,
   ): Promise<TaskDependencyListResponse>;
   listTasks(input: TaskListInput): Promise<TaskListPage>;
-  searchTasks(input: TaskSearchInput): Promise<TaskSearchResponse>;
+  searchTasks(input: TaskSearchInput, signal?: AbortSignal): Promise<TaskSearchResponse>;
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(input: TaskStartInput): Promise<TaskStartResponse>;
   moveTask(input: TaskMoveInput): Promise<TaskMoveResponse>;

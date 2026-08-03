@@ -117,13 +117,13 @@ describe("Board Task Search", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(299);
     });
-    expect(services.transport.calls).toHaveLength(0);
+    expect(services.transport.dedicatedCalls).toHaveLength(0);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
 
-    expect(services.transport.calls).toEqual([
+    expect(services.transport.dedicatedCalls).toEqual([
       {
         method: "workflow.task.search",
         params: {
@@ -137,6 +137,7 @@ describe("Board Task Search", () => {
         },
       },
     ]);
+    expect(services.transport.dedicatedCalls[0]?.options?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("keeps input focus while arrows choose a Task and Enter opens it", async () => {
@@ -175,7 +176,7 @@ describe("Board Task Search", () => {
     const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
     fireEvent.change(input, { target: { value: "search" } });
     await waitFor(() => {
-      expect(services.transport.calls).toHaveLength(1);
+      expect(services.transport.dedicatedCalls).toHaveLength(1);
     });
 
     view.rerender(
@@ -186,7 +187,7 @@ describe("Board Task Search", () => {
 
     expect(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") })).toHaveValue("search");
     await waitFor(() => {
-      expect(services.transport.calls.at(-1)?.params).toMatchObject({
+      expect(services.transport.dedicatedCalls.at(-1)?.params).toMatchObject({
         project_ids: ["project-second"],
         query: "search",
       });
@@ -272,7 +273,7 @@ describe("Board Task Search", () => {
     fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
 
     await waitFor(() => {
-      expect(services.transport.calls).toHaveLength(2);
+      expect(services.transport.dedicatedCalls).toHaveLength(2);
       expect(screen.getAllByRole("option")).toHaveLength(1);
     });
     expect(screen.getByRole("option")).toHaveAttribute("aria-selected", "true");

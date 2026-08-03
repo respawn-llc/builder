@@ -536,8 +536,8 @@ export class ApiClient implements ApiService {
     return workflowLabels.listTasks(this.#transport, input);
   }
 
-  async searchTasks(input: TaskSearchInput): Promise<TaskSearchResponse> {
-    return taskSearch.searchTasks(this.#transport, input);
+  async searchTasks(input: TaskSearchInput, signal?: AbortSignal): Promise<TaskSearchResponse> {
+    return taskSearch.searchTasks(this.#transport, input, signal);
   }
 
   async updateTask(input: TaskEditInput): Promise<string> {

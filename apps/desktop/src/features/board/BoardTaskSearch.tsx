@@ -178,20 +178,23 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
     number | null
   >({
     queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
-    queryFn: async ({ pageParam }) => ({
+    queryFn: async ({ pageParam, signal }) => ({
       offset: pageParam,
       projectID,
       query: trimmedQuery,
-      response: await api.searchTasks({
-        mode: "literal",
-        query: trimmedQuery,
-        context: taskSearchContext,
-        caseSensitive: false,
-        includeComments: true,
-        projectIDs: [projectID],
-        pageSize: taskSearchPageSize,
-        offset: pageParam ?? undefined,
-      }),
+      response: await api.searchTasks(
+        {
+          mode: "literal",
+          query: trimmedQuery,
+          context: taskSearchContext,
+          caseSensitive: false,
+          includeComments: true,
+          projectIDs: [projectID],
+          pageSize: taskSearchPageSize,
+          offset: pageParam ?? undefined,
+        },
+        signal,
+      ),
     }),
     initialPageParam: null,
     enabled: open && searchable,
