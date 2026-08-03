@@ -193,6 +193,8 @@ export function useLabelChooserMutationActions({
 }> {
   const catalogMutationPending =
     mutations.create.isPending ||
+    mutations.delete.isPending ||
+    mutations.rename.isPending ||
     mutations.reorder.isPending ||
     rename?.pending === true ||
     deletion?.pending === true;

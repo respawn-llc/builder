@@ -112,22 +112,18 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
 
   #advance(refreshNeeded: boolean): number {
     this.#generation += 1; this.#refreshNeeded ||= refreshNeeded;
-    try {
-      void this.#queryClient
-        .cancelQueries(
-          {
-            queryKey: this.#queryKey,
-            exact: true,
-          },
-          {
-            revert: false,
-            silent: true,
-          },
-        )
-        .catch(() => undefined);
-    } catch {
-      // Query cancellation is best effort; generation validation still rejects stale reads.
-    }
+    void this.#queryClient
+      .cancelQueries(
+        {
+          queryKey: this.#queryKey,
+          exact: true,
+        },
+        {
+          revert: false,
+          silent: true,
+        },
+      )
+      .catch(() => undefined);
     return this.#generation;
   }
 
