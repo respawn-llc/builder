@@ -416,14 +416,18 @@ func (i taskExecutionTargetPreparer) PrepareExecutionTarget(ctx context.Context,
 	}
 	switch preparation.Kind {
 	case workflowexecution.LaunchPreparationEstablishUnlockedNone:
+		targetContext, err := i.store.GetTaskExecutionTargetContext(ctx, reference.TaskID)
+		if err != nil {
+			return workflowstore.ExecutionRoot{}, err
+		}
 		return i.store.LockTaskExecutionTarget(ctx, reference.TaskID, &workflowstore.ExecutionTargetCandidate{
 			Snapshot: workflowstore.ExecutionTargetSnapshot{
 				Mode:       workflow.ExecutionTargetModeNone,
 				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 			},
 			Root: workflowstore.ExecutionRoot{
-				SourceWorkspaceID:   preparation.SourceWorkspaceID,
-				SourceWorkspaceRoot: preparation.SourceWorkspaceRoot,
+				SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+				SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 			},
 		})
 	case workflowexecution.LaunchPreparationEstablishUnlockedManaged:
