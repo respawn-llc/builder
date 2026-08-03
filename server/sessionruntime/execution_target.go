@@ -357,10 +357,10 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 	// Retried terminal events can arrive while OpenRuntime still holds the
 	// Session admission gate. Defer only admission; model work starts inside the
 	// Agent Execution Scope created below.
-	go func() {
+	a.launchLifecycleTask(func(ctx context.Context) {
 		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
 		if err == nil {
-			_, err = a.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			_, err = a.StartAgentExecution(ctx, AgentExecutionRequest{
 				Descriptor: descriptor,
 				Resource:   CurrentAgentResource{},
 				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
@@ -374,7 +374,7 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 			return
 		}
 		if errors.Is(err, ErrSessionRunActive) {
-			err = a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			err = a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
 				engine.QueueBackgroundShellContinuation(event)
 				return nil
 			})
@@ -382,15 +382,26 @@ func (a *Authority) startBackgroundContinuation(resource *agentResource, event r
 				return
 			}
 		}
-		fallbackErr := a.WithCurrentRuntime(context.Background(), resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed to start: %v", err))
-			return nil
+		if backgroundContinuationLifecycleStopped(err) {
+			if resource.logger != nil {
+				resource.logger.Logf("runtime.background.continuation.start.skipped process_id=%s error=%q", event.ID, err.Error())
+			}
+			return
+		}
+		fallbackErr := a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			return engine.SteerBackgroundContinuationFailure(err)
 		})
 		err = errors.Join(err, fallbackErr)
 		if resource.logger != nil {
 			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
 		}
-	}()
+	})
+}
+
+func backgroundContinuationLifecycleStopped(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrAuthorityClosed) ||
+		errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
 func resourceSessionHasWorkflowContract(resource *agentResource) bool {

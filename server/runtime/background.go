@@ -48,6 +48,16 @@ func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt Backgro
 	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
 }
 
+func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
+	if err == nil {
+		return errors.New("background continuation failure is required")
+	}
+	_, steerErr := e.steerRuntimeErrorFeedback(
+		fmt.Errorf("background continuation failed: %w", err),
+	)
+	return steerErr
+}
+
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
 	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
 		b.engine.surfaceRunError(err)
@@ -263,7 +273,9 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		b.engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed: %v", err))
+		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
+			b.engine.surfaceRunError(errors.Join(err, steerErr))
+		}
 	}
 }
 

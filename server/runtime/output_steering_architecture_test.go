@@ -23,7 +23,14 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		"appendQueuedUserMessageFlush": {"applySteeringItem": true},
 		"applySteeringItem":            {"steerOrdered": true},
 	}
+	sessionRuntimeBannedCalls := map[string]bool{
+		"AppendCommittedEntry":                  true,
+		"AppendCommittedEntryWithCondensedText": true,
+		"AppendCommittedEntryWithNoticeID":      true,
+		"AppendCommittedEntryWithVisibility":    true,
+	}
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	sessionRuntimeRoot := filepath.ToSlash(filepath.Join(repoRoot, "server", "sessionruntime")) + "/"
 	fileSet := token.NewFileSet()
 	var violations []string
 	if err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -72,6 +79,13 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 				callee, ok := selectorCallName(call.Fun)
 				if !ok {
 					return true
+				}
+				if strings.HasPrefix(filepath.ToSlash(path), sessionRuntimeRoot) &&
+					sessionRuntimeBannedCalls[callee] {
+					violations = append(violations, steeringViolation(
+						fileSet.Position(call.Pos()),
+						"calls generic runtime output operation "+callee+" outside the runtime owner",
+					))
 				}
 				callers, guarded := allowedCallers[callee]
 				if !guarded || callers[caller] {

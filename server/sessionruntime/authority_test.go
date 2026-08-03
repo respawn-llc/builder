@@ -55,6 +55,32 @@ type ownerlessRetirementLLMClient struct {
 	releaseFirst chan struct{}
 }
 
+func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	if !authority.launchLifecycleTask(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	}) {
+		t.Fatal("authority rejected lifecycle task before close")
+	}
+	<-started
+
+	if err := authority.Close(context.Background()); err != nil {
+		t.Fatalf("close authority: %v", err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Authority.Close returned before its lifecycle task stopped")
+	}
+	if authority.launchLifecycleTask(func(context.Context) {}) {
+		t.Fatal("closed authority accepted another lifecycle task")
+	}
+}
+
 func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
