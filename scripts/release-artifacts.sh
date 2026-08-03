@@ -212,7 +212,7 @@ smoke_windows_installer() {
 		exit 1
 	fi
 
-	local dist_path normalized tag asset archive_path smoke_dir release_base release_dir install_dir install_script
+	local dist_path normalized tag asset archive_path smoke_dir release_base release_dir install_dir install_script release_arch release_asset release_archive
 	dist_path="$(resolve_path "$dist_dir")"
 	normalized="${version#v}"
 	tag="v${normalized}"
@@ -232,7 +232,15 @@ smoke_windows_installer() {
 	release_dir="$release_base/$tag"
 	install_dir="$smoke_dir/install"
 	mkdir -p "$release_dir" "$install_dir"
-	cp "$archive_path" "$release_dir/$asset"
+	for release_arch in amd64 arm64; do
+		release_asset="kent_${normalized}_windows_${release_arch}.zip"
+		release_archive="$dist_path/$release_asset"
+		if [ ! -f "$release_archive" ]; then
+			echo "missing Windows release archive: $release_archive" >&2
+			exit 1
+		fi
+		cp "$release_archive" "$release_dir/$release_asset"
+	done
 	cp "$dist_path/checksums.txt" "$release_dir/checksums.txt"
 	install_script="$(to_powershell_path "$repo_root/scripts/install.ps1")"
 
