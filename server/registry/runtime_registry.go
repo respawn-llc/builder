@@ -602,6 +602,9 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req se
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")
 	}
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

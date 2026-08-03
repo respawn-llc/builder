@@ -276,6 +276,17 @@ func TestSessionTranscriptSubscriptionWaitStopsWithContext(t *testing.T) {
 	}
 }
 
+func TestSessionTranscriptSubscriptionRejectsMissingSession(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	_, err := registry.SubscribeSessionTranscript(
+		context.Background(),
+		serverapi.TranscriptSubscribeRequest{},
+	)
+	if err == nil {
+		t.Fatal("missing Session subscription did not fail")
+	}
+}
+
 func TestAuthorityRuntimeDrainCannotRestoreAggregateActivityAfterTerminalState(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
