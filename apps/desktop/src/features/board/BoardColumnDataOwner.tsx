@@ -118,6 +118,9 @@ export function BoardColumnDataOwner({
   } = cardsQuery;
   const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
+  const replacementDataRetained =
+    cardsQuery.data !== undefined &&
+    hydratedFilterGenerationRef.current !== activeFilterGeneration.generation;
   const mountedRef = useRef(true);
   const noticeRef = useRef<Readonly<{ generation: number; noticeID: string }> | null>(null);
   const noticeID = boardColumnNoticeID(
@@ -248,7 +251,7 @@ export function BoardColumnDataOwner({
   ]);
 
   useEffect(() => {
-    if (isError && requestEnabled) {
+    if (isError && replacementDataRetained && requestEnabled) {
       noticeRef.current = { generation: activeFilterGeneration.generation, noticeID };
       stableOnBoardColumnNotice({
         kind: "failure",
@@ -278,6 +281,7 @@ export function BoardColumnDataOwner({
     noticeID,
     stableOnBoardColumnNotice,
     requestEnabled,
+    replacementDataRetained,
     retryCards,
   ]);
 

@@ -165,28 +165,6 @@ describe("BoardColumnDataOwner retained replacement notices", () => {
     view.unmount();
   });
 
-  it("routes an initial card failure through the actionable typed notice", async () => {
-    const refetch = vi.fn(async () => undefined);
-    queryByColumn.set(
-      "column-1",
-      queryState({ data: undefined, error: new Error("initial failure"), isError: true, refetch }),
-    );
-    const events: BoardColumnNoticeEvent[] = [];
-    const view = render(
-      <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
-      </StrictMode>,
-    );
-
-    await waitFor(() => expect(events.at(-1)?.kind).toBe("failure"));
-    const failure = events.find(
-      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
-    );
-    failure?.retry();
-    expect(refetch).toHaveBeenCalledOnce();
-    view.unmount();
-  });
-
   it("keeps visible column notices independent and removes them on owner unmount", async () => {
     const firstRefetch = vi.fn(async () => undefined);
     const secondRefetch = vi.fn(async () => undefined);
