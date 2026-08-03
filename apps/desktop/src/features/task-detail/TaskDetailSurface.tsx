@@ -8,6 +8,7 @@ import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
+import { taskDetailSidebarState } from "./taskDetailSidebarState";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
 
 export type TaskDetailSurfaceProps = Readonly<{
@@ -48,8 +49,8 @@ export function TaskDetailSurface({
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
   const openLink = useOpenExternalLink();
-  const restoringSidebar =
-    sidebarSnapshot !== undefined && sidebarActivationID !== null && sidebarActivationID !== undefined;
+  const sidebarState = taskDetailSidebarState(sidebarActivationID, sidebarSnapshot);
+  const restoringSidebar = sidebarState?.snapshot !== undefined;
   const missingTask = detail.isError && isWorkflowTaskNotFound(detail.error);
   useEffect(() => {
     if (missingTask) {
@@ -74,12 +75,11 @@ export function TaskDetailSurface({
           initialFocus={initialFocus}
           onMutated={onMutated}
           openLink={openLink}
-          sidebarActivationID={sidebarActivationID}
+          sidebarState={sidebarState}
           restoredDataReady={
             !restoringSidebar ||
             (!detail.isFetching && !attention.isFetching && !activity.isFetching && !comments.isFetching)
           }
-          sidebarSnapshot={sidebarSnapshot}
         />
       </TaskDetailAssignmentScope>
     </ProjectLabelsProvider>

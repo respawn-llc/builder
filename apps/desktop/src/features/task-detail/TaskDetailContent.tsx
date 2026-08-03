@@ -14,7 +14,11 @@ import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
-import { taskDetailSavePending, taskDetailSnapshot } from "./taskDetailSidebarState";
+import {
+  taskDetailSavePending,
+  taskDetailSnapshot,
+  type TaskDetailSidebarState,
+} from "./taskDetailSidebarState";
 
 // TaskDraftState tracks the editable title/body draft alongside the server
 // snapshot (`base`) the draft last synced to. Comparing the draft to `base`
@@ -95,6 +99,7 @@ function useTaskDetailSidebarCapture({
   editingComment,
   newCommentBody,
   registerSidebarStateCapture,
+  restoredDataReady,
   savePending,
   scrollElementRef,
   selectedTab,
@@ -105,13 +110,14 @@ function useTaskDetailSidebarCapture({
   editingComment: Readonly<{ id: string; body: string }> | null;
   newCommentBody: string;
   registerSidebarStateCapture: ReturnType<typeof useSidebar>["registerSidebarStateCapture"];
+  restoredDataReady: boolean;
   savePending: boolean;
   scrollElementRef: Readonly<{ current: HTMLDivElement | null }>;
   selectedTab: "comments" | "activity";
   titleBodyDraft: TaskDraft | undefined;
 }>) {
   useEffect(() => {
-    if (activeToken === null) return;
+    if (activeToken === null || !restoredDataReady) return;
     return registerSidebarStateCapture(activeToken, () =>
       savePending
         ? null
@@ -133,6 +139,7 @@ function useTaskDetailSidebarCapture({
     editingComment,
     newCommentBody,
     registerSidebarStateCapture,
+    restoredDataReady,
     savePending,
     scrollElementRef,
     selectedTab,
@@ -262,9 +269,8 @@ export function TaskDetailContent({
   initialFocus,
   onMutated,
   openLink,
-  sidebarActivationID,
+  sidebarState,
   restoredDataReady,
-  sidebarSnapshot,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
@@ -273,9 +279,8 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
-  sidebarActivationID?: string | null | undefined;
+  sidebarState?: TaskDetailSidebarState | undefined;
   restoredDataReady: boolean;
-  sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -287,11 +292,10 @@ export function TaskDetailContent({
     registerSidebarStateCapture,
     openSidebar,
   } = useSidebar();
-  const activeSidebarActivationID = sidebarActivationID ?? undefined;
-  const isSidebarSurface = activeSidebarActivationID !== undefined;
+  const isSidebarSurface = sidebarState !== undefined;
   const activeToken = isSidebarSurface ? sidebarActiveToken : null;
   const serverDraft = taskDraft(detail);
-  const restoredSnapshot = sidebarSnapshot;
+  const restoredSnapshot = sidebarState?.snapshot;
   const scrollElementRef = useRef<HTMLDivElement | null>(null);
   const {
     draft,
@@ -355,6 +359,7 @@ export function TaskDetailContent({
     editingComment,
     newCommentBody,
     registerSidebarStateCapture,
+    restoredDataReady,
     savePending,
     scrollElementRef,
     selectedTab,
@@ -422,7 +427,7 @@ export function TaskDetailContent({
         restoredSnapshot === undefined ||
         !restoredDataReady
           ? undefined
-          : `${activeSidebarActivationID}:${detail.id}:${restoredSnapshot.scrollTop.toString()}`
+          : `${sidebarState.activationID}:${detail.id}:${restoredSnapshot.scrollTop.toString()}`
       }
       onScrollElementChange={(element) => {
         scrollElementRef.current = element;

@@ -1,5 +1,20 @@
 import type { SidebarTaskDetailSnapshot } from "@/app-facade";
 
+export type TaskDetailSidebarState = Readonly<{
+  activationID: string;
+  snapshot?: SidebarTaskDetailSnapshot;
+}>;
+
+export function taskDetailSidebarState(
+  activationID: string | null | undefined,
+  snapshot: SidebarTaskDetailSnapshot | undefined,
+): TaskDetailSidebarState | undefined {
+  if (activationID === null || activationID === undefined) {
+    return undefined;
+  }
+  return snapshot === undefined ? { activationID } : { activationID, snapshot };
+}
+
 export type TaskDetailSavePendingState = Readonly<{
   task: boolean;
   addComment: boolean;

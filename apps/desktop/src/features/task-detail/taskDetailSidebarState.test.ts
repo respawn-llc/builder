@@ -1,4 +1,4 @@
-import { taskDetailSavePending, taskDetailSnapshot } from "./taskDetailSidebarState";
+import { taskDetailSavePending, taskDetailSidebarState, taskDetailSnapshot } from "./taskDetailSidebarState";
 
 describe("task detail sidebar state", () => {
   it("blocks state-retaining navigation while any approved save is pending", () => {
@@ -50,6 +50,24 @@ describe("task detail sidebar state", () => {
       titleBodyDraft: { title: "Draft title", body: "Draft body" },
       newCommentDraft: "Unsaved comment",
       editedCommentDraft: { commentID: "comment-1", body: "Edited comment" },
+    });
+  });
+
+  it("normalizes sidebar restoration presence around the activation ID", () => {
+    const snapshot = taskDetailSnapshot({
+      scrollTop: 32,
+      descriptionExpanded: false,
+      selectedTab: "comments",
+    });
+
+    expect(taskDetailSidebarState(undefined, snapshot)).toBeUndefined();
+    expect(taskDetailSidebarState(null, snapshot)).toBeUndefined();
+    expect(taskDetailSidebarState("activation-1", undefined)).toEqual({
+      activationID: "activation-1",
+    });
+    expect(taskDetailSidebarState("activation-1", snapshot)).toEqual({
+      activationID: "activation-1",
+      snapshot,
     });
   });
 });
