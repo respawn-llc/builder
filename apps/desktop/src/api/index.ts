@@ -172,6 +172,7 @@ export type {
   TaskListItem,
   TaskListPage,
 } from "./workflowLabels";
+export type { BoardDependencyFilter, BoardFilter, BoardFilterInput } from "./workflowBoardFilters";
 export type {
   TaskSearchFTS5Hit,
   TaskSearchGroup,
@@ -190,3 +191,9 @@ export {
   taskLabelFilterConditionCount,
   taskLabelFiltersEqual,
 } from "./workflowLabels";
+export {
+  boardFilterWithDependencyFilter,
+  boardFilterWithLabelFilter,
+  boardFiltersEqual,
+  canonicalBoardFilter,
+} from "./workflowBoardFilters";

@@ -67,7 +67,7 @@ describe("BoardGenerationRequestAdapter", () => {
     await Promise.resolve();
     expect(controller.getSnapshot().active).toMatchObject({
       generation: 2,
-      filter: { kind: "unlabeled" },
+      filter: { labelFilter: { kind: "unlabeled" }, dependencyFilter: null },
     });
   });
 
@@ -126,7 +126,7 @@ describe("BoardGenerationRequestAdapter", () => {
     expect(queryClient.getQueryState(queryKey)?.error).toBeNull();
     expect(controller.getSnapshot().active).toMatchObject({
       generation: 2,
-      filter: { kind: "unlabeled" },
+      filter: { labelFilter: { kind: "unlabeled" }, dependencyFilter: null },
     });
   });
 
@@ -148,7 +148,7 @@ describe("BoardGenerationRequestAdapter", () => {
       queryClient,
       queryRegistry,
     });
-    const queryKey = ["board-node-cards", "project-1", "11111111-1111-4111-8111-111111111111", "none", "node-1"] as const;
+    const queryKey = ["board-node-cards", "project-1", "11111111-1111-4111-8111-111111111111", "none", "dependency", "dependency:null", "node-1"] as const;
     const pageCalls: (string | null)[] = [];
     let settleFirstPage: ((page: BoardNodeCardsPage) => void) | undefined;
 

@@ -1388,7 +1388,8 @@ label_filter_args AS (
     SELECT
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
-        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter
 ),
 effective_current_nodes AS (
     SELECT
@@ -1407,6 +1408,8 @@ JOIN label_filter_args
 WHERE (
 {{taskLabelFilter "    " "effective_current_nodes.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
 )
+AND
+{{taskDependencyFilter "    " "effective_current_nodes.task_id" "label_filter_args.dependency_filter"}}
 GROUP BY node_id
 ORDER BY node_id ASC;
 
@@ -1426,6 +1429,7 @@ args AS (
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter,
         CAST(sqlc.arg(offset_rows) AS INTEGER) AS offset_rows,
         CAST(sqlc.arg(sort_selector_count) AS INTEGER) AS sort_selector_count,
 {{- range .TaskListSortSlots}}
@@ -1594,6 +1598,8 @@ eligible_rows AS (
       AND (
 {{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
       )
+      AND
+{{taskDependencyFilter "          " "t.id" "args.dependency_filter"}}
 ),
 task_label_values AS (
     SELECT
@@ -3519,6 +3525,8 @@ WITH board_node_tasks AS (
       AND (
 {{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)" "sqlc.arg(excluded_label_ids_json)"}}
       )
+      AND
+{{taskDependencyFilter "          " "t.id" "sqlc.narg(dependency_filter)"}}
       AND (
           EXISTS (
               SELECT 1

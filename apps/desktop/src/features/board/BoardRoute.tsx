@@ -2,7 +2,12 @@ import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import {
+  canonicalBoardFilter,
+  hasSelectedWorkflow,
+  type BoardColumn,
+  type SelectedWorkflowBoard,
+} from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -38,7 +43,7 @@ import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
-import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
+import { BoardFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
 import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
@@ -105,8 +110,12 @@ function BoardRouteWithLabels({
   const filter = useProjectLabelFilter();
   return (
     <BoardFilterGenerationProvider
-      desiredFilter={filter.state.filter}
-      initialFilter={filter.state.filter}
+      desiredLabelFilter={filter.state.filter}
+      initialFilter={canonicalBoardFilter({
+        labelFilter: filter.state.filter,
+        dependencyFilter: null,
+      })}
+      key={`${projectId}:${workflowId ?? "default"}`}
       onBackgroundError={onBackgroundError}
       queriesEnabled={filter.persistence.status !== "loading"}
     >
@@ -321,12 +330,6 @@ function BoardContent({
       ? expandedEmptyColumns.ids
       : emptyExpandedEmptyColumnIDs;
   useWindowChromeTitle(board.selectedWorkflow.name || board.projectName);
-  const reportCardsLoadError = useCallback(
-    (error: unknown) => {
-      reportActionError("board-cards-load-error", t("board.cardsLoadFailed"), error);
-    },
-    [reportActionError, t],
-  );
   const reportNavigationError = useCallback(
     (error: unknown) => {
       reportActionError("board-navigation-error", t("board.navigationFailed"), error);
@@ -563,7 +566,7 @@ function BoardContent({
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
-        <BoardLabelFilterChrome />
+        <BoardFilterChrome />
         <BoardTaskSearchChrome onOpenTask={openTask} projectID={board.projectID} />
       </div>
       <div className="relative min-h-0 min-w-0 flex-1">
@@ -587,7 +590,6 @@ function BoardContent({
             onCardDragStart={(drag) => {
               setActiveDrag(drag);
             }}
-            onCardsLoadError={reportCardsLoadError}
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
             onExpandColumn={expandColumn}

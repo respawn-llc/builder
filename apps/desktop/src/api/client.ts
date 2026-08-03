@@ -73,13 +73,8 @@ import type {
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
-import type {
-  ProjectLabel,
-  ProjectLabelCatalog,
-  TaskLabelAssignment,
-  TaskLabelFilter,
-  TaskListPage,
-} from "./workflowLabels";
+import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
+import type { BoardFilter } from "./workflowBoardFilters";
 import {
   bindingPlanSchema,
   projectCreateSchema,
@@ -285,9 +280,9 @@ export class ApiClient implements ApiService {
   async getBoard(
     projectID: string,
     workflowID: string | undefined,
-    labelFilter: TaskLabelFilter,
+    filter: BoardFilter,
   ): Promise<WorkflowBoard> {
-    return workflowBoard.getBoard(this.#transport, projectID, workflowID, labelFilter);
+    return workflowBoard.getBoard(this.#transport, projectID, workflowID, filter);
   }
 
   async getWorkflow(workflowID: string): Promise<WorkflowDefinition> {

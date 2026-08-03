@@ -49,6 +49,7 @@ export type KanbanColumnProps = Readonly<{
   initialBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   isFirstActive: boolean;
   isCollapsed?: boolean;
   dropState: BoardColumnDropState;
@@ -111,6 +112,7 @@ export function KanbanColumn({
   initialBoundary,
   previousBoundary,
   nextBoundary,
+  replacementBoundary,
   isFirstActive,
   isCollapsed = false,
   dropState,
@@ -132,25 +134,25 @@ export function KanbanColumn({
   pinnedItemKeys,
 }: KanbanColumnProps) {
   const { t } = useTranslation();
-  const headerRef = useRef<HTMLElement | null>(null);
-  const [headerHeight, setHeaderHeight] = useState(0);
+  const chromeRef = useRef<HTMLDivElement | null>(null);
+  const [chromeHeight, setChromeHeight] = useState(0);
   useLayoutEffect(() => {
-    const header = headerRef.current;
-    if (header === null) {
+    const chrome = chromeRef.current;
+    if (chrome === null) {
       return;
     }
     const measure = () => {
-      setHeaderHeight(header.getBoundingClientRect().height);
+      setChromeHeight(chrome.getBoundingClientRect().height);
     };
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(header);
+    observer?.observe(chrome);
     return () => {
       observer?.disconnect();
     };
-  }, [isCollapsed]);
+  }, [isCollapsed, replacementBoundary]);
   const columnStyle: CSSProperties & Readonly<Record<"--board-column-header-height", string>> = {
-    "--board-column-header-height": `${headerHeight.toString()}px`,
+    "--board-column-header-height": `${chromeHeight.toString()}px`,
   };
   const columnClassName = isCollapsed
     ? `island-glass board-column-morph board-column-collapsed board-column-drop-${dropState} flex h-full min-h-0 w-[64px] shrink-0 rounded-[var(--radius-xl)] p-[var(--space-2)] align-top`
@@ -187,25 +189,29 @@ export function KanbanColumn({
         <CollapsedColumnHeader column={column} onExpand={onExpandColumn} />
       ) : (
         <>
-          <header
-            className="pointer-events-none absolute top-0 right-0 left-0 z-10 flex items-start justify-between gap-[var(--space-2)] px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)]"
-            ref={headerRef}
-          >
-            <div>
-              <h2 className="m-0 text-[1rem]">{column.name}</h2>
-              {column.assigneeRole.length > 0 ? (
-                <p className="m-0 font-mono text-sm text-[var(--color-muted)]">{column.assigneeRole}</p>
-              ) : null}
-            </div>
-            <Badge
-              title={t("board.taskCount", { count: column.taskCount })}
-              tone={isFirstActive ? "info" : "neutral"}
-            >
-              <span data-testid={`kanban-column-task-count-${column.id}`}>
-                {t("board.taskCount", { count: column.taskCount })}
-              </span>
-            </Badge>
-          </header>
+          <div className="pointer-events-none absolute top-0 right-0 left-0 z-10" ref={chromeRef}>
+            <header className="pointer-events-none flex items-start justify-between gap-[var(--space-2)] px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)]">
+              <div>
+                <h2 className="m-0 text-[1rem]">{column.name}</h2>
+                {column.assigneeRole.length > 0 ? (
+                  <p className="m-0 font-mono text-sm text-[var(--color-muted)]">{column.assigneeRole}</p>
+                ) : null}
+              </div>
+              <Badge
+                title={t("board.taskCount", { count: column.taskCount })}
+                tone={isFirstActive ? "info" : "neutral"}
+              >
+                <span data-testid={`kanban-column-task-count-${column.id}`}>
+                  {t("board.taskCount", { count: column.taskCount })}
+                </span>
+              </Badge>
+            </header>
+            {replacementBoundary === undefined ? null : (
+              <div className="pointer-events-auto px-[var(--space-3)] pb-[var(--space-2)]">
+                <InfiniteListBoundary direction="replacement" state={replacementBoundary} />
+              </div>
+            )}
+          </div>
           <VirtualizedInfiniteList
             ariaLabel={column.name}
             className="board-column-scroll absolute inset-0 min-h-0 overflow-y-auto px-[var(--space-3)] hide-scrollbar"
@@ -223,7 +229,7 @@ export function KanbanColumn({
             onLoadMore={onLoadMoreCards}
             onLoadPrevious={onLoadPreviousCards}
             onScrollElementChange={scrollportRef}
-            paddingStart={headerHeight}
+            paddingStart={chromeHeight}
             pinnedItemKeys={pinnedItemKeys}
             previousBoundary={visiblePreviousBoundary}
             renderItem={(card, cardIndex) => {

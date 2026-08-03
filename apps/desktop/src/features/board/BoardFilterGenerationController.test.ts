@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { TaskLabelFilter, WorkflowBoard } from "@/api";
+import { canonicalBoardFilter } from "@/api";
+import type { BoardFilter, TaskLabelFilter, WorkflowBoard } from "@/api";
 import { createBoardFilterGenerationController } from "./BoardFilterGenerationController";
 
 const priorityID = "11111111-1111-4111-8111-111111111111";
@@ -17,7 +18,7 @@ describe("BoardFilterGenerationController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       active: {
         generation: 2,
-        filter: priority,
+        filter: canonicalBoardFilter(priority),
         retiring: false,
       },
       desiredFilter: null,
@@ -43,7 +44,7 @@ describe("BoardFilterGenerationController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       active: {
         generation: 2,
-        filter: desired,
+        filter: canonicalBoardFilter(desired),
         retiring: false,
       },
       desiredFilter: null,
@@ -51,7 +52,7 @@ describe("BoardFilterGenerationController", () => {
   });
 
   it("retains only the latest desired filter while an active transport lease is unresolved", async () => {
-    const promoted: TaskLabelFilter[] = [];
+    const promoted: BoardFilter[] = [];
     const controller = createBoardFilterGenerationController(
       { kind: "none" },
       {
@@ -77,10 +78,10 @@ describe("BoardFilterGenerationController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       active: {
         generation: 1,
-        filter: { kind: "none" },
+        filter: canonicalBoardFilter({ kind: "none" }),
         retiring: true,
       },
-      desiredFilter: priorityAndUrgent,
+      desiredFilter: canonicalBoardFilter(priorityAndUrgent),
     });
     expect(promoted).toEqual([]);
 
@@ -90,12 +91,12 @@ describe("BoardFilterGenerationController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       active: {
         generation: 2,
-        filter: priorityAndUrgent,
+        filter: canonicalBoardFilter(priorityAndUrgent),
         retiring: false,
       },
       desiredFilter: null,
     });
-    expect(promoted).toEqual([priorityAndUrgent]);
+    expect(promoted).toEqual([canonicalBoardFilter(priorityAndUrgent)]);
   });
 
   it("keeps a generation active until its registered TanStack orchestration settles", async () => {
@@ -117,7 +118,7 @@ describe("BoardFilterGenerationController", () => {
     await Promise.resolve();
     expect(controller.getSnapshot().active).toMatchObject({
       generation: 2,
-      filter: { kind: "unlabeled" },
+      filter: canonicalBoardFilter({ kind: "unlabeled" }),
       retiring: false,
     });
   });
@@ -230,7 +231,7 @@ describe("BoardFilterGenerationController", () => {
   });
 
   it("coalesces one hundred immediate edits into the latest desired filter", async () => {
-    const promoted: TaskLabelFilter[] = [];
+    const promoted: BoardFilter[] = [];
     const controller = createBoardFilterGenerationController(
       { kind: "none" },
       {
@@ -255,12 +256,14 @@ describe("BoardFilterGenerationController", () => {
       controller.setDesiredFilter(namedFilter(index % 2 === 0 ? "all" : "any", labelID(index)));
     }
 
-    expect(controller.getSnapshot().desiredFilter).toEqual(namedFilter("all", labelID(100)));
+    expect(controller.getSnapshot().desiredFilter).toEqual(
+      canonicalBoardFilter(namedFilter("all", labelID(100))),
+    );
     expect(promoted).toEqual([]);
     settle?.(testBoard());
     await active;
     await Promise.resolve();
-    expect(promoted).toEqual([namedFilter("all", labelID(100))]);
+    expect(promoted).toEqual([canonicalBoardFilter(namedFilter("all", labelID(100)))]);
   });
 
   it("waits for unresolved newer and older page leases independently", async () => {

@@ -63,7 +63,6 @@ export type BoardRailMotionControllerProps = Readonly<{
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
@@ -90,7 +89,6 @@ export function BoardRailMotionController({
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
-  onCardsLoadError,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
@@ -453,7 +451,6 @@ export function BoardRailMotionController({
                     onCardClick={onCardClick}
                     onCardDragEnd={onCardDragEnd}
                     onCardDragStart={onCardDragStart}
-                    onCardsLoadError={onCardsLoadError}
                     onDeleteTask={onDeleteTask}
                     onDropTask={onDropTask}
                     onExpandColumn={onExpandColumn}
@@ -483,7 +480,6 @@ export function BoardRailMotionController({
                 onCardClick={onCardClick}
                 onCardDragEnd={onCardDragEnd}
                 onCardDragStart={onCardDragStart}
-                onCardsLoadError={onCardsLoadError}
                 onDeleteTask={onDeleteTask}
                 onDropTask={onDropTask}
                 onExpandColumn={onExpandColumn}

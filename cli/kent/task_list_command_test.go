@@ -466,6 +466,80 @@ func TestTaskListRetryCommandRetainsBothSelectorPolarities(t *testing.T) {
 	}
 }
 
+func TestTaskListDependencyFilterFlagsReachRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		flag string
+		want *bool
+	}{
+		{name: "no filter", want: nil},
+		{name: "unblocked", flag: "--unblocked", want: boolPointerForTaskListTest(true)},
+		{name: "blocked", flag: "--blocked", want: boolPointerForTaskListTest(false)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := newTaskListCommandRemote()
+			installWorkflowCommandRemote(t, remote)
+			args := []string{"list", "--project", taskListCommandTestProjectID}
+			if tt.flag != "" {
+				args = append(args, tt.flag)
+			}
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			if exitCode := taskSubcommand(args, &stdout, &stderr); exitCode != 0 {
+				t.Fatalf("exit code = %d; stderr=%q", exitCode, stderr.String())
+			}
+			if len(remote.listRequests) != 1 || !boolPointerForTaskListTestEqual(remote.listRequests[0].DependencyFilter, tt.want) {
+				t.Fatalf("list request = %+v, want dependency filter %v", remote.listRequests, tt.want)
+			}
+		})
+	}
+}
+
+func TestTaskListDependencyFilterFlagsAreMutuallyExclusiveBeforeRPC(t *testing.T) {
+	remote := newTaskListCommandRemote()
+	installWorkflowCommandRemote(t, remote)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := taskSubcommand(
+		[]string{"list", "--project", taskListCommandTestProjectID, "--unblocked", "--blocked"},
+		&stdout,
+		&stderr,
+	); exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q", exitCode, stderr.String())
+	}
+	if len(remote.listRequests) != 0 {
+		t.Fatalf("list requests = %+v, want none", remote.listRequests)
+	}
+}
+
+func TestTaskListRetryCommandRetainsDependencyFilter(t *testing.T) {
+	filter := false
+	args := taskListRetryCommandArgs(taskListCommandContext{
+		ProjectRef:       "project-ref",
+		DependencyFilter: &filter,
+		Limit:            100,
+	}, nil)
+	want := []string{
+		config.Command, "task", "list", "--project", "project-ref",
+		"--blocked",
+		"--limit", "100",
+	}
+	if !slices.Equal(args, want) {
+		t.Fatalf("retry args = %v, want %v", args, want)
+	}
+}
+
+func boolPointerForTaskListTest(value bool) *bool {
+	return &value
+}
+
+func boolPointerForTaskListTestEqual(left, right *bool) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func TestTaskListRetryCommandRendersWorkflowPlaceholderAtSelectorBoundary(t *testing.T) {
 	args := taskListRetryCommandArgsForSelector(
 		taskListCommandContext{ProjectRef: "project-ref", Limit: 100},

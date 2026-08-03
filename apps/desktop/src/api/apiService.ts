@@ -59,13 +59,8 @@ import type {
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
-import type {
-  ProjectLabel,
-  ProjectLabelCatalog,
-  TaskLabelAssignment,
-  TaskLabelFilter,
-  TaskListPage,
-} from "./workflowLabels";
+import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
+import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
@@ -109,11 +104,7 @@ export interface ApiService {
     addLabelIDs: readonly string[],
     removeLabelIDs: readonly string[],
   ): Promise<TaskLabelAssignment>;
-  getBoard(
-    projectID: string,
-    workflowID: string | undefined,
-    labelFilter: TaskLabelFilter,
-  ): Promise<WorkflowBoard>;
+  getBoard(projectID: string, workflowID: string | undefined, filter: BoardFilter): Promise<WorkflowBoard>;
   getWorkflow(workflowID: string): Promise<WorkflowDefinition>;
   listWorkflows(input?: WorkflowListInput): Promise<WorkflowPage>;
   createWorkflow(input: WorkflowCreateInput): Promise<WorkflowRecord>;

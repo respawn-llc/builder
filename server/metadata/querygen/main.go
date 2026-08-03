@@ -23,6 +23,12 @@ type taskLabelFilterTemplateData struct {
 	TaskID           string
 }
 
+type taskDependencyFilterTemplateData struct {
+	DependencyFilter string
+	Indent           string
+	TaskID           string
+}
+
 type taskStatusProjectionTemplateData struct {
 	LiveTaskStatesJSON string
 	Indent             string
@@ -74,6 +80,7 @@ func renderQueriesCommand(args []string) error {
 	fs.SetOutput(io.Discard)
 	input := fs.String("input", "", "metadata query template input file")
 	fragment := fs.String("fragment", "", "task label filter template fragment")
+	dependencyFragment := fs.String("dependency-fragment", "", "task dependency filter template fragment")
 	statusFragment := fs.String("status-fragment", "", "task status projection template fragment")
 	output := fs.String("output", "", "generated metadata query output file")
 	if err := fs.Parse(args); err != nil {
@@ -87,6 +94,9 @@ func renderQueriesCommand(args []string) error {
 	}
 	if strings.TrimSpace(*fragment) == "" {
 		return errors.New("fragment is required")
+	}
+	if strings.TrimSpace(*dependencyFragment) == "" {
+		return errors.New("dependency-fragment is required")
 	}
 	if strings.TrimSpace(*statusFragment) == "" {
 		return errors.New("status-fragment is required")
@@ -102,11 +112,15 @@ func renderQueriesCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("read fragment: %w", err)
 	}
+	dependencySource, err := os.ReadFile(*dependencyFragment)
+	if err != nil {
+		return fmt.Errorf("read dependency fragment: %w", err)
+	}
 	statusSource, err := os.ReadFile(*statusFragment)
 	if err != nil {
 		return fmt.Errorf("read status fragment: %w", err)
 	}
-	generated, err := generateQueries(source, filterSource, statusSource)
+	generated, err := generateQueries(source, filterSource, dependencySource, statusSource)
 	if err != nil {
 		return err
 	}
@@ -140,8 +154,8 @@ func exitWithError(err error) {
 	os.Exit(1)
 }
 
-func generateQueries(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
-	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, statusSource)
+func generateQueries(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
+	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, dependencySource, statusSource)
 	if err != nil {
 		return nil, err
 	}
@@ -177,16 +191,16 @@ func taskListSortSlots() []taskListSortSlotTemplateData {
 	return slots
 }
 
-func renderTaskSearchPageDescriptors(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
-	return renderTaskSearchQueryTemplate("taskSearchPageDescriptors", source, filterSource, statusSource, true)
+func renderTaskSearchPageDescriptors(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
+	return renderTaskSearchQueryTemplate("taskSearchPageDescriptors", source, filterSource, dependencySource, statusSource, true)
 }
 
-func renderTaskSearchSchemaContract(source []byte, filterSource []byte, statusSource []byte) ([]byte, error) {
-	return renderTaskSearchQueryTemplate("taskSearchSchemaContract", source, filterSource, statusSource, false)
+func renderTaskSearchSchemaContract(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
+	return renderTaskSearchQueryTemplate("taskSearchSchemaContract", source, filterSource, dependencySource, statusSource, false)
 }
 
-func renderTaskSearchQueryTemplate(templateName string, source []byte, filterSource []byte, statusSource []byte, includePageDescriptors bool) ([]byte, error) {
-	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, statusSource)
+func renderTaskSearchQueryTemplate(templateName string, source []byte, filterSource []byte, dependencySource []byte, statusSource []byte, includePageDescriptors bool) ([]byte, error) {
+	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, dependencySource, statusSource)
 	if err != nil {
 		return nil, err
 	}
@@ -201,10 +215,14 @@ func renderTaskSearchQueryTemplate(templateName string, source []byte, filterSou
 	return rendered.Bytes(), nil
 }
 
-func parseMetadataQueryTemplate(source []byte, filterSource []byte, statusSource []byte) (*template.Template, error) {
+func parseMetadataQueryTemplate(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) (*template.Template, error) {
 	filterTemplate, err := template.New("task_label_filter").Option("missingkey=error").Parse(string(filterSource))
 	if err != nil {
 		return nil, fmt.Errorf("parse task label filter template: %w", err)
+	}
+	dependencyTemplate, err := template.New("task_dependency_filter").Option("missingkey=error").Parse(string(dependencySource))
+	if err != nil {
+		return nil, fmt.Errorf("parse task dependency filter template: %w", err)
 	}
 	statusTemplate, err := template.New("task_status_projection").Option("missingkey=error").Parse(string(statusSource))
 	if err != nil {
@@ -254,10 +272,26 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, statusSource
 		}
 		return rendered.String(), nil
 	}
+	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string) (string, error) {
+		data := taskDependencyFilterTemplateData{
+			DependencyFilter: dependencyFilter,
+			Indent:           indent,
+			TaskID:           taskID,
+		}
+		if err := data.validate(); err != nil {
+			return "", err
+		}
+		var rendered bytes.Buffer
+		if err := dependencyTemplate.Execute(&rendered, data); err != nil {
+			return "", fmt.Errorf("render task dependency filter template: %w", err)
+		}
+		return rendered.String(), nil
+	}
 	queryTemplate, err := template.New("queries").
 		Option("missingkey=error").
 		Funcs(template.FuncMap{
 			"taskLabelFilter":      renderTaskLabelFilter,
+			"taskDependencyFilter": renderTaskDependencyFilter,
 			"taskStatusProjection": renderTaskStatusProjection,
 		}).
 		Parse(string(source))
@@ -265,6 +299,17 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, statusSource
 		return nil, fmt.Errorf("parse metadata query template: %w", err)
 	}
 	return queryTemplate, nil
+}
+
+func (d taskDependencyFilterTemplateData) validate() error {
+	switch {
+	case strings.TrimSpace(d.TaskID) == "":
+		return errors.New("task ID template expression is empty")
+	case strings.TrimSpace(d.DependencyFilter) == "":
+		return errors.New("dependency filter template expression is empty")
+	default:
+		return nil
+	}
 }
 
 func (d taskLabelFilterTemplateData) validate() error {

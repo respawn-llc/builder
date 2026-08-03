@@ -32,14 +32,26 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
 	fs.Var(&labelFlags, "label", "label name or canonical UUIDv4; repeat for multiple labels")
 	fs.Var(&notLabelFlags, "not-label", "excluded label name or canonical UUIDv4; repeat for multiple labels")
+	unblocked := fs.Bool("unblocked", false, "only include tasks with no unsatisfied direct dependencies")
+	blocked := fs.Bool("blocked", false, "only include tasks with unsatisfied direct dependencies")
 	labelMatchRaw := fs.String("label-match", string(serverapi.WorkflowTaskNamedLabelFilterModeAny), "label match mode: any or all")
 	unlabeled := fs.Bool("unlabeled", false, "only include tasks without labels")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
+	unblockedProvided := flagExplicit(fs, "unblocked")
+	blockedProvided := flagExplicit(fs, "blocked")
 	if len(fs.Args()) != 0 {
 		fmt.Fprintln(stderr, "task list does not accept positional arguments")
+		return 2
+	}
+	if (unblockedProvided && !*unblocked) || (blockedProvided && !*blocked) {
+		fmt.Fprintln(stderr, "--unblocked and --blocked must be enabled when supplied")
+		return 2
+	}
+	if unblockedProvided && blockedProvided {
+		fmt.Fprintln(stderr, "--unblocked and --blocked are mutually exclusive")
 		return 2
 	}
 	columnKeys, err := parseTaskListFilterValues([]string(columnFlags), "column")
@@ -84,6 +96,14 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		value := labelMatch
 		recoveryLabelMatch = &value
 	}
+	var dependencyFilter *bool
+	if unblockedProvided {
+		value := true
+		dependencyFilter = &value
+	} else if blockedProvided {
+		value := false
+		dependencyFilter = &value
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
@@ -106,15 +126,16 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 		}
 		request := serverapi.WorkflowTaskListRequest{
-			ProjectID:      &projectID,
-			WorkflowID:     selectedWorkflowID,
-			LabelFilter:    labelFilter,
-			ColumnKeys:     columnKeys,
-			StatusKinds:    statusKinds,
-			AttentionKinds: attentionKinds,
-			Sort:           sortSelectors,
-			Offset:         offset,
-			Limit:          limit,
+			ProjectID:        &projectID,
+			WorkflowID:       selectedWorkflowID,
+			LabelFilter:      labelFilter,
+			DependencyFilter: dependencyFilter,
+			ColumnKeys:       columnKeys,
+			StatusKinds:      statusKinds,
+			AttentionKinds:   attentionKinds,
+			Sort:             sortSelectors,
+			Offset:           offset,
+			Limit:            limit,
 		}
 		resp, err := workflowTaskList(context.Background(), remote, request)
 		if err != nil {
@@ -130,6 +151,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				ExcludedLabelSelectors: append([]string(nil), notLabelFlags...),
 				LabelMatch:             recoveryLabelMatch,
 				Unlabeled:              *unlabeled,
+				DependencyFilter:       dependencyFilter,
 				Offset:                 *offset,
 				Limit:                  *limit,
 				JSON:                   *jsonOut,

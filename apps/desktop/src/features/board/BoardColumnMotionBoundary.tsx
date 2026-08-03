@@ -37,7 +37,6 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
@@ -59,6 +58,7 @@ type BoardColumnPresentation = Readonly<{
   isLoadingPreviousCards: boolean;
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>;
 
 const inactivePresentation: BoardColumnPresentation = {
@@ -69,6 +69,7 @@ const inactivePresentation: BoardColumnPresentation = {
   isLoadingPreviousCards: false,
   nextBoundary: undefined,
   previousBoundary: undefined,
+  replacementBoundary: undefined,
 };
 
 export function BoardColumnMotionBoundary({
@@ -84,7 +85,6 @@ export function BoardColumnMotionBoundary({
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
-  onCardsLoadError,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
@@ -132,6 +132,7 @@ export function BoardColumnMotionBoundary({
       onLoadMore: () => undefined,
       onLoadPrevious: () => undefined,
       previousBoundary: undefined,
+      replacementBoundary: undefined,
     }),
     [t],
   );
@@ -171,7 +172,6 @@ export function BoardColumnMotionBoundary({
         <BoardColumnDataOwner
           board={board}
           column={column}
-          onCardsLoadError={onCardsLoadError}
           onDataViewChange={setDataView}
           onDataViewRelease={releaseDataView}
           onReportColumnSnapshot={onReportColumnSnapshot}
@@ -210,6 +210,7 @@ export function BoardColumnMotionBoundary({
         pendingResumeTaskIDs={pendingResumeTaskIDs}
         pinnedItemKeys={pinnedItemKeys}
         previousBoundary={presentation.previousBoundary}
+        replacementBoundary={presentation.replacementBoundary}
       />
     </>
   );
@@ -245,6 +246,7 @@ function presentedDataView(active: boolean, view: BoardColumnDataView): BoardCol
     isLoadingPreviousCards: view.isFetchingPreviousPage,
     nextBoundary: view.nextBoundary,
     previousBoundary: view.previousBoundary,
+    replacementBoundary: view.replacementBoundary,
   };
 }
 

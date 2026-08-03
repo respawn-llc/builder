@@ -111,6 +111,10 @@
 - Typed relationship errors identify the violated rule and the affected Tasks.
 - A Task Dependency is satisfied if and only if its Blocker Task has
   authoritative `done` status.
+- The shared Workflow-board and Task-list dependency filter is nullable. `null` applies no dependency restriction. `true` includes Tasks with zero unsatisfied direct Task Dependencies. `false` includes Tasks with one or more unsatisfied direct Task Dependencies.
+- A Task with no direct Task Dependencies matches the `true` dependency filter.
+- Kent combines the dependency filter with every other active filter using AND semantics.
+- Kent applies the dependency filter before pagination for Workflow boards and Task lists. Clients never load a complete board or Task list to apply it.
 - Every Terminal Node satisfies a Task Dependency, including a Terminal Node
   reached through Manual Move.
 - Reopening a done Blocker Task makes its Task Dependencies unsatisfied again.
@@ -573,6 +577,7 @@
 - Task-list Label filtering uses repeatable literal `--label` selectors for included conditions and repeatable literal `--not-label` selectors for excluded conditions. `--label-match any|all` combines every included and excluded condition and defaults to `any`. `--unlabeled` selects Tasks with no assignments and is mutually exclusive with both selector flags and an explicitly supplied match mode. An explicit match mode without either selector flag is invalid.
 - Every selector in one command must resolve before task creation, assignment, or listing proceeds. Selector-resolution failure reports every unresolved selector and never ignores or partially applies the input.
 - `kent task list` exposes one typed task status. `--status` filters primary status, `--attention` filters typed attention, and `--column` filters workflow node keys.
+- `kent task list --unblocked` includes Tasks with zero unsatisfied direct Task Dependencies. `kent task list --blocked` includes Tasks with one or more unsatisfied direct Task Dependencies. The two flags are mutually exclusive.
 - `kent task list` filters and sorts before pagination. Multiple values for one filter are ORed. Different filter types are ANDed. A Task with several Current Nodes exposes all matching column keys in Workflow order.
 - `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts up to seven ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
 - `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.

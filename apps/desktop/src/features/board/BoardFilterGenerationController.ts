@@ -1,21 +1,21 @@
 import {
-  canonicalTaskLabelFilter,
-  taskLabelFiltersEqual,
+  boardFiltersEqual,
+  canonicalBoardFilter,
+  type BoardFilter,
+  type BoardFilterInput,
   type BoardNodeCardsPage,
-  type CanonicalTaskLabelFilter,
-  type TaskLabelFilter,
   type WorkflowBoard,
 } from "@/api";
 
 export type BoardFilterGeneration = Readonly<{
   generation: number;
-  filter: CanonicalTaskLabelFilter;
+  filter: BoardFilter;
   retiring: boolean;
 }>;
 
 export type BoardFilterGenerationSnapshot = Readonly<{
   active: BoardFilterGeneration;
-  desiredFilter: CanonicalTaskLabelFilter | null;
+  desiredFilter: BoardFilter | null;
 }>;
 
 export type BoardFilterGenerationController = Readonly<{
@@ -32,7 +32,7 @@ export type BoardFilterGenerationController = Readonly<{
   getSnapshot(): BoardFilterGenerationSnapshot;
   registerOrchestration(generation: number, identity: string, orchestration: Promise<unknown>): boolean;
   registerCancellationBarrier(generation: number, barrier: Promise<unknown>): void;
-  setDesiredFilter(filter: TaskLabelFilter): void;
+  setDesiredFilter(filter: BoardFilterInput): void;
   subscribe(listener: () => void): () => void;
 }>;
 
@@ -40,7 +40,7 @@ export type BoardTransportAdmission<T> =
   Readonly<{ kind: "admitted"; promise: Promise<T> }> | Readonly<{ kind: "denied" }>;
 
 export function createBoardFilterGenerationController(
-  initialFilter: TaskLabelFilter,
+  initialFilter: BoardFilterInput,
   options: Readonly<{
     onPromoted?: ((generation: BoardFilterGeneration) => void) | undefined;
     onRetiring?: ((generation: BoardFilterGeneration) => Promise<void> | void) | undefined;
@@ -62,7 +62,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
   #snapshot: BoardFilterGenerationSnapshot;
 
   constructor(
-    initialFilter: TaskLabelFilter,
+    initialFilter: BoardFilterInput,
     options: Readonly<{
       onPromoted?: ((generation: BoardFilterGeneration) => void) | undefined;
       onRetiring?: ((generation: BoardFilterGeneration) => Promise<void> | void) | undefined;
@@ -75,7 +75,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     this.#snapshot = {
       active: {
         generation: 1,
-        filter: canonicalTaskLabelFilter(initialFilter),
+        filter: canonicalBoardFilter(initialFilter),
         retiring: false,
       },
       desiredFilter: null,
@@ -128,10 +128,10 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     this.#trackBarrier(barrier);
   }
 
-  setDesiredFilter(filter: TaskLabelFilter): void {
-    const desiredFilter = canonicalTaskLabelFilter(filter);
+  setDesiredFilter(filter: BoardFilterInput): void {
+    const desiredFilter = canonicalBoardFilter(filter);
     const { active } = this.#snapshot;
-    if (!active.retiring && taskLabelFiltersEqual(active.filter, desiredFilter)) {
+    if (!active.retiring && boardFiltersEqual(active.filter, desiredFilter)) {
       return;
     }
     if (!this.#hasUnsettledWork() && !active.retiring) {
@@ -241,7 +241,7 @@ class ActiveLatestBoardFilterController implements BoardFilterGenerationControll
     this.#promote(desiredFilter);
   }
 
-  #promote(filter: CanonicalTaskLabelFilter): void {
+  #promote(filter: BoardFilter): void {
     const active: BoardFilterGeneration = {
       generation: this.#snapshot.active.generation + 1,
       filter,

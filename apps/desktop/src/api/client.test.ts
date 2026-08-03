@@ -5,6 +5,7 @@ import { ApiClient } from "./client";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
+import { canonicalBoardFilter } from "./workflowBoardFilters";
 
 const startTaskParamsSchema = z.object({
   task_id: z.literal("task-1"),
@@ -83,10 +84,12 @@ describe("ApiClient", () => {
     const transport = new FakeRpcTransport([
       { method: "workflow.board.get", result: emptyBoardResponse },
       { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
+      { method: "workflow.board.get", result: emptyBoardResponse },
+      { method: "workflow.board.nodeCards.list", result: emptyBoardNodeCardsResponse },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getBoard("project-1", undefined, { kind: "none" })).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", undefined, canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
       projectID: "project-1",
       selectedWorkflow: null,
       workflows: [],
@@ -96,19 +99,17 @@ describe("ApiClient", () => {
     expect(transport.calls).toEqual([
       {
         method: "workflow.board.get",
-        params: { project_id: "project-1", label_filter: { kind: "none" } },
+        params: { project_id: "project-1", label_filter: { kind: "none" }, dependency_filter: null },
       },
     ]);
     const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
-    await expect(
-      client.listBoardNodeCards({
-        projectID: "project-1",
-        workflowID: "11111111-1111-4111-8111-111111111111",
-        nodeID: "node-1",
-        labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] },
-        pageToken: null,
-      }),
-    ).resolves.toMatchObject({
+    await expect(client.listBoardNodeCards({
+      projectID: "project-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
+      nodeID: "node-1",
+      filter: canonicalBoardFilter({ labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] }, dependencyFilter: null }),
+      pageToken: null,
+    })).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "11111111-1111-4111-8111-111111111111",
       nodeID: "node-1",
@@ -118,15 +119,16 @@ describe("ApiClient", () => {
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.board.nodeCards.list",
-      params: {
-        project_id: "project-1",
-        workflow_id: "11111111-1111-4111-8111-111111111111",
-        node_id: "node-1",
-        label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } },
-        page_size: 25,
-        page_token: null,
-      },
+      params: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-1", label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } }, dependency_filter: null, page_size: 25, page_token: null },
     });
+    const unblockedFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true });
+    await Promise.all([
+      client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter),
+      client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null }),
+    ]);
+    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
+    expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
+    expect(transport.calls[3]?.params).toMatchObject({ dependency_filter: true });
   });
 
   it("rejects malformed Workflow IDs before direct client RPCs or subscriptions", async () => {
@@ -153,7 +155,7 @@ describe("ApiClient", () => {
       new FakeRpcTransport([{ method: "workflow.board.get", result: boardWithJoinResponse }]),
     );
 
-    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" })).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
       groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
       columns: [{ id: "node-agent", kind: "agent" }],
     });

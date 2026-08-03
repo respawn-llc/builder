@@ -8,6 +8,7 @@ import type {
   WorkflowValidationMode,
 } from "./models";
 import type { TaskLabelFilter } from "./workflowLabels";
+import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 
 export type TaskMutationInput = Readonly<{
@@ -46,7 +47,7 @@ export type BoardNodeCardsInput = Readonly<{
   projectID: string;
   workflowID: string;
   nodeID: string;
-  labelFilter: TaskLabelFilter;
+  filter: BoardFilter;
   pageToken?: string | null | undefined;
 }>;
 

@@ -148,3 +148,98 @@ func TestCurrentNodeBoardLabelExclusionsFilterCountsAndCards(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentNodeBoardDependencyFilterCountsAndCombinesWithLabels(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	alpha, err := fixture.store.CreateProjectLabel(fixture.ctx, fixture.binding.ProjectID, "alpha")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+	started := func(title string, labelIDs ...string) workflowstore.TaskRecord {
+		t.Helper()
+		task, createErr := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  fixture.binding.ProjectID,
+			WorkflowID: &fixture.workflowID,
+			Title:      title,
+			LabelIDs:   labelIDs,
+		})
+		if createErr != nil {
+			t.Fatalf("CreateTask %q: %v", title, createErr)
+		}
+		if _, startErr := fixture.store.StartTask(fixture.ctx, task.ID); startErr != nil {
+			t.Fatalf("StartTask %q: %v", title, startErr)
+		}
+		return task
+	}
+	noDependencies := started("No dependencies", alpha.ID.String())
+	satisfied := started("Satisfied", alpha.ID.String())
+	unsatisfied := started("Unsatisfied", alpha.ID.String())
+	otherLabel := started("Other label")
+	satisfiedBlocker := createViewTask(t, fixture, "Satisfied blocker")
+	unsatisfiedBlocker := createViewTask(t, fixture, "Unsatisfied blocker")
+	for _, dependency := range []workflowstore.TaskDependencyAddRequest{
+		{BlockerTaskID: satisfiedBlocker.ID, BlockedTaskID: satisfied.ID},
+		{BlockerTaskID: unsatisfiedBlocker.ID, BlockedTaskID: unsatisfied.ID},
+	} {
+		if _, err := fixture.store.AddTaskDependency(fixture.ctx, dependency); err != nil {
+			t.Fatalf("AddTaskDependency: %v", err)
+		}
+	}
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
+		TaskID:       satisfiedBlocker.ID,
+		TargetNodeID: terminalNodeID(t, definition),
+	}); err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+
+	labelFilter := serverapi.WorkflowTaskLabelFilter{
+		Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+		Named: &serverapi.WorkflowTaskNamedLabelFilter{
+			Mode:     serverapi.WorkflowTaskNamedLabelFilterModeAny,
+			LabelIDs: []string{alpha.ID.String()},
+		},
+	}
+	tests := []struct {
+		name             string
+		dependencyFilter *bool
+		labelFilter      serverapi.WorkflowTaskLabelFilter
+		wantCount        int
+	}{
+		{name: "all", wantCount: 4},
+		{name: "unblocked", dependencyFilter: boolPointerForTest(true), wantCount: 3},
+		{name: "blocked", dependencyFilter: boolPointerForTest(false), wantCount: 1},
+		{name: "unblocked and labels", dependencyFilter: boolPointerForTest(true), labelFilter: labelFilter, wantCount: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := tt.labelFilter
+			if filter.Kind == "" {
+				filter = serverapi.WorkflowTaskLabelFilterNone()
+			}
+			board, err := fixture.board.Get(fixture.ctx, serverapi.WorkflowBoardRequest{
+				ProjectID:        fixture.binding.ProjectID,
+				WorkflowID:       &fixture.workflowID,
+				LabelFilter:      filter,
+				DependencyFilter: tt.dependencyFilter,
+			})
+			if err != nil {
+				t.Fatalf("Board.Get: %v", err)
+			}
+			column := workflowViewBoardColumn(t, board, fixture.agentNodeID)
+			if column.TaskCount != tt.wantCount {
+				t.Fatalf("agent column count = %d, want %d", column.TaskCount, tt.wantCount)
+			}
+		})
+	}
+	_ = noDependencies
+	_ = unsatisfied
+	_ = otherLabel
+}
+
+func boolPointerForTest(value bool) *bool {
+	return &value
+}

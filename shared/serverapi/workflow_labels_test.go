@@ -166,6 +166,80 @@ func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
 	}
 }
 
+func TestWorkflowDependencyFilterRequestContractsRoundTripAndValidate(t *testing.T) {
+	projectID := "project-1"
+	workflowID := runtimeids.NewWorkflowID()
+	nodeID := "node-1"
+	for _, dependencyFilter := range []*bool{nil, boolPointerForWorkflowTest(false), boolPointerForWorkflowTest(true)} {
+		t.Run(dependencyFilterName(dependencyFilter), func(t *testing.T) {
+			requests := []any{
+				WorkflowBoardRequest{
+					ProjectID:        projectID,
+					WorkflowID:       &workflowID,
+					LabelFilter:      WorkflowTaskLabelFilterNone(),
+					DependencyFilter: dependencyFilter,
+				},
+				WorkflowBoardNodeCardsListRequest{
+					ProjectID:        projectID,
+					WorkflowID:       workflowID,
+					NodeID:           nodeID,
+					LabelFilter:      WorkflowTaskLabelFilterNone(),
+					DependencyFilter: dependencyFilter,
+				},
+				WorkflowTaskListRequest{
+					ProjectID:        &projectID,
+					WorkflowID:       &workflowID,
+					LabelFilter:      WorkflowTaskLabelFilterNone(),
+					DependencyFilter: dependencyFilter,
+				},
+			}
+			for _, request := range requests {
+				encoded, err := json.Marshal(request)
+				if err != nil {
+					t.Fatalf("marshal %T: %v", request, err)
+				}
+				var shape map[string]any
+				if err := json.Unmarshal(encoded, &shape); err != nil {
+					t.Fatalf("decode %T: %v", request, err)
+				}
+				if dependencyFilter == nil {
+					if _, present := shape["dependency_filter"]; present {
+						t.Fatalf("%T JSON unexpectedly includes absent dependency filter: %s", request, encoded)
+					}
+				} else if shape["dependency_filter"] != *dependencyFilter {
+					t.Fatalf("%T dependency filter JSON = %#v, want %t", request, shape["dependency_filter"], *dependencyFilter)
+				}
+				decoded := reflect.New(reflect.TypeOf(request)).Elem()
+				if err := json.Unmarshal(encoded, decoded.Addr().Interface()); err != nil {
+					t.Fatalf("unmarshal %T: %v", request, err)
+				}
+				if !reflect.DeepEqual(decoded.Interface(), request) {
+					t.Fatalf("%T round trip = %#v, want %#v", request, decoded.Interface(), request)
+				}
+				if validator, ok := request.(interface{ Validate() error }); ok {
+					if err := validator.Validate(); err != nil {
+						t.Fatalf("%T Validate: %v", request, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func boolPointerForWorkflowTest(value bool) *bool {
+	return &value
+}
+
+func dependencyFilterName(value *bool) string {
+	if value == nil {
+		return "all"
+	}
+	if *value {
+		return "unblocked"
+	}
+	return "blocked"
+}
+
 func TestWorkflowTaskNamedLabelFilterExclusionsValidateAndMarshalAdditively(t *testing.T) {
 	mixed := WorkflowTaskLabelFilter{
 		Kind: WorkflowTaskLabelFilterKindNamed,
