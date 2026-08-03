@@ -7,14 +7,22 @@
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
-- Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation. The location of the separate-window action is unspecified.
+- Chat can appear as a full-page destination, a separate window, or an adaptive detail presentation.
+- The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
+- Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
+- Selecting the same Session in the main window afterward opens Chat there normally alongside the pop-out. Desktop adds no focus redirection, move-back behavior, or second pop-out for that Session.
+- Desktop relaunch restores the selected Project and its active Workflows or Sessions tab. It does not reopen Chat or restore Chat transcript/composer presentation state.
 
 ## Sessions
 
-- A Project's session browser has `Sessions` and `Subagents` categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
+- A Project's session browser has `Sessions` and `Subagents` categories. `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions; Workflow and headless launch modes do not create additional browser categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
 - Sessions are recency ordered. A compact full-width row shows the Session title, first-prompt preview, and recency. There is no search or additional status filter.
-- Selecting a Session opens full-page Chat. Secondary actions are in the row menu.
-- `New Session` opens an empty Chat using the Project default workspace. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list.
+- Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
+- Session rows do not expose execution-target availability or warnings.
+- Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.
+- Reopening a Session after navigation or relaunch opens its latest transcript position.
+- `New Session` opens the outstanding lazy Chat draft for the Project default workspace, or a new empty Chat when none exists. `New in workspace` lets the operator choose an attached Project workspace from an infinite-scrolling list and resumes that workspace's outstanding lazy draft when present.
+- Each Project workspace has at most one outstanding lazy Chat draft. Materializing its Session consumes that draft into the new Session; Desktop adds no Drafts destination or orphaned-draft list.
 - New Session creation does not select a worktree. Worktree control is available after Chat opens.
 - New Chat has no setup form for name, model, provider, Agent, worktree, or prompt. It starts with an empty composer; rename and settings remain available after Chat opens.
 - Opening and abandoning untouched new Chat creates neither a durable Session nor a session-browser row. The first nonblank user message, or another action that enters the agent loop, creates the Session.
@@ -59,6 +67,8 @@
 - Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. A future authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. Desktop does not infer row identity from display text, role, position, or transport order.
+- Opening, reopening, and transcript recovery hydrate mutable Session facts from their authoritative server owners. Cached feed-ordering state never replaces fresher Session identity, execution-target, runtime, or transcript facts.
+- Desktop does not require a globally atomic cross-owner snapshot-plus-live handoff or exactly-once delivery across that boundary. If event-sequence continuity cannot be established, Desktop discards transient live state and repeats authoritative hydration instead of remaining silently stale.
 
 ## Tools And Processes
 
@@ -94,12 +104,25 @@
 - User messages, assistant commentary, and assistant final answers are the only durable transcript islands. Tools, Reasoning Traces, context, diagnostics, notices, and every other durable non-conversational item use borderless inline disclosure or tool-row presentation.
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
-- Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. User messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Editing is the only fork action: submitting an edit creates a new Session branch and leaves the original Session unchanged.
+- Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. Eligible user messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Edit is the only fork action.
 - A live assistant message has no footer. The committed message receives timestamp and Copy together when it resolves.
 - Committed-message time uses the server's durable timestamp: relative age for 24 hours, then localized compact date and time, including the year only when different from the current year. Full date, time, and time zone are available on focus or hover.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
 - Contextual destinations adapt between shifted and overlay presentation. Processes and Goal are the defined Chat destinations. Session settings use a non-modal popover under the composer, not a contextual destination.
+
+## Edit And Fork
+
+- Desktop replaces the TUI rollback picker with the Edit action in an eligible committed user-message footer. It adds no global rollback picker, double-Escape shortcut, separate Fork action, or confirmation dialog.
+- A user message is eligible only when the server supplies its typed rollback target. Desktop never derives eligibility from role, text, position, timestamp, or another row.
+- Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
+- Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
+- The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
+- The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry.
+- The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
+- After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.
+- Fork failure leaves the operator in the unchanged parent Session and surfaces the authoritative diagnostic through Sonner. Desktop creates no optimistic child route or local fork state.
+- `To parent chat` follows the child's previous-Session lineage and opens the parent at latest. Parent-agent lineage remains omitted from ordinary Chat.
 
 ## Session Settings And Drafts
 
@@ -117,6 +140,7 @@
 - Requested setting values appear immediately and reject repeat activation while pending. On failure, the control returns to the latest server value and shows notification feedback. Other non-Agent settings remain available while work runs and affect only later applicable work, never work already in flight.
 - Sending remains available during a pending setting change. Server operation order determines whether it observes the old or requested value.
 - The unsent message and complete settings draft persist and restore together across navigation, detachment, relaunch, and server restart. The server owns this one draft; there is no collaborative composer editing.
+- A pre-Session draft is owned by its Project workspace. Reopening New Chat for that workspace resumes the same aggregate until its Session materializes.
 - Setting changes create no transcript rows. Clicking away or Escape closes settings.
 - Choosing Agent or Supervisor keeps settings open.
 
@@ -217,39 +241,77 @@
 ## Worktree
 
 - Worktree is a Session execution-target control, not a Session setting.
+- Desktop recognizes both `/worktree` and `/wt` as Worktree slash-command aliases.
+- Desktop does not recognize an `ls` Worktree subcommand.
+- Bare `/worktree` and `/wt` open the Worktree sidebar list.
+- The slash-command picker lists `/worktree` once. `/wt` remains an executable hidden alias and does not create a duplicate picker item.
+- `/worktree status` and `/wt status` open the Worktree sidebar list.
+- `/worktree new`, `/worktree create`, `/wt new`, and `/wt create` open the Worktree sidebar directly in its creation state.
+- `new` and `create` accept no arguments. Desktop does not support a raw branch or path bypass.
+- `/worktree switch <target>` and `/wt switch <target>` apply the ordinary Switch action directly without opening the sidebar. They require exactly one target selector.
+- `/worktree delete [target]`, `/worktree remove [target]`, `/worktree rm [target]`, and their `/wt` forms open the ordinary delete flow.
+- A delete command without a target selects the Session's current Worktree. A delete command with a target resolves that selector authoritatively before it opens the preview popup.
+- Delete commands accept at most one target selector.
+- Malformed or unsupported Worktree command arguments change no state and show one error Sonner with localized Worktree usage.
+- Submitting a rejected Worktree command clears that command from the composer. Desktop does not create a transcript row or send it to the model.
+- In untouched lazy New Chat, every recognized Worktree command clears from the composer and shows one error Sonner explaining that a Session is required.
+- A Worktree slash command never materializes lazy New Chat.
 - Untouched lazy New Chat omits the Worktree affordance because no Session exists yet. The affordance appears after the Session materializes.
 - Worktree management never materializes a lazy Session and is not a first-agentic trigger.
+- A Session owned by a Workflow Task uses the same Worktree affordance, sidebar, and mutations as an ordinary Session.
+- Switching a Task-owned Session changes that Session's execution target. It does not replace or rewrite the Task's locked Execution Target.
+- Workflow Task and Worktree safety rules remain authoritative. Desktop does not bypass a blocker that protects a Worktree referenced by a non-terminal Task.
 - The under-composer control row contains one Worktree affordance that identifies the Session's current concise execution target.
 - For a branch-backed worktree, the affordance shows the branch name. For a detached or otherwise non-branch worktree, it shows the Kent worktree display name. For the main workspace, it shows the workspace name.
 - When the current target is missing or inaccessible, the affordance preserves that recorded target name and adds warning iconography and semantic warning treatment. It does not replace the identity with generic warning copy.
 - The affordance end-truncates a long target name. The Worktree sidebar owns the complete target facts.
 - Activating the Worktree affordance opens the shared adaptive contextual-sidebar host.
 - Desktop does not place Worktree management in the Settings popover or a separate full-page destination.
+- Opening the Worktree list moves keyboard focus to its first enabled list action. If no row has an enabled action, focus moves to the header `+` action.
+- Opening Worktree creation moves focus to `Branch or ref`.
+- Escape closes the delete popup back to the list, returns creation to the list, and closes the list-level sidebar.
+- Closing Worktree restores focus to the under-composer Worktree control when that control opened it, or to the composer when a slash command opened it.
 - The Worktree sidebar opens directly to one management list. It has no overview landing page, cards, tabs, or nested Manage screen.
 - The sidebar header has a primary icon-only `+` action for creating a worktree.
 - The sidebar header has a secondary icon-only Refresh action beside `+`.
 - Opening the Worktree sidebar performs one fresh authoritative list read. Initial loading uses the standard compact Loading state, and failure uses the matching compact Error state with Retry.
 - Successful Worktree creation, switching, and deletion refresh the list. Manual Refresh discovers out-of-band Git topology changes.
 - Desktop adds no Worktree-list polling loop or timer-based refresh.
+- After reconnection, Desktop refreshes the authoritative current target and any open Worktree list.
+- Desktop does not reconstruct, retain, or retry a pending Worktree target change that the server lost during shutdown or restart.
+- Reconnection shows no speculative warning for an absent pending Worktree operation. The refreshed server state is authoritative.
+- If connection loss interrupts creation or setup, Desktop does not retry the Create request or keep waiting for its old result.
+- After reconnection, an open Worktree surface returns to its list and performs a fresh authoritative read. Any worktree retained by the interrupted operation appears through that read.
+- Desktop performs the automatic Switch only after it receives a successful Create result. An interrupted Create request does not infer success from list topology.
 - The list contains the server's complete worktree topology in authoritative order without pagination.
 - The current target row uses the shared UI kit's established selected-list-row treatment. Desktop adds no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action. Activating the row itself does not switch the Session target.
 - Switch copies the TUI lifecycle. Desktop waits only for the immediate scheduling request and acknowledgement. It never keeps a loading state open until the current Agent Step finishes or the target change applies.
 - While the immediate Switch request is pending, Desktop disables Worktree switching and uses only the action's ordinary request-scoped pending affordance.
-- A successful Switch acknowledgement closes the Worktree sidebar immediately and reports that the switch was scheduled.
+- The Worktree sidebar remains dismissible while the immediate Switch request is pending.
+- Dismissing the sidebar does not cancel the Switch request.
+- A successful Switch acknowledgement closes the Worktree sidebar immediately.
 - Desktop does not optimistically change the current target. The under-composer control and selected list row change only after the authoritative target update arrives.
 - If an Agent Step is active, the server queues the target change for its ordinary safe boundary before queued user work. Desktop adds no second waiting state for that queued transition.
-- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic, and follows the server's existing model-visible failure-Steer behavior.
+- A Scheduled acknowledgement and a later successful transition completion show no Toast or other success notice.
+- A later typed transition outcome refreshes the current target and any open Worktree list. Failure keeps the previous target, surfaces the authoritative diagnostic through Sonner, and follows the server's existing model-visible failure-Steer behavior.
 - The current target row omits `Switch`. A current non-main worktree retains its trash action. The main workspace has neither `Switch` nor a trash action.
 - Each Worktree row uses the display name as its title.
 - Before adoption gives an External worktree a Kent display name, its title is the branch name when available. A detached External worktree uses the final component of its canonical path as the title.
 - The External title fallback never exposes the complete path. After the Session switches to that worktree and Kent adopts it, ordinary Kent display-name rules apply.
 - When the branch or ref differs from the display name, the row shows that branch or ref on a second line. It omits the second line when it would repeat the title.
 - Worktree rows never show a path.
+- At narrow sidebar widths, a row keeps its title and optional branch/ref above a separate action line.
+- Worktree rows use no horizontal scrolling, overflow-action menu, hidden action, or card conversion.
+- Long row text end-truncates without removing an available action.
 - An External row places an `External` warning-colored chip after its title.
 - A Missing row places a `Missing` error-colored chip after its title.
 - Every deletable row has an icon-only trash action. Activating it opens the delete popup in a loading state and requests an authoritative typed deletion preview for that target.
 - The deletion preview reports Clean, Dirty with the modified-or-untracked file count, or Unknown with an authoritative diagnostic.
+- If the deletion preview request fails, the popup stays open and replaces loading with the authoritative error in error-colored plain text.
+- A preview-request failure shows ordinary Close but no Retry action, deletion action, or Sonner.
+- Closing and reopening the delete popup starts a fresh preview request.
+- A Missing target previews as Clean because deleting it preserves any leftover recorded directory.
 - The popup shows a Dirty or Unknown warning before its action items. Worktree List and Worktree Status remain lightweight and do not add dirty state.
 - After preview, a branch-backed target offers `Confirm` and `Confirm + Branch`.
 - The delete popup is both the deletion confirmation and the branch-cleanup selector. Desktop opens no second confirmation dialog.
@@ -258,10 +320,20 @@
 - Confirming after a Dirty or Unknown preview authorizes force folder removal in the same click. Confirming after a Clean preview does not authorize force folder removal.
 - Deletion rechecks current state. The preview does not reserve the target, lock its state, or guarantee later deletion.
 - If a Clean preview races with the target becoming Dirty or Unknown, the server rejects that deletion. Desktop refreshes the preview in the same popup and requires a new informed confirmation.
+- If deletion fails before returning Completed or Scheduled for another reason, the popup stays open and shows the authoritative diagnostic in error-colored plain text.
+- After an immediate deletion failure, the existing confirmation actions become available again. Repeating Confirm is the retry after the operator addresses the failure.
+- Immediate deletion failure shows no separate Retry action and no Sonner while the popup remains open.
+- The delete popup remains dismissible while a Delete request is pending.
+- Dismissing the popup does not cancel the Delete request.
+- If a Delete request fails after its popup was dismissed, Desktop shows the authoritative diagnostic through Sonner and does not reopen the popup.
+- A clean-to-dirty rejection received after dismissal also uses Sonner. Reopening the delete flow starts a new preview.
 - Delete copies the TUI's two typed outcomes. The delete popup shows its ordinary request-scoped loading state only until the server returns Completed or Scheduled.
-- A Completed result closes the popup, refreshes the list, and reports completed deletion.
-- A Scheduled result closes the popup back to the refreshed list and reports scheduled deletion. Desktop does not wait for current-Session retargeting or Git removal to finish.
-- The later authoritative transition outcome refreshes target and list state and surfaces final failure. Desktop adds no long-lived scheduled-deletion spinner.
+- A Completed result closes the popup and refreshes the list.
+- A Scheduled result closes the popup back to the refreshed list. Desktop does not wait for current-Session retargeting or Git removal to finish.
+- Completed deletion, Scheduled deletion, and later successful transition completion show no Toast or other success notice.
+- If a Completed result reports that requested branch cleanup was retained or that a filesystem root remains, Desktop shows one warning Sonner with the typed branch or root fact and the authoritative diagnostic.
+- Incomplete cleanup does not reopen the delete popup.
+- The later authoritative transition outcome refreshes target and list state and surfaces final failure through Sonner. Desktop adds no long-lived scheduled-deletion spinner.
 - A Missing row cannot switch and shows only its trash action. Deleting it applies the server's stale-record cleanup and current-Session retargeting behavior.
 - A detached available row can switch and shows its trash action, but its delete popup has no branch-cleanup item.
 - Worktree creation uses a focused child state within the same Worktree sidebar destination.
@@ -269,16 +341,45 @@
 - `Branch or ref` starts focused and is prefilled only from the sanitized Session title. When the Session has no usable title, the field starts empty.
 - Desktop never falls back to the current branch, `main`, or a generated generic Worktree name.
 - Desktop resolves `Branch or ref` asynchronously and presents the typed result as `New branch`, `Existing branch`, or `Detached ref`. It has no explicit new/existing target selector.
+- Desktop briefly debounces `Branch or ref` changes. A response applies only when it matches the latest trimmed field value.
+- Changing `Branch or ref` clears its prior classification and related resolver error. Desktop discards stale responses.
+- A plain-text classification line sits beneath the `Branch or ref` label. While a nonempty value is resolving, the line shows only a spinner with no loading copy.
+- Successful resolution replaces the spinner with bold `New branch`, `Existing branch`, or `Detached ref` text. Desktop uses no chip, badge, or card for this classification.
+- Resolution failure replaces the spinner or classification with the authoritative diagnostic in error-colored plain text on the same line. Desktop preserves the field value and shows no Sonner for this failure.
+- Submitting a nonempty value before its latest resolution finishes waits for that resolution and then creates only if it succeeds. Editing the field again cancels that pending submit intent.
+- Submitting an empty value sends no resolution or creation request and shows the inline validation error `Branch or ref is required`.
 - `Base ref` defaults to `HEAD` and is shown and enabled only when the target resolves as a new branch.
+- Before creating a new branch, the server must resolve `Base ref` once to an immutable commit. The server must use that commit for creation.
+- Blank, invalid, and unresolved Base refs must be owned by the `Base ref` field.
+- A failure after successful Base-ref resolution must be owned by the creation form, including a race in which the resolved commit disappears before creation.
+- Desktop must use typed ownership to place creation failures. Desktop must never inspect diagnostic text to choose between the `Base ref` field and the creation form.
+- Every Base-ref validation or operational error appears beneath the `Base ref` field in error-colored plain text.
+- Desktop uses typed error ownership to distinguish a Base-ref error from another creation failure. It never parses diagnostic text to choose error placement.
+- An empty Base ref sends no creation request and shows `Base ref is required`.
 - The creation state has no custom filesystem-path field. Kent uses the configured worktree base directory.
 - The primary creation action is `Create`. Back returns to the Worktree list without creating anything.
 - While creation and optional setup run, the creation child state shows one simple spinner for the complete operation.
 - Desktop does not expose setup phases, phase labels, percentage progress, or a progress bar.
+- If creation fails before a worktree exists, Desktop must stop the spinner. Desktop must preserve every entered value. Desktop must show the authoritative diagnostic inline at its typed owner.
 - If optional setup fails, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- If creation fails before Kent retains a worktree, Desktop keeps the creation state open with every entered value preserved.
+- A pre-retention creation failure not owned by one field shows the authoritative diagnostic as error-colored form-level plain text below the fields. It shows no Sonner.
+- The Worktree sidebar remains dismissible while creation and optional setup run.
+- Dismissing the Worktree sidebar does not cancel the submitted creation operation. The operation continues without its spinner after the destination closes.
+- Reopening Worktree while that creation operation remains in flight opens the ordinary list and performs its ordinary fresh read.
+- The reopened list keeps its normal actions available. Desktop does not reattach the creation spinner or add a client-wide Worktree mutation lock.
+- Concurrent requests follow the server's ordinary Worktree ordering and re-evaluation behavior.
+- Dismissing the Worktree sidebar does not suppress the automatic Switch after successful creation and setup.
+- Successful creation and automatic Switch remain silent. The authoritative current-target control changes when the Switch applies.
+- If optional setup fails while the Worktree sidebar remains open, Desktop returns immediately to the refreshed Worktree list and shows the authoritative diagnostic through Sonner.
+- If the Worktree sidebar was dismissed, setup failure does not reopen it. Desktop shows the authoritative diagnostic through Sonner, and the next Worktree-sidebar open performs its ordinary fresh list read.
 - Setup failure preserves the created worktree and does not offer an inline Error state, Retry action, or automatic deletion.
 - Successful creation waits for optional setup to finish and then applies the ordinary Switch operation for the new worktree.
 - If creation succeeds but the automatic Switch fails, Desktop preserves the created worktree, refreshes the list, leaves the Session on its previous target, and surfaces the Switch failure.
 - Desktop does not delete or otherwise roll back a successfully created worktree because its automatic Switch failed.
+- Worktree remains fully available in the bottom control row while a Question or Approval picker replaces the editor.
+- Opening or mutating Worktree does not answer, dismiss, hide, or otherwise change the pending prompt.
+- Any Worktree target change applies through the ordinary server lifecycle before later model work.
 
 ## Questions And Approvals
 
@@ -333,7 +434,29 @@
 - After preliminary QA passes, the agent opens the fixture for the user and asks for an explicit Approve or Reject decision with concrete findings. Silence, indirect feedback, screenshots, and agent judgment are not acceptance.
 - A rejection keeps the implementation work incomplete. The findings are addressed, preliminary QA is repeated, and the browser acceptance request is presented again. The complete Questions/Approvals work cannot pass its acceptance gate without explicit user approval.
 
+## Failure And Recovery
+
+- Desktop's existing global connection state owns server disconnection. Chat adds no banner, card, modal, or second reconnect indicator.
+- While disconnected, the existing persistent warning notice remains visible, Chat keeps its last committed authoritative content, and every server mutation is unavailable. Composer and form text remain present.
+- Reconnection dismisses the global warning, refreshes visible authoritative queries, recreates the transcript subscription, and performs Scratch Rehydration. Success adds no notification.
+- Desktop never replays an ambiguous Session mutation after connection loss. A later explicit operator action is a new operation; reconnect refreshes transcript, Pending Work, draft, runtime, prompt, Goal, Process, and Worktree state from their owners.
+- A transcript sequence gap, subscription loss, or buffered-stream failure discards provisional live content and starts Scratch Rehydration. Already committed transcript content never becomes fake empty or idle state.
+- Scratch Rehydration uses the ordinary authoritative hydration projection. It adds no client transcript repair, duplicate suppression, history rewrite, or global snapshot/replay mechanism.
+- Initial existing-Session loading uses the compact centered Chat loading state already specified. Initial inspection, runtime activation, transcript hydration, or draft-load failure uses the matching compact Error state with Retry while chrome Back remains available.
+- Initial Retry repeats the complete ordinary Session open path. It does not retry only one guessed failing sub-operation and adds no target-repair behavior.
+- A failed refresh after Chat is already hydrated preserves the last authoritative visible state. Desktop surfaces the failure through the owning global connection or operation error presentation and never fabricates empty state.
+- Older/newer transcript page failure affects only that boundary row. Loaded content remains usable and Retry repeats the same opaque cursor request.
+- A failed Session mutation keeps its initiating text, draft, Pending Work item, picker, Goal, Worktree, or settings state according to that operation's existing contract and uses the shared status-notice/Sonner owner. Desktop creates no optimistic transcript fallback row.
+- Mutation controls prevent duplicate activation while their request is pending. This is request presentation, not client-owned replay, reconciliation, or a second authoritative operation state.
+- If a server-owned Chat draft cannot load, existing-Session opening fails through the initial Error state. If a draft write fails while Chat is open, Desktop preserves the visible unsent text and settings and surfaces the failure.
+- An in-app navigation, detach, pop-out transition, or other controlled disposal that requires draft persistence or runtime release does not silently complete after that prerequisite fails. It keeps the current presentation and surfaces the authoritative diagnostic.
+- Opening a native Chat pop-out failure leaves Chat in the main window and uses the existing native-window failure notice. Desktop does not create a fallback duplicate window or partially navigate the main window.
+- Prompt-answer races follow the Question/Approval contract: externally resolved prompts disappear, stale results cannot replace current prompt state, and a failed still-pending submission preserves its local answer draft.
+- Impossible typed payloads, transcript integrity violations, and reducer/lifecycle states fail immediately in development. Production uses the owning transcript or operation failure path without placeholder rows, swallowed errors, or fake successful state.
+
 ## Desktop Exceptions
 
 - Desktop replaces terminal interaction mechanics with desktop controls without removing the capability they exposed.
+- Dedicated accessibility support is outside this initiative. Desktop Chat adds no screen-reader transcript model, streaming announcements, ARIA-specific interaction architecture, blind-user acceptance flow, or accessibility-only task.
+- Shared UI-kit components keep their ordinary incidental semantics. Keyboard shortcuts, functional focus transitions, Copy/select behavior, resizable-window layouts, and explicitly specified reduced-motion behavior remain product mechanics rather than a separate accessibility program.
 - Desktop Chat has no file or image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript attachment. `@` workspace references are paths, not attachments.

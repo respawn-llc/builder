@@ -315,9 +315,63 @@ type executionPromptResult struct {
 	err      error
 }
 
+// PromptResponseAcceptance is returned after a prompt response mutation has
+// been accepted. Successor observation is latched, so every retry sees the
+// same accepted result even after the successor has already been resolved.
+type PromptResponseAcceptance struct {
+	observation *promptSuccessorObservation
+}
+
+func (a PromptResponseAcceptance) AwaitSuccessor(ctx context.Context) error {
+	if a.observation == nil {
+		return errors.New("prompt response acceptance is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-a.observation.done:
+		return nil
+	default:
+	}
+	select {
+	case <-a.observation.done:
+		return nil
+	case <-ctx.Done():
+		select {
+		case <-a.observation.done:
+			return nil
+		default:
+			return context.Cause(ctx)
+		}
+	}
+}
+
+type promptSuccessorObservation struct {
+	done         chan struct{}
+	observed     bool
+	successorIDs []string
+}
+
 type executionPromptEntry struct {
-	snapshot ExecutionPromptSnapshot
-	response chan executionPromptResult
+	snapshot        ExecutionPromptSnapshot
+	response        chan executionPromptResult
+	publicationDone chan struct{}
+}
+
+type executionPromptClosure struct {
+	err          error
+	entries      []*executionPromptEntry
+	observations []*promptSuccessorObservation
+}
+
+type PromptBatchInvariantError struct {
+	PromptID string
+	Detail   string
+}
+
+func (e PromptBatchInvariantError) Error() string {
+	return fmt.Sprintf("prepared question batch for prompt %q is invalid: %s", e.PromptID, e.Detail)
 }
 
 type executionPromptStore struct {
@@ -325,11 +379,12 @@ type executionPromptStore struct {
 	// mu is the sole synchronization for pending prompts. Prompt lifecycle
 	// mutations must not acquire Authority.mu because status snapshots hold it
 	// while reading live execution state.
-	mu      sync.RWMutex
-	scope   ExecutionScope
-	feed    ExecutionPromptFeed
-	closed  bool
-	pending map[string]*executionPromptEntry
+	mu                    sync.RWMutex
+	scope                 ExecutionScope
+	feed                  ExecutionPromptFeed
+	closed                bool
+	pending               map[string]*executionPromptEntry
+	successorObservations map[string]map[*promptSuccessorObservation]struct{}
 }
 
 func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
@@ -355,8 +410,9 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		CreatedAt: time.Now().UTC(),
 	}
 	entry := &executionPromptEntry{
-		snapshot: snapshot,
-		response: make(chan executionPromptResult, 1),
+		snapshot:        snapshot,
+		response:        make(chan executionPromptResult, 1),
+		publicationDone: make(chan struct{}),
 	}
 	if s.authority == nil {
 		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
@@ -373,6 +429,10 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	s.pending[requestID] = entry
 	s.mu.Unlock()
 	s.publishPending(snapshot)
+	close(entry.publicationDone)
+	s.mu.Lock()
+	s.observePromptSuccessorLocked(requestID)
+	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		current := s.pending[requestID]
@@ -393,30 +453,137 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 }
 
 func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr error) error {
+	_, err := s.submit(resp, submitErr, false)
+	return err
+}
+
+func (s *executionPromptStore) Accept(
+	resp tools.AskQuestionResponse,
+	submitErr error,
+) (PromptResponseAcceptance, error) {
+	acceptance, err := s.submit(resp, submitErr, true)
+	if err != nil {
+		return PromptResponseAcceptance{}, err
+	}
+	return acceptance, nil
+}
+
+func (s *executionPromptStore) submit(
+	resp tools.AskQuestionResponse,
+	submitErr error,
+	latchSuccessor bool,
+) (PromptResponseAcceptance, error) {
 	requestID := strings.TrimSpace(resp.RequestID)
 	if requestID == "" {
-		return errors.New("prompt response request id is required")
+		return PromptResponseAcceptance{}, errors.New("prompt response request id is required")
 	}
 	if s.authority == nil {
-		return errors.New("session runtime authority is required")
+		return PromptResponseAcceptance{}, errors.New("session runtime authority is required")
 	}
 	s.mu.Lock()
 	entry := s.pending[requestID]
 	if entry == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
+		return PromptResponseAcceptance{}, fmt.Errorf(
+			"prompt %q not found: %w",
+			requestID,
+			serverapi.ErrPromptNotFound,
+		)
 	}
 	if submitErr == nil {
 		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
 			s.mu.Unlock()
-			return err
+			return PromptResponseAcceptance{}, err
 		}
+	}
+	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
+	if err != nil {
+		delete(s.pending, requestID)
+		s.mu.Unlock()
+		<-entry.publicationDone
+		s.publishResolved(entry.snapshot)
+		entry.response <- executionPromptResult{err: err}
+		return PromptResponseAcceptance{}, err
+	}
+	acceptance := PromptResponseAcceptance{}
+	if latchSuccessor {
+		observation := &promptSuccessorObservation{
+			done:         make(chan struct{}),
+			successorIDs: successorIDs,
+		}
+		acceptance.observation = observation
+		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
-	entry.response <- executionPromptResult{response: resp, err: submitErr}
+	<-entry.publicationDone
 	s.publishResolved(entry.snapshot)
-	return nil
+	entry.response <- executionPromptResult{response: resp, err: submitErr}
+	return acceptance, nil
+}
+
+func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) ([]string, error) {
+	batch := req.QuestionBatch
+	if batch == nil {
+		return nil, nil
+	}
+	invalid := func(detail string) ([]string, error) {
+		return nil, PromptBatchInvariantError{PromptID: req.ID, Detail: detail}
+	}
+	if batch.Origin != tools.AskQuestionOriginModelTool {
+		return invalid(fmt.Sprintf("origin is %q", batch.Origin))
+	}
+	if batch.Origin != req.Origin {
+		return invalid(fmt.Sprintf("origin %q does not match request origin %q", batch.Origin, req.Origin))
+	}
+	if strings.TrimSpace(batch.RunID) == "" || batch.RunID != req.RunID {
+		return invalid(fmt.Sprintf("run id %q does not match request run id %q", batch.RunID, req.RunID))
+	}
+	if strings.TrimSpace(batch.StepID) == "" || batch.StepID != req.StepID {
+		return invalid(fmt.Sprintf("step id %q does not match request step id %q", batch.StepID, req.StepID))
+	}
+	if strings.TrimSpace(batch.BatchID) == "" || strings.TrimSpace(batch.BatchID) != batch.BatchID {
+		return invalid("batch id is blank or not normalized")
+	}
+	if batch.PromptID != req.ID {
+		return invalid(fmt.Sprintf("metadata prompt id %q does not match request id", batch.PromptID))
+	}
+	if batch.PreparedPromptCount != len(batch.BatchPromptIDs) {
+		return invalid(fmt.Sprintf(
+			"prepared prompt count %d does not match prompt id count %d",
+			batch.PreparedPromptCount,
+			len(batch.BatchPromptIDs),
+		))
+	}
+	if batch.CandidateOrdinal < 0 || batch.CandidateOrdinal >= len(batch.BatchPromptIDs) {
+		return invalid(fmt.Sprintf(
+			"candidate ordinal %d is outside %d prompt ids",
+			batch.CandidateOrdinal,
+			len(batch.BatchPromptIDs),
+		))
+	}
+	seen := make(map[string]struct{}, len(batch.BatchPromptIDs))
+	for index, raw := range batch.BatchPromptIDs {
+		promptID := strings.TrimSpace(raw)
+		if promptID == "" || promptID != raw {
+			return invalid(fmt.Sprintf("prompt id at index %d is blank or not normalized", index))
+		}
+		if _, exists := seen[promptID]; exists {
+			return invalid(fmt.Sprintf("prompt id %q is duplicated", promptID))
+		}
+		seen[promptID] = struct{}{}
+	}
+	if batch.BatchPromptIDs[batch.CandidateOrdinal] != req.ID {
+		return invalid(fmt.Sprintf(
+			"prompt id at candidate ordinal %d is %q",
+			batch.CandidateOrdinal,
+			batch.BatchPromptIDs[batch.CandidateOrdinal],
+		))
+	}
+	if submitErr != nil {
+		return nil, nil
+	}
+	return append([]string(nil), batch.BatchPromptIDs[batch.CandidateOrdinal+1:]...), nil
 }
 
 func (s *executionPromptStore) Close(err error) {
@@ -427,32 +594,117 @@ func (s *executionPromptStore) Close(err error) {
 		return
 	}
 	s.mu.Lock()
-	snapshots := s.closeLocked(err)
+	closure := s.closeLocked(err)
 	s.mu.Unlock()
-	for _, snapshot := range snapshots {
-		s.publishResolved(snapshot)
-	}
+	s.publishClosure(closure)
+	s.releaseClosure(closure)
 }
 
-func (s *executionPromptStore) closeLocked(err error) []ExecutionPromptSnapshot {
+func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
 	if err == nil {
 		err = context.Canceled
 	}
 	if s.closed {
-		return nil
+		return executionPromptClosure{}
 	}
 	s.closed = true
-	entries := make([]*executionPromptEntry, 0, len(s.pending))
-	snapshots := make([]ExecutionPromptSnapshot, 0, len(s.pending))
+	closure := executionPromptClosure{
+		err:     err,
+		entries: make([]*executionPromptEntry, 0, len(s.pending)),
+	}
 	for requestID, entry := range s.pending {
-		entries = append(entries, entry)
-		snapshots = append(snapshots, entry.snapshot)
+		closure.entries = append(closure.entries, entry)
 		delete(s.pending, requestID)
 	}
-	for _, entry := range entries {
-		entry.response <- executionPromptResult{err: err}
+	observations := make(map[*promptSuccessorObservation]struct{})
+	for _, byObservation := range s.successorObservations {
+		for observation := range byObservation {
+			observations[observation] = struct{}{}
+		}
 	}
-	return snapshots
+	closure.observations = make([]*promptSuccessorObservation, 0, len(observations))
+	for observation := range observations {
+		closure.observations = append(closure.observations, observation)
+	}
+	return closure
+}
+
+func (s *executionPromptStore) publishClosure(closure executionPromptClosure) {
+	for _, entry := range closure.entries {
+		<-entry.publicationDone
+		s.publishResolved(entry.snapshot)
+	}
+}
+
+func (s *executionPromptStore) releaseClosure(closure executionPromptClosure) {
+	for _, entry := range closure.entries {
+		entry.response <- executionPromptResult{err: closure.err}
+	}
+	s.mu.Lock()
+	for _, observation := range closure.observations {
+		s.markPromptSuccessorObservedLocked(observation)
+	}
+	s.mu.Unlock()
+}
+
+func (s *executionPromptStore) registerPromptSuccessorObservationLocked(
+	observation *promptSuccessorObservation,
+) {
+	if observation == nil {
+		panic("prompt successor observation is required")
+	}
+	if len(observation.successorIDs) == 0 || s.closed {
+		s.markPromptSuccessorObservedLocked(observation)
+		return
+	}
+	for _, requestID := range observation.successorIDs {
+		if _, pending := s.pending[requestID]; pending {
+			s.markPromptSuccessorObservedLocked(observation)
+			return
+		}
+	}
+	if s.successorObservations == nil {
+		s.successorObservations = make(map[string]map[*promptSuccessorObservation]struct{})
+	}
+	for _, requestID := range observation.successorIDs {
+		observations := s.successorObservations[requestID]
+		if observations == nil {
+			observations = make(map[*promptSuccessorObservation]struct{})
+			s.successorObservations[requestID] = observations
+		}
+		observations[observation] = struct{}{}
+	}
+}
+
+func (s *executionPromptStore) observePromptSuccessorLocked(requestID string) {
+	observations := s.successorObservations[requestID]
+	if len(observations) == 0 {
+		return
+	}
+	pending := make([]*promptSuccessorObservation, 0, len(observations))
+	for observation := range observations {
+		pending = append(pending, observation)
+	}
+	for _, observation := range pending {
+		s.markPromptSuccessorObservedLocked(observation)
+	}
+}
+
+func (s *executionPromptStore) markPromptSuccessorObservedLocked(
+	observation *promptSuccessorObservation,
+) {
+	if observation == nil || observation.observed {
+		return
+	}
+	observation.observed = true
+	close(observation.done)
+	for _, requestID := range observation.successorIDs {
+		observations := s.successorObservations[requestID]
+		delete(observations, observation)
+		if len(observations) == 0 {
+			delete(s.successorObservations, requestID)
+		}
+	}
 }
 
 func (s *executionPromptStore) hasPending() bool {
@@ -541,6 +793,18 @@ func (a *Authority) SubmitPromptResponse(sessionID runtimeids.SessionID, resp to
 	return execution.prompts.Submit(resp, err)
 }
 
+func (a *Authority) AcceptPromptResponse(
+	sessionID runtimeids.SessionID,
+	resp tools.AskQuestionResponse,
+	err error,
+) (PromptResponseAcceptance, error) {
+	execution := a.sessionExecution(sessionID)
+	if execution == nil {
+		return PromptResponseAcceptance{}, fmt.Errorf("session %s has no active execution", sessionID)
+	}
+	return execution.prompts.Accept(resp, err)
+}
+
 // ResolvePendingWorkflowPrompt selects one exact live Agent scope by Task and
 // prompt ID. It deliberately reads only Authority-owned volatile execution
 // state; persisted Run history is not part of prompt ownership.
@@ -591,19 +855,39 @@ func (a *Authority) ResolvePendingWorkflowPrompt(taskID workflow.TaskID, askID s
 // resolved exact scope. A scope retirement between resolve and submit is a
 // stale prompt, never a reason to redirect by Session.
 func (a *Authority) SubmitPromptResponseForScope(scopeID runtimeids.ExecutionScopeID, resp tools.AskQuestionResponse, err error) error {
+	execution, resolveErr := a.agentExecutionByScope(scopeID)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	return execution.prompts.Submit(resp, err)
+}
+
+func (a *Authority) AcceptPromptResponseForScope(
+	scopeID runtimeids.ExecutionScopeID,
+	resp tools.AskQuestionResponse,
+	err error,
+) (PromptResponseAcceptance, error) {
+	execution, resolveErr := a.agentExecutionByScope(scopeID)
+	if resolveErr != nil {
+		return PromptResponseAcceptance{}, resolveErr
+	}
+	return execution.prompts.Accept(resp, err)
+}
+
+func (a *Authority) agentExecutionByScope(scopeID runtimeids.ExecutionScopeID) (*execution, error) {
 	if a == nil {
-		return errors.New("session runtime authority is required")
+		return nil, errors.New("session runtime authority is required")
 	}
 	if scopeID.IsZero() {
-		return errors.New("execution scope id is required")
+		return nil, errors.New("execution scope id is required")
 	}
 	a.mu.Lock()
 	execution := a.byScope[scopeID]
 	a.mu.Unlock()
 	if execution == nil || execution.scope.Kind() != ExecutionScopeAgent {
-		return serverapi.ErrPromptNotFound
+		return nil, serverapi.ErrPromptNotFound
 	}
-	return execution.prompts.Submit(resp, err)
+	return execution, nil
 }
 
 func (a *Authority) sessionExecution(sessionID runtimeids.SessionID) *execution {
@@ -632,6 +916,7 @@ func cloneExecutionPromptRequest(req tools.AskQuestionRequest) tools.AskQuestion
 	req.ApprovalOptions = append([]tools.AskQuestionApprovalOption(nil), req.ApprovalOptions...)
 	if req.QuestionBatch != nil {
 		batch := *req.QuestionBatch
+		batch.BatchPromptIDs = append([]string(nil), req.QuestionBatch.BatchPromptIDs...)
 		req.QuestionBatch = &batch
 	}
 	if req.AttentionTarget != nil {

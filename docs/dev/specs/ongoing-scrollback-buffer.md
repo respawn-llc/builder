@@ -22,9 +22,10 @@
 
 ## Delivery Consumption
 
-- Ongoing Mode consumes an exactly-once ordered transcript stream. Opening the stream delivers hydration first. Each event is complete and committed assistant entries identify the Streaming Message that they finalize.
+- Ongoing Mode consumes one ordered, sequence-numbered transcript subscription. Opening the subscription delivers hydration first. Every later received event has the next per-subscription sequence number. Each event is complete and committed assistant entries identify the Streaming Message that they finalize.
 - Each received event has one outcome: render it now, hold it in arrival order while another surface owns the terminal, start Scratch Rehydration after a sequence gap, or surface a developer error.
 - No other outcome exists. A received event must never be skipped, dropped, deduplicated, merged with another event, reordered relative to arrival order, partially applied, or held back to await a matching or confirming event.
+- A prompt admitted concurrently with Session resource draining may be absent from the closing subscription; Scratch Rehydration reloads authoritative prompt state after reopening.
 - Committed tool lines join the open group in server emission order. There is no client-side reordering or frontier between parallel tool calls. Visual grouping follows the Grouping And Separators section and never changes arrival order.
 - During live operation the client must not issue transcript reads of any kind: no page requests, tail requests, gap fills, refreshes, recovery reads, or committed-advance re-reads. The ongoing surface reads from the server through exactly one mechanism: opening the subscription, which is also the scratch-rehydration mechanism. Detail-mode history paging is a separate surface and is not available to ongoing rendering.
 
@@ -96,7 +97,7 @@
   - A large paste filled the screen.
 - Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
 - Rehydration erases only the Mutable Band, reopens the Session, and appends the received active segment below existing Scrollback. It never clears Scrollback, changes emitted content, or compares the received segment with existing terminal output. Duplicate-looking output after rehydration is acceptable.
-- Only the operator's local input and navigation state survives rehydration. Kent reloads transcript, Queue, execution, status, tool, and Steer state from the reopened Session. If rehydration fails, the TUI exits with a clear error; it does not fabricate empty state or continue with stale state.
+- Only the operator's local input and navigation state survives rehydration. Kent reloads fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state from the reopened Session. If rehydration fails, the TUI exits with a clear error; it does not fabricate empty state or continue with stale state.
 
 ## Errors
 
@@ -104,3 +105,4 @@
 - In debug mode, unclear developer failures are logged with the same diagnostics and then panic. In normal operation, Kent logs them and continues when possible.
 - No error or recovery path may: drop, skip, or defer rendering of received committed content; drop or disable the native surface; hand the ongoing transcript to an app-managed viewport; trigger scratch rehydration; store content for later comparison; or re-emit. An error path that cannot satisfy these constraints exits the TUI with a clear message instead.
 - Immediate terminal write failures surface synchronously and follow the same debug and normal-operation recovery rules.
+- When an ongoing transcript subscription cannot open because of a runtime transport failure, the TUI exits cleanly with the exact `server connection lost` status and does not expose low-level transport details. Other failures while opening or rehydrating Chat retain the existing clear-error and debug-diagnostic path.

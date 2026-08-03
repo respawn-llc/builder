@@ -24,6 +24,7 @@ description: Write, rewrite, review, or validate Kent product specifications und
 - Use short, direct sentences with an explicit subject and active voice.
 - Put conditions before outcomes.
 - State one requirement per sentence.
+- Keep each prose paragraph or list item on one physical line. Do not hard-wrap prose to a column width or insert line breaks between sentences. Use line breaks only for Markdown structure such as separate paragraphs, list items, tables, block quotes, and code blocks.
 - Use `must` for normative requirements.
 - Write timelessly. Do not use changelog, rollout, or work-in-progress language.
 - Preserve literal product copy exactly when the wording is part of the contract.

@@ -28,7 +28,7 @@ type RuntimeActivityResolver interface {
 }
 
 type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error
+	PublishSessionIdentity(sessionID string) error
 }
 
 type sessionStatusPublisher interface {
@@ -318,7 +318,7 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 				return err
 			}
 			if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-				return publisher.PublishSessionIdentity(req.SessionID, nil)
+				return publisher.PublishSessionIdentity(req.SessionID)
 			}
 			return nil
 		})

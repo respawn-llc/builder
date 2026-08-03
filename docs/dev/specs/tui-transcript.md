@@ -20,7 +20,7 @@
 - A Compaction-Preserved User Message does not become a new user turn in Ongoing Mode.
 - Transcript display reads bounded pages or a recent tail. Neither the TUI nor Kent keeps the complete transcript in memory for display.
 - Detail Mode can page across compaction boundaries.
-- Rollback/fork is navigation or attachment to a different session target, not same-session transcript mutation.
+- Rollback/fork immediately materializes and opens a durable child Session whose copied history ends before the selected user message. The selected message becomes the child composer draft, and the parent Session remains unchanged; rollback is never a same-session transcript mutation.
 - **Assistant streaming in ongoing mode uses source-backed Markdown promotion. Stable rendered assistant lines append during streaming after being styled as markdown; the volatile tail that cannot be styled deterministically stays in the mutable area until it can be promoted into immutable scrollback.**
 - Kent commits every control-feedback transcript row. The TUI does not show an optimistic copy or create a local fallback row.
 - A failed commit surfaces as an error.
@@ -206,7 +206,8 @@
 - Worktree-management product language uses `workspace`, not `repo`.
 - Changing worktrees keeps the Session identity stable. It changes only the workspace, optional worktree, and relative working directory used for execution.
 - `/worktree` has no separate teleport-root abstraction.
-- `/worktree`, `/worktree new`, and `/worktree create` enter one smart-target create dialog. Raw `/worktree create <branch> [path]` bypass is unsupported.
+- Bare `/worktree` opens the Worktree list.
+- `/worktree new` and `/worktree create` enter one smart-target create dialog. Raw `/worktree create <branch> [path]` bypass is unsupported.
 - Create dialog auto-suggests target name only from sanitized session name. It does not fall back to current branch, main, or generic placeholder.
 - Create dialog has no explicit new/existing selector. Kent resolves typed `Branch or ref` asynchronously and shows `new branch`, `existing branch`, or `detached ref`.
 - `Branch or ref` appears before `Base ref`. `Base ref` defaults to `HEAD` and is required only for new branch creation.
@@ -225,7 +226,7 @@
 - List rows have three exhaustive states: registered rows combine Git and Kent facts, external rows contain only Git facts and carry an `External` marker, and missing rows contain only orphaned Kent facts and carry a `Missing` warning. Registered and external rows preserve Git's native order; missing rows follow in Kent metadata creation order. Listing never creates metadata for external rows or deletes missing rows.
 - Non-Kent Git worktrees are manageable. Explicitly entering one adopts it into Kent metadata before applying the ordinary session-target switch.
 - Worktree selector resolution gives exact Kent IDs precedence over exact branch names, display names, and paths. List/create prefer concise branch or display selectors only when resolving that text returns the same row; registered rows then fall back to their full Kent ID, while external rows fall back to a unique trailing path component and then the full canonical path. IDs and paths are omitted from normal list output unless needed for disambiguation.
-- Supported aliases preserve safety semantics: `/worktree status`, `/worktree ls`, `/worktree remove`, `/worktree rm`.
+- Supported aliases preserve safety semantics: `/worktree status`, `/worktree remove`, `/worktree rm`.
 - Worktree deletion retargets Sessions before it removes the worktree.
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.

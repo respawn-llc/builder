@@ -186,7 +186,7 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	if engine.HasQueuedUserWork() {
 		t.Fatal("close drain retained uncommitted queued user work")
 	}
-	if len(statuses) != 2 {
+	if len(statuses) != 3 {
 		t.Fatalf("queued user statuses = %+v", statuses)
 	}
 	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
@@ -194,7 +194,12 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 		accepted.ClientRequestID != queued.ClientRequestID {
 		t.Fatalf("accepted queue status = %+v", accepted)
 	}
-	if failed := statuses[1]; failed.Status != QueuedUserMessageFailed ||
+	if restored := statuses[1]; restored.Status != QueuedUserMessageAccepted ||
+		restored.QueueItemID != queued.ID ||
+		restored.ClientRequestID != queued.ClientRequestID {
+		t.Fatalf("restored queue status = %+v", restored)
+	}
+	if failed := statuses[2]; failed.Status != QueuedUserMessageFailed ||
 		failed.QueueItemID != queued.ID ||
 		failed.ClientRequestID != queued.ClientRequestID ||
 		failed.FailureReason != QueuedUserMessageFailureClosing {

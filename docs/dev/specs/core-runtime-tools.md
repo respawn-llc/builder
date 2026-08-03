@@ -8,7 +8,10 @@
 - A completed live execution has one server-authoritative terminal result: status, result kind, reason that no final answer exists, final assistant message, runtime error, timestamps, and whether work was performed. Work was performed when a completed step observed at least two tool-start events, including events emitted during recovery.
 - Terminal-result delivery is best-effort and never delays execution completion, waiting callers, queued work, interruption, or successor scheduling.
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
-- Client transcript delivery is exactly once and ordered for each subscription. Every hydration and later update has a per-subscription monotonically increasing sequence number. Initial hydration and later updates use the same order; each update contains the required content, tool completions appear in committed order, and committed assistant entries retain the identity of their streamed output. Clients receive neither total transcript counts nor absolute offsets or revisions.
+- Each client transcript subscription is ordered and sequence-numbered. Hydration is the first message. Every later update has the next per-subscription sequence number; each update contains the required content, tool completions appear in committed order, and committed assistant entries retain the identity of their streamed output. Clients apply every received message once and in order. Clients receive neither total transcript counts nor absolute offsets or revisions.
+- Opening or reopening Chat hydrates fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state. Feed delivery state never replaces those authoritative facts. A missed earlier publication cannot prevent hydration.
+- Transcript delivery does not promise lossless continuity across subscription establishment, disconnection, process failure, or recovery. When a client detects discontinuity, it reopens the subscription and refreshes authoritative Session state instead of remaining silently stale.
+- A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; it never becomes an absent or stale target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - The server owns exact Session-resource admission, Runtime Command ordering, and dormant Goal commands. Transport keeps request identity and idempotency only; it never owns ordering, queueing, execution lifecycle, reconciliation, or persistence disposition.
 
@@ -77,6 +80,17 @@
 - Internal approvals offer exactly `Allow once`, `Allow for this session`, and `Deny`. Denial commentary travels only with the approval answer and authoritatively fails the guarded tool call. Allow commentary is sent as an ordinary user message before the Approval answer. The TUI's Queue-creation failure recovery for Allow commentary is defined in `tui-chat-core.md`.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - Answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
+- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. Accepting an answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
+- `kent question` shows the first pending ordinary Question. `kent questions` is an alias.
+- The Question CLI requires exactly one of `--session <session-id>` or `--task <task-id-or-short-id>`. A Task short ID uses `--project`, which defaults to the Project attached to the current workspace.
+- A Session selector cannot target the invoking agent's `KENT_SESSION_ID`.
+- A Task selector uses the live Workflow Question authority. If pending ordinary Questions belong to exactly one Session, the command selects that Session. If they belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
+- A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
+- The show command writes the Question text. When suggestions exist, it follows with `Suggestions:` and a one-based numbered list. The recommended suggestion ends with ` (recommended)`.
+- The show command writes `No questions pending` and succeeds when no ordinary Question is pending.
+- `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
+- `kent question answer` writes `No pending questions at the moment for that session` and exits with status `1` when no ordinary Question is pending.
+- After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions again. It writes `Next question: <question text>` followed by suggestions when another Question is pending in that Session. Otherwise it writes `Done, session resumed`.
 
 ## Sessions, Location, And Transcript Bounds
 

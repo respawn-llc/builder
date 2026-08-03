@@ -148,6 +148,11 @@ func (s *Service) runWorktreeTransition(
 		if err != nil {
 			outcome.State = clientui.WorktreeTransitionFailed
 			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
+			var precondition *serverapi.WorktreeDeletePreconditionError
+			if errors.As(err, &precondition) {
+				dirtyState := precondition.DirtyState
+				outcome.Failure.DeletePrecondition = &dirtyState
+			}
 		}
 		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
 		if err != nil {

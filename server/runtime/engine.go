@@ -556,6 +556,8 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 func (e *Engine) queueUserMessageWithClientRequestIDAndResolver(text string, clientRequestID string, forceAutoDrain bool, resolve DeferredUserMessageResolver) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
+		e.outputMutationMu.Lock()
+		defer e.outputMutationMu.Unlock()
 		item := e.messageFlow.QueueUserMessageWithResolver(text, clientRequestID, resolve)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return item
@@ -566,8 +568,10 @@ func (e *Engine) queueUserMessageWithClientRequestIDAndResolver(text string, cli
 		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
+			e.outputMutationMu.Lock()
 			item := e.messageFlow.QueueUserMessageWithID(liveItem)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
 				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -583,11 +587,15 @@ func (e *Engine) queueUserMessageWithClientRequestIDAndResolver(text string, cli
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
+		e.outputMutationMu.Lock()
 		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		e.outputMutationMu.Unlock()
 		return liveItem
 	}
+	e.outputMutationMu.Lock()
 	item := e.messageFlow.QueueUserMessageWithResolver(text, clientRequestID, resolve)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+	e.outputMutationMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
 	return item
@@ -619,6 +627,8 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
@@ -709,7 +719,7 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}

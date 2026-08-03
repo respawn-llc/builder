@@ -566,6 +566,9 @@ func protocolError(resp *protocol.ResponseError) error {
 		diagnostic := resp.Message
 		return worktreeBlockedError{diagnostic: &diagnostic}
 	}
+	if resp.Code == protocol.ErrCodeWorktreeCreate {
+		return serverapi.DecodeWorktreeCreateError(resp.Data, message)
+	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
 		protocol.ErrCodeWorktreeTransitionPending,

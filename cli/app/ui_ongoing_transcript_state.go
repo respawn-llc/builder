@@ -101,6 +101,15 @@ func (m *uiModel) applyTranscriptHydration(
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
 	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
+	currentSessionID := strings.TrimSpace(m.sessionID)
+	preserved := m.processList.entries[:0]
+	for _, entry := range m.processList.entries {
+		if strings.TrimSpace(entry.OwnerSessionID) != currentSessionID {
+			preserved = append(preserved, entry)
+		}
+	}
+	m.processList.entries = preserved
+	m.processList.selection = 0
 	for _, background := range hydration.BackgroundActivities {
 		m.applyTranscriptBackgroundActivity(background)
 	}

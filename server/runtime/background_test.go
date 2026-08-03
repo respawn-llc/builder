@@ -103,6 +103,26 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	}
 }
 
+func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	if err := engine.SteerBackgroundContinuationFailure(errors.New("provider unavailable")); err != nil {
+		t.Fatalf("steer background continuation failure: %v", err)
+	}
+	entries := engine.ChatSnapshot().Entries
+	if len(entries) != 1 ||
+		entries[0].Role != string(transcript.EntryRoleDeveloperErrorFeedback) ||
+		entries[0].Text == "" {
+		t.Fatalf("background failure entries = %+v, want one developer error feedback entry", entries)
+	}
+
+	mustBlockTestEventLogAppends(t, store)
+	if err := engine.SteerBackgroundContinuationFailure(errors.New("retry failed")); err == nil {
+		t.Fatal("background continuation failure steering swallowed persistence error")
+	}
+}
+
 func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	for i := 0; i < 200; i++ {

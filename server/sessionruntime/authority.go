@@ -43,6 +43,9 @@ type AuthorityOptions struct {
 type Authority struct {
 	mu                 sync.Mutex
 	closed             bool
+	lifecycleCtx       context.Context
+	lifecycleCancel    context.CancelFunc
+	lifecycleWG        sync.WaitGroup
 	nextExecution      ExecutionGeneration
 	nextResource       runtimeids.ResourceGeneration
 	byScope            map[runtimeids.ExecutionScopeID]*execution
@@ -55,11 +58,14 @@ type Authority struct {
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	authority := &Authority{
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
 		workflowExecutions: make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
 		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
+		lifecycleCtx:       lifecycleCtx,
+		lifecycleCancel:    lifecycleCancel,
 		executionFinalized: options.ExecutionFinalized,
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),
@@ -68,6 +74,25 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
 	}
 	return authority
+}
+
+func (a *Authority) launchLifecycleTask(task func(context.Context)) bool {
+	if a == nil || task == nil {
+		return false
+	}
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return false
+	}
+	a.lifecycleWG.Add(1)
+	ctx := a.lifecycleCtx
+	a.mu.Unlock()
+	go func() {
+		defer a.lifecycleWG.Done()
+		task(ctx)
+	}()
+	return true
 }
 
 func (a *Authority) nextGenerationsLocked() (ExecutionGeneration, runtimeids.ResourceGeneration) {
@@ -311,6 +336,7 @@ func (a *Authority) Close(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	a.closed = true
+	lifecycleCancel := a.lifecycleCancel
 	executions := make([]ExecutionHandle, 0, len(a.byScope))
 	for _, running := range a.byScope {
 		executions = append(executions, executionHandle{execution: running})
@@ -320,6 +346,9 @@ func (a *Authority) Close(ctx context.Context) error {
 		resources = append(resources, resource)
 	}
 	a.mu.Unlock()
+	if lifecycleCancel != nil {
+		lifecycleCancel()
+	}
 
 	var closeErrs []error
 	for _, running := range executions {
@@ -332,6 +361,7 @@ func (a *Authority) Close(ctx context.Context) error {
 			closeErrs = append(closeErrs, fmt.Errorf("join execution scope %s: %w", running.Scope().ID(), err))
 		}
 	}
+	a.lifecycleWG.Wait()
 	for _, resource := range resources {
 		if err := resource.closeResource(ctx); err != nil {
 			closeErrs = append(closeErrs, fmt.Errorf(

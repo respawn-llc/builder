@@ -33,15 +33,63 @@ func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNoti
 	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
 }
 
+func (e *Engine) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RecordBackgroundShellUpdate(evt)
+}
+
+func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
+	e.ensureOrchestrationCollaborators()
+	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
+}
+
+func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	e.ensureOrchestrationCollaborators()
+	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
+}
+
+func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
+	if err == nil {
+		return errors.New("background continuation failure is required")
+	}
+	_, steerErr := e.steerRuntimeErrorFeedback(
+		fmt.Errorf("background continuation failed: %w", err),
+	)
+	return steerErr
+}
+
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	_ = b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-	if !queueNotice {
+	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
+		b.engine.surfaceRunError(err)
 		return
 	}
+	if queueNotice {
+		b.QueueBackgroundShellContinuation(evt)
+	}
+}
+
+func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+}
+
+func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
 	if !evt.Type.IsTerminal() {
 		return
 	}
-	b.QueueDeveloperNotice(llm.Message{
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
+	if !evt.Type.IsTerminal() {
+		return nil
+	}
+	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), false)
+	_, err := b.runQueuedNotices(ctx)
+	return err
+}
+
+func backgroundShellDeveloperNotice(evt BackgroundShellEvent) llm.Message {
+	return llm.Message{
 		Role:                 llm.RoleDeveloper,
 		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
 		Name:                 textutil.OptionalTrimmedString(evt.ID),
@@ -49,7 +97,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
 		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
-	})
+	}
 }
 
 func formatBackgroundShellNotice(evt BackgroundShellEvent) string {
@@ -82,6 +130,10 @@ func formatBackgroundShellCompact(evt BackgroundShellEvent) string {
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message) {
+	b.queueDeveloperNotice(msg, true)
+}
+
+func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool) {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
@@ -93,7 +145,7 @@ func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message)
 	}
 	b.mu.Lock()
 	b.pending = append(b.pending, notice)
-	if !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
+	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
 		b.scheduled = true
 		shouldSchedule = true
 	}
@@ -221,7 +273,9 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		b.engine.AppendCommittedEntry("error", fmt.Sprintf("background continuation failed: %v", err))
+		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
+			b.engine.surfaceRunError(errors.Join(err, steerErr))
+		}
 	}
 }
 

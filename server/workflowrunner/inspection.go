@@ -52,8 +52,8 @@ type PersistedWorkflowInspection struct {
 
 // BuildPersistedWorkflowInspection reconstructs the same workflow session plan
 // and prompt contract that live execution uses immediately before a model turn. The
-// supplied session store controls persistence, so callers can use a fileless
-// store for read-only inspection.
+// supplied session store controls persistence, so callers can use an isolated
+// diagnostic Session copy for read-only source inspection.
 func BuildPersistedWorkflowInspection(
 	ctx context.Context,
 	app config.App,

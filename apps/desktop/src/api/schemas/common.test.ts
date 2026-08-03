@@ -10,6 +10,7 @@ const baseAttentionItem = {
   task_title: "Task",
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: "session-1" },
   session_id: "session-1",
+  session_name: "Session one",
   question_id: "ask-1",
   message: "Approve protected path?",
   occurred_at_unix_ms: 1,
@@ -32,6 +33,7 @@ const approvalAttentionItem = {
   task_short_id: "KT-1",
   task_title: "Task",
   approval_id: "approval-1",
+  session_name: null,
   message: "Approval required",
   approval_snapshot: approvalSnapshot,
   occurred_at_unix_ms: 1,
@@ -47,11 +49,29 @@ const interruptedCurrentNodeAttentionItem = {
   task_title: "Task",
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_id: null,
+  session_name: null,
   message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
 
 describe("attentionItemSchema", () => {
+  it("requires nullable session names for every attention variant", () => {
+    const nullableItems = [
+      { ...baseAttentionItem, session_name: null },
+      approvalAttentionItem,
+      interruptedCurrentNodeAttentionItem,
+    ];
+    for (const item of nullableItems) {
+      expect(() => attentionItemSchema.parse(item)).not.toThrow();
+    }
+
+    for (const item of nullableItems) {
+      const omitted = { ...item };
+      Reflect.deleteProperty(omitted, "session_name");
+      expect(() => attentionItemSchema.parse(omitted)).toThrow();
+    }
+  });
+
   it("decodes only the task-scoped discriminated attention variants", () => {
     const question = attentionItemSchema.parse(baseAttentionItem);
     const approval = attentionItemSchema.parse(approvalAttentionItem);
@@ -65,6 +85,7 @@ describe("attentionItemSchema", () => {
     }
     expect(question.question).toBeNull();
     expect(question.recommendedOptionIndex).toBeNull();
+    expect(question.sessionName).toBe("Session one");
     expect(approval.approvalSnapshot).not.toBeNull();
     expect(interrupted.currentNode.nodeID).toBe("node-1");
     expect(interrupted.sessionID).toBeNull();
@@ -81,6 +102,7 @@ describe("attentionItemSchema", () => {
       { ...baseAttentionItem, workflow_id: "" },
       { ...baseAttentionItem, current_node: { ...baseAttentionItem.current_node, node_id: "" } },
       { ...baseAttentionItem, question_id: "" },
+      { ...baseAttentionItem, session_name: "" },
       { ...baseAttentionItem, approval_id: "approval-1" },
       { ...baseAttentionItem, approval_snapshot: approvalSnapshot },
       { ...baseAttentionItem, detail_json: "{}" },
@@ -93,6 +115,7 @@ describe("attentionItemSchema", () => {
       { ...approvalAttentionItem, question_id: "ask-1" },
       { ...approvalAttentionItem, current_node: baseAttentionItem.current_node },
       { ...approvalAttentionItem, session_id: "session-1" },
+      { ...approvalAttentionItem, session_name: "Session one" },
       { ...approvalAttentionItem, suggestions: [] },
       { ...approvalAttentionItem, recommended_option_index: 1 },
       { ...approvalAttentionItem, question: { kind: "ordinary" } },
@@ -102,6 +125,7 @@ describe("attentionItemSchema", () => {
         current_node: { node_id: "", transition_branch_key: null, session_id: null },
       },
       { ...interruptedCurrentNodeAttentionItem, question_id: "ask-1" },
+      { ...interruptedCurrentNodeAttentionItem, session_name: "Session one" },
       { ...interruptedCurrentNodeAttentionItem, suggestions: [] },
       { ...interruptedCurrentNodeAttentionItem, recommended_option_index: 1 },
       { ...interruptedCurrentNodeAttentionItem, question: { kind: "ordinary" } },

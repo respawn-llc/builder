@@ -192,6 +192,8 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"WorktreeTransitionKind":                           {},
 		"WorktreeTransitionOutcome":                        {},
 		"WorktreeTransitionState":                          {},
+		"WorktreeDirtyState":                               {},
+		"WorktreeDirtyStateKind":                           {},
 	}
 	allowedFuncs := map[string]struct{}{
 		"NewTranscriptEvent":                                      {},

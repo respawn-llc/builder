@@ -67,18 +67,19 @@ const (
 )
 
 type uiWorktreeCreateDialogState struct {
-	baseRef       tuiinput.Editor
-	branchTarget  tuiinput.Editor
-	focus         uiWorktreeCreateField
-	action        uiWorktreeCreateAction
-	errorText     string
-	submitting    bool
-	resolving     bool
-	submitPending bool
-	resolveToken  uint64
-	resolution    serverapi.WorktreeCreateTargetResolution
-	setupProgress *uiWorktreeSetupProgressState
-	setupEvent    *serverapi.WorktreeSetupEvent
+	baseRef          tuiinput.Editor
+	branchTarget     tuiinput.Editor
+	focus            uiWorktreeCreateField
+	action           uiWorktreeCreateAction
+	errorText        string
+	baseRefErrorText string
+	submitting       bool
+	resolving        bool
+	submitPending    bool
+	resolveToken     uint64
+	resolution       serverapi.WorktreeCreateTargetResolution
+	setupProgress    *uiWorktreeSetupProgressState
+	setupEvent       *serverapi.WorktreeSetupEvent
 }
 
 type uiWorktreeSetupProgressState struct {
@@ -466,6 +467,7 @@ func (m *uiModel) worktreeCreateCmd(req serverapi.WorktreeCreateRequest) tea.Cmd
 		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
 	}
 	m.worktrees.create.errorText = ""
+	m.worktrees.create.baseRefErrorText = ""
 	m.worktrees.create.submitting = true
 	m.worktrees.create.setupEvent = nil
 	setupCtx, cancel := context.WithCancel(context.Background())

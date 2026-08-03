@@ -40,6 +40,21 @@ func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg Acq
 	return result.RowsAffected()
 }
 
+const acquireManualMoveTaskWriteLock = `-- name: AcquireManualMoveTaskWriteLock :execrows
+UPDATE tasks
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = ?1
+`
+
+func (q *Queries) AcquireManualMoveTaskWriteLock(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireManualMoveTaskWriteLock, taskID)
+	err = recordQueryError(ctx, err, acquireManualMoveTaskWriteLock, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const acquireProjectDeleteWriteLock = `-- name: AcquireProjectDeleteWriteLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -1749,6 +1764,7 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 const getSessionExecutionTargetByID = `-- name: GetSessionExecutionTargetByID :one
 SELECT
     s.id AS session_id,
+    s.workspace_id AS execution_target_workspace_binding,
     s.project_id,
     COALESCE(s.workspace_id, '') AS workspace_id,
     CAST(COALESCE(json_extract(s.metadata_json, '$.workspace_container'), '') AS TEXT) AS workspace_snapshot_name,
@@ -1764,14 +1780,15 @@ LIMIT 1
 `
 
 type GetSessionExecutionTargetByIDRow struct {
-	SessionID             string
-	ProjectID             string
-	WorkspaceID           string
-	WorkspaceSnapshotName string
-	WorkspaceRoot         string
-	WorktreeID            sql.NullString
-	WorktreeRoot          sql.NullString
-	CwdRelpath            string
+	SessionID                       string
+	ExecutionTargetWorkspaceBinding sql.NullString
+	ProjectID                       string
+	WorkspaceID                     string
+	WorkspaceSnapshotName           string
+	WorkspaceRoot                   string
+	WorktreeID                      sql.NullString
+	WorktreeRoot                    sql.NullString
+	CwdRelpath                      string
 }
 
 func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID string) (GetSessionExecutionTargetByIDRow, error) {
@@ -1779,6 +1796,7 @@ func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID s
 	var i GetSessionExecutionTargetByIDRow
 	err := recordQueryError(ctx, row.Scan(
 		&i.SessionID,
+		&i.ExecutionTargetWorkspaceBinding,
 		&i.ProjectID,
 		&i.WorkspaceID,
 		&i.WorkspaceSnapshotName,

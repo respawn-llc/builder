@@ -1,5 +1,7 @@
 import { act, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
+import { appI18n } from "@/i18n";
 import {
   mountTaskDetailSurface,
   questionAttention,
@@ -8,6 +10,33 @@ import {
 } from "@/test-support/task-detail";
 
 describe("Task Detail live refresh", () => {
+  it("keeps an accepted question mounted until server attention replaces it", async () => {
+    const attention = taskAttention("ask-1", 1);
+    mountTaskDetailSurface(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.attention.list",
+          handler: () => attention,
+        },
+        {
+          method: "workflow.task.question.answer",
+          handler: () => ({}),
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    await waitForQuestionOptionCount(1);
+    const [firstOption] = screen.getAllByRole("radio");
+    if (firstOption === undefined) {
+      throw new Error("expected a question option");
+    }
+    await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
+
+    await waitFor(() => expect(firstOption).toBeDisabled());
+    expect(firstOption).toBeInTheDocument();
+  });
+
   it("shows the next batch question when its waiting event arrives after an answer", async () => {
     let attention = taskAttention("ask-1", 1);
     const services = mountTaskDetailSurface(taskDetailResponse, {

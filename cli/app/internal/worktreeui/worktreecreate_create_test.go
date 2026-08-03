@@ -44,7 +44,9 @@ func TestRequestRejectsBlankTarget(t *testing.T) {
 }
 
 func TestRequestRejectsBlankBaseRefForNewBranch(t *testing.T) {
-	if _, err := Request("feature/a", " ", serverapi.WorktreeCreateTargetResolutionKindNewBranch); err == nil || !errors.Is(err, ErrBaseRefRequired) {
-		t.Fatalf("error = %v, want base ref required", err)
+	_, err := Request("feature/a", " ", serverapi.WorktreeCreateTargetResolutionKindNewBranch)
+	var typed *serverapi.WorktreeCreateError
+	if !errors.As(err, &typed) || typed.Owner != serverapi.WorktreeCreateErrorOwnerBaseRef {
+		t.Fatalf("error = %T %v, want Base-ref-owned create error", err, err)
 	}
 }

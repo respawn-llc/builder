@@ -108,23 +108,63 @@ func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.Wor
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
 	}
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	selector, err := topologySelectorFor(resolution.entries, resolution.match.index)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	return serverapi.WorktreeSelectorPreviewResponse{Worktree: resolution.match.entry, Selector: selector}, nil
+}
+
+type worktreeSelectorResolution struct {
+	entries []serverapi.WorktreeTopologyEntry
+	match   topologySelectorMatch
+}
+
+func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string, selector string) (worktreeSelectorResolution, error) {
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
+	if err != nil {
+		return worktreeSelectorResolution{}, err
 	}
 	entries, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return worktreeSelectorResolution{}, err
 	}
-	match, err := resolveTopologySelector(entries, req.Selector)
+	match, err := resolveTopologySelector(entries, selector)
 	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return worktreeSelectorResolution{}, err
 	}
-	selector, err := topologySelectorFor(entries, match.index)
+	return worktreeSelectorResolution{entries: entries, match: match}, nil
+}
+
+func (s *Service) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
 	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
+		return serverapi.WorktreeDeletePreviewResponse{}, err
 	}
-	return serverapi.WorktreeSelectorPreviewResponse{Worktree: match.entry, Selector: selector}, nil
+	deletionSelector, err := resolution.match.entry.DeletionSelector()
+	if err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	cleanliness, err := s.evaluateDeleteCleanliness(ctx, resolution.match.entry)
+	if err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	response := serverapi.WorktreeDeletePreviewResponse{
+		Worktree:         resolution.match.entry,
+		DeletionSelector: deletionSelector,
+		Cleanliness:      cleanliness,
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	return response, nil
 }
 
 func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {

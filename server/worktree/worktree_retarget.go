@@ -277,7 +277,7 @@ func (s *Service) syncExecutionTarget(ctx context.Context, sessionID string, tar
 	if err := s.authority.SyncExecutionTarget(ctx, sessionID, target, reminder); err != nil {
 		return err
 	}
-	if err := s.publisher.PublishSessionIdentity(sessionID, &target); err != nil {
+	if err := s.publisher.PublishSessionIdentity(sessionID); err != nil {
 		return fmt.Errorf("publish session identity: %w", err)
 	}
 	return nil

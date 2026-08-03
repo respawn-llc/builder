@@ -176,7 +176,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
-	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
+	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
+	if runtimeSupport.Background != nil {
+		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
+	}
 	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
@@ -548,12 +551,16 @@ type authorityPromptResponder struct {
 	authority *sessionruntime.Authority
 }
 
-func (r authorityPromptResponder) SubmitPromptResponse(sessionID string, response askquestion.AskQuestionResponse, submitErr error) error {
+func (r authorityPromptResponder) AcceptPromptResponse(
+	sessionID string,
+	response askquestion.AskQuestionResponse,
+	submitErr error,
+) (promptcontrol.PromptResponseAcceptance, error) {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return r.authority.SubmitPromptResponse(id, response, submitErr)
+	return r.authority.AcceptPromptResponse(id, response, submitErr)
 }
 
 type authorityStepLifecycle struct {
@@ -593,7 +600,10 @@ func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentQuestions(
 			entry.ToolCall.ToolName != string(toolspec.ToolAskQuestion) {
 			continue
 		}
-		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex)
+		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
+			entry.ToolCall.RecommendedOptionIndex,
+			len(entry.ToolCall.Suggestions),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("session %q pending ask %q: %w", sessionID, entry.ToolCallID, err)
 		}
@@ -614,7 +624,10 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 	items := s.prompts.ListPendingPrompts(sessionID)
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
-		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(item.Request.RecommendedOptionIndex)
+		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
+			item.Request.RecommendedOptionIndex,
+			len(item.Request.Suggestions),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("session %q pending prompt %q: %w", sessionID, item.Request.ID, err)
 		}
@@ -633,18 +646,4 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 		})
 	}
 	return out, nil
-}
-
-func legacyOptionalRecommendedOptionIndex(index int) (*int, error) {
-	if index == 0 {
-		return nil, nil
-	}
-	if index < 0 {
-		return nil, serverapi.WorkflowRequestValidationError{
-			Code:    serverapi.WorkflowRequestErrorInvalidValue,
-			Field:   "recommended_option_index",
-			Message: fmt.Sprintf("legacy recommended option index %d must be positive when present", index),
-		}
-	}
-	return &index, nil
 }

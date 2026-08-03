@@ -252,8 +252,8 @@ func worktreeDeleteSuccessStatus(target string, result serverapi.WorktreeDeleteR
 	return status
 }
 
-func worktreeDeleteForceConfirmation(state serverapi.WorktreeDirtyState) string {
-	if state.Kind == serverapi.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
+func worktreeDeleteForceConfirmation(state clientui.WorktreeDirtyState) string {
+	if state.Kind == clientui.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
 		return fmt.Sprintf("Worktree has %d modified or untracked file(s). Press Delete again to force folder removal.", *state.DirtyFileCount)
 	}
 	return "Worktree cleanliness could not be determined. Press Delete again to force folder removal."
