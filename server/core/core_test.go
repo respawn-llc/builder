@@ -127,9 +127,9 @@ func TestPromptCommandWorkspaceRootUsesCurrentWorktree(t *testing.T) {
 	target := clientui.SessionExecutionTarget{
 		Worktree: &clientui.SessionExecutionWorktreeTarget{Root: "/worktrees/feature"},
 	}
-	got, err := promptCommandWorkspaceRoot(target, "/workspace/main")
+	got, err := clientui.SessionExecutionWorkspaceRoot(target, "/workspace/main")
 	if err != nil {
-		t.Fatalf("promptCommandWorkspaceRoot: %v", err)
+		t.Fatalf("SessionExecutionWorkspaceRoot: %v", err)
 	}
 	if got != "/worktrees/feature" {
 		t.Fatalf("workspace root = %q, want current worktree root", got)

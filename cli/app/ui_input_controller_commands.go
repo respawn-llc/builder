@@ -34,6 +34,9 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 			if err != nil {
 				return m, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), "")
 			}
+			if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, canonical); blocked {
+				return m, disconnectCmd
+			}
 			m.nextSessionInitialPrompt = history
 			m.nextSessionInitialPromptHistoryRecorded = true
 			m.nextPreviousSessionID = &previousSessionID

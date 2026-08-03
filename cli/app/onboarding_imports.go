@@ -333,7 +333,8 @@ func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
 			options = append(options, onboardingOption{ID: choice.OptionID, Title: "Do not import"})
 		case onboardingImportModeSymlinkSource:
 			if choice.Count > 0 {
-				options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Import slash commands (%d found)", choice.Count)})
+				providerLabel := importProviderDisplayLabel(providerIDFromPtr(choice.Ref.ImportProviderID), "external_provider")
+				options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Import slash commands from %s (%d found)", providerLabel, choice.Count)})
 			}
 		}
 	}

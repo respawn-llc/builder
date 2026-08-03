@@ -36,10 +36,6 @@ type promptCommandEffectiveWorkspaceResolver struct {
 	persistenceRoot string
 }
 
-func promptCommandWorkspaceRoot(target clientui.SessionExecutionTarget, fallback string) (string, error) {
-	return clientui.SessionExecutionWorkspaceRoot(target, fallback)
-}
-
 func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspace(ctx context.Context, workspaceRoot, name, arguments string) (string, error) {
 	content, err := promptcommands.New(r.persistenceRoot, workspaceRoot).Resolve(name, arguments)
 	if err != nil {
@@ -60,7 +56,7 @@ func (r promptCommandRuntimeResolver) ResolvePromptCommand(ctx context.Context, 
 	if err != nil {
 		return "", err
 	}
-	workspaceRoot, err := promptCommandWorkspaceRoot(target, binding.CanonicalRoot)
+	workspaceRoot, err := clientui.SessionExecutionWorkspaceRoot(target, binding.CanonicalRoot)
 	if err != nil {
 		return "", err
 	}
