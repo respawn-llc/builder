@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -48,9 +47,6 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 	}); err != nil {
 		t.Fatalf("add dependency: %v", err)
 	}
-	targets := &recordingExecutionTargetInfrastructure{}
-	service.executionTargets = targets
-
 	warning, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           blocked.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -65,10 +61,6 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 	if err := warning.Validate(); err != nil {
 		t.Fatalf("warning Validate: %v", err)
 	}
-	if targets.resolveSelection != (workflow.ExecutionTargetSelection{}) || targets.materializeTaskID != "" || targets.restoreTaskID != "" {
-		t.Fatalf("target infrastructure used during warning: %+v", targets)
-	}
-
 	proceeded, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:                     blocked.Task.ID,
 		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
@@ -98,8 +90,6 @@ func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *test
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	reader := &countingTaskDependencyReadModel{}
 	service.readModels.TaskDependencies = reader
-	service.executionTargets = nil
-
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:                     taskID,
 		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
@@ -131,8 +121,6 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructur
 	reader := &countingTaskDependencyReadModel{}
 	service.readModels.TaskDependencies = reader
 	service.currentNodeExecution = newManualMoveExecutionStub(service)
-	service.executionTargets = nil
-
 	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     task.Task.ID,
 		TargetNodeID:               workflowServiceNodeIDByKey(t, definition.Definition, "plan"),
@@ -172,9 +160,6 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
 	execution := newManualMoveExecutionStub(service)
 	service.currentNodeExecution = execution
-	targets := &recordingExecutionTargetInfrastructure{}
-	service.executionTargets = targets
-
 	warning, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:           blocked.Task.ID,
 		TargetNodeID:     targetNodeID,
@@ -193,10 +178,6 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	if len(execution.interruptTaskIDs) != 0 || len(execution.started) != 0 {
 		t.Fatalf("execution used during dependency warning: interrupts=%v starts=%v", execution.interruptTaskIDs, execution.started)
 	}
-	if targets.resolveSelection != (workflow.ExecutionTargetSelection{}) || targets.materializeTaskID != "" {
-		t.Fatalf("target infrastructure used during dependency warning: %+v", targets)
-	}
-
 	proceeded, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     blocked.Task.ID,
 		TargetNodeID:               targetNodeID,

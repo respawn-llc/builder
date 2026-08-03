@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef } from "react";
 
 import type { WorkflowExecutionTargetSelection } from "@/api";
 import {
@@ -6,8 +6,10 @@ import {
   type TaskInitiatingAction,
   type TaskInitiatingActionController,
 } from "@/shared/execution-target";
+import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoardResumeAction(controller: TaskInitiatingActionController): Readonly<{
+  actionsDisabled: boolean;
   pendingTaskIDs: ReadonlySet<string>;
   execute(taskID: string): void;
   continueExecution(
@@ -15,23 +17,27 @@ export function useBoardResumeAction(controller: TaskInitiatingActionController)
     selection: WorkflowExecutionTargetSelection,
   ): void;
 }> {
-  const [pendingTaskIDs, setPendingTaskIDs] = useState<ReadonlySet<string>>(() => new Set());
+  const { execute: trackAction, pendingTaskIDs } = useBoardTaskLifecycleAction();
+  const runningRef = useRef(false);
   const runAction = useCallback(
     (
       taskID: string,
       action: Extract<TaskInitiatingAction, { kind: "resume" }>,
       selection?: WorkflowExecutionTargetSelection,
     ): void => {
-      setPendingTaskIDs((current) => new Set(current).add(taskID));
-      void controller.run(action, selection).finally(() => {
-        setPendingTaskIDs((current) => {
-          const next = new Set(current);
-          next.delete(taskID);
-          return next;
-        });
+      if (runningRef.current || controller.running) {
+        return;
+      }
+      runningRef.current = true;
+      void trackAction(taskID, async () => {
+        try {
+          await controller.run(action, selection);
+        } finally {
+          runningRef.current = false;
+        }
       });
     },
-    [controller],
+    [controller, trackAction],
   );
   const execute = useCallback(
     (taskID: string): void => {
@@ -48,5 +54,10 @@ export function useBoardResumeAction(controller: TaskInitiatingActionController)
     },
     [runAction],
   );
-  return { continueExecution, execute, pendingTaskIDs };
+  return {
+    actionsDisabled: controller.running || runningRef.current,
+    continueExecution,
+    execute,
+    pendingTaskIDs,
+  };
 }

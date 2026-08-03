@@ -469,9 +469,9 @@
 - After deletion starts, new work for every Session that targets the worktree is rejected until retargeting and Git removal finish.
 - A rejected deletion leaves Session targets, worktree information, Git state, and branch state unchanged.
 - Task worktree creation and conservative restoration have the same setup and collision behavior.
-- The CLI task-start, task-approve, and task-move commands may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
+- The CLI task-start, task-approve, task-move, and task-resume commands may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
 - CLI target selection uses `--execution-target none|head|default-branch|ref:<revision>`; custom Git revisions require the explicit `ref:` namespace.
-- CLI task start, approve, and move never prompt interactively. Selection-required output identifies the reason and concrete rerun flags. Task start exposes the same typed outcome in JSON.
+- CLI task start, approve, move, and resume never prompt interactively. Selection-required output identifies the reason and concrete rerun flags. Task start exposes the same typed outcome in JSON.
 
 ## Project Keys And Task IDs
 

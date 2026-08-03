@@ -290,7 +290,8 @@ function BoardContent({
     onPreviewError: reportMoveError,
     runAction: runCardAction,
   });
-  const actionsDisabled = initiatingActionsDisabled || manualMove.actionsDisabled;
+  const actionsDisabled =
+    initiatingActionsDisabled || manualMove.actionsDisabled || resumeAction.actionsDisabled;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),

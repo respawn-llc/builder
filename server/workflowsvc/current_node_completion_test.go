@@ -333,17 +333,6 @@ func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
 	return s.store.StartTaskWithExecutionTarget(ctx, taskID, nil)
 }
 
-func (s *currentNodeCompletionExecutionStub) StartTaskWithExecutionTarget(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	candidate *workflowstore.ExecutionTargetCandidate,
-) (workflowstore.StartTaskResult, error) {
-	if s.store == nil {
-		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
-	}
-	return s.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
-}
-
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	if s.store == nil {
 		return nil, errors.New("workflow store is required")
@@ -380,17 +369,6 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMoveWithPreparation(
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
 	return s.store.ApplyManualMove(ctx, prepared, nil)
-}
-
-func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
-	ctx context.Context,
-	prepared workflowstore.ManualMovePreparation,
-	candidate *workflowstore.ExecutionTargetCandidate,
-) (workflowstore.ManualMoveResult, error) {
-	if s.store == nil {
-		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
-	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {
