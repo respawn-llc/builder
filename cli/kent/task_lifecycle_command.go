@@ -950,11 +950,20 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandR
 	done := make(chan error, 1)
 	go func() {
 		defer func() { _ = subscription.Close() }()
+		terminalObserved := false
 		for {
 			event, err := subscription.Next(progressCtx)
 			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) || errors.Is(err, io.EOF) {
+				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) {
 					done <- nil
+					return
+				}
+				if errors.Is(err, io.EOF) {
+					if terminalObserved {
+						done <- nil
+					} else {
+						done <- errors.New("worktree setup progress stream ended before a terminal event")
+					}
 					return
 				}
 				done <- err
@@ -962,6 +971,7 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandR
 			}
 			writeWorktreeSetupProgress(stderr, event)
 			if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+				terminalObserved = true
 				done <- nil
 				return
 			}
