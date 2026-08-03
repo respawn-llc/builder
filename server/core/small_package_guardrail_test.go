@@ -139,4 +139,5 @@ var allowedSmallPackages = map[string]string{
 	"shared/toolspec":                             "shared model-facing tool spec contract required below runtime, runtimewire, and clients",
 	"shared/transcriptdiag":                       "transcript diagnostic DTO adapter kept separate because transcript and clientui dependencies would cycle",
 	"shared/workflowkey":                          "shared workflow key contract required by workflow validation and shared server API",
+	"shared/worktreecontract":                     "shared Worktree deletion cleanliness and transition applicability contract owner kept below client-facing DTOs and server API errors",
 }

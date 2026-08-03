@@ -8,6 +8,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/worktreecontract"
 )
 
 var (
@@ -342,7 +343,11 @@ func (e *WorktreeDeletePreconditionError) Validate() error {
 	if e == nil {
 		return errors.New("worktree delete precondition error is required")
 	}
-	return e.DirtyState.ValidateDeletePrecondition()
+	return worktreecontract.ValidateDeletePrecondition(
+		e.DirtyState.Kind,
+		e.DirtyState.DirtyFileCount,
+		e.DirtyState.UnknownCause,
+	)
 }
 
 func DecodeWorktreeRPCError(data json.RawMessage, message string) error {

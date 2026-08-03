@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
 
@@ -115,7 +116,13 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 			return errors.New("worktree transition failure diagnostic is required")
 		}
 		if outcome.Failure.DeletePrecondition != nil {
-			if err := outcome.Failure.DeletePrecondition.ValidateDeleteForTransition(outcome.Transition); err != nil {
+			precondition := outcome.Failure.DeletePrecondition
+			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
+				outcome.Transition,
+				precondition.Kind,
+				precondition.DirtyFileCount,
+				precondition.UnknownCause,
+			); err != nil {
 				return err
 			}
 		}

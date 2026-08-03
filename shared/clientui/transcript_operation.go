@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/worktreecontract"
 )
 
 type TranscriptWorktreeTransitionOutcome struct {
@@ -53,7 +54,13 @@ func (o TranscriptWorktreeTransitionOutcome) Validate() error {
 			return err
 		}
 		if o.DeletePrecondition != nil {
-			if err := o.DeletePrecondition.ValidateDeleteForTransition(o.Transition); err != nil {
+			precondition := o.DeletePrecondition
+			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
+				o.Transition,
+				precondition.Kind,
+				precondition.DirtyFileCount,
+				precondition.UnknownCause,
+			); err != nil {
 				return err
 			}
 		}
