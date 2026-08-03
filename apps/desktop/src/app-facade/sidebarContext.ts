@@ -42,6 +42,11 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
 
+export type PendingTaskRelationship = Readonly<{
+  originTaskID: string;
+  newTaskRole: "blocker" | "blocked";
+}>;
+
 export type SidebarResult =
   SidebarCanceledResult | SidebarNewTaskResult | SidebarTaskDetailResult | SidebarWorkflowResult;
 
@@ -51,12 +56,7 @@ export type SidebarDestination =
       mode?: SidebarMode;
       boardQueryWorkflowID: string | undefined;
       initialSourceWorkspaceID?: string | undefined;
-      pendingRelationship?:
-        | Readonly<{
-            originTaskID: string;
-            newTaskRole: "blocker" | "blocked";
-          }>
-        | undefined;
+      pendingRelationship?: PendingTaskRelationship | undefined;
       projectID: string;
       workflowID: string;
     }>

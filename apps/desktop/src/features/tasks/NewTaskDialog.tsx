@@ -5,8 +5,12 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
-import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
+import { errorMessage } from "@/api";
+import {
+  useConnectionSnapshot,
+  useTextFieldSubmitShortcut,
+  type PendingTaskRelationship,
+} from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
@@ -101,12 +105,7 @@ export function NewTaskForm({
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
+  pendingRelationship?: PendingTaskRelationship | undefined;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -151,12 +150,7 @@ function NewTaskFormContent({
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
+  pendingRelationship?: PendingTaskRelationship | undefined;
 }>) {
   const { t } = useTranslation();
   const connection = useConnectionSnapshot();
