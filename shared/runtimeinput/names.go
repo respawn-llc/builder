@@ -36,7 +36,7 @@ func (c BuiltinPromptCommand) Name() string {
 	case BuiltinPromptCommandInit:
 		return PromptCommandInitName
 	default:
-		return ""
+		panic("invalid built-in prompt command")
 	}
 }
 
@@ -47,29 +47,33 @@ func (c BuiltinPromptCommand) Alias() string {
 	case BuiltinPromptCommandInit:
 		return PromptCommandInitIdentifier
 	default:
-		return ""
+		panic("invalid built-in prompt command")
 	}
 }
 
-func BuiltinPromptCommandForName(name PromptCommandName) (BuiltinPromptCommand, bool) {
+func BuiltinPromptCommandForName(name PromptCommandName) (*BuiltinPromptCommand, bool) {
 	switch name.Identifier {
 	case PromptCommandReviewIdentifier:
-		return BuiltinPromptCommandReview, true
+		command := BuiltinPromptCommandReview
+		return &command, true
 	case PromptCommandInitIdentifier:
-		return BuiltinPromptCommandInit, true
+		command := BuiltinPromptCommandInit
+		return &command, true
 	default:
-		return 0, false
+		return nil, false
 	}
 }
 
-func BuiltinPromptCommandForAlias(alias string) (BuiltinPromptCommand, bool) {
+func BuiltinPromptCommandForAlias(alias string) (*BuiltinPromptCommand, bool) {
 	switch alias {
 	case PromptCommandReviewIdentifier:
-		return BuiltinPromptCommandReview, true
+		command := BuiltinPromptCommandReview
+		return &command, true
 	case PromptCommandInitIdentifier:
-		return BuiltinPromptCommandInit, true
+		command := BuiltinPromptCommandInit
+		return &command, true
 	default:
-		return 0, false
+		return nil, false
 	}
 }
 

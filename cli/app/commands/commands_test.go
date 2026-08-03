@@ -67,10 +67,8 @@ func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 			t.Fatalf("Execute(%q) = %+v, want fresh user submission", test.input, got)
 		}
 		if got.PromptCommand.Name != test.command.Name() ||
-			got.PromptCommand.Arguments != test.suffix ||
-			got.PromptCommand.HistoryName == nil ||
-			*got.PromptCommand.HistoryName != test.command.Alias() {
-			t.Fatalf("Execute(%q) prompt command = %+v, want %s/%s", test.input, got.PromptCommand, test.command.Name(), test.command.Alias())
+			got.PromptCommand.Arguments != test.suffix {
+			t.Fatalf("Execute(%q) prompt command = %+v, want %s", test.input, got.PromptCommand, test.command.Name())
 		}
 		if got.User != "" || got.Text != "" || got.Args != "" {
 			t.Fatalf("Execute(%q) leaked system text or args: %+v", test.input, got)

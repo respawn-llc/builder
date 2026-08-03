@@ -22,12 +22,8 @@ func (c PromptCommand) CanonicalHistoryText() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.HistoryName != nil {
-		command, ok := BuiltinPromptCommandForAlias(*c.HistoryName)
-		if !ok || command.Name() != name.String() {
-			return "", errors.New("prompt-command history name is invalid")
-		}
-		text := "/" + *c.HistoryName
+	if command, ok := BuiltinPromptCommandForName(name); ok {
+		text := "/" + command.Alias()
 		if trimmed := strings.TrimSpace(c.Arguments); trimmed != "" {
 			text += " " + trimmed
 		}

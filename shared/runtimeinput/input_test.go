@@ -7,7 +7,7 @@ func TestInputAndCanonicalCommandProjection(t *testing.T) {
 	if err := input.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := input.CanonicalHistoryText(); err != nil || got != "/prompt:review src" {
+	if got, err := input.CanonicalHistoryText(); err != nil || got != "/review src" {
 		t.Fatalf("history = %q, %v", got, err)
 	}
 	builtin := BuiltinCommand(BuiltinPromptCommandReview, " src ")

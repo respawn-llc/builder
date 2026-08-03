@@ -92,7 +92,7 @@ func promptCommandInput(text string) (runtimeinput.Input, bool) {
 		return runtimeinput.Input{}, false
 	}
 	if builtin, ok := runtimeinput.BuiltinPromptCommandForAlias(parsed.token); ok {
-		return runtimeinput.BuiltinCommand(builtin, parsed.args), true
+		return runtimeinput.BuiltinCommand(*builtin, parsed.args), true
 	}
 	name, err := runtimeinput.ParsePromptCommandName(parsed.token)
 	if err != nil {

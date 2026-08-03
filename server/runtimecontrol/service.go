@@ -102,12 +102,11 @@ type sessionTextMemoRequest struct {
 }
 
 type sessionUserTurnMemoRequest struct {
-	SessionID   string
-	Kind        serverapi.RuntimeUserTurnInputKind
-	Text        string
-	Name        string
-	Arguments   string
-	HistoryName *string
+	SessionID string
+	Kind      serverapi.RuntimeUserTurnInputKind
+	Text      string
+	Name      string
+	Arguments string
 }
 
 type liveSteerMemoRequest struct {

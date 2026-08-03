@@ -71,7 +71,7 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 	}
 	if name, parseErr := runtimeinput.ParsePromptCommandName(command); parseErr == nil {
 		if kind, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
-			content, _ := builtinPromptContent(kind)
+			content := builtinPromptContent(*kind)
 			return textutil.ExpandPromptTemplate(content, arguments), nil
 		}
 	}
@@ -96,19 +96,22 @@ type builtinPromptCommand struct {
 }
 
 func builtinPromptCommands() []builtinPromptCommand {
-	return []builtinPromptCommand{
-		{kind: runtimeinput.BuiltinPromptCommandReview, content: prompts.ReviewPrompt},
-		{kind: runtimeinput.BuiltinPromptCommandInit, content: prompts.InitPrompt},
+	commands := make([]builtinPromptCommand, 0, len(runtimeinput.BuiltinPromptCommands()))
+	for _, kind := range runtimeinput.BuiltinPromptCommands() {
+		commands = append(commands, builtinPromptCommand{kind: kind, content: builtinPromptContent(kind)})
 	}
+	return commands
 }
 
-func builtinPromptContent(kind runtimeinput.BuiltinPromptCommand) (string, bool) {
-	for _, command := range builtinPromptCommands() {
-		if command.kind == kind {
-			return command.content, true
-		}
+func builtinPromptContent(kind runtimeinput.BuiltinPromptCommand) string {
+	switch kind {
+	case runtimeinput.BuiltinPromptCommandReview:
+		return prompts.ReviewPrompt
+	case runtimeinput.BuiltinPromptCommandInit:
+		return prompts.InitPrompt
+	default:
+		panic("invalid built-in prompt command")
 	}
-	return "", false
 }
 
 func (s Service) validateRoots(kind ErrorKind) error {

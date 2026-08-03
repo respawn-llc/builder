@@ -14,9 +14,8 @@ const (
 )
 
 type PromptCommand struct {
-	Name        string  `json:"name"`
-	Arguments   string  `json:"arguments"`
-	HistoryName *string `json:"history_name,omitempty"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type Input struct {
@@ -37,12 +36,7 @@ func Command(name, arguments string) Input {
 }
 
 func NewBuiltinPromptCommand(command BuiltinPromptCommand, arguments string) PromptCommand {
-	name := command.Name()
-	alias := command.Alias()
-	if name == "" || alias == "" {
-		panic("invalid built-in prompt command")
-	}
-	return PromptCommand{Name: name, Arguments: arguments, HistoryName: &alias}
+	return PromptCommand{Name: command.Name(), Arguments: arguments}
 }
 
 func BuiltinCommand(command BuiltinPromptCommand, arguments string) Input {
@@ -63,15 +57,9 @@ func (i Input) Validate() error {
 		if i.Text != nil || i.PromptCommand == nil {
 			return errors.New("prompt-command user-turn input requires prompt_command only")
 		}
-		name, err := ParsePromptCommandName(i.PromptCommand.Name)
+		_, err := ParsePromptCommandName(i.PromptCommand.Name)
 		if err != nil {
 			return err
-		}
-		if i.PromptCommand.HistoryName != nil {
-			command, ok := BuiltinPromptCommandForAlias(*i.PromptCommand.HistoryName)
-			if !ok || command.Name() != name.String() {
-				return errors.New("prompt-command history name does not match its built-in identity")
-			}
 		}
 	default:
 		return fmt.Errorf("user-turn input kind %q is invalid", i.Kind)

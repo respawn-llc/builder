@@ -30,6 +30,6 @@ func builtinPromptDescription(command runtimeinput.BuiltinPromptCommand) string 
 	case runtimeinput.BuiltinPromptCommandInit:
 		return "Run repository initialization prompt"
 	default:
-		return ""
+		panic("invalid built-in prompt command")
 	}
 }
