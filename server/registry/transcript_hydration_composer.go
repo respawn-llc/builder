@@ -20,7 +20,6 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 	hydration.RuntimeReadModelUpdate = readModel
 	hydration.ActiveStep = transcriptActiveStepFromRuntimeReadModel(readModel)
 	clearMismatchedActiveFacts(&hydration)
-
 	var err error
 	hydration.SessionStatus, err = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 	if err != nil {
