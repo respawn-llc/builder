@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,9 +19,19 @@ func TestCaptureSessionRequestLeavesSourceSessionUntouched(t *testing.T) {
 	assertCapturedSessionHistory(t, fixture)
 }
 
-func TestCaptureSessionRequestRestoresLegacyHistoryWithoutMutatingSource(t *testing.T) {
+func TestCaptureSessionRequestRejectsLegacyHistoryWithoutMutatingSource(t *testing.T) {
 	fixture := newCaptureSessionFixture(t, true)
-	assertCapturedSessionHistory(t, fixture)
+	_, err := captureSessionRequest(
+		context.Background(),
+		fixture.persistenceRoot,
+		fixture.sessionID,
+		"openai-compatible",
+		false,
+	)
+	if !errors.Is(err, session.ErrDiagnosticLegacyEventLogUnsupported) {
+		t.Fatalf("capture legacy Session request error = %v, want %v", err, session.ErrDiagnosticLegacyEventLogUnsupported)
+	}
+	assertSourceSessionUntouched(t, fixture)
 }
 
 type captureSessionFixture struct {
@@ -132,6 +143,11 @@ func assertCapturedSessionHistory(t *testing.T, fixture captureSessionFixture) {
 		t.Fatal("captured request omitted persisted user history")
 	}
 
+	assertSourceSessionUntouched(t, fixture)
+}
+
+func assertSourceSessionUntouched(t *testing.T, fixture captureSessionFixture) {
+	t.Helper()
 	afterEvents, err := os.ReadFile(fixture.eventsPath)
 	if err != nil {
 		t.Fatalf("read source events after capture: %v", err)
