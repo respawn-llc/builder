@@ -110,25 +110,23 @@ describe("sidebarStackReducer", () => {
       entryID: "entry-1",
       destination: task("task-1"),
     });
+    const focusedTask: SidebarDestination = {
+      kind: "taskDetail",
+      taskID: "task-1",
+      initialFocus: { kind: "dependencies" },
+    };
 
     const replaced = apply(opened, {
       type: "replace",
       activationID: "activation-2",
       entryID: "entry-2",
-      destination: {
-        ...task("task-1"),
-        initialFocus: { kind: "dependencies" },
-      },
+      destination: focusedTask,
     });
 
     expect(replaced?.entries).toEqual([
       {
         entryID: "entry-2",
-        destination: {
-          kind: "taskDetail",
-          taskID: "task-1",
-          initialFocus: { kind: "dependencies" },
-        },
+        destination: focusedTask,
       },
     ]);
     expect(replaced?.activationID).toBe("activation-2");
