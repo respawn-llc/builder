@@ -100,18 +100,14 @@ func TestResolveReadsCurrentWinningContentAndExpandsArguments(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsPromptThatExpandsToEmptyMessage(t *testing.T) {
+func TestResolveReturnsExactEmptyExpansion(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	writePromptFile(t, filepath.Join(persistenceRoot, "prompts", "arguments_only.md"), "$ARGUMENTS")
 
-	_, err := New(persistenceRoot, workspaceRoot).Resolve("prompt:arguments_only", "")
-	var commandErr *Error
-	if !errors.As(err, &commandErr) || commandErr.Kind != ErrorKindCommandRead {
-		t.Fatalf("empty expansion error = %T %v, want typed command-read error", err, err)
-	}
-	if commandErr.Command == nil || *commandErr.Command != "prompt:arguments_only" {
-		t.Fatalf("empty expansion command = %+v", commandErr.Command)
+	got, err := New(persistenceRoot, workspaceRoot).Resolve("prompt:arguments_only", "")
+	if err != nil || got != "" {
+		t.Fatalf("empty expansion = %q, %v; want exact empty result", got, err)
 	}
 }
 

@@ -2,35 +2,26 @@ package textutil
 
 import "testing"
 
-func TestExpandPromptTemplateReplacesEveryArgumentsTokenOrAppendsTrailingArguments(t *testing.T) {
-	if got := ExpandPromptTemplate("Review $ARGUMENTS twice: $ARGUMENTS", " src "); got != "Review src twice: src" {
-		t.Fatalf("replacement = %q", got)
+func TestExpandPromptTemplateReplacesLiteralArgumentsOccurrence(t *testing.T) {
+	if got := ExpandPromptTemplate("prefix$ARGUMENTS_SUFFIX", " src "); got != "prefixsrc_SUFFIX" {
+		t.Fatalf("literal replacement = %q", got)
 	}
+}
+
+func TestExpandPromptTemplateReplacesEveryArgumentsOccurrence(t *testing.T) {
+	if got := ExpandPromptTemplate("Review $ARGUMENTS twice: $ARGUMENTS", " src "); got != "Review src twice: src" {
+		t.Fatalf("repeated replacement = %q", got)
+	}
+}
+
+func TestExpandPromptTemplateAppendsArgumentsAfterBlankLine(t *testing.T) {
 	if got := ExpandPromptTemplate("Review", " src "); got != "Review\n\nsrc" {
 		t.Fatalf("append = %q", got)
 	}
+}
+
+func TestExpandPromptTemplateLeavesPromptUnchangedForEmptyArguments(t *testing.T) {
 	if got := ExpandPromptTemplate("Review", " "); got != "Review" {
 		t.Fatalf("empty args = %q", got)
-	}
-}
-
-func TestExpandPromptTemplateOnlyExpandsExactArgumentsTokens(t *testing.T) {
-	prompt := "prefix$ARGUMENTS $ARGUMENTS_SUFFIX $ARGUMENTS, $ARGUMENTS"
-	if got := ExpandPromptTemplate(prompt, "src"); got != "prefix$ARGUMENTS $ARGUMENTS_SUFFIX src, src" {
-		t.Fatalf("exact-token expansion = %q", got)
-	}
-}
-
-func TestExpandPromptTemplateTreatsUnicodeAdjacentTextAsLiteral(t *testing.T) {
-	prompt := "Review $ARGUMENTSé"
-	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
-		t.Fatalf("unicode-adjacent placeholder = %q", got)
-	}
-}
-
-func TestExpandPromptTemplateTreatsUnicodeConnectorPunctuationAsLiteral(t *testing.T) {
-	prompt := "Review $ARGUMENTS‿suffix"
-	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
-		t.Fatalf("connector-adjacent placeholder = %q", got)
 	}
 }

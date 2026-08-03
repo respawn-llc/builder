@@ -7,8 +7,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
-	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -119,43 +117,5 @@ func TestMissingPromptCommandSubmissionRefreshesCatalog(t *testing.T) {
 	}
 	if _, ok := updated.commandRegistry.Command("/prompt:old"); ok {
 		t.Fatal("missing-command submission restored stale command")
-	}
-}
-
-func TestDeferredMissingPromptCommandRefreshesCatalogWithoutRestoringQueue(t *testing.T) {
-	service := &promptCatalogTestService{response: serverapi.PromptCommandCatalogResponse{
-		Commands: []serverapi.PromptCommandCatalogEntry{{Name: "prompt:new", Preview: "new"}},
-	}}
-	model := newProjectedStaticUIModel(
-		WithUIPromptCommandCatalog(service),
-		WithUIPromptCommandCatalogEntries([]commands.PromptCommandCatalogEntry{{Name: "prompt:old", Preview: "old"}}),
-	)
-	model.commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(model.promptCatalogEntries)
-	command := "prompt:old"
-	reason := clientui.QueuedUserMessageFailurePromptCommandNotFound
-	text := "/prompt:old src"
-	cmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		QueueItemID:     runtimeids.NewQueueItemID(),
-		Status:          clientui.QueuedUserMessageFailed,
-		FailureReason:   &reason,
-		Text:            &text,
-		PromptCommand:   &command,
-	})
-	for _, msg := range collectCmdMessages(t, cmd) {
-		model = updateUIModel(t, model, msg)
-	}
-
-	if service.calls != 1 {
-		t.Fatalf("catalog calls = %d, want one", service.calls)
-	}
-	if _, ok := model.commandRegistry.Command("/prompt:new"); !ok {
-		t.Fatal("deferred missing-command failure did not install refreshed command")
-	}
-	if _, ok := model.commandRegistry.Command("/prompt:old"); ok {
-		t.Fatal("deferred missing-command failure restored stale command")
-	}
-	if got := testMainInput(model); got != "" {
-		t.Fatalf("deferred missing-command failure restored queued input %q", got)
 	}
 }

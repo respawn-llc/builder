@@ -161,7 +161,7 @@ func TestDiscoverWorkspaceLocalTargetsDoNotSkipGlobalImports(t *testing.T) {
 	}
 }
 
-func TestDiscoverCommandsCountsOnlyFollowedRegularFiles(t *testing.T) {
+func TestDiscoverCommandsCountsFollowedRegularMarkdownFiles(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()
 	writeProviderCommand(t, home, ProviderCodex, "prompts", "regular.md")
@@ -188,13 +188,18 @@ func TestDiscoverCommandsCountsOnlyFollowedRegularFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(result.Commands.Items) != 2 {
-		t.Fatalf("command items = %+v, want non-blank regular file and regular-file symlink only", result.Commands.Items)
+	if len(result.Commands.Items) != 3 {
+		t.Fatalf("command items = %+v, want regular files and regular-file symlinks regardless of content", result.Commands.Items)
 	}
+	foundBlank := false
 	for _, item := range result.Commands.Items {
-		if item.Ref.TargetName == "directory.md" || item.Ref.TargetName == "blank.md" {
+		if item.Ref.TargetName == "directory.md" {
 			t.Fatalf("directory symlink counted as command: %+v", item)
 		}
+		foundBlank = foundBlank || item.Ref.TargetName == "blank.md"
+	}
+	if !foundBlank {
+		t.Fatalf("blank regular Markdown file was not counted: %+v", result.Commands.Items)
 	}
 }
 

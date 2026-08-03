@@ -193,10 +193,6 @@ func (t *goalLoopInterruptTracker) resolve(err error, snapshot *RunSnapshot) {
 }
 
 func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
-	return e.QueueUserMessageForActiveRunWithResolver(ctx, text, clientRequestID, nil, beforeQueue)
-}
-
-func (e *Engine) QueueUserMessageForActiveRunWithResolver(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, resolve DeferredUserMessageResolver, beforeQueue func() error) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
@@ -228,7 +224,7 @@ func (e *Engine) QueueUserMessageForActiveRunWithResolver(ctx context.Context, t
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID.String(), Resolve: resolve}
+	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID.String()}
 	finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
 		e.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})

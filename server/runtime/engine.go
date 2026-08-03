@@ -528,13 +528,10 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	return true
 }
 
-type DeferredUserMessageResolver func() (string, error)
-
 type QueuedUserMessage struct {
 	ID              string
 	Text            string
 	ClientRequestID string
-	Resolve         DeferredUserMessageResolver
 }
 
 func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
@@ -545,24 +542,16 @@ func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestI
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
 }
 
-func (e *Engine) QueueUserMessageForAutoDrainWithResolver(text string, clientRequestID string, resolve DeferredUserMessageResolver) QueuedUserMessage {
-	return e.queueUserMessageWithClientRequestIDAndResolver(text, clientRequestID, true, resolve)
-}
-
 func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
-	return e.queueUserMessageWithClientRequestIDAndResolver(text, clientRequestID, forceAutoDrain, nil)
-}
-
-func (e *Engine) queueUserMessageWithClientRequestIDAndResolver(text string, clientRequestID string, forceAutoDrain bool, resolve DeferredUserMessageResolver) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
 		e.outputMutationMu.Lock()
 		defer e.outputMutationMu.Unlock()
-		item := e.messageFlow.QueueUserMessageWithResolver(text, clientRequestID, resolve)
+		item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return item
 	}
-	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID, Resolve: resolve}
+	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
 	waitedForLiveRunStep := false
 	for {
 		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
@@ -593,7 +582,7 @@ func (e *Engine) queueUserMessageWithClientRequestIDAndResolver(text string, cli
 		return liveItem
 	}
 	e.outputMutationMu.Lock()
-	item := e.messageFlow.QueueUserMessageWithResolver(text, clientRequestID, resolve)
+	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 	e.outputMutationMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)

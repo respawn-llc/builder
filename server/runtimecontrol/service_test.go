@@ -1960,6 +1960,156 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
 }
 
+func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				queuedStatuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	resolver := &runtimeControlPromptCommandResolver{content: "expanded prompt body"}
+	service.WithPromptCommandResolver(resolver)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(
+			context.Background(),
+			runtimeControlUserTurnRequest(store, "active-prompt-turn", "start"),
+		)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active turn did not reach the first model request")
+	}
+
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-prompt-command", "unused")
+	steeringReq.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "src")
+	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking: %v", err)
+	}
+	if !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn prompt command while model was thinking = %+v, want accepted steering", steered)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls before queue admission = %d, want 1", resolver.calls)
+	}
+	select {
+	case status := <-queuedStatuses:
+		if status.ClientRequestID != steeringReq.OperationRef.ClientRequestID.String() ||
+			status.RestoreText != "expanded prompt body" {
+			t.Fatalf("accepted prompt-command queue status = %+v", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("accepted prompt-command steering emitted no queue status")
+	}
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
+		t.Fatalf("canonical prompt history count = %d, want 1", got)
+	}
+	if got := countPromptHistoryEvents(t, store, "expanded prompt body"); got != 0 {
+		t.Fatalf("expanded prompt history count = %d, want 0", got)
+	}
+
+	close(client.releaseFirst)
+	select {
+	case <-client.secondStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active turn did not reach the prompt-command safe-boundary request")
+	}
+	defer close(client.releaseSecond)
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls after queue drain = %d, want 1", resolver.calls)
+	}
+
+	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
+		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == "expanded prompt body" {
+			return
+		}
+	}
+	t.Fatalf("next model request did not receive expanded prompt command: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWithoutQueueing(t *testing.T) {
+	for _, kind := range []serverapi.PromptCommandErrorKind{
+		serverapi.PromptCommandErrorKindCommandNotFound,
+		serverapi.PromptCommandErrorKindCommandRead,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			client := newSteeringDrainRuntimeControlClient()
+			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 1)
+			registry := tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: fakeShellHandler{},
+			})
+			store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+				OnEvent: func(event runtime.Event) {
+					if event.QueuedUserMessageStatus != nil {
+						queuedStatuses <- *event.QueuedUserMessageStatus
+					}
+				},
+			})
+			command := runtimeinput.PromptCommandReviewName
+			resolutionErr := &serverapi.PromptCommandError{Kind: kind, Command: &command}
+			resolver := &runtimeControlPromptCommandResolver{err: resolutionErr}
+			service.WithPromptCommandResolver(resolver)
+			submitDone := make(chan error, 1)
+			go func() {
+				_, err := service.SubmitUserTurn(
+					context.Background(),
+					runtimeControlUserTurnRequest(store, "active-before-failed-prompt", "start"),
+				)
+				submitDone <- err
+			}()
+			select {
+			case <-client.firstStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("active turn did not reach the first model request")
+			}
+
+			req := runtimeControlUserTurnRequest(store, "failed-prompt-during-active-run", "unused")
+			req.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
+			_, err := service.SubmitUserTurn(context.Background(), req)
+			var typed *serverapi.PromptCommandError
+			if !errors.As(err, &typed) || typed.Kind != kind {
+				t.Fatalf("SubmitUserTurn prompt resolution error = %T %v, want typed %s", err, err, kind)
+			}
+			if resolver.calls != 1 {
+				t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+			}
+			if engine.HasQueuedUserWork() {
+				t.Fatal("failed prompt command was admitted to the runtime queue")
+			}
+			select {
+			case status := <-queuedStatuses:
+				t.Fatalf("failed prompt command emitted queued status %+v", status)
+			default:
+			}
+			if got := countPromptHistoryEvents(t, store, "/review"); got != 0 {
+				t.Fatalf("failed prompt command history count = %d, want 0", got)
+			}
+
+			close(client.releaseFirst)
+			select {
+			case <-client.secondStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("active turn did not reach its second model request")
+			}
+			close(client.releaseSecond)
+			if err := <-submitDone; err != nil {
+				t.Fatalf("active SubmitUserTurn: %v", err)
+			}
+		})
+	}
+}
+
 func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testing.T) {
 	trimmed := 1
 	client := &blockingCompactionRuntimeControlClient{

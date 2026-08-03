@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -280,31 +278,6 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	}
 	if state.Status != clientui.QueuedUserMessageFailed || state.Text == nil {
 		return cmd
-	}
-	if state.FailureReason != nil &&
-		(*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound ||
-			*state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandRead) &&
-		state.PromptCommand != nil {
-		kind := serverapi.PromptCommandErrorKindCommandRead
-		if *state.FailureReason == clientui.QueuedUserMessageFailurePromptCommandNotFound {
-			kind = serverapi.PromptCommandErrorKindCommandNotFound
-		}
-		commandErr := &serverapi.PromptCommandError{
-			Kind:    kind,
-			Command: state.PromptCommand,
-		}
-		statusCmd := m.sendTransientStatusWithNoticeID(
-			runtimeattach.FormatSubmissionError(commandErr),
-			uiStatusNoticeError,
-			transientStatusDuration,
-			uiStatusNoticeReplace,
-			"",
-		)
-		refreshCmd := tea.Cmd(nil)
-		if kind == serverapi.PromptCommandErrorKindCommandNotFound {
-			refreshCmd = m.startPromptCatalogRefresh(*state.PromptCommand)
-		}
-		return tea.Batch(cmd, statusCmd, refreshCmd)
 	}
 	m.inputController().restoreInjectedTextIntoInput(*state.Text)
 	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(

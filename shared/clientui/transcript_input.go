@@ -23,8 +23,6 @@ const (
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
 	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
-	QueuedUserMessageFailurePromptCommandNotFound      QueuedUserMessageFailureReason = "prompt_command_not_found"
-	QueuedUserMessageFailurePromptCommandRead          QueuedUserMessageFailureReason = "prompt_command_read"
 )
 
 type TranscriptUserMessageFlushed struct {
@@ -38,7 +36,6 @@ type TranscriptQueuedMessageState struct {
 	Status          QueuedUserMessageStatus
 	FailureReason   *QueuedUserMessageFailureReason
 	Text            *string
-	PromptCommand   *string
 }
 
 func (f TranscriptUserMessageFlushed) Validate() error {
@@ -76,16 +73,10 @@ func (s TranscriptQueuedMessageState) Validate() error {
 		if s.FailureReason != nil {
 			return fmt.Errorf("accepted queued-message state cannot carry failure reason")
 		}
-		if s.PromptCommand != nil {
-			return fmt.Errorf("accepted queued-message state cannot carry prompt command")
-		}
 		return validateRequiredOptionalText("accepted queued-message state", s.Text)
 	case QueuedUserMessageSubmitted, QueuedUserMessageDiscarded:
 		if s.FailureReason != nil {
 			return fmt.Errorf("%s queued-message state cannot carry failure reason", s.Status)
-		}
-		if s.PromptCommand != nil {
-			return fmt.Errorf("%s queued-message state cannot carry prompt command", s.Status)
 		}
 		if s.Text != nil {
 			return fmt.Errorf("%s queued-message state cannot carry restore text", s.Status)
@@ -100,17 +91,6 @@ func (s TranscriptQueuedMessageState) Validate() error {
 			QueuedUserMessageFailureTerminalWorkflowCompletion,
 			QueuedUserMessageFailureRuntimeUnavailable,
 			QueuedUserMessageFailureStopped:
-			if s.PromptCommand != nil {
-				return fmt.Errorf("%s queued-message state cannot carry prompt command", *s.FailureReason)
-			}
-		case QueuedUserMessageFailurePromptCommandNotFound:
-			if s.PromptCommand == nil || strings.TrimSpace(*s.PromptCommand) == "" {
-				return fmt.Errorf("prompt-command failure requires prompt command")
-			}
-		case QueuedUserMessageFailurePromptCommandRead:
-			if s.PromptCommand == nil || strings.TrimSpace(*s.PromptCommand) == "" {
-				return fmt.Errorf("prompt-command failure requires prompt command")
-			}
 		default:
 			return fmt.Errorf("unknown queued-message failure reason %q", *s.FailureReason)
 		}

@@ -125,7 +125,6 @@ type messageLifecycle interface {
 	PendingUserMessages() []QueuedUserMessage
 	RestorePendingUserInjections(items []queuedUserSteeringIntent)
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
-	QueueUserMessageWithResolver(text string, clientRequestID string, resolve DeferredUserMessageResolver) QueuedUserMessage
 	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool

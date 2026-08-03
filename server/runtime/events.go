@@ -79,8 +79,6 @@ const (
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
 	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
-	QueuedUserMessageFailurePromptCommandNotFound      QueuedUserMessageFailureReason = "prompt_command_not_found"
-	QueuedUserMessageFailurePromptCommandRead          QueuedUserMessageFailureReason = "prompt_command_read"
 )
 
 type QueuedUserMessageStatusEvent struct {
@@ -90,30 +88,6 @@ type QueuedUserMessageStatusEvent struct {
 	Status          QueuedUserMessageStatus
 	FailureReason   QueuedUserMessageFailureReason
 	RestoreText     string
-	PromptCommand   *string
-}
-
-type DeferredUserMessageResolutionError struct {
-	Reason        QueuedUserMessageFailureReason
-	PromptCommand *string
-	Cause         error
-}
-
-func (e *DeferredUserMessageResolutionError) Error() string {
-	if e == nil {
-		return "deferred user message resolution failed"
-	}
-	if e.Cause != nil {
-		return e.Cause.Error()
-	}
-	return "deferred user message resolution failed"
-}
-
-func (e *DeferredUserMessageResolutionError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
 }
 
 type QueuedUserMessageIdentity struct {
