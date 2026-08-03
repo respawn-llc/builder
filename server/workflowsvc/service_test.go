@@ -1057,6 +1057,52 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	}
 }
 
+func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailure(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		started.Mutation.Created[0].Reference,
+		workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
+		workflow.CurrentNodeInterruptionDetail{Code: "workflow_runtime_start_failed"},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("c", 40)
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		materializeErr: &worktree.GitRevisionResolutionError{
+			Kind:         worktree.GitRevisionResolutionErrorGitFailure,
+			RequestedRef: requestedRef,
+		},
+	}
+
+	_, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var preparationErr *workflowexecution.TaskStartPreparationError
+	if !errors.As(err, &preparationErr) ||
+		preparationErr.InterruptionDetail().Code != configuredTargetPreparationFailureCode {
+		t.Fatalf("ResumeWorkflowTask error = %T %v, want configured-target preparation failure", err, err)
+	}
+}
+
 func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)

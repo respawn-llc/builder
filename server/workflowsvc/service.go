@@ -1360,7 +1360,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 				snapshot,
 			)
 			if candidate == nil {
-				return preparationErr
+				return configuredTargetPreparationError(target, preparationErr)
 			}
 			lockErr := s.mutationPermit.Run(preparationCtx, func(ctx context.Context) error {
 				return s.store.LockTaskExecutionTarget(ctx, taskID, candidate)

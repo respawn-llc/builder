@@ -82,7 +82,12 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
     }>;
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
-export type TaskResumeResponse = WorkflowExecutionTargetActionResponse<TaskResumeApplied>;
+export type TaskResumeResponse =
+  | Readonly<{ outcome: "applied"; applied: TaskResumeApplied }>
+  | Readonly<{
+      outcome: "selection_required";
+      selectionRequired: WorkflowExecutionTargetSelectionRequirement;
+    }>;
 export type TaskMoveResponse =
   | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
   | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;

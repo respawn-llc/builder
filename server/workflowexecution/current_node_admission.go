@@ -98,6 +98,9 @@ func NewTaskStartPreparationError(
 	cause error,
 	detail workflow.CurrentNodeInterruptionDetail,
 ) *TaskStartPreparationError {
+	if cause == nil {
+		panic("task start preparation error requires a cause")
+	}
 	return &TaskStartPreparationError{cause: cause, detail: detail}
 }
 

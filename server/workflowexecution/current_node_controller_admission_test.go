@@ -666,7 +666,13 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
 	permit := NewMutationPermit()
-	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
+		AgentConcurrency:  1,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+	})
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
 	t.Cleanup(func() {
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
