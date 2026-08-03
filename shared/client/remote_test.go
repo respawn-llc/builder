@@ -1232,6 +1232,7 @@ func TestDialRemoteURLForProjectAttachesProjectAndReturnsRemote(t *testing.T) {
 }
 
 func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
+	releaseServer := make(chan struct{})
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
@@ -1266,7 +1267,9 @@ func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
 			t.Fatalf("send worktree status response: %v", err)
 		}
+		<-releaseServer
 	})
+	defer close(releaseServer)
 
 	remote, err := DialRemoteURLForSession(
 		context.Background(),
