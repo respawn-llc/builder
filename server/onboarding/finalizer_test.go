@@ -60,7 +60,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 	trueValue := true
 	falseValue := false
 	providerOverride := "openai"
-	openAIBaseURL := "http://127.0.0.1:8080/v1"
+	openAIBaseURL := "https://api.openai.com/v1"
 	modelTimeout := 123
 	reviewerModel := "gpt-5.4"
 	reviewerThinking := "xhigh"

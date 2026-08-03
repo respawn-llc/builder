@@ -13,6 +13,7 @@ import (
 
 	"core/server/skillcatalog"
 	brand "core/shared/config"
+	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
 
@@ -352,6 +353,9 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 			continue
 		}
 		name := strings.TrimSuffix(target, filepath.Ext(target))
+		if _, err := runtimeinput.NormalizeIdentifier(name); err != nil {
+			continue
+		}
 		items = append(items, Item{Ref: ItemRef{ItemKind: ItemKindCommand, SourceKind: SourceKindExternalProvider, ProviderID: &providerID, SourceRoot: &sourceRoot, SourcePath: &sourcePath, TargetName: target, Name: &name}})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Ref.TargetName < items[j].Ref.TargetName })

@@ -527,6 +527,12 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	transport := llm.NewHTTPTransport(transportStaticAuth{})
 	transport.BaseURL = server.URL + "/v1"
 	transport.Client = server.Client()
+	transport.ProviderCapabilitiesOverride = &llm.ProviderCapabilities{
+		ProviderID:             "openai",
+		SupportsResponsesAPI:   true,
+		SupportsPromptCacheKey: true,
+		IsOpenAIFirstParty:     true,
+	}
 	openAIClient := llm.NewOpenAIClient(transport)
 
 	store := mustCreateTestSession(t)

@@ -1,2 +1,7 @@
 model = "gpt-5"
 openai_base_url = "http://127.0.0.1:1/v1"
+
+[provider_capabilities]
+provider_id = "pty-responses-stub"
+supports_responses_api = true
+supports_prompt_cache_key = true
