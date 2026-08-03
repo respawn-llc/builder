@@ -44,6 +44,26 @@ var (
 	ErrExecutionTargetAlreadyLocked = errors.New("execution target is already locked")
 )
 
+func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) error {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return err
+	}
+	prepared, err := s.prepareExecutionTargetMutation(ctx, task, candidate)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := applyPreparedExecutionTargetMutation(ctx, s.queries.WithTx(tx), task, prepared, s.now().UnixMilli()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) GetTaskExecutionTargetContext(ctx context.Context, taskID workflow.TaskID) (TaskExecutionTargetContext, error) {
 	task, err := s.queries.GetTask(ctx, strings.TrimSpace(string(taskID)))
 	if err != nil {

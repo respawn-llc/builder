@@ -217,21 +217,41 @@ func TestOnboardingSelectionInvariantFailureReturnsTypedErrorInRelease(t *testin
 }
 
 func TestOnboardingSelectionInvariantDiagnosticReportsInvalidImportReferenceValue(t *testing.T) {
-	state, err := newOnboardingFlowState(onboardingSeedConfig(), testOnboardingCapabilityFacts())
-	if err != nil {
-		t.Fatalf("construct onboarding state: %v", err)
-	}
-	invalidProviderID := " \t"
-	state.selections.skillImport = testImportSelection(onboardingImportProviderCodex, "/tmp/skills")
-	state.selections.skillImport.ChoiceRef.ImportProviderID = &invalidProviderID
+	for _, test := range []struct {
+		name          string
+		variantPrefix string
+		selectImport  func(*onboardingSelections) *onboardingImportSelection
+	}{
+		{
+			name:          "skill import",
+			variantPrefix: "skill_import",
+			selectImport:  func(selections *onboardingSelections) *onboardingImportSelection { return &selections.skillImport },
+		},
+		{
+			name:          "command import",
+			variantPrefix: "command_import",
+			selectImport:  func(selections *onboardingSelections) *onboardingImportSelection { return &selections.commandImport },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state, err := newOnboardingFlowState(onboardingSeedConfig(), testOnboardingCapabilityFacts())
+			if err != nil {
+				t.Fatalf("construct onboarding state: %v", err)
+			}
+			invalidProviderID := " \t"
+			selection := test.selectImport(&state.selections)
+			*selection = testImportSelection(onboardingImportProviderCodex, "/tmp/import")
+			selection.ChoiceRef.ImportProviderID = &invalidProviderID
 
-	violation, ok := state.selections.invariantViolation()
-	if !ok {
-		t.Fatal("invalid import provider reference unexpectedly passed invariants")
-	}
-	if violation.VariantType != "skill_import.choice_ref.import_provider_id" ||
-		violation.VariantTag != invalidProviderID {
-		t.Fatalf("import provider diagnostic = %+v, want offending value", violation)
+			violation, ok := state.selections.invariantViolation()
+			if !ok {
+				t.Fatal("invalid import provider reference unexpectedly passed invariants")
+			}
+			if violation.VariantType != test.variantPrefix+".choice_ref.import_provider_id" ||
+				violation.VariantTag != invalidProviderID {
+				t.Fatalf("import provider diagnostic = %+v, want offending value", violation)
+			}
+		})
 	}
 }
 

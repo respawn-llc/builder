@@ -29,9 +29,8 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			name: "predecessor held",
 			apply: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
 				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
-					reference:         script,
-					launchPreparation: EstablishedRootLaunchPreparation(),
-					policy:            currentNodeAdmissionAutomaticScript,
+					reference: script,
+					policy:    currentNodeAdmissionAutomaticScript,
 				}}
 			},
 			clean: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
@@ -42,9 +41,8 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			name: "reserved",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				controller.automaticReservations[key] = currentNodeQueuedStart{
-					reference:         script,
-					launchPreparation: EstablishedRootLaunchPreparation(),
-					policy:            currentNodeAdmissionAutomaticScript,
+					reference: script,
+					policy:    currentNodeAdmissionAutomaticScript,
 				}
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
@@ -125,9 +123,8 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			}
 			controller.agentCapacityActive = 1
 			controller.automaticQueue.append(currentNodeQueuedStart{
-				reference:         queuedAgent,
-				launchPreparation: EstablishedRootLaunchPreparation(),
-				policy:            currentNodeAdmissionAutomaticAgent,
+				reference: queuedAgent,
+				policy:    currentNodeAdmissionAutomaticAgent,
 			})
 			controller.queued[queuedKey] = struct{}{}
 			test.apply(controller, scriptKey)
@@ -257,9 +254,8 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 	})
 
 	controller.enqueueStarts([]currentNodeQueuedStart{{
-		reference:         failed,
-		launchPreparation: EstablishedRootLaunchPreparation(),
-		policy:            currentNodeAdmissionAutomaticAgent,
+		reference: failed,
+		policy:    currentNodeAdmissionAutomaticAgent,
 		assignmentSteer: completedCurrentNodeAssignmentSteer{
 			err: errors.New("assignment preparation failed"),
 		},
@@ -290,7 +286,7 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNodeWithPreparation(_ context.Context, reference workflow.CurrentNodeReference, _ LaunchPreparation, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	if reference.Equal(r.failed) {
 		return errors.New("script start failed")
 	}
@@ -312,10 +308,9 @@ type finalizingBeforeLiveRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *finalizingBeforeLiveRunner) StartCurrentNodeWithPreparation(
+func (r *finalizingBeforeLiveRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	_ LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,

@@ -474,7 +474,14 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		},
 	})
 	if err != nil {
-		return workflowstore.ManagedExecutionRoot{}, err
+		var retained *serverapi.WorktreeSetupRetainedError
+		if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+			return workflowstore.ManagedExecutionRoot{}, err
+		}
+		return workflowstore.ManagedExecutionRoot{
+			WorktreeID: retained.Worktree.Registered.Kent.WorktreeID,
+			Root:       retained.Worktree.Registered.Git.CanonicalRoot,
+		}, err
 	}
 	if materialized.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered || materialized.Worktree.Registered == nil {
 		return workflowstore.ManagedExecutionRoot{}, errors.New("materialized task worktree is not registered")

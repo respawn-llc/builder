@@ -48,6 +48,6 @@ Discovery is non-recursive and includes non-blank `.md` files. The first valid f
 
 The picker shows a one-line preview made from the first 256 Unicode characters after collapsing whitespace. Markdown punctuation remains unchanged. Prompt bodies are resolved by the server when the command is invoked.
 
-If `$ARGUMENTS` appears in the body, Kent replaces every occurrence with trimmed trailing arguments. Otherwise, Kent appends non-empty trailing arguments after one blank line.
+If the exact `$ARGUMENTS` token appears in the body, Kent replaces every occurrence with trimmed trailing arguments. Otherwise, Kent appends non-empty trailing arguments after one blank line.
 
 First-time setup can import slash-command directories from supported providers. An unavailable or unknown `/prompt:` command reports an error and is never sent to the model as plain text. Other unknown slash commands retain their normal behavior.

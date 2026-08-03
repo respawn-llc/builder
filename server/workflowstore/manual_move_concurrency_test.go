@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
 )
@@ -39,7 +40,7 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared)
+		result, err := moveStore.ApplyManualMove(moveCtx, prepared, nil)
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -57,7 +58,7 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 	}
 }
 
-func TestManualMoveToExecutableWaitsForConcurrentWriterBeforePlacement(t *testing.T) {
+func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLocksTarget(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -76,13 +77,15 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforePlacement(t *testin
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
+	candidate := noneManualMoveExecutionTargetCandidate(binding)
+
 	moveStore, writerStore := openConcurrentManualMoveStores(t, cfg)
 	writer := acquireUnrelatedManualMoveWriter(t, ctx, writerStore, binding.ProjectID)
 	moveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared)
+		result, err := moveStore.ApplyManualMove(moveCtx, prepared, candidate)
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -102,8 +105,9 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforePlacement(t *testin
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget != nil {
-		t.Fatalf("execution target after manual move = %+v, want asynchronous preparation to lock it", targetContext.Task.ExecutionTarget)
+	if targetContext.Task.ExecutionTarget == nil ||
+		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
 
@@ -136,7 +140,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared)
+		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -214,7 +218,7 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared)
+		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -262,6 +266,19 @@ func assertManualMoveTargetShapeDriftRejected(
 type manualMoveApplyResult struct {
 	result ManualMoveResult
 	err    error
+}
+
+func noneManualMoveExecutionTargetCandidate(binding metadata.Binding) *ExecutionTargetCandidate {
+	return &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	}
 }
 
 func openConcurrentManualMoveStores(t *testing.T, cfg config.App) (*Store, *Store) {

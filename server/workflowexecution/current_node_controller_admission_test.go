@@ -594,7 +594,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTaskWithPreparation(context.Background(), taskID, EstablishedRootLaunchPreparation())
+		_, err := controller.StartTask(context.Background(), taskID, func(context.Context) error { return nil })
 		startDone <- err
 	}()
 	select {
@@ -617,7 +617,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	select {
 	case err := <-startDone:
 		if err != nil {
-			t.Fatalf("StartTaskWithPreparation: %v", err)
+			t.Fatalf("StartTask: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("task start did not finish")
@@ -636,6 +636,105 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		t.Fatal("explicit admission did not begin")
 	}
 	releaseRunner()
+}
+
+func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-deferred-preparation", "node-agent")
+	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
+	permit := NewMutationPermit()
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	preparationStarted := make(chan struct{})
+	preparationRelease := make(chan struct{})
+
+	started := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(context.Background(), reference.TaskID, func(ctx context.Context) error {
+			close(preparationStarted)
+			select {
+			case <-preparationRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		})
+		started <- err
+	}()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("StartTask: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("StartTask waited for asynchronous preparation")
+	}
+	<-preparationStarted
+	permitAvailable := make(chan error, 1)
+	go func() {
+		permitAvailable <- permit.Run(context.Background(), func(context.Context) error { return nil })
+	}()
+	select {
+	case err := <-permitAvailable:
+		if err != nil {
+			t.Fatalf("unrelated mutation permit: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("preparation blocked unrelated workflow mutations")
+	}
+	close(preparationRelease)
+	<-runner.entered
+	close(runner.release)
+}
+
+func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-preparation-failure", "node-agent")
+	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	cause := errors.New("worktree setup failed")
+
+	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error {
+		return cause
+	}); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if interruption, ok := store.interruption(reference); ok {
+			if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+				interruption.detail.Fields["error"] != cause.Error() {
+				t.Fatalf("interruption = %+v, want preparation failure", interruption)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("placed Current Node was not interrupted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if runner.starts() != 0 {
+		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
 }
 
 func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
@@ -657,11 +756,7 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{
-		reference:         reference,
-		launchPreparation: EstablishedRootLaunchPreparation(),
-		policy:            currentNodeAdmissionAutomaticAgent,
-	}
+	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
 	controller.mu.Unlock()
 
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
@@ -690,9 +785,8 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 			name: "automatic queue",
 			apply: func(controller *CurrentNodeController) {
 				controller.automaticQueue.append(currentNodeQueuedStart{
-					reference:         reference,
-					launchPreparation: EstablishedRootLaunchPreparation(),
-					policy:            currentNodeAdmissionAutomaticAgent,
+					reference: reference,
+					policy:    currentNodeAdmissionAutomaticAgent,
 				})
 			},
 		},
@@ -703,21 +797,13 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.automaticReservations[key] = currentNodeQueuedStart{
-					reference:         reference,
-					launchPreparation: EstablishedRootLaunchPreparation(),
-					policy:            currentNodeAdmissionAutomaticAgent,
-				}
+				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
 			},
 		},
 		{
 			name: "retirement held intent",
 			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
-					reference:         reference,
-					launchPreparation: EstablishedRootLaunchPreparation(),
-					policy:            currentNodeAdmissionAutomaticAgent,
-				}}
+				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
 			},
 		},
 		{

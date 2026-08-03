@@ -469,6 +469,6 @@ func commandImportSummary(state *onboardingFlowState) string {
 	case onboardingImportModeSymlinkSource:
 		return "from " + importProviderDisplayLabel(providerIDFromPtr(state.selections.commandImport.ChoiceRef.ImportProviderID), "external_provider")
 	default:
-		return ""
+		panic(fmt.Sprintf("invalid command import mode %q", state.selections.commandImport.Mode))
 	}
 }

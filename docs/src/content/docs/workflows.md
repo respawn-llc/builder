@@ -404,17 +404,17 @@ The workflow's execution-target policy chooses where executable agent and script
 
 New workflows ask when execution starts. Kent Desktop offers all four concrete targets when selection is required, preselects the repository default branch, and uses the same dialog when a configured Git target cannot be resolved.
 
-Target selection occurs when an unlocked task first reaches executable work through Start or Manual Move. Kent applies the workflow movement before environment preparation, then locks the selected mode and managed requested/resolved commit facts when preparation establishes the execution root. Preparation failure leaves the task moved and interrupts the affected current node; Resume retries preparation in place. Later workflow nodes reuse the locked target, which cannot be replaced with another mode.
+Target selection occurs on the first executable start, manual move, or approval. The task locks the selected mode and managed requested/resolved commit facts only when that initiating action succeeds. Later workflow nodes reuse the locked target; a locked target cannot be replaced with another mode.
 
-Configure a workflow policy or select a concrete target when starting, manually moving, or resuming an unlocked task:
+Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
 ```bash
 kent workflow update <uuid> --execution-target ask-on-first-execution
 kent workflow update <uuid> --execution-target none|head|default-branch|ref:<revision>
 
 kent task start <task> --execution-target none|head|default-branch|ref:<revision>
+kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
 kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
-kent task resume <task> --execution-target none|head|default-branch|ref:<revision>
 ```
 
 These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.

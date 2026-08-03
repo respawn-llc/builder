@@ -135,7 +135,6 @@ func TestWorkflowSessionCannotInterruptOrResumeItsOwnTask(t *testing.T) {
 	_, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 	})
 	var resumeDenied *serverapi.WorkflowTaskMutationSelfTargetError
 	if !errors.As(resumeErr, &resumeDenied) || resumeDenied.TaskID != task.Task.ID {
@@ -271,7 +270,6 @@ func TestWorkflowSessionCanInterruptAndResumeAnotherTask(t *testing.T) {
 	targetTask := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	execution := newTaskMutationAuthorizationExecutionStub(service)
 	service.currentNodeExecution = execution
-	waitForWorkflowServiceTargetLock(t, ctx, service, targetTask.Task.ID)
 
 	if _, err := service.InterruptWorkflowTask(ctx, serverapi.WorkflowTaskInterruptRequest{
 		TaskID:            targetTask.Task.ID,
@@ -282,7 +280,6 @@ func TestWorkflowSessionCanInterruptAndResumeAnotherTask(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
@@ -315,7 +312,6 @@ func TestWorkflowTaskMutationRejectsUnknownInvokingSession(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &unknownSessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 	}); !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("ResumeWorkflowTask error = %v, want unknown Session failure", err)
 	}
@@ -363,7 +359,6 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:            task.Task.ID,
 		InvokingSessionID: &sessionID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 	}); err != nil {
 		t.Fatalf("ResumeWorkflowTask with unbound Session: %v", err)
 	}
@@ -441,13 +436,7 @@ func (s *taskMutationAuthorizationExecutionStub) Interrupt(_ context.Context, se
 
 func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	s.resumedTaskIDs = append(s.resumedTaskIDs, taskID)
-	return []workflow.CurrentNode{{
-		Reference: workflow.CurrentNodeReference{TaskID: taskID, NodeID: workflow.NodeID("resumed")},
-	}}, nil
-}
-
-func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(ctx context.Context, taskID workflow.TaskID, _ workflowexecution.LaunchPreparation) ([]workflow.CurrentNode, error) {
-	return s.ResumeTask(ctx, taskID)
+	return nil, nil
 }
 
 func bindWorkflowServiceSessionToTask(

@@ -25,17 +25,9 @@ type taskDependencyLifecycleRemote struct {
 func (r *taskDependencyLifecycleRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
 	return serverapi.WorkflowTaskGetResponse{
 		Task: serverapi.WorkflowTaskDetail{
-			Summary:      serverapi.WorkflowTaskSummary{ID: req.TaskID, ShortID: "KENT-1", ProjectID: "project-1"},
-			CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
-			CurrentScripts: []serverapi.WorkflowTaskCurrentScript{{
-				CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-1"},
-			}},
+			Summary: serverapi.WorkflowTaskSummary{ID: req.TaskID, ShortID: "KENT-1", ProjectID: "project-1"},
 		},
 	}, nil
-}
-
-func (r *taskDependencyLifecycleRemote) ListWorkflowTaskAttention(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return serverapi.WorkflowTaskAttentionListResponse{Items: []serverapi.WorkflowAttentionItem{}}, nil
 }
 
 func (r *taskDependencyLifecycleRemote) StartWorkflowTask(_ context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {

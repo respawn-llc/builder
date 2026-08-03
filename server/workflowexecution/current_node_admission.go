@@ -61,6 +61,7 @@ type currentNodeAgentCapacityLease struct {
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
+	preparation        TaskStartPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
@@ -175,6 +176,16 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		return err
 	}
 	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
+	if start.preparation != nil {
+		if err := start.preparation(ctx); err != nil {
+			return err
+		}
+		assignment, err := c.steerAssignment(ctx, reference)
+		if err != nil {
+			return err
+		}
+		start.assignmentSteer = assignment
+	}
 	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
 	if err != nil {
 		return err

@@ -60,7 +60,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 	trueValue := true
 	falseValue := false
 	providerOverride := "openai"
-	openAIBaseURL := "http://127.0.0.1:8080/v1"
+	openAIBaseURL := "https://api.openai.com/v1"
 	modelTimeout := 123
 	reviewerModel := "gpt-5.4"
 	reviewerThinking := "xhigh"
@@ -71,7 +71,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 		want want
 	}{
 		{
-			name: "known model large context level thinking verbosity true ask supervisor override local compaction",
+			name: "known model large context level thinking verbosity true ask supervisor override native compaction",
 			req: serverapi.OnboardingFinalizeRequest{
 				MainProvider:  &serverapi.OnboardingProviderChoice{ProviderOverride: &providerOverride, OpenAIBaseURL: &openAIBaseURL},
 				Model:         &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4-mini"},
@@ -88,7 +88,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 					Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.4"},
 					Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingCustom, Value: "xhigh"},
 				},
-				Compaction:          ptr(serverapi.OnboardingCompactionLocal),
+				Compaction:          ptr(serverapi.OnboardingCompactionNative),
 				ModelTimeoutSeconds: &modelTimeout,
 				DisabledSkillNames:  []string{" API   Result "},
 			},
@@ -102,7 +102,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 				supervisor:       "all",
 				reviewerModel:    &reviewerModel,
 				reviewerThinking: &reviewerThinking,
-				compaction:       config.CompactionModeLocal,
+				compaction:       config.CompactionModeNative,
 				providerOverride: &providerOverride,
 				openAIBaseURL:    &openAIBaseURL,
 				modelTimeout:     &modelTimeout,

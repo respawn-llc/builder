@@ -61,7 +61,6 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &sessionID,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",
@@ -92,7 +91,6 @@ func TestWorkflowTaskMutationRequestsValidateInvokingSession(t *testing.T) {
 		WorkflowTaskResumeRequest{
 			TaskID:            "task",
 			InvokingSessionID: &zero,
-			SetupOperationID:  NewWorktreeSetupOperationID(),
 		},
 		WorkflowTaskInterruptRequest{
 			TaskID:            "task",

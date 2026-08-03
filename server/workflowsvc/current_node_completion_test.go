@@ -338,6 +338,7 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 
 type currentNodeCompletionExecutionStub struct {
 	store               *workflowstore.Store
+	startPreparations   chan<- workflowexecution.TaskStartPreparation
 	sessionID           runtimeids.SessionID
 	sessionResult       workflowstore.CurrentNodeCompletionResult
 	sessionErr          error
@@ -349,7 +350,6 @@ type currentNodeCompletionExecutionStub struct {
 	questionResponse    askquestion.AskQuestionResponse
 	questionSubmitErr   error
 	questionErr         error
-	approvalPreparation *workflowexecution.LaunchPreparation
 	questionAcceptance  workflowexecution.WorkflowQuestionAcceptance
 	questionAcceptCalls int
 }
@@ -360,33 +360,23 @@ func (f workflowQuestionAcceptanceFunc) AwaitSuccessor(ctx context.Context) erro
 	return f(ctx)
 }
 
-func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
+func (s *currentNodeCompletionExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	preparation workflowexecution.LaunchPreparation,
+	preparation workflowexecution.TaskStartPreparation,
 ) (workflowstore.StartTaskResult, error) {
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
-	if _, unlockedNone := preparation.EstablishUnlockedNone(); unlockedNone {
-		target, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
-		if err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
-		if _, err := s.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
-			Snapshot: workflowstore.ExecutionTargetSnapshot{
-				Mode:       workflow.ExecutionTargetModeNone,
-				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-			},
-			Root: workflowstore.ExecutionRoot{
-				SourceWorkspaceID:   target.SourceWorkspaceID,
-				SourceWorkspaceRoot: target.SourceWorkspaceRoot,
-			},
-		}); err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
+	started, err := s.store.StartTask(ctx, taskID)
+	if err != nil || preparation == nil {
+		return started, err
 	}
-	return s.store.StartTask(ctx, taskID)
+	if s.startPreparations != nil {
+		s.startPreparations <- preparation
+		return started, nil
+	}
+	return started, preparation(ctx)
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
@@ -405,27 +395,22 @@ func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, tas
 	return selected, nil
 }
 
-func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(ctx context.Context, taskID workflow.TaskID, _ workflowexecution.LaunchPreparation) ([]workflow.CurrentNode, error) {
-	return s.ResumeTask(ctx, taskID)
-}
-
-func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID, preparation workflowexecution.LaunchPreparation) (workflowstore.PendingApprovalApplyResult, error) {
+func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
 	if s.store == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("workflow store is required")
 	}
-	s.approvalPreparation = &preparation
 	return s.store.ApplyPendingApproval(ctx, approvalID)
 }
 
-func (s *currentNodeCompletionExecutionStub) ApplyManualMoveWithPreparation(
+func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	ctx context.Context,
 	prepared workflowstore.ManualMovePreparation,
-	_ workflowexecution.LaunchPreparation,
+	candidate *workflowstore.ExecutionTargetCandidate,
 ) (workflowstore.ManualMoveResult, error) {
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared)
+	return s.store.ApplyManualMove(ctx, prepared, candidate)
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

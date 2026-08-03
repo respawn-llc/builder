@@ -94,7 +94,7 @@ type CurrentNodeExecutionSnapshot struct {
 // lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
 	store interface {
-		StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
+		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
@@ -146,7 +146,7 @@ type CurrentNodeController struct {
 
 func NewCurrentNodeController(
 	store interface {
-		StartTaskWithExecutionTarget(context.Context, workflow.TaskID, *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error)
+		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)

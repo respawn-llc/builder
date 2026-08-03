@@ -186,7 +186,7 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 	required := preview.Choices[0].RequiredValues[0]
 	if required.NodeKey != "join" ||
 		required.OutputName != "joined" ||
-		strings.TrimSpace(required.Description) == "" {
+		required.Description != "Joined branch summary." {
 		t.Fatalf("required value = %+v, want described prior Join parameter", required)
 	}
 }
@@ -413,7 +413,16 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared)
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}

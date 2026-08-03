@@ -169,6 +169,9 @@ func TestDiscoverCommandsCountsFollowedRegularMarkdownFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "blank.md"), []byte(" \n\t"), 0o644); err != nil {
 		t.Fatalf("write blank command: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "---.md"), []byte("invalid command name"), 0o644); err != nil {
+		t.Fatalf("write invalid-name command: %v", err)
+	}
 	targetDir := filepath.Join(t.TempDir(), "command-directory")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir command target directory: %v", err)
@@ -195,6 +198,9 @@ func TestDiscoverCommandsCountsFollowedRegularMarkdownFiles(t *testing.T) {
 	for _, item := range result.Commands.Items {
 		if item.Ref.TargetName == "directory.md" {
 			t.Fatalf("directory symlink counted as command: %+v", item)
+		}
+		if item.Ref.TargetName == "---.md" {
+			t.Fatalf("unnormalizable command filename counted as command: %+v", item)
 		}
 		foundBlank = foundBlank || item.Ref.TargetName == "blank.md"
 	}

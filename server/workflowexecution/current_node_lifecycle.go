@@ -25,6 +25,8 @@ const (
 
 var ErrManualMoveLifecycleConflict = errors.New("workflow task has a non-interruptible lifecycle conflict")
 
+type TaskStartPreparation func(context.Context) error
+
 func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (ManualMoveDisposition, error) {
 	if c == nil {
 		return "", errors.New("current node workflow controller is required")
@@ -81,13 +83,16 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 	return int64(len(recovered)), nil
 }
 
-func (c *CurrentNodeController) StartTaskWithExecutionTarget(
+func (c *CurrentNodeController) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	candidate *workflowstore.ExecutionTargetCandidate,
+	preparation TaskStartPreparation,
 ) (workflowstore.StartTaskResult, error) {
 	if c == nil {
 		return workflowstore.StartTaskResult{}, errors.New("current node workflow controller is required")
+	}
+	if preparation == nil {
+		return workflowstore.StartTaskResult{}, errors.New("task start preparation is required")
 	}
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
 		c.mu.Lock()
@@ -96,26 +101,23 @@ func (c *CurrentNodeController) StartTaskWithExecutionTarget(
 			return workflowstore.StartTaskResult{}, err
 		}
 		c.mu.Unlock()
-		started, err := c.store.StartTaskWithExecutionTarget(ctx, taskID, candidate)
+		started, err := c.store.StartTask(ctx, taskID)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
 			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
 		}
-		starts, err := c.steerAndWaitStarts(ctx, []currentNodeQueuedStart{{
-			reference:          started.Mutation.Created[0].Reference,
-			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
-		}}, recoverCommittedCurrentNodeStarts)
-		if err != nil {
-			return workflowstore.StartTaskResult{}, err
-		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(starts[0]); err != nil {
+		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
+			reference:          started.Mutation.Created[0].Reference,
+			preparation:        preparation,
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
+		}); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		return started, nil

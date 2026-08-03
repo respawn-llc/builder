@@ -524,20 +524,19 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	}))
 	defer server.Close()
 
-	firstPartyCaps := llm.ProviderCapabilities{
+	transport := llm.NewHTTPTransport(transportStaticAuth{})
+	transport.BaseURL = server.URL + "/v1"
+	transport.Client = server.Client()
+	transport.ProviderCapabilitiesOverride = &llm.ProviderCapabilities{
 		ProviderID:             "openai",
 		SupportsResponsesAPI:   true,
 		SupportsPromptCacheKey: true,
 		IsOpenAIFirstParty:     true,
 	}
-	transport := llm.NewHTTPTransport(transportStaticAuth{})
-	transport.BaseURL = server.URL + "/v1"
-	transport.Client = server.Client()
-	transport.ProviderCapabilitiesOverride = &firstPartyCaps
 	openAIClient := llm.NewOpenAIClient(transport)
 
 	store := mustCreateTestSession(t)
-	engineClient := &fakeClient{caps: firstPartyCaps}
+	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
 	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	send := func(req llm.Request) capturedRequest {
 		t.Helper()

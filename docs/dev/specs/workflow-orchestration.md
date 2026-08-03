@@ -264,7 +264,7 @@
 - Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
-- Resume reuses the existing task reminder without steering or appending a duplicate Current Node assignment. If a sessionless Resume has not yet received that reminder, Kent delivers the initial assignment exactly once before the first turn.
+- Resume must not steer or append a Current Node assignment.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -316,8 +316,7 @@
 - Kent presents every required Parameter value before movement. Values already available from the Task are prefilled and remain editable; the operator supplies unresolved values and may override prefilled values.
 - Deliberately selecting an Approval-gated Transition counts as its Approval. Kent applies the move without creating another Approval and clears any older pending Approval.
 - Task Start and manual movement into executable work make no Task change while Execution Target selection is required. Dismissal leaves the Task unchanged.
-- Task Start and manual movement retry the original action after a valid target selection without creating a second Task mutation.
-- Preparation runs asynchronously after the durable Workflow mutation is acknowledged. Preparation failure interrupts the affected Current Node and leaves the Task resumable.
+- After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without holding the shared Workflow mutation permit; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
 - Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
 - Other conflicting lifecycle operations block Manual Move.
@@ -371,9 +370,8 @@
 - Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
 - Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
-- The Resume server mutation returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
-- Direct API and Desktop Resume acknowledgement does not wait for Execution Target restoration, Session setup, or agent or Script startup.
-- The CLI Resume command waits for each affected Current Node to report a live Session or Script scope or to advance beyond that Current Node. An interruption observed before that acknowledgement makes the command fail.
+- Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
+- Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
@@ -439,20 +437,19 @@
 
 - A workflow execution target policy is evaluated only when an unlocked task first reaches an executable node through task start or manual movement.
 - No managed worktree uses the source workspace as the execution root, supports non-Git workspaces, and creates no branch or worktree and runs no worktree setup.
-- A no-managed-worktree preparation attempt uses the source-workspace snapshot captured for that initiating action.
-- Source workspace is editable only while the Task is in Backlog. A Backlog source-workspace edit changes the root captured by later initiating actions.
+- A no-managed-worktree target follows the task's current source workspace. Changing that workspace intentionally changes later execution roots.
 - Source `HEAD`, repository default branch, and custom Git ref resolve to an immutable commit before managed-worktree creation. A custom ref accepts any Git revision that resolves to a commit.
 - Repository default branch uses configured local remote-HEAD metadata: `origin` when configured, otherwise one unambiguous configured remote HEAD. Kent does not contact remotes or guess branch names; missing or ambiguous metadata makes the configured target unavailable.
 - `ask_on_first_execution` and an unavailable configured target use the same task-local selection flow. They offer no managed worktree, source `HEAD`, repository default branch, and custom Git ref.
 - For `ask_on_first_execution`, repository default branch is preselected. For an unavailable configured target, the configured mode and custom-ref input remain selected when useful; otherwise repository default branch is preselected.
-- An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why.
+- An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why, except during Task Start where resolution occurs after placement and failure interrupts the placed Current Node.
 - Selection-required results distinguish two reasons: the Workflow requires selection, or the configured target is unavailable. Every selection flow offers all four concrete modes.
-- Failure to resolve an explicitly selected custom ref is a validation failure. It does not recursively request selection or fall back to another target.
-- A Task locks target-selection provenance when environment-dependent preparation establishes its Execution Root after the durable Workflow mutation. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
+- Failure to resolve an explicitly selected custom ref is a validation failure. During Task Start that failure occurs asynchronously after placement; it does not recursively request selection or fall back to another target.
+- A Task locks target-selection provenance when preparation establishes the first Execution Root. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
 - A Task with a legacy managed worktree and usable recorded `HEAD` continues to use that worktree. Kent identifies its observed commit as legacy provenance and does not present it as a known original branch point.
 - A legacy Task without a managed worktree remains unlocked and uses its Workflow's source-`HEAD` policy.
-- Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent runs the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
-- Managed worktree setup failure leaves the durable movement applied, interrupts the affected Current Node, and retains the locked target and created worktree for inspection or manual repair.
+- Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
+- Managed worktree setup failure during Task Start leaves placement applied and interrupts the placed Current Node. For other initiating actions it leaves the action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when an operation creates or recreates a worktree root. A later retry does not rerun setup for an existing compatible root.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.
 - Workflow Task setup has no Session identity. Its JSON input represents the Session as `null`, and its Session environment value is absent. Session-originated setup supplies the requesting Session identity in both inputs.
@@ -471,9 +468,9 @@
 - After deletion starts, new work for every Session that targets the worktree is rejected until retargeting and Git removal finish.
 - A rejected deletion leaves Session targets, worktree information, Git state, and branch state unchanged.
 - Task worktree creation and conservative restoration have the same setup and collision behavior.
-- The CLI task-start, task-approve, task-move, and task-resume commands may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
+- The CLI task-start, task-approve, and task-move commands may select a concrete target for an unlocked task even when the workflow has a fixed policy. Task creation has no target override.
 - CLI target selection uses `--execution-target none|head|default-branch|ref:<revision>`; custom Git revisions require the explicit `ref:` namespace.
-- CLI task start, approve, move, and resume never prompt interactively. Selection-required output identifies the reason and concrete rerun flags. Task start exposes the same typed outcome in JSON.
+- CLI task start, approve, and move never prompt interactively. Selection-required output identifies the reason and concrete rerun flags. Task start exposes the same typed outcome in JSON.
 
 ## Project Keys And Task IDs
 

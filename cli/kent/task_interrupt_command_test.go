@@ -52,15 +52,8 @@ func (r *taskInterruptCommandRemote) GetWorkflowTask(_ context.Context, req serv
 	return serverapi.WorkflowTaskGetResponse{
 		Task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: req.TaskID, ShortID: "KENT-1"},
-			CurrentScripts: []serverapi.WorkflowTaskCurrentScript{{
-				CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-1"},
-			}},
 		},
 	}, nil
-}
-
-func (r *taskInterruptCommandRemote) ListWorkflowTaskAttention(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return serverapi.WorkflowTaskAttentionListResponse{Items: []serverapi.WorkflowAttentionItem{}}, nil
 }
 
 func (r *taskInterruptCommandRemote) InterruptWorkflowTask(_ context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
@@ -70,12 +63,7 @@ func (r *taskInterruptCommandRemote) InterruptWorkflowTask(_ context.Context, re
 
 func (r *taskInterruptCommandRemote) ResumeWorkflowTask(_ context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	r.resumeRequests = append(r.resumeRequests, req)
-	return serverapi.WorkflowTaskResumeResponse{
-		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
-		Applied: &serverapi.WorkflowTaskResumeApplied{
-			CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
-		},
-	}, nil
+	return serverapi.WorkflowTaskResumeResponse{}, nil
 }
 
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {

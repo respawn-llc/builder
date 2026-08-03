@@ -3,7 +3,6 @@ import {
   taskApproveResponseSchema,
   taskMovePreviewResponseSchema,
   taskMoveResponseSchema,
-  taskResumeResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -60,26 +59,11 @@ describe("task lifecycle client", () => {
           },
         },
       },
-      {
-        method: "workflow.task.resume",
-        result: {
-          outcome: "applied",
-          applied: {
-            current_nodes: [{ node_id: "node-4", transition_branch_key: null, session_id: null }],
-          },
-        },
-      },
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { currentNodes: [{ nodeID: "node-1" }] },
-    });
-    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { currentNodes: [{ nodeID: "node-2" }] },
-    });
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-1" }] } });
+    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-2" }] } });
     await expect(client.previewMoveTask("task-1", "node-2")).resolves.toEqual({
       outcome: "transition",
       transition: {
@@ -95,35 +79,15 @@ describe("task lifecycle client", () => {
         ],
       },
     });
-    await expect(client.resumeTask({ taskID: "task-1" })).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { currentNodes: [{ nodeID: "node-4" }] },
-    });
-    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
-    });
+    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({ outcome: "applied", applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] } });
 
     expect(transport.calls).toContainEqual({
       method: "workflow.task.approve",
       options: { timeoutMs: null },
       params: { approval_id: "approval-1" },
     });
-    expect(transport.calls.find((call) => call.method === "workflow.task.resume")?.params).toMatchObject({
-      task_id: "task-1",
-    });
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "allow_missing_edge",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "auto_approve",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "allow_missing_edge",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "auto_approve",
-    );
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("allow_missing_edge");
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("auto_approve");
     expect(transport.calls.find((call) => call.method === "workflow.task.move.preview")).toEqual({
       method: "workflow.task.move.preview",
       options: { timeoutMs: null },
@@ -201,12 +165,7 @@ describe("task lifecycle client", () => {
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {
-    const schemas = [
-      taskStartResponseSchema,
-      taskMoveResponseSchema,
-      taskResumeResponseSchema,
-      taskApproveResponseSchema,
-    ];
+    const schemas = [taskStartResponseSchema, taskMoveResponseSchema, taskApproveResponseSchema];
     for (const schema of schemas) {
       expect(() =>
         schema.parse({

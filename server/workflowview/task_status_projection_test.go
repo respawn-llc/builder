@@ -82,10 +82,9 @@ func (r *controllerBackedTaskStatusRunner) configure(
 	r.configs[taskID] = config
 }
 
-func (r *controllerBackedTaskStatusRunner) StartCurrentNodeWithPreparation(
+func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	_ workflowexecution.LaunchPreparation,
 	_ workflowruntime.TaskPromptDelivery,
 	_ workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
@@ -277,12 +276,23 @@ func startControllerBackedTaskStatusExecution(
 	options.executionRelease = release
 	options.started = startedHandle
 	surfaces.runner.configure(backlog.task.ID, options)
-	startedResult, err := surfaces.controller.StartTaskWithPreparation(t.Context(), backlog.task.ID, workflowexecution.EstablishedRootLaunchPreparation())
+	startedResult, err := surfaces.controller.StartTask(t.Context(), backlog.task.ID, func(ctx context.Context) error {
+		return surfaces.fixture.store.LockTaskExecutionTarget(ctx, backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   surfaces.fixture.binding.WorkspaceID,
+				SourceWorkspaceRoot: surfaces.fixture.binding.CanonicalRoot,
+			},
+		})
+	})
 	if err != nil {
-		t.Fatalf("StartTaskWithPreparation: %v", err)
+		t.Fatalf("StartTask: %v", err)
 	}
 	if len(startedResult.Mutation.Created) != 1 {
-		t.Fatalf("StartTaskWithExecutionTarget mutation = %+v, want one Current Node", startedResult.Mutation)
+		t.Fatalf("StartTask mutation = %+v, want one Current Node", startedResult.Mutation)
 	}
 	task := startedCurrentNodeViewTask{
 		task:        backlog.task,
@@ -382,10 +392,9 @@ func (s staticTaskStatusLiveObservationSource) ObserveWorkflowTaskExecutions([]w
 	return s.observation, nil
 }
 
-func (taskStatusProjectionTestRunner) StartCurrentNodeWithPreparation(
+func (taskStatusProjectionTestRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
-	workflowexecution.LaunchPreparation,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
 	sessionruntime.WorkflowExecutionLease,

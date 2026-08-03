@@ -241,15 +241,18 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
-	started, err := f.controller.StartTaskWithPreparation(
-		context.Background(),
-		task.ID,
-		workflowexecution.NewEstablishUnlockedNoneLaunchPreparation(
-			workflowexecution.LaunchSourceWorkspaceSnapshot{ID: f.workspaceID, Root: f.workspace},
-			serverapi.NewWorktreeSetupOperationID(),
-			nil,
-		),
-	)
+	started, err := f.controller.StartTask(context.Background(), task.ID, func(ctx context.Context) error {
+		return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   f.workspaceID,
+				SourceWorkspaceRoot: f.workspace,
+			},
+		})
+	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
@@ -280,25 +283,7 @@ func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workf
 	if marshalErr != nil {
 		t.Fatalf("Current Nodes = %+v did not reach expected state", nodes)
 	}
-	controller, controllerMarshalErr := json.Marshal(f.controller.Snapshot())
-	if controllerMarshalErr != nil {
-		t.Fatalf("Current Nodes = %s did not reach expected state; controller snapshot = %+v", encoded, f.controller.Snapshot())
-	}
-	executionState, executionStateErr := f.authority.CurrentWorkflowTaskExecutionState(taskID)
-	if executionStateErr != nil {
-		t.Fatalf(
-			"Current Nodes = %s did not reach expected state; controller snapshot = %s; execution state error = %v",
-			encoded,
-			controller,
-			executionStateErr,
-		)
-	}
-	t.Fatalf(
-		"Current Nodes = %s did not reach expected state; controller snapshot = %s; execution state = %+v",
-		encoded,
-		controller,
-		executionState,
-	)
+	t.Fatalf("Current Nodes = %s did not reach expected state", encoded)
 	return nil
 }
 
@@ -641,11 +626,7 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	if err != nil {
 		t.Fatalf("resolve previous target Session: %v", err)
 	}
-	if _, err := f.controller.ApplyPendingApproval(
-		context.Background(),
-		approval.ID,
-		workflowexecution.EstablishedRootLaunchPreparation(),
-	); err != nil {
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply pending Approval: %v", err)
 	}
 	requests := f.waitForModelRequests(t, 3)
@@ -964,7 +945,7 @@ func currentNodeKindID(t *testing.T, definition workflow.Definition, kind workfl
 	return ""
 }
 
-func TestCurrentNodeRuntimePreparationFailureCleansDisposableFreshSession(t *testing.T) {
+func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
@@ -976,15 +957,18 @@ func TestCurrentNodeRuntimePreparationFailureCleansDisposableFreshSession(t *tes
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
-	started, err := f.controller.StartTaskWithPreparation(
-		context.Background(),
-		task.ID,
-		workflowexecution.NewEstablishUnlockedNoneLaunchPreparation(
-			workflowexecution.LaunchSourceWorkspaceSnapshot{ID: f.workspaceID, Root: f.workspace},
-			serverapi.NewWorktreeSetupOperationID(),
-			nil,
-		),
-	)
+	started, err := f.controller.StartTask(context.Background(), task.ID, func(ctx context.Context) error {
+		return f.store.LockTaskExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+			},
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   f.workspaceID,
+				SourceWorkspaceRoot: f.workspace,
+			},
+		})
+	})
 	if err != nil {
 		t.Fatalf("start task: %v", err)
 	}
@@ -995,8 +979,8 @@ func TestCurrentNodeRuntimePreparationFailureCleansDisposableFreshSession(t *tes
 		return len(nodes) == 1 && nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
 	})
-	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 0 {
-		t.Fatalf("disposable Session count after runtime preparation failure = %d, %v; want cleanup", count, err)
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
+		t.Fatalf("retained Session count after runtime preparation failure = %d, %v; want assigned Session", count, err)
 	}
 }
 
@@ -1207,15 +1191,7 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	if err != nil {
 		t.Fatalf("subscribe source transcript: %v", err)
 	}
-	var closeTranscript sync.Once
-	closeTranscriptSubscription := func() {
-		closeTranscript.Do(func() {
-			if err := transcript.Close(); err != nil {
-				t.Errorf("close source transcript subscription: %v", err)
-			}
-		})
-	}
-	t.Cleanup(closeTranscriptSubscription)
+	t.Cleanup(func() { _ = transcript.Close() })
 
 	releaseSource.Do(func() { close(sourceResponseRelease) })
 	successorNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
@@ -1241,7 +1217,7 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	}
 	if err := os.WriteFile(
 		laterScriptPath,
-		[]byte("#!/bin/sh\nprintf '%s' '{\"commentary\":\"later script done\"}'\n: > "+workflowRunnerShellQuote(laterScriptMarker)+"\n"),
+		[]byte("#!/bin/sh\n: > "+workflowRunnerShellQuote(laterScriptMarker)+"\nprintf '%s' '{\"commentary\":\"later script done\"}'\n"),
 		0o755,
 	); err != nil {
 		t.Fatalf("write later automatic script: %v", err)
@@ -1249,29 +1225,18 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	scriptWorkflowID := createCurrentNodeScriptChainWorkflow(t, f.store, sourceScriptPath, laterScriptPath)
 	scriptTask := f.createTask(t, scriptWorkflowID)
 	scriptSource := f.startTask(t, scriptTask)
-	scriptSuccessorNodes := f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && !nodes[0].Reference.Equal(scriptSource)
 	})
-	scriptSuccessor := scriptSuccessorNodes[0].Reference
 
 	releaseSuccessor.Do(func() { close(successorResponseRelease) })
 	f.waitForPath(t, laterScriptMarker)
-	closeTranscriptSubscription()
 	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
 	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
-		if len(nodes) != 1 {
-			return false
-		}
-		if nodes[0].Scheduling == nil {
-			return true
-		}
-		return nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted &&
-			nodes[0].Scheduling.Interruption != nil &&
-			nodes[0].Scheduling.Interruption.Reason == workflow.CurrentNodeInterruptionReason(ReasonScriptCompletionFailed)
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
-	f.waitForControllerCurrentNodeFinalized(t, scriptSuccessor)
 }
 
 func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
