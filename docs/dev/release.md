@@ -60,33 +60,33 @@ Do not write:
 
 ### Kent Implementation-Detail Examples
 
-These 25 examples came from the `v2.4.0...v2.5.0` source diff. Do not copy them into curated notes. Apply the stated rewrite or omit the item.
+These 25 examples came from the `v2.4.0...v2.5.0` source diff. Each entry quotes an exact commit subject and its short hash. Do not copy them into curated notes. Apply the stated rewrite or omit the item.
 
-1. `centralize metadata SQLite extensions` — omit; storage composition is not a user outcome.
-2. `add task search index schema foundation` — fold into `Added Task Search`; do not announce index structure.
-3. `add task search index creation triggers` — fold into `Added Task Search`; do not announce database triggers.
-4. `synchronize task search source edits` — write `Task and Comment edits appear in search immediately` only when public behavior requires that guarantee.
-5. `add task search RPC` — announce the released Desktop or CLI search surface, not its transport.
-6. `bump task search protocol version` — state the coordinated client/server upgrade action without naming protocol generations.
-7. `expose revisioned workflow observations` — translate to the visible Task-status behavior or omit.
-8. `capture stable workflow status snapshots` — combine with the same Task-status outcome; do not add a second entry.
-9. `reserve manual move write transaction` — fold into the final Manual Move capability or omit as same-release stabilization.
-10. `serialize manual move previews` — fold into the final Manual Move capability or omit as same-release stabilization.
-11. `defer workflow successors until scope retirement` — write the prior-release workflow-overlap defect only when users could encounter it; otherwise omit.
-12. `admit workflow runs after runtime preparation` — write the prior-release failure to start work only when users could encounter it; otherwise omit.
-13. `release gate-owned agent capacity` — translate to the documented `workflow.concurrency` behavior.
-14. `share keyed mutation lanes` — write `Concurrent edits do not overwrite newer changes` when that previous-release defect is verified.
-15. `make transcript batch publication atomic` — write the visible partial-transcript defect when users could encounter it; otherwise omit.
-16. `preserve repaired tool step identity` — write `Fixed Sessions with interrupted tool calls reopening with transcript corruption or crashing`.
-17. `deduplicate stream terminal resets` — write `Fixed failed model responses duplicating or leaving partial assistant output`.
-18. `initialize transcript feed before wake` — write the resumed-TUI crash once, in user terms.
-19. `wait for transcript runtime wake` — merge with the same resumed-TUI crash entry; do not duplicate it.
-20. `publish question state before releasing waiters` — write the missing or stale Question behavior when it existed in the previous public release.
-21. `memoize workflow question acceptance` — omit; this is internal stabilization.
-22. `classify local providers as OpenAI compatible` — state the new-Session action for local or custom OpenAI-compatible endpoints without describing provider classification.
-23. `centralize worktree create ownership` — write `Added distinct TUI feedback for Base-ref errors during Worktree Create`.
-24. `add the read-only worktree.deletePreview API/RPC surface` — omit until a released client or public integration exposes it.
-25. `remove workflow identity sentinels` — omit; internal identity cleanup is not a user outcome.
+1. `feat: centralize metadata SQLite extensions` (`daba3d3f6`) — omit; storage composition is not a user outcome.
+2. `feat: add task search index schema foundation` (`65b694630`) — fold into `Added Task Search`; do not announce index structure.
+3. `feat: add task search index creation triggers` (`02101ff5f`) — fold into `Added Task Search`; do not announce database triggers.
+4. `feat: synchronize task search source edits` (`c9d9f3626`) — write `Task and Comment edits appear in search immediately` only when public behavior requires that guarantee.
+5. `feat!: add task search RPC` (`e8a7aa299`) — announce the released Desktop or CLI search surface, not its transport.
+6. `fix!: bump task search protocol version` (`0dd37d78e`) — state the coordinated client/server upgrade action without naming protocol generations.
+7. `feat: expose revisioned workflow observations` (`ea71fa018`) — translate to the visible Task-status behavior or omit.
+8. `feat: capture stable workflow status snapshots` (`4c7b7f98f`) — combine with the same Task-status outcome; do not add a second entry.
+9. `fix: reserve manual move write transaction` (`ec0012dbd`) — fold into the final Manual Move capability or omit as same-release stabilization.
+10. `fix: serialize manual move previews` (`9e1383cd5`) — fold into the final Manual Move capability or omit as same-release stabilization.
+11. `fix: defer workflow successors until scope retirement` (`55e35b61d`) — write the prior-release workflow-overlap defect only when users could encounter it; otherwise omit.
+12. `fix: admit workflow runs after runtime preparation` (`1d027863b`) — write the prior-release failure to start work only when users could encounter it; otherwise omit.
+13. `fix: release gate-owned agent capacity` (`2336bc48d`) — translate to the documented `workflow.concurrency` behavior.
+14. `refactor: share keyed mutation lanes` (`afd3381c4`) — write `Concurrent edits do not overwrite newer changes` when that previous-release defect is verified.
+15. `fix!: make transcript batch publication atomic` (`c315a1a5e`) — write the visible partial-transcript defect when users could encounter it; otherwise omit.
+16. `fix: preserve repaired tool step identity` (`b31094c0c`) — write `Fixed Sessions with interrupted tool calls reopening with transcript corruption or crashing`.
+17. `fix: deduplicate stream terminal resets` (`5e0b57c7e`) — write `Fixed failed model responses duplicating or leaving partial assistant output`.
+18. `fix: initialize transcript feed before wake` (`856c68e87`) — write the resumed-TUI crash once, in user terms.
+19. `fix: wait for transcript runtime wake` (`c0955534f`) — merge with the same resumed-TUI crash entry; do not duplicate it.
+20. `fix: publish question state before releasing waiters` (`5ac765f8f`) — write the missing or stale Question behavior when it existed in the previous public release.
+21. `fix: memoize workflow question acceptance` (`6d2191c94`) — omit; this is internal stabilization.
+22. `fix: classify local providers as openai compatible` (`dbcc53f15`) — state the new-Session action for local or custom OpenAI-compatible endpoints without describing provider classification.
+23. `fix: centralize worktree create ownership` (`d28dff3ee`) — write `Added distinct TUI feedback for Base-ref errors during Worktree Create`.
+24. `fix: move worktree deletion validation to contract owner` (`ab68f744c`) — omit; an internal validation owner is not a user outcome.
+25. `fix: remove workflow identity sentinels` (`ed93c1e2a`) — omit; internal identity cleanup is not a user outcome.
 
 ### Curated Notes And Generated Changelog
 
