@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
 
@@ -82,7 +83,8 @@ const (
 )
 
 type WorktreeTransitionFailure struct {
-	Diagnostic string
+	Diagnostic         string
+	DeletePrecondition *WorktreeDirtyState
 }
 
 type WorktreeTransitionOutcome struct {
@@ -112,6 +114,17 @@ func (outcome WorktreeTransitionOutcome) Validate() error {
 		}
 		if strings.TrimSpace(outcome.Failure.Diagnostic) == "" {
 			return errors.New("worktree transition failure diagnostic is required")
+		}
+		if outcome.Failure.DeletePrecondition != nil {
+			precondition := outcome.Failure.DeletePrecondition
+			if err := worktreecontract.ValidateDeleteTransitionPrecondition(
+				worktreecontract.TransitionKind(outcome.Transition),
+				precondition.Kind,
+				precondition.DirtyFileCount,
+				precondition.UnknownCause,
+			); err != nil {
+				return err
+			}
 		}
 	default:
 		return errors.New("worktree transition state is invalid")

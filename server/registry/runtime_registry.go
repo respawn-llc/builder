@@ -574,6 +574,10 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 			Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
 			Detail: outcome.Failure.Diagnostic,
 		}
+		if outcome.Failure.DeletePrecondition != nil {
+			dirtyState := *outcome.Failure.DeletePrecondition
+			transcriptOutcome.DeletePrecondition = &dirtyState
+		}
 	}
 	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptOutcome)})
 }

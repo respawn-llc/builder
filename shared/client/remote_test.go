@@ -80,6 +80,138 @@ func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
 	}
 }
 
+func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(t *testing.T) {
+	tests := []struct {
+		name  string
+		state clientui.WorktreeDirtyState
+	}{
+		{name: "clean", state: clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}},
+		{
+			name: "dirty",
+			state: func() clientui.WorktreeDirtyState {
+				count := 3
+				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateDirty, DirtyFileCount: &count}
+			}(),
+		},
+		{
+			name: "unknown",
+			state: func() clientui.WorktreeDirtyState {
+				cause := "status inspection failed"
+				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateUnknown, UnknownCause: &cause}
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := serverapi.WorktreeTopologyEntry{
+				Variant: serverapi.WorktreeTopologyVariantRegistered,
+				Registered: &serverapi.WorktreeRegisteredFacts{
+					Git: serverapi.WorktreeGitFacts{
+						CanonicalRoot: "/repo/feature",
+						HeadObject:    "abc123",
+						PathAvailable: true,
+					},
+					Kent: serverapi.WorktreeKentFacts{
+						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+						CanonicalRoot: "/repo/feature",
+						DisplayName:   "feature",
+					},
+				},
+			}
+			response := serverapi.WorktreeDeletePreviewResponse{
+				Worktree:         entry,
+				DeletionSelector: entry.Registered.Kent.WorktreeID,
+				Cleanliness:      test.state,
+			}
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive delete preview: %v", err)
+					return
+				}
+				if request.Method != protocol.MethodWorktreeDeletePreview {
+					t.Errorf("method = %q, want %q", request.Method, protocol.MethodWorktreeDeletePreview)
+					return
+				}
+				var params serverapi.WorktreeDeletePreviewRequest
+				if err := json.Unmarshal(request.Params, &params); err != nil {
+					t.Errorf("decode delete preview request: %v", err)
+					return
+				}
+				if err := params.Validate(); err != nil {
+					t.Errorf("delete preview request validation: %v", err)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+					t.Errorf("send delete preview response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+
+			got, err := remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
+				SessionID: "session-1",
+				Selector:  "feature",
+			})
+			if err != nil {
+				t.Fatalf("PreviewWorktreeDelete: %v", err)
+			}
+			if got.Cleanliness.Kind != test.state.Kind {
+				t.Fatalf("cleanliness kind = %q, want %q", got.Cleanliness.Kind, test.state.Kind)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("decoded response validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemotePreviewWorktreeDeleteRejectsMismatchedResponseSelector(t *testing.T) {
+	entry := serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantExternal,
+		External: &serverapi.WorktreeExternalFacts{
+			Git: serverapi.WorktreeGitFacts{
+				CanonicalRoot: "/repo/external",
+				HeadObject:    "abc123",
+				PathAvailable: true,
+			},
+		},
+	}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			t.Errorf("receive delete preview: %v", err)
+			return
+		}
+		response := serverapi.WorktreeDeletePreviewResponse{
+			Worktree:         entry,
+			DeletionSelector: "/repo/other",
+			Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+			t.Errorf("send delete preview response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
+		SessionID: "session-1",
+		Selector:  "external",
+	})
+	if err == nil {
+		t.Fatal("mismatched delete preview selector was accepted")
+	}
+}
+
 func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1670,8 +1802,8 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			Diagnostic: "setup failed",
 		},
 		&serverapi.WorktreeDeletePreconditionError{
-			DirtyState: serverapi.WorktreeDirtyState{
-				Kind:           serverapi.WorktreeDirtyStateDirty,
+			DirtyState: clientui.WorktreeDirtyState{
+				Kind:           clientui.WorktreeDirtyStateDirty,
 				DirtyFileCount: remoteTestIntPointer(2),
 			},
 		},

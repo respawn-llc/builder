@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")
@@ -918,49 +918,33 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	return normalized.CreateBranch, nil
 }
 
-func (i *GitInspector) DirtyFileCount(ctx context.Context, worktreeRoot string) (int, error) {
+func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
 	if i == nil {
-		return 0, fmt.Errorf("git inspector is required")
+		return clientui.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
 	}
 	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return 0, err
-	}
-	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
-	if err != nil {
-		return 0, err
-	}
-	return countPorcelainStatusEntries(output), nil
-}
-
-func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (serverapi.WorktreeDirtyState, error) {
-	if i == nil {
-		return serverapi.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
-	}
-	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
-	if err != nil {
-		return serverapi.WorktreeDirtyState{}, err
+		return clientui.WorktreeDirtyState{}, err
 	}
 	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return serverapi.WorktreeDirtyState{}, ctxErr
+			return clientui.WorktreeDirtyState{}, ctxErr
 		}
 		cause := err.Error()
-		return serverapi.WorktreeDirtyState{
-			Kind:         serverapi.WorktreeDirtyStateUnknown,
+		return clientui.WorktreeDirtyState{
+			Kind:         clientui.WorktreeDirtyStateUnknown,
 			UnknownCause: &cause,
 		}, nil
 	}
 	count := countPorcelainStatusEntries(output)
 	if count == 0 {
-		return serverapi.WorktreeDirtyState{
-			Kind:           serverapi.WorktreeDirtyStateClean,
-			DirtyFileCount: &count,
+		return clientui.WorktreeDirtyState{
+			Kind: clientui.WorktreeDirtyStateClean,
 		}, nil
 	}
-	return serverapi.WorktreeDirtyState{
-		Kind:           serverapi.WorktreeDirtyStateDirty,
+	return clientui.WorktreeDirtyState{
+		Kind:           clientui.WorktreeDirtyStateDirty,
 		DirtyFileCount: &count,
 	}, nil
 }
