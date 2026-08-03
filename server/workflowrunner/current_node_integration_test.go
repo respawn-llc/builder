@@ -1245,9 +1245,10 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	scriptWorkflowID := createCurrentNodeScriptChainWorkflow(t, f.store, sourceScriptPath, laterScriptPath)
 	scriptTask := f.createTask(t, scriptWorkflowID)
 	scriptSource := f.startTask(t, scriptTask)
-	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+	scriptSuccessorNodes := f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && !nodes[0].Reference.Equal(scriptSource)
 	})
+	scriptSuccessor := scriptSuccessorNodes[0].Reference
 
 	releaseSuccessor.Do(func() { close(successorResponseRelease) })
 	f.waitForPath(t, laterScriptMarker)
@@ -1256,8 +1257,17 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
 	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 && nodes[0].Scheduling == nil
+		if len(nodes) != 1 {
+			return false
+		}
+		if nodes[0].Scheduling == nil {
+			return true
+		}
+		return nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted &&
+			nodes[0].Scheduling.Interruption != nil &&
+			nodes[0].Scheduling.Interruption.Reason == workflow.CurrentNodeInterruptionReason(ReasonScriptCompletionFailed)
 	})
+	f.waitForControllerCurrentNodeFinalized(t, scriptSuccessor)
 }
 
 func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
