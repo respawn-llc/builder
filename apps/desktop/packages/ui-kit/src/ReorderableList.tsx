@@ -4,9 +4,13 @@ import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
+  pointerWithin,
   useDndContext,
   useSensor,
   useSensors,
+  type ClientRect,
+  type Collision,
+  type CollisionDetection,
   type DraggableAttributes,
   type DraggableSyntheticListeners,
   type DragEndEvent,
@@ -18,7 +22,7 @@ import {
   arrayMove,
   sortableKeyboardCoordinates,
   useSortable,
-  verticalListSortingStrategy,
+  type SortingStrategy,
 } from "@dnd-kit/sortable";
 import {
   useCallback,
@@ -123,7 +127,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
   return (
     <DndContext
       autoScroll
-      collisionDetection={closestCenter}
+      collisionDetection={verticalReorderCollisionDetection}
       onDragCancel={() => {
         setDragMode(null);
         setOverlayItem(null);
@@ -144,20 +148,15 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
       }}
       sensors={sensors}
     >
-      <SortableContext items={itemIDs} strategy={verticalListSortingStrategy}>
-        {items.map((item) => (
-          <ReorderableListItem
-            disabled={disabled}
-            hideActiveItem={dragMode === "pointer"}
-            item={item}
-            itemID={getItemID(item)}
-            itemNodes={itemNodes}
-            key={getItemID(item)}
-            reducedMotion={reducedMotion}
-            renderItem={renderItem}
-          />
-        ))}
-      </SortableContext>
+      <ReorderableListItems
+        dragMode={dragMode}
+        disabled={disabled}
+        getItemID={getItemID}
+        itemNodes={itemNodes}
+        items={items}
+        reducedMotion={reducedMotion}
+        renderItem={renderItem}
+      />
       {dragMode === "pointer" || overlayItem !== null ? (
         <ReorderableListDragOverlay
           dragMode={dragMode}
@@ -224,28 +223,86 @@ function ReorderableListDragOverlay<Item>({
   );
 }
 
+function ReorderableListItems<Item, ID extends UniqueIdentifier>({
+  dragMode,
+  disabled,
+  getItemID,
+  itemNodes,
+  items,
+  reducedMotion,
+  renderItem,
+}: Readonly<{
+  dragMode: "keyboard" | "pointer" | null;
+  disabled: boolean;
+  getItemID: (item: Item) => ID;
+  itemNodes: RefObject<Map<ID, HTMLElement>>;
+  items: readonly Item[];
+  reducedMotion: boolean;
+  renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
+}>) {
+  const { active, activeNodeRect, over } = useDndContext();
+  const itemIDs = items.map(getItemID);
+  const projection =
+    active === null ? { insertionIndex: undefined } : projectVerticalReorder(itemIDs, active.id, over?.id);
+  const activeRowHeight = activeNodeRect?.height;
+  const canCollapseActive = projection.insertionIndex !== undefined && activeRowHeight !== undefined;
+  return (
+    <SortableContext items={itemIDs} strategy={verticalReorderProjectionStrategy}>
+      {items.map((item, index) => {
+        const itemID = getItemID(item);
+        return (
+          <ReorderableListItem
+            activeRowHeight={activeRowHeight}
+            collapseActive={canCollapseActive && active?.id === itemID}
+            disabled={disabled}
+            hideActiveItem={dragMode === "pointer" || canCollapseActive}
+            insertionGap={projection.insertionIndex === index}
+            isDragging={active?.id === itemID}
+            item={item}
+            itemID={itemID}
+            itemNodes={itemNodes}
+            key={itemID}
+            reducedMotion={reducedMotion}
+            renderItem={renderItem}
+          />
+        );
+      })}
+      {projection.insertionIndex === itemIDs.length ? (
+        <VerticalReorderGap height={activeRowHeight} reducedMotion={reducedMotion} />
+      ) : null}
+    </SortableContext>
+  );
+}
+
 function ReorderableListItem<Item, ID extends UniqueIdentifier>({
+  activeRowHeight,
+  collapseActive,
   disabled,
   hideActiveItem,
   item,
   itemID,
+  insertionGap,
   itemNodes,
+  isDragging,
   reducedMotion,
   renderItem,
 }: Readonly<{
+  activeRowHeight: number | undefined;
+  collapseActive: boolean;
   disabled: boolean;
   hideActiveItem: boolean;
   item: Item;
   itemID: ID;
+  insertionGap: boolean;
   itemNodes: RefObject<Map<ID, HTMLElement>>;
+  isDragging: boolean | undefined;
   reducedMotion: boolean;
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>) {
-  const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } =
-    useSortable({
-      disabled,
-      id: itemID,
-    });
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
+    disabled,
+    id: itemID,
+  });
   const setTrackedNodeRef = useCallback(
     (element: HTMLElement | null) => {
       setNodeRef(element);
@@ -262,19 +319,102 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
       transform === null
         ? undefined
         : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
-    opacity: hideActiveItem && isDragging ? 0 : undefined,
     transition: reducedMotion ? undefined : transition,
+    ...(collapseActive
+      ? { height: 0, opacity: 0, overflow: "hidden", pointerEvents: "none" }
+      : isDragging && hideActiveItem
+        ? { opacity: 0, pointerEvents: "none" }
+        : {}),
   };
-  return renderItem(item, {
-    activatorAttributes: attributes,
-    activatorListeners: listeners,
-    activatorRef: setActivatorNodeRef,
-    itemRef: setTrackedNodeRef,
-    style,
-  });
+  return (
+    <>
+      {insertionGap ? <VerticalReorderGap height={activeRowHeight} reducedMotion={reducedMotion} /> : null}
+      {renderItem(item, {
+        activatorAttributes: attributes,
+        activatorListeners: listeners,
+        activatorRef: setActivatorNodeRef,
+        itemRef: setTrackedNodeRef,
+        style,
+      })}
+    </>
+  );
 }
 
+function VerticalReorderGap({
+  height,
+  reducedMotion,
+}: Readonly<{ height: number | undefined; reducedMotion: boolean }>) {
+  if (height === undefined) {
+    return null;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        height,
+        transition: reducedMotion ? undefined : "height var(--motion-fast) ease-out",
+      }}
+    />
+  );
+}
+
+const verticalReorderProjectionStrategy: SortingStrategy = () => null;
+
 const DROP_ANIMATION_DURATION_MS = 250;
+
+const verticalReorderCollisionDetection: CollisionDetection = ({
+  active,
+  collisionRect,
+  pointerCoordinates,
+  ...args
+}) => {
+  if (pointerCoordinates === null) {
+    return closestCenter({ active, collisionRect, pointerCoordinates, ...args });
+  }
+  const pointerCollisions = pointerWithin({ active, collisionRect, pointerCoordinates, ...args });
+  const collisions =
+    pointerCollisions.length === 0
+      ? closestCenter({ active, collisionRect, pointerCoordinates, ...args })
+      : pointerCollisions;
+  return activationCollisions(active, collisionRect, collisions);
+};
+
+function activationCollisions(
+  active: { id: UniqueIdentifier; rect: { current: { initial: ClientRect | null } } },
+  collisionRect: ClientRect,
+  collisions: Collision[],
+): Collision[] {
+  const initialRect = active.rect.current.initial;
+  if (initialRect === null) {
+    return collisions;
+  }
+  if (initialRect.top !== collisionRect.top || initialRect.left !== collisionRect.left) {
+    return collisions;
+  }
+  const activeCollision = collisions.find(({ id }) => id === active.id);
+  if (activeCollision === undefined) {
+    return collisions;
+  }
+  return [activeCollision, ...collisions.filter(({ id }) => id !== active.id)];
+}
+
+function projectVerticalReorder(
+  itemIDs: readonly UniqueIdentifier[],
+  activeID: UniqueIdentifier,
+  overID: UniqueIdentifier | undefined,
+): Readonly<{ insertionIndex: number | undefined }> {
+  if (overID === undefined || activeID === overID) {
+    return { insertionIndex: undefined };
+  }
+  const activeIndex = itemIDs.indexOf(activeID);
+  const overIndex = itemIDs.indexOf(overID);
+  if (activeIndex < 0 || overIndex < 0) {
+    return { insertionIndex: undefined };
+  }
+  return {
+    insertionIndex: activeIndex < overIndex ? overIndex + 1 : overIndex,
+  };
+}
 
 const noopRef = (): void => undefined;
 
