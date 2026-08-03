@@ -54,14 +54,8 @@ export type ReorderableListProps<Item, ID extends UniqueIdentifier = UniqueIdent
   renderItem: (item: Item, props: ReorderableListItemRenderProps) => ReactElement | null;
 }>;
 
-type DropDestination = Readonly<{
-  left: number;
-  top: number;
-}>;
-
-interface DropAnimationToken {
-  readonly marker: symbol;
-}
+type DropDestination = Readonly<{ left: number; top: number }>;
+type DropAnimationToken = symbol;
 
 export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdentifier>({
   disabled = false,
@@ -178,7 +172,7 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
         if (event.activatorEvent instanceof KeyboardEvent || destination === null) {
           clearDropState();
         } else {
-          const token: DropAnimationToken = { marker: Symbol("drop-animation") };
+          const token: DropAnimationToken = Symbol("drop-animation");
           dropAnimationTokenRef.current = token;
           setDropAnimationToken(token);
         }
@@ -284,19 +278,14 @@ function ReorderableListDragOverlay<Item>({
           fill: "forwards",
         },
       );
-      onDropAnimationCreated(dropAnimationToken, animation);
-      let settled = false;
       await new Promise<void>((resolve) => {
         const finish = () => {
-          if (settled) {
-            return;
-          }
-          settled = true;
           onDropAnimationEnd(dropAnimationToken);
           resolve();
         };
         animation.onfinish = finish;
         animation.oncancel = finish;
+        onDropAnimationCreated(dropAnimationToken, animation);
       });
     },
     [dropAnimationToken, dropDestination, onDropAnimationCreated, onDropAnimationEnd, reducedMotion],
@@ -376,7 +365,6 @@ function ReorderableListItem<Item, ID extends UniqueIdentifier>({
 }
 
 const DROP_ANIMATION_DURATION_MS = 250;
-
 const noopRef = (): void => undefined;
 
 function formatTransform(transform: Readonly<{ x: number; y: number; scaleX: number; scaleY: number }>): string {
