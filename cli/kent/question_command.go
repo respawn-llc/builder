@@ -117,7 +117,12 @@ func showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stder
 			fmt.Fprintln(stdout, noPendingQuestionsText)
 			return 0
 		}
-		writePendingQuestion(stdout, pendingSessionQuestion(response.Asks[0]), false)
+		question, err := pendingSessionQuestion(response.Asks[0])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		writePendingQuestion(stdout, question, false)
 		return 0
 	})
 }
@@ -204,7 +209,12 @@ func answerSessionQuestion(
 			fmt.Fprintln(stdout, questionAnswerDoneText)
 			return 0
 		}
-		writePendingQuestion(stdout, pendingSessionQuestion(next.Asks[0]), true)
+		question, err := pendingSessionQuestion(next.Asks[0])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		writePendingQuestion(stdout, question, true)
 		return 0
 	})
 }
@@ -541,17 +551,22 @@ func openQuestionCommandRemote(ctx context.Context, sessionID string) (questionC
 	return remote, nil
 }
 
-func pendingSessionQuestion(ask clientui.PendingAsk) questionCommandPendingQuestion {
-	var recommendedOptionIndex *int
-	if ask.RecommendedOptionIndex > 0 {
-		recommendedOptionIndex = textutil.Value(ask.RecommendedOptionIndex)
+func pendingSessionQuestion(ask clientui.PendingAsk) (questionCommandPendingQuestion, error) {
+	if ask.RecommendedOptionIndex != nil &&
+		(*ask.RecommendedOptionIndex < 1 || *ask.RecommendedOptionIndex > len(ask.Suggestions)) {
+		return questionCommandPendingQuestion{}, fmt.Errorf(
+			"pending question %q recommended option index %d is outside suggestions 1..%d",
+			ask.AskID,
+			*ask.RecommendedOptionIndex,
+			len(ask.Suggestions),
+		)
 	}
 	return questionCommandPendingQuestion{
 		AskID:                  ask.AskID,
 		Question:               ask.Question,
 		Suggestions:            append([]string(nil), ask.Suggestions...),
-		RecommendedOptionIndex: recommendedOptionIndex,
-	}
+		RecommendedOptionIndex: textutil.Pointer(ask.RecommendedOptionIndex),
+	}, nil
 }
 
 func writePendingQuestion(stdout io.Writer, ask questionCommandPendingQuestion, next bool) {

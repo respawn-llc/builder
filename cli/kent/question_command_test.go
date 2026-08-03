@@ -184,6 +184,41 @@ func TestQuestionShowsFirstPendingQuestion(t *testing.T) {
 	}
 }
 
+func TestPendingSessionQuestionPreservesRecommendationPresenceAndRejectsInvalidIndexes(t *testing.T) {
+	recommended := 2
+	present, err := pendingSessionQuestion(clientui.PendingAsk{
+		AskID:                  "ask-present",
+		Suggestions:            []string{"one", "two"},
+		RecommendedOptionIndex: &recommended,
+	})
+	if err != nil {
+		t.Fatalf("pending Session question with recommendation: %v", err)
+	}
+	if present.RecommendedOptionIndex == nil || *present.RecommendedOptionIndex != recommended {
+		t.Fatalf("present recommendation = %v, want %d", present.RecommendedOptionIndex, recommended)
+	}
+
+	absent, err := pendingSessionQuestion(clientui.PendingAsk{
+		AskID:       "ask-absent",
+		Suggestions: []string{"one"},
+	})
+	if err != nil {
+		t.Fatalf("pending Session question without recommendation: %v", err)
+	}
+	if absent.RecommendedOptionIndex != nil {
+		t.Fatalf("absent recommendation = %v, want nil", absent.RecommendedOptionIndex)
+	}
+
+	invalid := 0
+	if _, err := pendingSessionQuestion(clientui.PendingAsk{
+		AskID:                  "ask-invalid",
+		Suggestions:            []string{"one"},
+		RecommendedOptionIndex: &invalid,
+	}); err == nil {
+		t.Fatal("accepted present zero recommendation")
+	}
+}
+
 func TestQuestionsAliasDispatchesQuestionCommand(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	sessionID := uuid.NewString()

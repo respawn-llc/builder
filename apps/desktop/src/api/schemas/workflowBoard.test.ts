@@ -1,6 +1,7 @@
 import {
   activityPageSchema,
   boardNodeCardsPageSchema,
+  pendingAskListSchema,
   taskMovePreviewResponseSchema,
   workflowBoardSchema,
 } from "./workflowBoard";
@@ -69,6 +70,31 @@ const card = {
 };
 
 describe("workflow board schemas", () => {
+  it("preserves pending-ask recommendation presence and rejects invalid indexes", () => {
+    const pendingAsk = {
+      AskID: "ask-1",
+      SessionID: "session-1",
+      Question: "Choose?",
+      Suggestions: ["one", "two"],
+      CreatedAt: "2026-08-03T00:00:00Z",
+    };
+    expect(
+      pendingAskListSchema.parse({
+        Asks: [{ ...pendingAsk, RecommendedOptionIndex: null }],
+      })[0]?.recommendedOptionIndex,
+    ).toBeNull();
+    expect(
+      pendingAskListSchema.parse({
+        Asks: [{ ...pendingAsk, RecommendedOptionIndex: 2 }],
+      })[0]?.recommendedOptionIndex,
+    ).toBe(2);
+    expect(() =>
+      pendingAskListSchema.parse({
+        Asks: [{ ...pendingAsk, RecommendedOptionIndex: 3 }],
+      }),
+    ).toThrow();
+  });
+
   it("decodes required parent workspace facts", () => {
     expect(workflowBoardSchema.parse(boardResponse)).toMatchObject({
       defaultWorkspaceID: "workspace-default",
