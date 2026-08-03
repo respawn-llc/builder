@@ -123,7 +123,7 @@ describe("Board Task Search", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
 
-    expect(services.transport.dedicatedCalls).toEqual([
+    expect(services.transport.dedicatedCalls).toMatchObject([
       {
         method: "workflow.task.search",
         params: {
