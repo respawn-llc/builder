@@ -703,6 +703,7 @@ func (c *CurrentNodeController) runAdmissions() {
 func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	defer c.admissionWG.Done()
 	defer close(start.done)
+	defer cancelAdmission(start.cancel)
 	defer c.finishTaskInterruptAdmission(start.reference)
 	defer c.finishAdmissionWorker(start)
 	if err := c.admit(start.ctx, start); err != nil {

@@ -15,7 +15,8 @@ type CurrentNodeStartFailure struct {
 }
 
 type ExecutionTargetPreparationFailure struct {
-	Cause error
+	Cause     error
+	Selection workflow.ExecutionTargetSelection
 }
 
 func (e *ExecutionTargetPreparationFailure) Error() string {

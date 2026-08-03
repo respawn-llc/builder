@@ -1026,6 +1026,12 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			if err != nil {
 				return serverapi.WorkflowTaskResumeResponse{}, err
 			}
+			if requirement, ok := unlockedPreparationFailureSelection(interrupted, targetContext.Policy); ok {
+				return serverapi.WorkflowTaskResumeResponse{
+					Outcome:           serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
+					SelectionRequired: requirement,
+				}, nil
+			}
 			if hasUnlockedPreparationFailure(interrupted) {
 				return serverapi.WorkflowTaskResumeResponse{
 					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired,
@@ -1084,6 +1090,58 @@ func hasUnlockedPreparationFailure(nodes []workflow.CurrentNode) bool {
 		}
 	}
 	return false
+}
+
+func unlockedPreparationFailureSelection(nodes []workflow.CurrentNode, policy workflow.ExecutionTargetPolicy) (*serverapi.WorkflowExecutionTargetSelectionRequirement, bool) {
+	for _, node := range nodes {
+		if node.Scheduling == nil || node.Scheduling.Interruption == nil ||
+			node.Scheduling.Interruption.Detail.Code != workflow.CurrentNodeInterruptionCodeExecutionTargetResolutionFailed {
+			continue
+		}
+		fields := node.Scheduling.Interruption.Detail.Fields
+		mode := workflow.ExecutionTargetMode(fields["selection_mode"])
+		if mode == "" && fields["requested_ref"] != "" {
+			mode = workflow.ExecutionTargetModeCustomRef
+		}
+		if mode == "" {
+			mode = policy.Mode
+		}
+		cause := workflowExecutionTargetUnavailableCause(fields["code"])
+		if cause == "" || (mode != workflow.ExecutionTargetModeHead && mode != workflow.ExecutionTargetModeDefaultBranch && mode != workflow.ExecutionTargetModeCustomRef) {
+			continue
+		}
+		configured := &serverapi.WorkflowExecutionTargetConfiguredTarget{Mode: serverapi.WorkflowExecutionTargetMode(mode)}
+		requestedRef := fields["requested_ref"]
+		if requestedRef == "" && policy.CustomRef != nil {
+			requestedRef = *policy.CustomRef
+		}
+		if mode == workflow.ExecutionTargetModeCustomRef {
+			configured.RequestedRef = &requestedRef
+		}
+		return &serverapi.WorkflowExecutionTargetSelectionRequirement{
+			Reason:           serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable,
+			ConfiguredTarget: configured,
+			UnavailableCause: cause,
+		}, true
+	}
+	return nil, false
+}
+
+func workflowExecutionTargetUnavailableCause(code string) serverapi.WorkflowExecutionTargetUnavailableCause {
+	switch code {
+	case "invalid_revision":
+		return serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision
+	case "non_commit":
+		return serverapi.WorkflowExecutionTargetUnavailableCauseNonCommit
+	case "default_branch_missing":
+		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchMissing
+	case "default_branch_ambiguous":
+		return serverapi.WorkflowExecutionTargetUnavailableCauseDefaultBranchAmbiguous
+	case "git_failure":
+		return serverapi.WorkflowExecutionTargetUnavailableCauseGitFailure
+	default:
+		return ""
+	}
 }
 
 func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {

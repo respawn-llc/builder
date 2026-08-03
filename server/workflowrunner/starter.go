@@ -140,7 +140,7 @@ func (s *Starter) StartCurrentNodeWithPreparation(
 		if err != nil {
 			if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone ||
 				preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedManaged {
-				return &workflowexecution.ExecutionTargetPreparationFailure{Cause: err}
+				return &workflowexecution.ExecutionTargetPreparationFailure{Cause: err, Selection: preparation.Selection}
 			}
 			return err
 		}
@@ -243,6 +243,17 @@ func currentNodeStartFailure(cause error) error {
 		detail = workflow.CurrentNodeInterruptionDetail{
 			Code:   "workflow_worktree_setup_failed",
 			Fields: map[string]string{"diagnostic": retained.Diagnostic},
+		}
+	}
+	if targetPreparation != nil {
+		if detail.Fields == nil {
+			detail.Fields = map[string]string{}
+		}
+		if _, exists := detail.Fields["selection_mode"]; !exists && targetPreparation.Selection.Mode != "" {
+			detail.Fields["selection_mode"] = string(targetPreparation.Selection.Mode)
+		}
+		if _, exists := detail.Fields["requested_ref"]; !exists && targetPreparation.Selection.CustomRef != nil {
+			detail.Fields["requested_ref"] = *targetPreparation.Selection.CustomRef
 		}
 	}
 	return &workflowexecution.CurrentNodeStartFailure{
