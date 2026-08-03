@@ -14,16 +14,14 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 	sessionID string,
 	entry *authorityRuntimeEntry,
 	snapshot runtime.TranscriptHydrationSnapshot,
+	readModel clientui.RuntimeReadModelUpdate,
 ) (clientui.TranscriptHydration, error) {
 	hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
-	readModel, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID, nil)
-	if err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript runtime read model: %w", err)
-	}
 	hydration.RuntimeReadModelUpdate = readModel
 	hydration.ActiveStep = transcriptActiveStepFromRuntimeReadModel(readModel)
 	clearMismatchedActiveFacts(&hydration)
 
+	var err error
 	hydration.SessionStatus, err = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 	if err != nil {
 		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript session status: %w", err)

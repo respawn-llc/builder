@@ -628,9 +628,13 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}
 	var sub *transcriptSubscription
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		readModel, readModelErr := r.runtimeReadModelFeedSnapshot(ctx, id, nil)
+		if readModelErr != nil {
+			return fmt.Errorf("build transcript runtime read model: %w", readModelErr)
+		}
 		var subscribeErr error
 		sub, subscribeErr = entry.sessionFeed.Subscribe(func() (clientui.TranscriptHydration, error) {
-			return r.composeTranscriptHydration(ctx, id, entry, snapshot)
+			return r.composeTranscriptHydration(ctx, id, entry, snapshot, readModel)
 		})
 		return subscribeErr
 	})
@@ -651,20 +655,18 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 		panic(fmt.Sprintf("execution prompt pending projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
 	id := resource.SessionID().String()
-	var admittedEntry *authorityRuntimeEntry
 	var snapshot PendingPromptSnapshot
-	projected := r.withCurrentAuthorityEntry(resource, func(current *authorityRuntimeEntry) bool {
+	projected := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
 		var projected bool
 		snapshot, projected = r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt)
 		if projected {
-			admittedEntry = current
+			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+			r.publishAttentionPending(id, snapshot)
+			r.publishTaskQuestionWaiting(id, snapshot)
 		}
 		return projected
 	})
 	if projected {
-		publishPendingPrompt(admittedEntry.sessionFeed, id, snapshot, pendingPromptEventPending)
-		r.publishAttentionPending(id, snapshot)
-		r.publishTaskQuestionWaiting(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
 }
@@ -677,18 +679,16 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 		panic(fmt.Sprintf("execution prompt resolved projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
 	id := resource.SessionID().String()
-	var admittedEntry *authorityRuntimeEntry
 	var snapshot PendingPromptSnapshot
-	resolved := r.withCurrentAuthorityEntry(resource, func(current *authorityRuntimeEntry) bool {
+	resolved := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
 		var ok bool
 		snapshot, ok = r.pendingPrompts.Complete(id, resource, scopeID, requestID)
 		if ok {
-			admittedEntry = current
+			r.publishPromptResolution(entry, id, snapshot)
 		}
 		return ok
 	})
 	if resolved {
-		r.publishPromptResolution(admittedEntry, id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
 }

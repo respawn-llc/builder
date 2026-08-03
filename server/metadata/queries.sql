@@ -3070,6 +3070,7 @@ LIMIT 1;
 -- name: GetSessionExecutionTargetByID :one
 SELECT
     s.id AS session_id,
+    s.workspace_id AS execution_target_workspace_binding,
     s.project_id,
     COALESCE(s.workspace_id, '') AS workspace_id,
     CAST(COALESCE(json_extract(s.metadata_json, '$.workspace_container'), '') AS TEXT) AS workspace_snapshot_name,

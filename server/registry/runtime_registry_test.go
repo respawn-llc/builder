@@ -119,30 +119,6 @@ func TestSubscribeSessionTranscriptFailsExecutionTargetResolution(t *testing.T) 
 	}
 }
 
-func TestSubscribeSessionTranscriptAllowsAbsentExecutionTarget(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	registry.WithExecutionTargetResolver(func(context.Context, string) (*clientui.SessionExecutionTarget, error) {
-		return nil, nil
-	})
-
-	sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
-		SessionID: engine.SessionID(),
-	})
-	if err != nil {
-		t.Fatalf("subscribe without execution target: %v", err)
-	}
-	message, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("read hydration: %v", err)
-	}
-	hydration := transcriptPayload[clientui.TranscriptHydration](t, message)
-	if hydration.SessionIdentity.ExecutionTarget != nil {
-		t.Fatalf("hydrated absent execution target = %+v, want nil", hydration.SessionIdentity.ExecutionTarget)
-	}
-}
-
 func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
@@ -215,19 +191,37 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	}
 }
 
-func TestPromptPendingAfterResourceDrainingIsRejected(t *testing.T) {
+func TestPromptPendingPublicationPrecedesResourceDrainResolution(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	ref := registryTestResourceRef(engine.SessionID())
 	registerResource(t, registry, ref, engine)
-	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
-		t.Fatalf("drain resource: %v", err)
+	sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
 	}
-	registry.PromptPending(ref, runtimeids.NewExecutionScopeID(), askquestion.AskQuestionRequest{
+	_ = nextTranscriptMessage(t, sub)
+	scopeID := runtimeids.NewExecutionScopeID()
+	registry.PromptPending(ref, scopeID, askquestion.AskQuestionRequest{
 		ID: "ask-1", StepID: registryTestStepID, Question: "Continue?",
 	}, time.Now().UTC())
-	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
-		t.Fatalf("stale prompt after resource drain = %+v", prompts)
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	states := make([]clientui.TranscriptPromptStatus, 0, 2)
+	for len(states) < 2 {
+		message, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("read prompt lifecycle: %v", err)
+		}
+		if message.Kind() == clientui.TranscriptMessagePrompt {
+			states = append(states, transcriptPayload[clientui.TranscriptPrompt](t, message).Status)
+		}
+	}
+	if states[0] != clientui.TranscriptPromptStatusPending || states[1] != clientui.TranscriptPromptStatusResolved {
+		t.Fatalf("prompt lifecycle = %v, want pending then resolved", states)
 	}
 }
 

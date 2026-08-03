@@ -2080,7 +2080,7 @@ func (s *Store) ResolveOptionalSessionExecutionTarget(ctx context.Context, sessi
 	if err != nil {
 		return nil, err
 	}
-	if !sessionExecutionTargetRowHasBinding(row) {
+	if !row.ExecutionTargetWorkspaceBinding.Valid && !row.WorktreeID.Valid {
 		return nil, nil
 	}
 	target := sessionExecutionTargetFromRow(row)
@@ -2153,16 +2153,6 @@ func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID 
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
 	return row, nil
-}
-
-func sessionExecutionTargetRowHasBinding(row sqlitegen.GetSessionExecutionTargetByIDRow) bool {
-	return strings.TrimSpace(row.ProjectID) != "" ||
-		strings.TrimSpace(row.WorkspaceID) != "" ||
-		strings.TrimSpace(row.WorkspaceSnapshotName) != "" ||
-		strings.TrimSpace(row.WorkspaceRoot) != "" ||
-		row.WorktreeID.Valid ||
-		row.WorktreeRoot.Valid ||
-		strings.TrimSpace(row.CwdRelpath) != ""
 }
 
 func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
