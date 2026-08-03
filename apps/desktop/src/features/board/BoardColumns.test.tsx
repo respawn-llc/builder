@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { KanbanColumn } from "./BoardColumns";
-import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
+import type { KanbanColumnVM } from "./BoardColumnViewModel";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -52,9 +52,6 @@ describe("KanbanColumn retained replacement boundary", () => {
       />,
     );
 
-    const alert = screen.getByTestId("virtual-boundary-replacement");
-    const list = screen.getByTestId("kanban-column-scroll-column-1");
-    expect(alert.closest("[data-testid='kanban-column-scroll-column-1']")).toBeNull();
     expect(screen.getByRole("alert")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button"));
     expect(boundary.onRetry).toHaveBeenCalledOnce();

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 
 import { canonicalBoardFilter, type TaskLabelFilter } from "@/api";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
@@ -77,12 +77,12 @@ function FilterProbe() {
       <output data-testid="dependency-filter">{String(active.filter.dependencyFilter)}</output>
       <output data-testid="label-filter">{active.filter.labelFilter.kind}</output>
       <button
-        onClick={() =>
+        onClick={() => {
           runtime.controller.setDesiredFilter({
             labelFilter: active.filter.labelFilter,
             dependencyFilter: true,
-          })
-        }
+          });
+        }}
         type="button"
       >
         select unblocked

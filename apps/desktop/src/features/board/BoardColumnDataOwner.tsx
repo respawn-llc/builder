@@ -42,6 +42,18 @@ export type BoardColumnDataView = Readonly<{
   replacementBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>;
 
+type BoardColumnDataOwnerBoard = Readonly<{
+  attachedWorkspaceCount: SelectedWorkflowBoard["attachedWorkspaceCount"];
+  defaultWorkspaceID: SelectedWorkflowBoard["defaultWorkspaceID"];
+  projectID: SelectedWorkflowBoard["projectID"];
+  selectedWorkflow: Pick<SelectedWorkflowBoard["selectedWorkflow"], "id">;
+}>;
+
+type BoardColumnDataOwnerColumn = Pick<
+  BoardColumn,
+  "id" | "isBacklog" | "isDone" | "taskCount"
+>;
+
 export function BoardColumnDataOwner({
   board,
   column,
@@ -49,8 +61,8 @@ export function BoardColumnDataOwner({
   onDataViewRelease,
   onReportColumnSnapshot,
 }: Readonly<{
-  board: SelectedWorkflowBoard;
-  column: BoardColumn;
+  board: BoardColumnDataOwnerBoard;
+  column: BoardColumnDataOwnerColumn;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
@@ -65,7 +77,6 @@ export function BoardColumnDataOwner({
   const activeFilterGeneration = filterGeneration.snapshot.active;
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
-  const hydratedFilterGenerationRef = useRef<number | null>(null);
   const paginationInFlightRef = useRef(false);
   const queryCards = useMemo(
     () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
@@ -103,10 +114,7 @@ export function BoardColumnDataOwner({
   } = cardsQuery;
   const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
-  const replacementDataRetained =
-    cardsQuery.data !== undefined &&
-    hydratedFilterGenerationRef.current !== null &&
-    hydratedFilterGenerationRef.current !== activeFilterGeneration.generation;
+  const replacementDataRetained = cardsQuery.data !== undefined && isPlaceholderData;
   const retryCards = useCallback(() => {
     const current = filterGeneration.controller.getSnapshot();
     if (
@@ -161,7 +169,7 @@ export function BoardColumnDataOwner({
         onRetry: loadNewer,
         retryLabel: t("app.retry"),
       }),
-    [error, isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
+    [isFetchPreviousPageError, isFetchingPreviousPage, loadNewer, t],
   );
   const nextBoundary = useMemo(
     () =>
@@ -173,7 +181,7 @@ export function BoardColumnDataOwner({
         onRetry: loadOlder,
         retryLabel: t("app.retry"),
       }),
-    [error, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
+    [isFetchNextPageError, isFetchingNextPage, loadOlder, t],
   );
   const replacementBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
@@ -249,13 +257,8 @@ export function BoardColumnDataOwner({
   }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
-    const activeFilterGeneration = filterGeneration.snapshot.active.generation;
     const cause: BoardColumnUpdateCause =
-      hydratedFilterGenerationRef.current !== activeFilterGeneration
-        ? "hydration"
-        : paginationInFlightRef.current
-          ? "pagination"
-          : "domain";
+      paginationInFlightRef.current ? "pagination" : isPlaceholderData ? "hydration" : "domain";
     generationRef.current += 1;
     stableOnReportColumnSnapshot(column.id, {
       cause,
@@ -268,9 +271,6 @@ export function BoardColumnDataOwner({
         taskCount: column.taskCount,
       },
     });
-    if (cardsQuery.data !== undefined && !isPlaceholderData && !isError) {
-      hydratedFilterGenerationRef.current = activeFilterGeneration;
-    }
     if (!isFetchingPreviousPage && !isFetchingNextPage) {
       paginationInFlightRef.current = false;
     }
@@ -279,7 +279,6 @@ export function BoardColumnDataOwner({
     cardsQuery.data,
     column.id,
     column.taskCount,
-    filterGeneration.snapshot.active.generation,
     isError,
     isFetching,
     isFetchingNextPage,

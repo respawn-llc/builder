@@ -4,28 +4,35 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import type { BoardFilter } from "@/api";
+import type {
+  BoardFilterGenerationController,
+  BoardFilterGenerationSnapshot,
+} from "./BoardFilterGenerationController";
 
 const labelRuntime = vi.hoisted(() => ({
-  state: { filter: { kind: "named" as const, mode: "all" as const, labelIDs: ["label-1"] } },
+  state: { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } },
   dispatch: vi.fn(),
 }));
-const generationRuntime = vi.hoisted(() => ({
+interface GenerationRuntime {
+  snapshot: BoardFilterGenerationSnapshot;
+  controller: Pick<BoardFilterGenerationController, "getSnapshot" | "setDesiredFilter">;
+}
+const generationRuntime = vi.hoisted((): GenerationRuntime => ({
   snapshot: {
     active: {
       generation: 1,
       filter: {
         labelFilter: {
-          kind: "named" as const,
-          mode: "all" as const,
+          kind: "named",
+          mode: "all",
           labelIDs: ["label-1"],
           excludedLabelIDs: [],
         },
-        dependencyFilter: true as boolean | null,
+        dependencyFilter: true,
       },
       retiring: false,
     },
-    desiredFilter: null as BoardFilter | null,
+    desiredFilter: null,
   },
   controller: {
     getSnapshot: () => generationRuntime.snapshot,
@@ -42,17 +49,26 @@ vi.mock("@/shared/labels", () => ({
     trigger: ReactElement<{ onClick?: () => void }>;
   }) =>
     cloneElement(trigger, {
-      onClick: () => invocation.onAction({ type: "clear" }),
+      onClick: () => {
+        invocation.onAction({ type: "clear" });
+      },
     }),
-  reduceLabelFilterState: () => ({ filter: { kind: "none" as const } }),
+  reduceLabelFilterState: () => ({ filter: { kind: "none" } }),
   taskLabelFilterConditionCount: () => 1,
   useProjectLabelFilter: () => labelRuntime,
 }));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) =>
-      ({ "board.unblocked": "dependency-control", "labels.filterCount": "label-control" })[key] ?? key,
+    t: (key: string) => {
+      if (key === "board.unblocked") {
+        return "dependency-control";
+      }
+      if (key === "labels.filterCount") {
+        return "label-control";
+      }
+      return key;
+    },
   }),
 }));
 
@@ -70,7 +86,7 @@ describe("BoardFilterChrome", () => {
         generation: 1,
         filter: {
           labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
-          dependencyFilter: null as boolean | null,
+          dependencyFilter: null,
         },
         retiring: false,
       },
