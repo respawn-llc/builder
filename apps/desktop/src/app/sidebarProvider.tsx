@@ -161,7 +161,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
   const clearSidebarRouteChangePreservation = useCallback((token: SidebarEntryToken) => {
     const pending = preserveRouteChangeRef.current;
-    if (pending?.token.lifecycleID === token.lifecycleID && pending.token.entryID === token.entryID) {
+    if (pending !== null && tokenKey(pending.token) === tokenKey(token)) {
       preserveRouteChangeRef.current = null;
     }
   }, []);

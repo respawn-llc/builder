@@ -20,6 +20,7 @@ export function useBoardSelectedTaskDeletion({
 }>) {
   const navigation = useAppNavigation();
   const {
+    activeToken,
     clearSidebarRouteChangePreservation,
     preserveSidebarOnNextRouteChange,
     removeSidebarEntry,
@@ -31,24 +32,28 @@ export function useBoardSelectedTaskDeletion({
       selectedTaskId === undefined
         ? undefined
         : sidebarEntryTokenForDeletedTask(stackDestinations, stackEntryTokens, selectedTaskId);
-    if (deletedToken !== undefined) {
+    const preservationToken = selectedTaskId === undefined ? null : (deletedToken ?? activeToken);
+    if (preservationToken !== null) {
       const expectation: SidebarRouteChangeExpectation = {
         kind: "projectTaskCleared",
         projectID: projectId,
         workflowID: workflowId,
       };
-      preserveSidebarOnNextRouteChange(deletedToken, expectation);
-      removeSidebarEntry(deletedToken);
+      preserveSidebarOnNextRouteChange(preservationToken, expectation);
+      if (deletedToken !== undefined) {
+        removeSidebarEntry(deletedToken);
+      }
     }
     try {
       await navigation.closeProjectTask(projectId, workflowId);
     } catch (error: unknown) {
-      if (deletedToken !== undefined) {
-        clearSidebarRouteChangePreservation(deletedToken);
+      if (preservationToken !== null) {
+        clearSidebarRouteChangePreservation(preservationToken);
       }
       onNavigationError(error);
     }
   }, [
+    activeToken,
     clearSidebarRouteChangePreservation,
     navigation,
     onNavigationError,
