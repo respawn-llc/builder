@@ -48,6 +48,19 @@ type authorityPromptEvent struct {
 
 type authorityPromptFeed chan authorityPromptEvent
 
+type admissionObservationContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *admissionObservationContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.observed)
+	})
+	return c.Context.Done()
+}
+
 type ownerlessRetirementLLMClient struct {
 	mu           sync.Mutex
 	calls        int
@@ -78,6 +91,104 @@ func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
 	}
 	if authority.launchLifecycleTask(func(context.Context) {}) {
 		t.Fatal("closed authority accepted another lifecycle task")
+	}
+}
+
+func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	descriptor := mustOpenSessionDescriptor(t, sessionID)
+
+	admissionHeld := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	storeDone := make(chan error, 1)
+	go func() {
+		storeDone <- authority.WithSessionStore(
+			context.Background(),
+			descriptor,
+			func(context.Context, *session.Store) error {
+				close(admissionHeld)
+				<-releaseAdmission
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-admissionHeld:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Session admission holder")
+	}
+
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	admissionWaitObserved := make(chan struct{})
+	startDone := make(chan error, 1)
+	lifecycleFinished := make(chan struct{})
+	if !authority.launchLifecycleTask(func(ctx context.Context) {
+		defer close(lifecycleFinished)
+		observedCtx := &admissionObservationContext{
+			Context:  ctx,
+			observed: admissionWaitObserved,
+		}
+		_, err := authority.StartAgentExecution(observedCtx, AgentExecutionRequest{
+			Descriptor: descriptor,
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		startDone <- err
+	}) {
+		close(releaseAdmission)
+		t.Fatal("authority rejected lifecycle task before close")
+	}
+	select {
+	case <-admissionWaitObserved:
+	case <-time.After(3 * time.Second):
+		close(releaseAdmission)
+		<-storeDone
+		_ = authority.Close(context.Background())
+		t.Fatal("lifecycle start did not reach context-aware Session admission")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- authority.Close(context.Background())
+	}()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			close(releaseAdmission)
+			t.Fatalf("close authority: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		close(releaseAdmission)
+		<-closeDone
+		t.Fatal("Authority.Close did not cancel a lifecycle start waiting for Session admission")
+	}
+
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, context.Canceled) {
+			close(releaseAdmission)
+			t.Fatalf("lifecycle start error = %v, want context canceled", err)
+		}
+	default:
+		close(releaseAdmission)
+		t.Fatal("Authority.Close returned before the blocked lifecycle start stopped")
+	}
+	select {
+	case <-lifecycleFinished:
+	default:
+		close(releaseAdmission)
+		t.Fatal("Authority.Close returned before its lifecycle task finished")
+	}
+
+	close(releaseAdmission)
+	if err := <-storeDone; err != nil {
+		t.Fatalf("Session admission holder: %v", err)
 	}
 }
 
