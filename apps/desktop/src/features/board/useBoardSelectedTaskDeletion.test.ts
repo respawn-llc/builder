@@ -6,10 +6,17 @@ const mocks = vi.hoisted(() => {
     lifecycleID: "lifecycle-1",
     entryID: "entry-task-b",
   };
+  const deletedToken = {
+    lifecycleID: "lifecycle-1",
+    entryID: "entry-task-a",
+  };
   return {
     activeToken,
+    deletedToken,
     navigation: {
-      closeProjectTask: vi.fn(async () => undefined),
+      closeProjectTask: vi.fn(async (): Promise<void> => {
+        await Promise.resolve();
+      }),
     },
     sidebar: {
       activeToken,
@@ -36,6 +43,10 @@ import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
 describe("useBoardSelectedTaskDeletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.navigation.closeProjectTask.mockResolvedValue(undefined);
+    mocks.sidebar.activeToken = mocks.activeToken;
+    mocks.sidebar.stackDestinations = [{ kind: "taskDetail", taskID: "task-b" }];
+    mocks.sidebar.stackEntryTokens = [mocks.activeToken];
   });
 
   it("preserves an unrelated active sidebar stack during selected-task route cleanup", async () => {
@@ -64,5 +75,38 @@ describe("useBoardSelectedTaskDeletion", () => {
     expect(mocks.sidebar.removeSidebarEntry).not.toHaveBeenCalled();
     expect(mocks.navigation.closeProjectTask).toHaveBeenCalledWith("project-1", "workflow-1");
     expect(onNavigationError).not.toHaveBeenCalled();
+  });
+
+  it("coalesces concurrent cleanup for the same selected Task", async () => {
+    mocks.sidebar.activeToken = mocks.deletedToken;
+    mocks.sidebar.stackDestinations = [{ kind: "taskDetail", taskID: "task-a" }];
+    mocks.sidebar.stackEntryTokens = [mocks.deletedToken];
+    let resolveCloseProjectTask: (() => void) | undefined;
+    mocks.navigation.closeProjectTask.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        resolveCloseProjectTask = resolve;
+      });
+    });
+    const { result } = renderHook(() =>
+      useBoardSelectedTaskDeletion({
+        onNavigationError: vi.fn(),
+        projectId: "project-1",
+        selectedTaskId: "task-a",
+        workflowId: "workflow-1",
+      }),
+    );
+
+    const first = result.current();
+    const second = result.current();
+
+    expect(mocks.navigation.closeProjectTask).toHaveBeenCalledTimes(1);
+    expect(mocks.sidebar.preserveSidebarOnNextRouteChange).toHaveBeenCalledTimes(1);
+    expect(mocks.sidebar.removeSidebarEntry).toHaveBeenCalledTimes(1);
+
+    resolveCloseProjectTask?.();
+    await Promise.all([first, second]);
+    await result.current();
+    expect(mocks.navigation.closeProjectTask).toHaveBeenCalledTimes(1);
+    expect(mocks.sidebar.removeSidebarEntry).toHaveBeenCalledTimes(1);
   });
 });
