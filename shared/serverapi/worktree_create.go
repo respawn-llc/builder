@@ -143,12 +143,18 @@ func ValidateWorktreeCreateErrorBoundary(err error, operation string, policy inv
 		Scope: invariant.ScopeWorktreeContract,
 		Fields: map[invariant.Field]string{
 			invariant.FieldOperation:       strings.TrimSpace(operation),
-			invariant.FieldRawOwner:        string(typed.Owner),
 			invariant.FieldValidationCause: validationErr.Error(),
 		},
 	}
+	owner := (*WorktreeCreateErrorOwner)(nil)
+	validationDiagnostic := validationErr.Error()
+	if typed != nil {
+		diagnostic.Fields[invariant.FieldRawOwner] = string(typed.Owner)
+		owner = worktreeCreateErrorOwnerPointer(typed.Owner)
+		validationDiagnostic = typed.Diagnostic
+	}
 	policy.Check(false, diagnostic)
-	return newWorktreeCreateContractError(operation, worktreeCreateErrorOwnerPointer(typed.Owner), typed.Diagnostic, validationErr)
+	return newWorktreeCreateContractError(operation, owner, validationDiagnostic, validationErr)
 }
 
 func DecodeWorktreeCreateError(data json.RawMessage, message string) error {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/shared/invariant"
 	"core/shared/protocol"
 )
 
@@ -241,6 +242,23 @@ func TestWorktreeCreateErrorRejectsMalformedWireDataAsContractError(t *testing.T
 				t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)
 			}
 		})
+	}
+}
+
+func TestWorktreeCreateErrorBoundaryHandlesTypedNil(t *testing.T) {
+	var source *WorktreeCreateError
+
+	err := ValidateWorktreeCreateErrorBoundary(source, "worktree.create.test", invariant.NewPolicy())
+
+	var contractErr *WorktreeCreateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("boundary error = %T %v, want WorktreeCreateContractError", err, err)
+	}
+	if contractErr.Owner != nil {
+		t.Fatalf("typed-nil owner = %q, want absent owner", *contractErr.Owner)
+	}
+	if strings.TrimSpace(contractErr.Diagnostic) == "" {
+		t.Fatal("typed-nil contract diagnostic is blank")
 	}
 }
 
