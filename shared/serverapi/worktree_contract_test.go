@@ -142,9 +142,9 @@ func TestWorktreeDeletePreviewResponseValidatesTopologyOwnedSelectorAndCleanline
 		},
 	}
 	valid := WorktreeDeletePreviewResponse{
-		Worktree:        entry,
+		Worktree:         entry,
 		DeletionSelector: entry.Missing.Kent.WorktreeID,
-		Cleanliness:     clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+		Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid deletion preview rejected: %v", err)
