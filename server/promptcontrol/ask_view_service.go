@@ -31,7 +31,7 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 		if item.Request.Approval {
 			continue
 		}
-		recommendedOptionIndex, err := pendingAskRecommendedOptionIndex(
+		recommendedOptionIndex, err := DecodeLegacyRecommendedOptionIndex(
 			item.Request.RecommendedOptionIndex,
 			len(item.Request.Suggestions),
 		)
@@ -52,20 +52,6 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 		})
 	}
 	return serverapi.AskListPendingBySessionResponse{Asks: asks}, nil
-}
-
-func pendingAskRecommendedOptionIndex(index int, suggestionCount int) (*int, error) {
-	if index == 0 {
-		return nil, nil
-	}
-	if index < 1 || index > suggestionCount {
-		return nil, fmt.Errorf(
-			"recommended option index %d is outside suggestions 1..%d",
-			index,
-			suggestionCount,
-		)
-	}
-	return &index, nil
 }
 
 var _ servicecontract.AskViewService = (*AskViewService)(nil)

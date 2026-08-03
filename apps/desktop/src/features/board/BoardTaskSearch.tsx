@@ -44,7 +44,7 @@ const taskSearchLoadingDialogHeight = 176;
 const taskSearchErrorDialogHeight = 240;
 
 type SearchPage = Readonly<{
-  offset: number;
+  offset: number | null;
   projectID: string;
   query: string;
   response: TaskSearchResponse;
@@ -173,9 +173,9 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
   const request = useInfiniteQuery<
     SearchPage,
     Error,
-    InfiniteData<SearchPage, number>,
+    InfiniteData<SearchPage, number | null>,
     readonly string[],
-    number
+    number | null
   >({
     queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
     queryFn: async ({ pageParam }) => ({
@@ -190,10 +190,10 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
         includeComments: true,
         projectIDs: [projectID],
         pageSize: taskSearchPageSize,
-        offset: pageParam === 0 ? undefined : pageParam,
+        offset: pageParam ?? undefined,
       }),
     }),
-    initialPageParam: 0,
+    initialPageParam: null,
     enabled: open && searchable,
     getNextPageParam: (lastPage) => lastPage.response.nextOffset ?? undefined,
     maxPages: retainedTaskSearchPages,
@@ -563,7 +563,9 @@ function SearchRefreshError({
   );
 }
 
-function flattenSearchResults(data: InfiniteData<SearchPage, number> | undefined): readonly SearchResult[] {
+function flattenSearchResults(
+  data: InfiniteData<SearchPage, number | null> | undefined,
+): readonly SearchResult[] {
   if (data === undefined) {
     return [];
   }
@@ -578,12 +580,12 @@ function flattenSearchResults(data: InfiniteData<SearchPage, number> | undefined
 function taskSearchResultKey(page: SearchPage, group: TaskSearchGroup, groupIndex: number): string {
   const firstOrdinal = group.hits[0]?.ordinal;
   if (firstOrdinal === undefined) {
-    throw new Error(`Task Search group ${group.taskID} at offset ${page.offset.toString()} has no hits.`);
+    throw new Error(`Task Search group ${group.taskID} at offset ${String(page.offset)} has no hits.`);
   }
   return [
     page.projectID,
     page.query,
-    page.offset.toString(),
+    String(page.offset),
     groupIndex.toString(),
     group.taskID,
     firstOrdinal.toString(),

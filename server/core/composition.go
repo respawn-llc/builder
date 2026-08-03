@@ -591,7 +591,10 @@ func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentQuestions(
 			entry.ToolCall.ToolName != string(toolspec.ToolAskQuestion) {
 			continue
 		}
-		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex)
+		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
+			entry.ToolCall.RecommendedOptionIndex,
+			len(entry.ToolCall.Suggestions),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("session %q pending ask %q: %w", sessionID, entry.ToolCallID, err)
 		}
@@ -612,7 +615,10 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 	items := s.prompts.ListPendingPrompts(sessionID)
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
-		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(item.Request.RecommendedOptionIndex)
+		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
+			item.Request.RecommendedOptionIndex,
+			len(item.Request.Suggestions),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("session %q pending prompt %q: %w", sessionID, item.Request.ID, err)
 		}
@@ -631,18 +637,4 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 		})
 	}
 	return out, nil
-}
-
-func legacyOptionalRecommendedOptionIndex(index int) (*int, error) {
-	if index == 0 {
-		return nil, nil
-	}
-	if index < 0 {
-		return nil, serverapi.WorkflowRequestValidationError{
-			Code:    serverapi.WorkflowRequestErrorInvalidValue,
-			Field:   "recommended_option_index",
-			Message: fmt.Sprintf("legacy recommended option index %d must be positive when present", index),
-		}
-	}
-	return &index, nil
 }
