@@ -71,8 +71,7 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 	}
 	if name, parseErr := runtimeinput.ParsePromptCommandName(command); parseErr == nil {
 		if kind, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
-			content := builtinPromptContent(*kind)
-			return textutil.ExpandPromptTemplate(content, arguments), nil
+			return expandPromptCommand(name.String(), builtinPromptContent(*kind), arguments)
 		}
 	}
 	candidate, found, err := s.findCandidate(command)
@@ -87,7 +86,20 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 		}
 		return "", &Error{Kind: ErrorKindCommandNotFound, Command: &name}
 	}
-	return textutil.ExpandPromptTemplate(candidate.content, arguments), nil
+	return expandPromptCommand(candidate.name, candidate.content, arguments)
+}
+
+func expandPromptCommand(name, content, arguments string) (string, error) {
+	expanded := textutil.ExpandPromptTemplate(content, arguments)
+	if strings.TrimSpace(expanded) == "" {
+		commandName := name
+		return "", &Error{
+			Kind:    ErrorKindCommandRead,
+			Command: &commandName,
+			cause:   errors.New("prompt command expands to an empty message"),
+		}
+	}
+	return expanded, nil
 }
 
 type builtinPromptCommand struct {
