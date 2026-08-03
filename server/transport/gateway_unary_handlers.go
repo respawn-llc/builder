@@ -8,6 +8,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -170,7 +171,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedProject = params.ProjectID
 			state.attachedWorkspaceID = attachedWorkspaceID
 			state.attachedWorkspaceRoot = attachedRoot
-			state.attachedSession = ""
+			state.attachedSession = nil
 			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
 		})
 	},
@@ -186,7 +187,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedProject = binding.ProjectID
 			state.attachedWorkspaceID = binding.WorkspaceID
 			state.attachedWorkspaceRoot = binding.CanonicalRoot
-			state.attachedSession = params.SessionID
+			parsedSessionID, parseErr := runtimeids.ParseSessionID(params.SessionID)
+			if parseErr != nil {
+				return protocol.AttachResponse{}, parseErr
+			}
+			state.attachedSession = &parsedSessionID
 			return protocol.SessionAttachResponse(
 				binding.ProjectID,
 				binding.WorkspaceID,

@@ -45,7 +45,7 @@ func (e *candidateTraversalError) Unwrap() error {
 	return e.cause
 }
 
-func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, error)) error {
+func (s Service) walkCandidates(matches func(string) bool, fn func(candidateEntry) (candidateDecision, error)) error {
 	seen := make(map[string]struct{})
 	for _, dir := range s.searchDirs() {
 		entries, err := os.ReadDir(dir)
@@ -66,6 +66,10 @@ func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, erro
 			if _, builtin := runtimeinput.BuiltinPromptCommandForName(*name); builtin {
 				continue
 			}
+			command := name.String()
+			if matches != nil && !matches(command) {
+				continue
+			}
 			path := filepath.Join(dir, entry.Name())
 			regular, err := regularPromptFile(path)
 			if err != nil {
@@ -74,7 +78,6 @@ func (s Service) walkCandidates(fn func(candidateEntry) (candidateDecision, erro
 			if !regular {
 				continue
 			}
-			command := name.String()
 			if _, ok := seen[command]; ok {
 				continue
 			}
@@ -106,7 +109,7 @@ func regularPromptFile(path string) (bool, error) {
 
 func (s Service) scan() ([]CatalogEntry, error) {
 	result := make([]CatalogEntry, 0)
-	err := s.walkCandidates(func(entry candidateEntry) (candidateDecision, error) {
+	err := s.walkCandidates(nil, func(entry candidateEntry) (candidateDecision, error) {
 		preview, err := previewFile(entry.path)
 		if err != nil {
 			commandName := entry.name
@@ -134,7 +137,9 @@ func (s Service) findCandidate(command string) (candidate, bool, error) {
 		return candidate{}, false, nil
 	}
 	var found *candidate
-	err = s.walkCandidates(func(entry candidateEntry) (candidateDecision, error) {
+	err = s.walkCandidates(func(command string) bool {
+		return command == name.String()
+	}, func(entry candidateEntry) (candidateDecision, error) {
 		if entry.name != name.String() {
 			return candidateSkip, nil
 		}

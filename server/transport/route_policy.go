@@ -209,7 +209,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeSessionAttachedProject:
 		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
-		if state.attachedSession != scopeParams.sessionID {
+		if state.attachedSession == nil || state.attachedSession.String() != scopeParams.sessionID {
 			return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
 		}
 		return nil

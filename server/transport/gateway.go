@@ -17,6 +17,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -162,7 +163,7 @@ type connectionState struct {
 	attachedProject       string
 	attachedWorkspaceID   string
 	attachedWorkspaceRoot string
-	attachedSession       string
+	attachedSession       *runtimeids.SessionID
 	runtimeOwnerID        string
 	ownedRuntimes         map[serverapi.SessionRuntimeAttachment]struct{}
 }

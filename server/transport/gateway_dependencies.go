@@ -90,10 +90,10 @@ func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state 
 	if state == nil {
 		return "", errors.New("connection state is required")
 	}
-	if strings.TrimSpace(state.attachedSession) == "" {
+	if state.attachedSession == nil {
 		return state.attachedWorkspaceRoot, nil
 	}
-	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, state.attachedSession)
+	target, binding, err := g.resolveSessionAttachmentTarget(ctx, state, state.attachedSession.String())
 	if err != nil {
 		return "", err
 	}
