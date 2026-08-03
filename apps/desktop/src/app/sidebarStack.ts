@@ -110,17 +110,22 @@ function reduceReplace(
     return state;
   }
   const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
-  if (existingTaskIndex !== undefined && existingTaskIndex < state.entries.length - 1) {
+  if (existingTaskIndex !== undefined) {
     const retainedEntry = state.entries[existingTaskIndex];
     if (retainedEntry === undefined) {
       return state;
     }
+    const isCurrentEntry = existingTaskIndex === state.entries.length - 1;
     return {
       ...state,
       activationID: action.activationID ?? state.activationID,
       entries: [
-        ...state.entries.slice(0, existingTaskIndex),
-        { ...retainedEntry, destination: action.destination },
+        ...state.entries.slice(0, isCurrentEntry ? -1 : existingTaskIndex),
+        {
+          ...retainedEntry,
+          ...(isCurrentEntry ? { entryID: action.entryID } : {}),
+          destination: action.destination,
+        },
       ],
     };
   }

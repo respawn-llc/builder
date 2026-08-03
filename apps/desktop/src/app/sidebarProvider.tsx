@@ -215,38 +215,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [clearAllCaptures, clearCloseTimeout, dispatchStack, nextID],
   );
 
-  const replaceSidebar = useCallback(
-    (destination: SidebarDestination): void => {
-      const state = stackStateRef.current;
-      if (state === null || pendingRef.current === null) {
-        throw new Error("Sidebar replacement requires an active destination lifecycle.");
-      }
-      clearCloseTimeout();
-      setExitBlockedToken(null);
-      preserveRouteChangeRef.current = null;
-      const currentEntry = state.entries.at(-1);
-      if (currentEntry === undefined) {
-        throw new Error("Sidebar replacement requires an active destination.");
-      }
-      clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
-      const nextProfile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(nextProfile);
-      setSidebarWidths((current) =>
-        sidebarWidthForProfile(current, nextProfile) === undefined
-          ? [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }]
-          : current,
-      );
-      setPhase("open");
-      dispatchStack({
-        type: "replace",
-        activationID: nextID("activation"),
-        entryID: nextID("entry"),
-        destination,
-      });
-    },
-    [clearCapture, clearCloseTimeout, dispatchStack, nextID],
-  );
-
   const captureCurrentState = useCallback((): boolean => {
     const state = stackStateRef.current;
     const pending = pendingRef.current;
@@ -272,6 +240,41 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     clearCapture(token);
     return true;
   }, [clearCapture, dispatchStack]);
+
+  const replaceSidebar = useCallback(
+    (destination: SidebarDestination): void => {
+      const state = stackStateRef.current;
+      if (state === null || pendingRef.current === null) {
+        throw new Error("Sidebar replacement requires an active destination lifecycle.");
+      }
+      clearCloseTimeout();
+      setExitBlockedToken(null);
+      preserveRouteChangeRef.current = null;
+      const currentEntry = state.entries.at(-1);
+      if (currentEntry === undefined) {
+        throw new Error("Sidebar replacement requires an active destination.");
+      }
+      if (findTaskDetailIndex([currentEntry], destination) === 0 && !captureCurrentState()) {
+        return;
+      }
+      clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
+      const nextProfile = sidebarWidthProfile(destination);
+      setActiveWidthProfile(nextProfile);
+      setSidebarWidths((current) =>
+        sidebarWidthForProfile(current, nextProfile) === undefined
+          ? [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }]
+          : current,
+      );
+      setPhase("open");
+      dispatchStack({
+        type: "replace",
+        activationID: nextID("activation"),
+        entryID: nextID("entry"),
+        destination,
+      });
+    },
+    [captureCurrentState, clearCapture, clearCloseTimeout, dispatchStack, nextID],
+  );
 
   const pushSidebar = useCallback(
     (destination: SidebarDestination): void => {

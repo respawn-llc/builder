@@ -69,6 +69,44 @@ describe("SidebarProvider replacement", () => {
     });
   });
 
+  it("captures drafts before refocusing the current Task Detail", () => {
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+      <SidebarProvider>{children}</SidebarProvider>
+    );
+    const { result } = renderHook(() => useSidebar(), { wrapper });
+    act(() => {
+      void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    });
+    const token = result.current.activeToken;
+    if (token === null) {
+      throw new Error("Sidebar token was not created.");
+    }
+    const snapshot = {
+      kind: "taskDetail",
+      scrollTop: 180,
+      descriptionExpanded: true,
+      selectedTab: "comments",
+      titleBodyDraft: { title: "Draft title", body: "Draft body" },
+      newCommentDraft: "Draft comment",
+    } as const;
+    result.current.registerSidebarStateCapture(token, () => snapshot);
+
+    act(() => {
+      result.current.replaceSidebar({
+        kind: "taskDetail",
+        taskID: "task-1",
+        initialFocus: { kind: "dependencies" },
+      });
+    });
+
+    expect(result.current.activeDestination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-1",
+      initialFocus: { kind: "dependencies" },
+    });
+    expect(result.current.activeSnapshot).toEqual(snapshot);
+  });
+
   it("keeps the active activation stable during the close animation", () => {
     const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
       <SidebarProvider>{children}</SidebarProvider>
