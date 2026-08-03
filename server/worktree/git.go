@@ -14,10 +14,6 @@ import (
 	"core/shared/serverapi"
 )
 
-// ErrBaseRefRequired is returned when a create spec omits a required base ref.
-// Callers match it via errors.Is; the create_branch context is added with %w.
-var ErrBaseRefRequired = errors.New("base ref is required")
-
 var errGitTargetNotFound = errors.New("git target not found")
 
 // InvalidCreateTargetError reports that a requested create target is neither a
@@ -1109,22 +1105,10 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
 	baseRef := strings.TrimSpace(spec.BaseRef)
 	branchName := strings.TrimSpace(spec.BranchName)
-	if spec.CreateBranch {
-		if branchName == "" {
-			return CreateSpec{}, fmt.Errorf("branch name is required when create_branch=true")
-		}
-		if baseRef == "" {
-			return CreateSpec{}, fmt.Errorf("%w when create_branch=true", ErrBaseRefRequired)
-		}
-		return CreateSpec{BaseRef: baseRef, CreateBranch: true, BranchName: branchName}, nil
+	if err := serverapi.ValidateWorktreeCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
+		return CreateSpec{}, err
 	}
-	if baseRef == "" {
-		return CreateSpec{}, fmt.Errorf("%w when create_branch=false", ErrBaseRefRequired)
-	}
-	if branchName != "" {
-		return CreateSpec{}, fmt.Errorf("branch name must be empty when create_branch=false")
-	}
-	return CreateSpec{BaseRef: baseRef, CreateBranch: false}, nil
+	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil
 }
 
 type execGitCommandRunner struct{}

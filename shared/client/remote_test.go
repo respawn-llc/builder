@@ -48,6 +48,22 @@ func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesMalformedWorktreeCreateAsContractError(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorktreeCreate,
+		Message: "worktree creation failed",
+		Data:    json.RawMessage(`{"owner":"other","diagnostic":"bad owner"}`),
+	})
+	var contractErr *serverapi.WorktreeCreateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("decoded error = %T %v, want WorktreeCreateContractError", err, err)
+	}
+	var typed *serverapi.WorktreeCreateError
+	if errors.As(err, &typed) {
+		t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)
+	}
+}
+
 func TestProtocolErrorMapsBlankWorktreeBlockedSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorktreeBlocked})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
@@ -1659,6 +1675,13 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 				DirtyFileCount: remoteTestIntPointer(2),
 			},
 		},
+		&serverapi.WorktreeCreateError{
+			Owner:      serverapi.WorktreeCreateErrorOwnerForm,
+			Diagnostic: errors.Join(
+				errors.New("worktree path already exists"),
+				errors.New("cleanup failed"),
+			).Error(),
+		},
 	}
 }
 
@@ -1689,6 +1712,11 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		var decoded *serverapi.WorktreeDeletePreconditionError
 		if !errors.As(err, &decoded) || decoded.DirtyState.DirtyFileCount == nil || *decoded.DirtyState.DirtyFileCount != 2 {
 			t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
+		}
+	case *serverapi.WorktreeCreateError:
+		var decoded *serverapi.WorktreeCreateError
+		if !errors.As(err, &decoded) || decoded.Owner != source.(*serverapi.WorktreeCreateError).Owner || decoded.Diagnostic != source.(*serverapi.WorktreeCreateError).Diagnostic {
+			t.Fatalf("decoded create error = %+v (%v)", decoded, err)
 		}
 	default:
 		t.Fatalf("unsupported structured worktree error %T", source)

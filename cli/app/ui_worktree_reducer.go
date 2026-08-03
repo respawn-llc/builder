@@ -7,6 +7,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -133,7 +134,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 			}
-			m.worktrees.create.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.applyWorktreeCreateError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -167,7 +168,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		if msg.err != nil {
-			m.worktrees.create.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.applyWorktreeCreateError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -275,7 +276,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		if outcome.Submit {
 			req, err := worktreeui.Request(m.worktrees.create.branchTarget.Text(), m.worktrees.create.baseRef.Text(), outcome.SubmitKind)
 			if err != nil {
-				m.worktrees.create.errorText = err.Error()
+				m.applyWorktreeCreateError(err)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, nil)
 			}
@@ -285,4 +286,45 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
+}
+
+type worktreeCreateErrorPlacement struct {
+	baseRef string
+	form    string
+}
+
+func (m *uiModel) applyWorktreeCreateError(err error) {
+	if m == nil {
+		return
+	}
+	placement := classifyWorktreeCreateError(err, worktreeCreateInvariantPolicy(m.debugMode))
+	m.worktrees.create.baseRefErrorText = placement.baseRef
+	m.worktrees.create.errorText = placement.form
+}
+
+func classifyWorktreeCreateError(err error, policy invariant.Policy) worktreeCreateErrorPlacement {
+	if err == nil {
+		return worktreeCreateErrorPlacement{}
+	}
+	if contractErr := serverapi.ValidateWorktreeCreateErrorBoundary(err, "cli.worktree.create", policy); contractErr != nil {
+		return worktreeCreateErrorPlacement{form: runtimeattach.FormatSubmissionError(contractErr)}
+	}
+	var typed *serverapi.WorktreeCreateError
+	if errors.As(err, &typed) {
+		switch typed.Owner {
+		case serverapi.WorktreeCreateErrorOwnerBaseRef:
+			return worktreeCreateErrorPlacement{baseRef: typed.Diagnostic}
+		case serverapi.WorktreeCreateErrorOwnerForm:
+			return worktreeCreateErrorPlacement{form: typed.Diagnostic}
+		}
+	}
+	return worktreeCreateErrorPlacement{form: runtimeattach.FormatSubmissionError(err)}
+}
+
+func worktreeCreateInvariantPolicy(debugMode bool) invariant.Policy {
+	mode := invariant.ModeDiagnostic
+	if debugMode {
+		mode = invariant.ModePanic
+	}
+	return invariant.NewPolicy(invariant.WithMode(mode))
 }

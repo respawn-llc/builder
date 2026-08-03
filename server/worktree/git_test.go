@@ -254,8 +254,9 @@ func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
 
 	_, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{CreateBranch: true, BranchName: "feature/new"})
 
-	if !errors.Is(err, ErrBaseRefRequired) {
-		t.Fatalf("error = %v, want base ref validation", err)
+	var validationErr *serverapi.WorktreeCreateValidationError
+	if !errors.As(err, &validationErr) || validationErr.Kind != serverapi.WorktreeCreateValidationBaseRefRequired {
+		t.Fatalf("error = %T %v, want neutral base ref validation", err, err)
 	}
 	if runner.args != nil {
 		t.Fatalf("expected no git command, got %v", runner.args)

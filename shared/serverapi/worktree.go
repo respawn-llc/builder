@@ -598,28 +598,18 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 
 func (r WorktreeCreateRequest) Validate() error {
 	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
 	if err := r.SetupOperationID.Validate(); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
-	if r.CreateBranch {
-		if strings.TrimSpace(r.BaseRef) == "" {
-			return errors.New("base_ref is required when create_branch=true")
-		}
-		if strings.TrimSpace(r.BranchName) == "" {
-			return errors.New("branch_name is required when create_branch=true")
-		}
+	specErr := ValidateWorktreeCreateSpec(r.BaseRef, r.CreateBranch, r.BranchName)
+	if specErr == nil {
 		return nil
 	}
-	if strings.TrimSpace(r.BaseRef) == "" {
-		return errors.New("base_ref is required when create_branch=false")
-	}
-	if strings.TrimSpace(r.BranchName) != "" {
-		return errors.New("branch_name must be empty when create_branch=false")
-	}
-	return nil
+	owner := ProjectWorktreeCreateValidationOwner(specErr, r.CreateBranch)
+	return NewWorktreeCreateError(owner, specErr.Error(), specErr)
 }

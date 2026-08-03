@@ -13,6 +13,7 @@ const (
 	ScopeBackgroundEvent      Scope = "background_event"
 	ScopeSessionPersistence   Scope = "session_persistence"
 	ScopeWorkflowExecution    Scope = "workflow_execution"
+	ScopeWorktreeContract     Scope = "worktree_contract"
 )
 
 type Field string
@@ -48,6 +49,8 @@ const (
 	FieldProposedStepID           Field = "proposed_step_id"
 	FieldProcessID                Field = "process_id"
 	FieldBackgroundState          Field = "background_state"
+	FieldRawOwner                 Field = "raw_owner"
+	FieldValidationCause          Field = "validation_cause"
 )
 
 type Diagnostic struct {
