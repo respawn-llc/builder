@@ -13,6 +13,10 @@ func (m *uiModel) handleFatalUIError(operatorMessage string, err error) tea.Cmd 
 	if m != nil && m.debugMode {
 		panic(err)
 	}
+	return m.exitWithUIError(operatorMessage)
+}
+
+func (m *uiModel) exitWithUIError(operatorMessage string) tea.Cmd {
 	if m != nil {
 		m.exitAction = UIActionExit
 		m.forcedLocalExit = true
