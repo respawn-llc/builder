@@ -34,11 +34,42 @@ Translate client/server compatibility changes into user actions, such as upgradi
 
 Announce only capabilities available through released Kent artifacts or public documentation. Exclude private repository helpers, operator scripts, and internal automation.
 
+The exact workflow-generated changelog appendix described below is the sole exception to this curated audience boundary. Keep it collapsed and verbatim, and do not copy its internal commit terminology into the curated notes.
+
 ### Editorial Structure
 
 GitHub renders the release name and tag above the body. Start the body with its opening summary; do not repeat the release title as a Markdown H1.
 
 Lead with the release's new capabilities and user-visible improvements. Put routine coordinated-upgrade guidance after the highlights. Lead with an upgrade warning only when users must act before upgrading to prevent data loss, outage, security exposure, or a broken installation.
+
+Use release voice in the curated body. The opening says what the version adds or changes, and entries use verbs such as `Added`, `Changed`, `Removed`, and `Fixed`. Do not apply evergreen documentation voice to a versioned changelog. Avoid `now` and `no longer`; write `Changed` or `Removed` and name the previous public behavior when migration requires it.
+
+Curated entries describe outcomes, not mechanisms. Name what users can do, what they see, what failed in the previous release, or what action they must take. Terms such as transactions, schedulers, projections, runtime ownership, transport streams, RPCs, protocol versions, DTOs, and review remediation do not belong in the curated body unless a documented third-party integration makes the term part of the public contract.
+
+Examples:
+
+- `Added Project-scoped Task Search across Task titles, bodies, and Comments.`
+- `Fixed resumed TUI Sessions crashing when their transcript was temporarily unavailable.`
+- `Removed --page-token; use --offset and --limit.`
+
+Do not write:
+
+- `Task Search supports...` — evergreen documentation voice does not identify the release change.
+- `Reserved a write transaction before interruption.` — implementation mechanics do not state the user outcome.
+- `Improved Task Search selection stability.` — stabilization of a capability first shipped in this release is not a separate release item.
+
+### Curated Notes And Generated Changelog
+
+The release workflow creates a generated changelog. A rewritten release body has two distinct parts:
+
+1. A curated public section that follows the Audience Boundary and Coverage Gate.
+2. The workflow-generated changelog preserved verbatim under `<details><summary>Generated changelog</summary>`.
+
+The generated appendix is source history, not authority for curated product claims. Do not promote its commit titles into the curated body without independently passing the public-surface and previous-release-baseline checks.
+
+Keep the generated appendix byte-for-byte unchanged while editing the curated section. Label a GitHub comparison link `Source comparison`; do not call the link a full changelog when the generated changelog is absent.
+
+If the appendix was lost or overwritten, regenerate it with the exact action version and configuration pinned by the release workflow for that tag range. Do not hand-reconstruct it from local commit subjects.
 
 ### Coverage Gate
 
@@ -57,6 +88,21 @@ Preserve exact verified measurements and explain their user benefit. Treat prote
 Use the previous public release as the baseline for `Bug Fixes`. Fixes made while developing features first shipped in the same release are stabilization work, not public bug fixes; describe the final capability once under the appropriate highlight.
 
 The remaining sections document internal release operations. Their repository scripts and local cleanup commands are not public release-note content unless they produce a separately verified public product capability.
+
+### Draft, Review, And Publication Gate
+
+Do not draft by repeatedly editing a published release.
+
+1. Capture the existing release body and exact generated changelog before making an edit.
+2. Build the coverage ledger and complete the curated body in a scratch file.
+3. Append or preserve the exact generated changelog according to the section above.
+4. Verify every curated capability against a released client surface or public documentation. An internal API, specification-only design, or unreleased client implementation is insufficient.
+5. Run an independent general-purpose editorial reviewer with this document and the release-notes and docs-writing skills. Do not use a code-review role. Scope the review to the curated section and state the exact generated appendix exemption.
+6. Apply findings and continue the same reviewer until it returns exactly `CLEAN`.
+7. Publish the completed body once.
+8. Re-read the published body and verify the generated appendix still matches the workflow output byte-for-byte.
+
+If independent review is unavailable, do not rewrite an already-published release until a second cold editorial pass has checked the same criteria.
 
 ## What The App Release Workflow Does
 
