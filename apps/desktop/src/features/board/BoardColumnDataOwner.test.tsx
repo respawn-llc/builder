@@ -3,7 +3,10 @@ import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { canonicalBoardFilter, type BoardColumn, type BoardFilter, type SelectedWorkflowBoard } from "@/api";
-import type { BoardColumnNoticeEvent } from "./BoardColumnDataOwner";
+
+const { loggerAppend } = vi.hoisted(() => ({
+  loggerAppend: vi.fn(async () => undefined),
+}));
 
 const queryByColumn = new Map<string, Record<string, unknown>>();
 const runtime = {
@@ -19,6 +22,10 @@ const runtime = {
     getSnapshot: () => runtime.snapshot,
   },
 };
+
+vi.mock("@/app-facade", () => ({
+  useAppServices: () => ({ logger: { append: loggerAppend } }),
+}));
 
 vi.mock("@/shared/labels", () => ({
   useProjectLabelCatalog: () => ({ data: { labels: [] } }),
@@ -37,7 +44,7 @@ vi.mock("./useBoardData", () => ({
     queryByColumn.get(columnID),
 }));
 
-import { BoardColumnDataOwner } from "./BoardColumnDataOwner";
+import { BoardColumnDataOwner, type BoardColumnDataView } from "./BoardColumnDataOwner";
 
 const board = {
   attachedWorkspaceCount: 0,
@@ -49,6 +56,7 @@ const column = { id: "column-1", taskCount: 1 } as unknown as BoardColumn;
 
 afterEach(() => {
   queryByColumn.clear();
+  loggerAppend.mockClear();
   runtime.snapshot = {
     active: {
       generation: 2,
@@ -59,171 +67,156 @@ afterEach(() => {
   };
 });
 
-describe("BoardColumnDataOwner retained replacement notices", () => {
-  it("keeps Retry bound to the exact active generation and dismisses after recovery", async () => {
+describe("BoardColumnDataOwner retained replacement boundary", () => {
+  it("publishes a generation-scoped Retry boundary, logs the failure, and removes it after recovery", async () => {
     const refetch = vi.fn(async () => undefined);
     queryByColumn.set("column-1", queryState({ refetch }));
-    const events: BoardColumnNoticeEvent[] = [];
+    let latestView: BoardColumnDataView | undefined;
     const view = render(
       <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
+        <Owner onView={(next) => (latestView = next)} />
       </StrictMode>,
     );
+    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
 
     runtime.snapshot = {
       ...runtime.snapshot,
       active: { ...runtime.snapshot.active, generation: 3 },
     };
-    queryByColumn.set(
-      "column-1",
-      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
-    );
+    const replacementError = new Error("replacement failed");
+    queryByColumn.set("column-1", queryState({ error: replacementError, isError: true, refetch }));
     view.rerender(
       <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
+        <Owner onView={(next) => (latestView = next)} />
       </StrictMode>,
     );
-    await waitFor(() => expect(events.at(-1)?.kind).toBe("failure"));
 
-    const failure = events.find(
-      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
+    await waitFor(() => expect(latestView?.replacementBoundary?.state).toBe("error"));
+    expect(loggerAppend).toHaveBeenCalledWith(
+      "warn",
+      "Board task-card replacement failed.",
+      expect.objectContaining({
+        columnID: "column-1",
+        error: "replacement failed",
+        filterGeneration: "3",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      }),
     );
-    expect(typeof failure?.noticeID).toBe("string");
-    failure?.retry();
+    expect(loggerAppend).toHaveBeenCalledOnce();
+    latestView?.replacementBoundary?.state === "error" && latestView.replacementBoundary.onRetry();
     expect(refetch).toHaveBeenCalledOnce();
 
+    const staleRetry = latestView?.replacementBoundary;
+    const replacementFilter = canonicalBoardFilter({
+      labelFilter: { kind: "none" },
+      dependencyFilter: false,
+    });
     runtime.snapshot = {
-      ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 4 },
-    };
-    failure?.retry();
-    expect(refetch).toHaveBeenCalledOnce();
-
-    runtime.snapshot = {
-      active: {
-        generation: 4,
-        filter: canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true }),
-        retiring: false,
-      },
+      active: { generation: 4, filter: replacementFilter, retiring: false },
       desiredFilter: null,
     };
-    queryByColumn.set("column-1", queryState({ refetch }));
-    view.rerender(
-      <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
-      </StrictMode>,
-    );
-    await waitFor(() => expect(events.at(-1)?.kind).toBe("dismiss"));
-  });
-
-  it("keeps repeated failed replacement retries on the same persistent notice", async () => {
-    const refetch = vi.fn(async () => undefined);
-    queryByColumn.set("column-1", queryState({ refetch }));
-    const events: BoardColumnNoticeEvent[] = [];
-    const view = render(
-      <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
-      </StrictMode>,
-    );
-
-    runtime.snapshot = {
-      ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 3 },
-    };
-    queryByColumn.set(
-      "column-1",
-      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
-    );
-    view.rerender(
-      <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
-      </StrictMode>,
-    );
-    await waitFor(() => expect(events.at(-1)?.kind).toBe("failure"));
-
-    const firstFailure = events.find(
-      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
-    );
-    firstFailure?.retry();
+    if (staleRetry?.state === "error") {
+      staleRetry.onRetry();
+    }
     expect(refetch).toHaveBeenCalledOnce();
-
-    queryByColumn.set(
-      "column-1",
-      queryState({ error: new Error("replacement failed again"), isError: true, refetch }),
-    );
+    const recoveredQuery = queryState({ refetch });
+    queryByColumn.set("column-1", recoveredQuery);
     view.rerender(
       <StrictMode>
-        <Owner onNotice={(event) => events.push(event)} />
+        <Owner onView={(next) => (latestView = next)} />
       </StrictMode>,
     );
-    await waitFor(() => expect(events.filter((event) => event.kind === "failure")).toHaveLength(2));
-
-    const failures = events.filter(
-      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
-    );
-    expect(new Set(failures.map((event) => event.noticeID))).toEqual(new Set([firstFailure?.noticeID]));
+    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
     view.unmount();
   });
 
-  it("keeps visible column notices independent and removes them on owner unmount", async () => {
+  it("keeps retained replacement failures independent across visible columns", async () => {
     const firstRefetch = vi.fn(async () => undefined);
     const secondRefetch = vi.fn(async () => undefined);
-    const firstColumn = { id: "column-1", taskCount: 1 } as unknown as BoardColumn;
     const secondColumn = { id: "column-2", taskCount: 1 } as unknown as BoardColumn;
+    queryByColumn.set("column-1", queryState({ refetch: firstRefetch }));
+    queryByColumn.set("column-2", queryState({ refetch: secondRefetch }));
+    const views = new Map<string, BoardColumnDataView>();
+    const view = render(
+      <>
+        <Owner onView={(next) => views.set("column-1", next)} />
+        <Owner column={secondColumn} onView={(next) => views.set("column-2", next)} />
+      </>,
+    );
+    await waitFor(() => expect(views.get("column-2")?.replacementBoundary).toBeUndefined());
+
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      active: { ...runtime.snapshot.active, generation: 3 },
+    };
     queryByColumn.set(
       "column-1",
-      queryState({
-        error: new Error("first"),
-        isError: true,
-        isPlaceholderData: true,
-        refetch: firstRefetch,
-      }),
+      queryState({ error: new Error("first"), isError: true, refetch: firstRefetch }),
     );
     queryByColumn.set(
       "column-2",
-      queryState({
-        error: new Error("second"),
-        isError: true,
-        isPlaceholderData: true,
-        refetch: secondRefetch,
-      }),
+      queryState({ error: new Error("second"), isError: true, refetch: secondRefetch }),
     );
-    const events: BoardColumnNoticeEvent[] = [];
-    const view = render(
+    view.rerender(
       <>
-        <Owner column={firstColumn} onNotice={(event) => events.push(event)} />
-        <Owner column={secondColumn} onNotice={(event) => events.push(event)} />
+        <Owner onView={(next) => views.set("column-1", next)} />
+        <Owner column={secondColumn} onView={(next) => views.set("column-2", next)} />
       </>,
     );
 
-    await waitFor(() => expect(events.filter((event) => event.kind === "failure")).toHaveLength(2));
-    const failures = events.filter(
-      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
-    );
-    expect(new Set(failures.map((event) => event.noticeID)).size).toBe(2);
-    failures[0]?.retry();
+    await waitFor(() => {
+      expect(views.get("column-1")?.replacementBoundary?.state).toBe("error");
+      expect(views.get("column-2")?.replacementBoundary?.state).toBe("error");
+    });
+    const firstBoundary = views.get("column-1")?.replacementBoundary;
+    if (firstBoundary?.state === "error") {
+      firstBoundary.onRetry();
+    }
     expect(firstRefetch).toHaveBeenCalledOnce();
     expect(secondRefetch).not.toHaveBeenCalled();
-
+    expect(views.get("column-2")?.replacementBoundary?.state).toBe("error");
     view.unmount();
-    expect(events.filter((event) => event.kind === "dismiss")).toHaveLength(2);
+  });
+
+  it("removes the boundary when the generation retires and releases the view on deactivation", async () => {
+    queryByColumn.set("column-1", queryState());
+    const onViewRelease = vi.fn();
+    let latestView: BoardColumnDataView | undefined;
+    const view = render(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
+    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
+
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      active: { ...runtime.snapshot.active, generation: 3, retiring: true },
+      desiredFilter: canonicalBoardFilter({
+        labelFilter: { kind: "none" },
+        dependencyFilter: false,
+      }),
+    };
+    queryByColumn.set("column-1", queryState({ error: new Error("retiring"), isError: true }));
+    view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
+    await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
+    view.unmount();
+    expect(onViewRelease).toHaveBeenCalledOnce();
   });
 });
 
 function Owner({
   column: ownerColumn = column,
-  onNotice,
+  onDataViewRelease = vi.fn(),
+  onView,
 }: Readonly<{
   column?: BoardColumn;
-  onNotice(event: BoardColumnNoticeEvent): void;
+  onDataViewRelease?: () => void;
+  onView(view: BoardColumnDataView): void;
 }>) {
   return (
     <BoardColumnDataOwner
       board={board}
       column={ownerColumn}
-      onBoardColumnNotice={onNotice}
-      onDataViewChange={vi.fn()}
-      onDataViewRelease={vi.fn()}
+      onDataViewChange={onView}
+      onDataViewRelease={onDataViewRelease}
       onReportColumnSnapshot={vi.fn()}
     />
   );

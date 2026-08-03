@@ -12,11 +12,7 @@ import { flushSync } from "react-dom";
 
 import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
 import { chromeContentPaddingClassName } from "@/ui";
-import {
-  type BoardColumnNoticeEvent,
-  type BoardColumnQueryDataSnapshot,
-  type BoardColumnQuerySnapshot,
-} from "./BoardColumnDataOwner";
+import { type BoardColumnQueryDataSnapshot, type BoardColumnQuerySnapshot } from "./BoardColumnDataOwner";
 import { BoardColumnMotionBoundary } from "./BoardColumnMotionBoundary";
 import { runBoardCardMotionTransition } from "./BoardCardMotionAnimator";
 import { BoardCardMotionContext, type BoardCardMotionContextValue } from "./BoardCardMotionContext";
@@ -67,7 +63,6 @@ export type BoardRailMotionControllerProps = Readonly<{
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
-  onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
@@ -94,7 +89,6 @@ export function BoardRailMotionController({
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
-  onBoardColumnNotice,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
@@ -457,7 +451,6 @@ export function BoardRailMotionController({
                     onCardClick={onCardClick}
                     onCardDragEnd={onCardDragEnd}
                     onCardDragStart={onCardDragStart}
-                    onBoardColumnNotice={onBoardColumnNotice}
                     onDeleteTask={onDeleteTask}
                     onDropTask={onDropTask}
                     onExpandColumn={onExpandColumn}
@@ -487,7 +480,6 @@ export function BoardRailMotionController({
                 onCardClick={onCardClick}
                 onCardDragEnd={onCardDragEnd}
                 onCardDragStart={onCardDragStart}
-                onBoardColumnNotice={onBoardColumnNotice}
                 onDeleteTask={onDeleteTask}
                 onDropTask={onDropTask}
                 onExpandColumn={onExpandColumn}

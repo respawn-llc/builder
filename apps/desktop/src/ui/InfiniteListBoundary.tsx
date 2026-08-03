@@ -9,7 +9,7 @@ export function InfiniteListBoundary({
   direction,
   state,
 }: Readonly<{
-  direction: "initial" | "previous" | "next";
+  direction: "initial" | "previous" | "next" | "replacement";
   state: VirtualizedInfiniteListBoundaryState;
 }>) {
   return (

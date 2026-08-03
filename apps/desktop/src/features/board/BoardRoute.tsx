@@ -28,8 +28,6 @@ import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { BoardRailMotionController } from "./BoardRailMotionController";
-import type { BoardColumnNoticeEvent } from "./BoardColumnDataOwner";
-import { boardColumnNoticeDiagnostic, boardColumnNoticeStatusNotice } from "./BoardColumnNotice";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 import type { BoardColumnDropState } from "./BoardDragTypes";
@@ -236,8 +234,8 @@ function BoardContent({
   const [expandedEmptyColumns, setExpandedEmptyColumns] = useState<
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
   >(() => ({ ids: new Set(), scope: "" }));
-  const { dismiss, push } = useStatusController();
-  const { api, logger, nativeBridge } = useAppServices();
+  const { push } = useStatusController();
+  const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
   const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
@@ -332,28 +330,6 @@ function BoardContent({
       ? expandedEmptyColumns.ids
       : emptyExpandedEmptyColumnIDs;
   useWindowChromeTitle(board.selectedWorkflow.name || board.projectName);
-  const reportColumnNotice = useCallback(
-    (event: BoardColumnNoticeEvent) => {
-      const diagnostic = boardColumnNoticeDiagnostic(event, {
-        projectID: board.projectID,
-        workflowID: board.selectedWorkflow.id,
-      });
-      if (diagnostic !== null) {
-        void logger.append("warn", diagnostic.message, diagnostic.context);
-      }
-      const notice = boardColumnNoticeStatusNotice(event, {
-        cardsLoadRetryBody: t("board.cardsLoadRetryBody"),
-        cardsLoadFailed: t("board.cardsLoadFailed"),
-        retry: t("app.retry"),
-      });
-      if (notice === null) {
-        dismiss(event.noticeID);
-        return;
-      }
-      push(notice);
-    },
-    [board.projectID, board.selectedWorkflow.id, dismiss, logger, push, t],
-  );
   const reportNavigationError = useCallback(
     (error: unknown) => {
       reportActionError("board-navigation-error", t("board.navigationFailed"), error);
@@ -614,7 +590,6 @@ function BoardContent({
             onCardDragStart={(drag) => {
               setActiveDrag(drag);
             }}
-            onBoardColumnNotice={reportColumnNotice}
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
             onExpandColumn={expandColumn}

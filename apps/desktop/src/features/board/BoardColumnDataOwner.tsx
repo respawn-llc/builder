@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { boardFiltersEqual, type BoardColumn, type BoardFilter, type SelectedWorkflowBoard } from "@/api";
+import { boardFiltersEqual, errorMessage, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import { useAppServices } from "@/app-facade";
 import { useProjectLabelCatalog } from "@/shared/labels";
 import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
@@ -27,21 +28,6 @@ export type BoardColumnQuerySnapshot =
       data: BoardColumnQueryDataSnapshot;
     }>;
 
-export type BoardColumnNoticeEvent =
-  | Readonly<{
-      kind: "failure";
-      columnID: string;
-      error: unknown;
-      filter: BoardFilter;
-      generation: number;
-      noticeID: string;
-      retry: () => void;
-    }>
-  | Readonly<{
-      kind: "dismiss";
-      noticeID: string;
-    }>;
-
 export type BoardColumnDataView = Readonly<{
   cards: readonly KanbanCardVM[];
   hasNextPage: boolean;
@@ -53,27 +39,26 @@ export type BoardColumnDataView = Readonly<{
   onLoadMore: () => void;
   onLoadPrevious: () => void;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>;
 
 export function BoardColumnDataOwner({
   board,
   column,
-  onBoardColumnNotice,
   onDataViewChange,
   onDataViewRelease,
   onReportColumnSnapshot,
 }: Readonly<{
   board: SelectedWorkflowBoard;
   column: BoardColumn;
-  onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
+  const { logger } = useAppServices();
   const labelCatalog = useProjectLabelCatalog();
   const filterGeneration = useBoardFilterGeneration();
-  const stableOnBoardColumnNotice = useStableCallback(onBoardColumnNotice);
   const stableOnDataViewChange = useStableCallback(onDataViewChange);
   const stableOnDataViewRelease = useStableCallback(onDataViewRelease);
   const stableOnReportColumnSnapshot = useStableCallback(onReportColumnSnapshot);
@@ -120,19 +105,9 @@ export function BoardColumnDataOwner({
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
   const replacementDataRetained =
     cardsQuery.data !== undefined &&
+    hydratedFilterGenerationRef.current !== null &&
     hydratedFilterGenerationRef.current !== activeFilterGeneration.generation;
-  const mountedRef = useRef(true);
-  const noticeRef = useRef<Readonly<{ generation: number; noticeID: string }> | null>(null);
-  const noticeID = boardColumnNoticeID(
-    board.projectID,
-    board.selectedWorkflow.id,
-    column.id,
-    activeFilterGeneration.generation,
-  );
   const retryCards = useCallback(() => {
-    if (!mountedRef.current) {
-      return;
-    }
     const current = filterGeneration.controller.getSnapshot();
     if (
       current.active.generation !== activeFilterGeneration.generation ||
@@ -200,6 +175,18 @@ export function BoardColumnDataOwner({
       }),
     [error, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
   );
+  const replacementBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
+    () =>
+      isError && replacementDataRetained && requestEnabled
+        ? {
+            state: "error",
+            message: t("board.cardsLoadRetryBody"),
+            retryLabel: t("app.retry"),
+            onRetry: retryCards,
+          }
+        : undefined,
+    [isError, replacementDataRetained, requestEnabled, retryCards, t],
+  );
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
       cards: cardVMs,
@@ -212,6 +199,7 @@ export function BoardColumnDataOwner({
       onLoadMore: loadOlder,
       onLoadPrevious: loadNewer,
       previousBoundary: paginationEnabled ? previousBoundary : undefined,
+      replacementBoundary,
     }),
     [
       cardVMs,
@@ -225,6 +213,7 @@ export function BoardColumnDataOwner({
       nextBoundary,
       paginationEnabled,
       previousBoundary,
+      replacementBoundary,
     ],
   );
 
@@ -233,56 +222,24 @@ export function BoardColumnDataOwner({
   }, [dataView, stableOnDataViewChange]);
 
   useEffect(() => {
-    const notice = noticeRef.current;
-    if (
-      notice !== null &&
-      (notice.generation !== activeFilterGeneration.generation ||
-        activeFilterGeneration.retiring ||
-        filterGeneration.snapshot.desiredFilter !== null)
-    ) {
-      stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
-      noticeRef.current = null;
-    }
-  }, [
-    activeFilterGeneration.generation,
-    activeFilterGeneration.retiring,
-    filterGeneration.snapshot.desiredFilter,
-    stableOnBoardColumnNotice,
-  ]);
-
-  useEffect(() => {
-    if (isError && replacementDataRetained && requestEnabled) {
-      noticeRef.current = { generation: activeFilterGeneration.generation, noticeID };
-      stableOnBoardColumnNotice({
-        kind: "failure",
-        columnID: column.id,
-        error,
-        filter: activeFilterGeneration.filter,
-        generation: activeFilterGeneration.generation,
-        noticeID,
-        retry: retryCards,
-      });
+    if (replacementBoundary?.state !== "error") {
       return;
     }
-    const notice = noticeRef.current;
-    if (notice !== null && notice.noticeID === noticeID && !isFetching && !isError && !isPlaceholderData) {
-      stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
-      noticeRef.current = null;
-    }
+    void logger.append("warn", "Board task-card replacement failed.", {
+      columnID: column.id,
+      error: errorMessage(error),
+      filterGeneration: activeFilterGeneration.generation.toString(),
+      projectID: board.projectID,
+      workflowID: board.selectedWorkflow.id,
+    });
   }, [
-    activeFilterGeneration.filter,
     activeFilterGeneration.generation,
-    cardsQuery.data,
+    board.projectID,
+    board.selectedWorkflow.id,
     column.id,
     error,
-    isError,
-    isFetching,
-    isPlaceholderData,
-    noticeID,
-    stableOnBoardColumnNotice,
-    requestEnabled,
-    replacementDataRetained,
-    retryCards,
+    logger,
+    replacementBoundary,
   ]);
 
   useEffect(() => {
@@ -333,29 +290,13 @@ export function BoardColumnDataOwner({
   ]);
 
   useEffect(() => {
-    mountedRef.current = true;
     return () => {
-      mountedRef.current = false;
-      const notice = noticeRef.current;
-      if (notice !== null) {
-        stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
-        noticeRef.current = null;
-      }
       stableOnDataViewRelease();
       stableOnReportColumnSnapshot(column.id, { cause: "deactivation" });
     };
-  }, [column.id, stableOnBoardColumnNotice, stableOnDataViewRelease, stableOnReportColumnSnapshot]);
+  }, [column.id, stableOnDataViewRelease, stableOnReportColumnSnapshot]);
 
   return null;
-}
-
-function boardColumnNoticeID(
-  projectID: string,
-  workflowID: string,
-  columnID: string,
-  generation: number,
-): string {
-  return `board-cards:${projectID}:${workflowID}:${columnID}:${generation.toString()}`;
 }
 
 function directionalBoundary(
