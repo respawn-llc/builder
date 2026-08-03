@@ -236,7 +236,7 @@ function BoardContent({
   }, [stopDragAutoScroll]);
   const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
-  const actions = useBoardTaskActions();
+  const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
       const body = errorMessage(error);

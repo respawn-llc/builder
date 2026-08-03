@@ -20,6 +20,7 @@ export * from "./statusContextValue";
 export * from "./statusStore";
 export * from "./taskDetailInitialFocus";
 export * from "./taskSearchMemoryContext";
+export * from "./taskSearchQueries";
 export * from "./textFieldSubmitShortcut";
 export * from "./useAppServices";
 export * from "./useConnectionSnapshot";

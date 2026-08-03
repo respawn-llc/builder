@@ -12,6 +12,7 @@ describe("label query keys", () => {
     expect(queryKeys.projectBoardsRoot("project-1")).toEqual(["board", "project-1"]);
     expect(queryKeys.projectBoardNodeCardsRoot("project-1")).toEqual(["board-node-cards", "project-1"]);
     expect(queryKeys.projectTaskListsRoot("project-1")).toEqual(["task-list", "project-1"]);
+    expect(queryKeys.projectTaskSearches("project-1")).toEqual(["task-search", "project-1"]);
     expect(
       queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", {
         kind: "named",

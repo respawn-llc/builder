@@ -104,6 +104,7 @@ export const queryKeys = {
     nodeID,
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
+  projectTaskSearches: (projectID: string) => ["task-search", projectID],
   taskSearch: (projectID: string, query: string) => ["task-search", projectID, query],
   task: (taskID: string) => ["task", taskID],
   taskDependencies: (taskID: string, direction?: string) => ["task-dependencies", taskID, direction ?? null],
