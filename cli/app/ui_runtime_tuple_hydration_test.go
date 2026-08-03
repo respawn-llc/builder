@@ -186,6 +186,36 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	}
 }
 
+func TestHydrationReplacesStaleCompletedCompactionCountWithoutActiveCompaction(t *testing.T) {
+	runtimeClient := newTestSessionRuntimeClient(
+		&countingSessionViewClient{},
+		newUnavailableRuntimeControlService(),
+	)
+	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	current.Status.CompactionCount = 9
+	runtimeClient.storeMainView(current)
+	m := newProjectedTestUIModel(runtimeClient)
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(
+		surface,
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+	payload := hydration.Payload().(clientui.TranscriptHydration)
+	payload.SessionStatus.CompactionCount = 4
+	payload.ActiveCompaction = nil
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
+
+	if _, _, err := controller.Accept(hydration); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if got := runtimeClient.MainView().Status.CompactionCount; got != 4 {
+		t.Fatalf("hydrated compaction count = %d, want 4", got)
+	}
+}
+
 func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	reads := &countingSessionViewClient{view: v12}

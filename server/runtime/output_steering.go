@@ -40,6 +40,7 @@ type steeringItem struct {
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
 	queuedFlush                 *steeringQueuedUserMessageFlush
+	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
 	streaming                   *steeringStreamingOutput
 	cacheWarning                *steeringCacheWarning
@@ -144,6 +145,10 @@ type steeringQueuedUserMessageFlush struct {
 	queueItems []QueuedUserMessage
 }
 
+type steeringQueuedUserMessageRestore struct {
+	items []queuedUserSteeringIntent
+}
+
 type steeringMessageEventPolicy uint8
 
 const (
@@ -208,6 +213,15 @@ func steerQueuedUserMessageFlushIntent(text string, batch []string, queueItems [
 			text:       text,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
+		}}},
+	}
+}
+
+func steerQueuedUserMessageRestoreIntent(items []queuedUserSteeringIntent) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityUser,
+		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
+			items: append([]queuedUserSteeringIntent(nil), items...),
 		}}},
 	}
 }
@@ -477,10 +491,29 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		item.recordCommitReceipt(receipt)
 		return err
 	}
+	if item.queuedRestore != nil {
+		e.messageFlow.RestorePendingUserInjections(item.queuedRestore.items)
+		for _, pending := range item.queuedRestore.items {
+			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
+		}
+		return nil
+	}
 	if item.event != nil {
 		evt := *item.event
 		if evt.StepID == "" {
 			evt.StepID = stepID
+		}
+		switch evt.Kind {
+		case EventReviewerStarted:
+			e.reviewerRuntimeState().SetActiveStep(evt.StepID)
+		case EventReviewerCompleted:
+			e.reviewerRuntimeState().ClearActiveStep(evt.StepID)
+		case EventCompactionStarted:
+			if evt.Compaction != nil {
+				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
+			}
+		case EventCompactionCompleted, EventCompactionFailed:
+			e.compactionRuntimeState().ClearActive(evt.StepID)
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
 			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
@@ -543,6 +576,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		if item.streaming.reasoningDelta != nil {
 			delta := *item.streaming.reasoningDelta
+			e.transcriptRuntimeState().SetReasoningState(stepID, delta)
 			return e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
 		}
 		var clearedMetadata *AssistantStreamMetadata

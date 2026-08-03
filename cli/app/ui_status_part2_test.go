@@ -98,6 +98,44 @@ func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
 	}
 }
 
+func TestTranscriptSessionIdentityReplacesConflictingConversationFreshnessCaches(t *testing.T) {
+	sessionID, err := runtimeids.ParseSessionID("session-1")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID: "session-1",
+		mainView: clientui.RuntimeMainView{
+			Session: clientui.RuntimeSessionView{
+				SessionID:             "session-1",
+				ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			},
+			Status: clientui.RuntimeStatus{
+				ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			},
+		},
+		hasMainView: true,
+	}
+	_, err = runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(
+		clientui.TranscriptSessionIdentity{
+			SessionID:             sessionID,
+			ConversationFreshness: clientui.ConversationFreshnessFresh,
+		},
+	)))
+	if err != nil {
+		t.Fatalf("admit transcript session identity: %v", err)
+	}
+	if runtimeClient.mainView.Session.ConversationFreshness != clientui.ConversationFreshnessFresh {
+		t.Fatalf("session-view conversation freshness = %q, want fresh", runtimeClient.mainView.Session.ConversationFreshness)
+	}
+	if runtimeClient.mainView.Status.ConversationFreshness != clientui.ConversationFreshnessFresh {
+		t.Fatalf("status conversation freshness = %q, want fresh", runtimeClient.mainView.Status.ConversationFreshness)
+	}
+	if got := runtimeClient.Status().ConversationFreshness; got != clientui.ConversationFreshnessFresh {
+		t.Fatalf("cached conversation freshness = %q, want fresh", got)
+	}
+}
+
 func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 	role := "worker"
 	runtimeClient := &runtimeControlFakeClient{

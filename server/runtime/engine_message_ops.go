@@ -538,6 +538,7 @@ func (e *Engine) emitStreamingAssistantCleanupEventsRaw(
 	streamID *uuid.UUID,
 	abortReason *AssistantStreamAbortReason,
 ) error {
+	e.transcriptRuntimeState().ClearReasoningState(stepID)
 	emissionErrors := []error{
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	}

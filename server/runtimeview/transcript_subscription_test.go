@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -192,6 +193,100 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 	}
 	if hydration.ActiveAssistant.Phase != transcript.AssistantPhaseFinal {
 		t.Fatalf("active assistant stream phase = %q, want final", hydration.ActiveAssistant.Phase)
+	}
+}
+
+func TestTranscriptHydrationCarriesRuntimeOwnedReasoningToolsAndQueue(t *testing.T) {
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	queueItemID := runtimeids.NewQueueItemID()
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveReasoning: &runtime.TranscriptReasoningState{
+			StepID: transcriptProjectionStepID,
+			Key:    "plan",
+			Text:   "inspect the repository",
+			CurrentStatus: &llm.ReasoningStatus{
+				Text: "Planning",
+			},
+		},
+		InFlightTools: []runtime.TranscriptLiveToolStart{{
+			StepID:     transcriptProjectionStepID,
+			ToolCallID: "call-1",
+			ToolName:   "shell",
+		}},
+		QueuedMessages: []runtime.QueuedUserMessage{{
+			ID:              queueItemID.String(),
+			ClientRequestID: clientRequestID.String(),
+			Text:            "queued input",
+		}},
+	})
+	if hydration.ActiveReasoning == nil ||
+		hydration.ActiveReasoning.StepID.String() != transcriptProjectionStepID ||
+		hydration.ActiveReasoning.Key != "plan" ||
+		hydration.ActiveReasoning.Text != "inspect the repository" ||
+		hydration.ActiveReasoning.CurrentStatus == nil ||
+		hydration.ActiveReasoning.CurrentStatus.Text != "Planning" {
+		t.Fatalf("active reasoning = %+v", hydration.ActiveReasoning)
+	}
+	if len(hydration.InFlightTools) != 1 ||
+		hydration.InFlightTools[0].ToolCallID != "call-1" {
+		t.Fatalf("in-flight tools = %+v", hydration.InFlightTools)
+	}
+	if len(hydration.QueuedMessages) != 1 ||
+		hydration.QueuedMessages[0].QueueItemID != queueItemID ||
+		hydration.QueuedMessages[0].ClientRequestID != clientRequestID ||
+		hydration.QueuedMessages[0].Status != clientui.QueuedUserMessageAccepted ||
+		hydration.QueuedMessages[0].Text == nil ||
+		*hydration.QueuedMessages[0].Text != "queued input" {
+		t.Fatalf("queued hydration = %+v", hydration.QueuedMessages)
+	}
+}
+
+func TestTranscriptHydrationCarriesRuntimeOwnedReviewerCompactionUsageAndGoal(t *testing.T) {
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveReviewer: &runtime.TranscriptReviewerState{
+			StepID: transcriptProjectionStepID,
+		},
+		ActiveCompaction: &runtime.TranscriptCompactionState{
+			StepID: transcriptProjectionStepID,
+			Mode:   "auto",
+			Count:  3,
+		},
+		CompactionCount: 3,
+		ContextUsage: &runtime.ContextUsage{
+			UsedTokens:            123,
+			WindowTokens:          4000,
+			CacheHitPercent:       25,
+			HasCacheHitPercentage: true,
+		},
+		Goal: &session.GoalState{
+			ID:        "goal-1",
+			Objective: "ship the feature",
+			Status:    session.GoalStatusActive,
+		},
+		GoalSuspended: true,
+	})
+	if hydration.ActiveReviewer == nil ||
+		hydration.ActiveReviewer.StepID.String() != transcriptProjectionStepID ||
+		hydration.ActiveReviewer.State != clientui.ReviewerStateRunning {
+		t.Fatalf("active reviewer = %+v", hydration.ActiveReviewer)
+	}
+	if hydration.ActiveCompaction == nil ||
+		hydration.ActiveCompaction.StepID.String() != transcriptProjectionStepID ||
+		hydration.ActiveCompaction.State != clientui.CompactionStarted ||
+		hydration.ActiveCompaction.Count != 3 {
+		t.Fatalf("active compaction = %+v", hydration.ActiveCompaction)
+	}
+	if hydration.ContextUsage == nil ||
+		hydration.ContextUsage.UsedTokens != 123 ||
+		hydration.ContextUsage.CacheHitPercent == nil ||
+		*hydration.ContextUsage.CacheHitPercent != 25 {
+		t.Fatalf("context usage = %+v", hydration.ContextUsage)
+	}
+	if hydration.GoalStatus == nil ||
+		hydration.GoalStatus.Goal == nil ||
+		hydration.GoalStatus.Goal.ID != "goal-1" ||
+		!hydration.GoalStatus.Goal.Suspended {
+		t.Fatalf("goal status = %+v", hydration.GoalStatus)
 	}
 }
 

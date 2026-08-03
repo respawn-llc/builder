@@ -16,10 +16,99 @@ import (
 )
 
 func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
-	return clientui.TranscriptHydration{
+	hydration := clientui.TranscriptHydration{
 		CommittedRows:   transcriptRowsFromFacts(runtimeSnapshot.CommittedRows),
 		ActiveAssistant: transcriptAssistantStream(runtimeSnapshot),
 	}
+	hydration.ActiveReasoning = transcriptReasoningStateFromRuntime(runtimeSnapshot.ActiveReasoning)
+	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
+	hydration.QueuedMessages = transcriptQueuedMessagesFromRuntime(runtimeSnapshot.QueuedMessages)
+	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
+	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
+	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
+	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
+	return hydration
+}
+
+func transcriptReasoningStateFromRuntime(state *runtime.TranscriptReasoningState) *clientui.TranscriptReasoningUpdate {
+	if state == nil {
+		return nil
+	}
+	update := &clientui.TranscriptReasoningUpdate{
+		StepID: mustTranscriptStepID(state.StepID, "hydrated reasoning"),
+		Key:    strings.TrimSpace(state.Key),
+		Text:   state.Text,
+	}
+	if state.CurrentStatus != nil {
+		update.CurrentStatus = &clientui.ReasoningStatus{Text: state.CurrentStatus.Text}
+	}
+	return update
+}
+
+func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) []clientui.TranscriptQueuedMessageState {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]clientui.TranscriptQueuedMessageState, 0, len(messages))
+	for index, message := range messages {
+		out = append(out, clientui.TranscriptQueuedMessageState{
+			ClientRequestID: mustTranscriptClientRequestID(message.ClientRequestID, fmt.Sprintf("hydrated queued message %d", index)),
+			QueueItemID:     mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
+			Status:          clientui.QueuedUserMessageAccepted,
+			Text:            textutil.Value(message.Text),
+		})
+	}
+	return out
+}
+
+func transcriptReviewerStateFromRuntime(state *runtime.TranscriptReviewerState) *clientui.TranscriptReviewerState {
+	if state == nil {
+		return nil
+	}
+	return &clientui.TranscriptReviewerState{
+		StepID: mustTranscriptStepID(state.StepID, "hydrated reviewer"),
+		State:  clientui.ReviewerStateRunning,
+	}
+}
+
+func transcriptCompactionStateFromRuntime(state *runtime.TranscriptCompactionState) *clientui.TranscriptCompactionStatus {
+	if state == nil {
+		return nil
+	}
+	return &clientui.TranscriptCompactionStatus{
+		StepID: mustTranscriptStepID(state.StepID, "hydrated compaction"),
+		State:  clientui.CompactionStarted,
+		Mode:   strings.TrimSpace(state.Mode),
+		Count:  state.Count,
+	}
+}
+
+func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.TranscriptContextUsage {
+	if usage == nil {
+		return nil
+	}
+	projected := &clientui.TranscriptContextUsage{
+		UsedTokens:   usage.UsedTokens,
+		WindowTokens: usage.WindowTokens,
+	}
+	if usage.HasCacheHitPercentage {
+		cacheHitPercent := usage.CacheHitPercent
+		projected.CacheHitPercent = &cacheHitPercent
+	}
+	return projected
+}
+
+func transcriptGoalStatusFromRuntime(goal *session.GoalState, suspended bool) *clientui.TranscriptGoalStatus {
+	projected := GoalFromSessionState(goal, suspended)
+	if projected == nil {
+		return nil
+	}
+	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
+		ID:        projected.ID,
+		Objective: projected.Objective,
+		Status:    projected.Status,
+		Suspended: projected.Suspended,
+	}}
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {

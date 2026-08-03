@@ -104,6 +104,117 @@ func closeRuntime(registry *RuntimeRegistry, sessionID string, _ *runtime.Engine
 	_ = registry.ResourceDraining(context.Background(), registryTestResource(registryTestResourceRef(sessionID)))
 }
 
+func TestSubscribeSessionTranscriptFailsExecutionTargetResolution(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	registry.WithExecutionTargetResolver(func(context.Context, string) (*clientui.SessionExecutionTarget, error) {
+		return nil, errors.New("execution target unavailable")
+	})
+
+	if _, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	}); err == nil {
+		t.Fatal("subscription succeeded despite execution-target resolution failure")
+	}
+}
+
+func TestSubscribeSessionTranscriptAllowsAbsentExecutionTarget(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	registry.WithExecutionTargetResolver(func(context.Context, string) (*clientui.SessionExecutionTarget, error) {
+		return nil, nil
+	})
+
+	sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("subscribe without execution target: %v", err)
+	}
+	message, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatalf("read hydration: %v", err)
+	}
+	hydration := transcriptPayload[clientui.TranscriptHydration](t, message)
+	if hydration.SessionIdentity.ExecutionTarget != nil {
+		t.Fatalf("hydrated absent execution target = %+v, want nil", hydration.SessionIdentity.ExecutionTarget)
+	}
+}
+
+func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerResource(t, registry, ref, engine)
+	scopeID := runtimeids.NewExecutionScopeID()
+	registry.PromptPending(ref, scopeID, askquestion.AskQuestionRequest{
+		ID:       "ask-1",
+		StepID:   registryTestStepID,
+		Question: "Continue?",
+	}, time.Now().UTC())
+
+	hydrationResolverStarted := make(chan struct{})
+	releaseHydrationResolver := make(chan struct{})
+	registry.WithExecutionTargetResolver(func(context.Context, string) (*clientui.SessionExecutionTarget, error) {
+		close(hydrationResolverStarted)
+		<-releaseHydrationResolver
+		return nil, nil
+	})
+	type subscriptionResult struct {
+		sub serverapi.TranscriptSubscription
+		err error
+	}
+	subscriptionDone := make(chan subscriptionResult, 1)
+	go func() {
+		sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+			SessionID: engine.SessionID(),
+		})
+		subscriptionDone <- subscriptionResult{sub: sub, err: err}
+	}()
+	<-hydrationResolverStarted
+	resolutionDone := make(chan struct{})
+	go func() {
+		registry.PromptResolved(ref, scopeID, "ask-1")
+		close(resolutionDone)
+	}()
+	select {
+	case <-resolutionDone:
+		t.Fatal("prompt resolution completed before hydration registration")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseHydrationResolver)
+	select {
+	case result := <-subscriptionDone:
+		if result.err != nil {
+			t.Fatalf("subscribe: %v", result.err)
+		}
+		defer func() { _ = result.sub.Close() }()
+		if message := nextTranscriptMessage(t, result.sub); message.Kind() != clientui.TranscriptMessageHydration {
+			t.Fatalf("first message = %+v, want hydration", message)
+		}
+		var resolved bool
+		for !resolved {
+			message, err := result.sub.Next(context.Background())
+			if err != nil {
+				t.Fatalf("read after hydration: %v", err)
+			}
+			if message.Kind() == clientui.TranscriptMessagePrompt {
+				prompt := transcriptPayload[clientui.TranscriptPrompt](t, message)
+				resolved = prompt.Status == clientui.TranscriptPromptStatusResolved
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscription and prompt resolution deadlocked")
+	}
+	select {
+	case <-resolutionDone:
+	case <-time.After(time.Second):
+		t.Fatal("prompt resolution did not complete")
+	}
+}
+
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
 	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"}, func(_ *runtime.Engine, evt runtime.Event) {

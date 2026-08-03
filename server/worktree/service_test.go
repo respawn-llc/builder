@@ -33,7 +33,7 @@ type serviceTestPublisher struct {
 	ready    chan struct{}
 }
 
-func (p *serviceTestPublisher) PublishSessionIdentity(string, *clientui.SessionExecutionTarget) error {
+func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
 	return nil
 }
 

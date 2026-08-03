@@ -16,6 +16,7 @@ type TranscriptSessionStatus struct {
 	FastModeEnabled           bool
 	ThinkingLevel             string
 	CompactionMode            string
+	CompactionCount           int
 	PreviousSessionID         *runtimeids.SessionID
 	ParentAgentSessionID      *runtimeids.SessionID
 	NavigationTargetSessionID *runtimeids.SessionID

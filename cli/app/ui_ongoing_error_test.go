@@ -57,6 +57,28 @@ func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
 	}
 }
 
+func TestOngoingTranscriptOpenFailureDoesNotPanicInDebug(t *testing.T) {
+	controller := newNoopOngoingTranscriptController(&ongoingSurfaceSpy{}, ongoingTestFrameProvider)
+	m := newProjectedStaticUIModel(
+		WithUIDebug(true),
+		withUIOngoingTranscriptController(controller),
+	)
+
+	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventFailure,
+		Err:  errors.New("transcript server unavailable"),
+	})
+	if cmd == nil {
+		t.Fatal("transcript-open failure did not return quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("transcript-open failure command did not return Bubble Tea quit")
+	}
+	if !m.Transition().Exit {
+		t.Fatal("transcript-open failure did not request clear TUI exit")
+	}
+}
+
 func TestPendingScratchResetFailureExitsWithoutResettingOrReopeningTranscript(t *testing.T) {
 	nativeSurface := ongoing.NewSurface(&failingTerminalCursorWriter{failAfter: 0})
 	controllerSurface := &ongoingSurfaceSpy{}

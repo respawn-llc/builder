@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"reflect"
 	"testing"
 	"time"
 
@@ -163,26 +162,13 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 	})})
 }
 
-func TestSessionFeedSequencerRejectsUninitializedEventBeforeMutation(t *testing.T) {
-	sequencer := newSessionFeedSequencer(newTranscriptSubscriptionBroker())
-	before := sequencer.snapshot
-	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatal("uninitialized transcript event did not fail fast")
-		}
-		if !reflect.DeepEqual(sequencer.snapshot, before) {
-			t.Fatalf("sequencer snapshot mutated on invalid event: before=%+v after=%+v", before, sequencer.snapshot)
-		}
-	}()
-	sequencer.Publish([]clientui.TranscriptEvent{{}})
-}
-
 func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.T) {
 	broker := newTranscriptSubscriptionBroker()
 	sequencer := newSessionFeedSequencer(broker)
 	hydration := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
-	sequencer.snapshot.runtimeReadModel = &hydration.RuntimeReadModelUpdate
-	sub, err := sequencer.Subscribe(hydration)
+	sub, err := sequencer.Subscribe(func() (clientui.TranscriptHydration, error) {
+		return hydration, nil
+	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -199,7 +185,9 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 		if _, err := nextTranscriptMessageTimeout(sub, 20*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("valid prefix was delivered after invalid batch: %v", err)
 		}
-		hydratedSub, err := sequencer.Subscribe(hydration)
+		hydratedSub, err := sequencer.Subscribe(func() (clientui.TranscriptHydration, error) {
+			return hydration, nil
+		})
 		if err != nil {
 			t.Fatalf("subscribe after rejected batch: %v", err)
 		}
@@ -216,6 +204,22 @@ func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.
 		}
 	}()
 	sequencer.Publish([]clientui.TranscriptEvent{valid, {}})
+}
+
+func TestSessionFeedSequencerBuildsHydrationWithoutPriorRuntimeReadModel(t *testing.T) {
+	sequencer := newSessionFeedSequencer(newTranscriptSubscriptionBroker())
+	hydration := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
+	sub, err := sequencer.Subscribe(func() (clientui.TranscriptHydration, error) {
+		return hydration, nil
+	})
+	if err != nil {
+		t.Fatalf("Subscribe without prior runtime read-model publication: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	message := nextTranscriptMessage(t, sub)
+	if message.Sequence != 1 || message.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("hydration message = %+v, want sequence 1 hydration", message)
+	}
 }
 
 func TestTranscriptBrokerRejectsUninitializedEventWithoutSequenceOrDelivery(t *testing.T) {

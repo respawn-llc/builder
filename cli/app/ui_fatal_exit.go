@@ -21,3 +21,16 @@ func (m *uiModel) handleFatalUIError(operatorMessage string, err error) tea.Cmd 
 	}
 	return tea.Quit
 }
+
+func (m *uiModel) handleExpectedUIError(operatorMessage string, err error) tea.Cmd {
+	if err == nil {
+		err = errors.New("UI operation failed")
+	}
+	if m != nil {
+		m.exitAction = UIActionExit
+		m.forcedLocalExit = true
+		m.transientStatus = operatorMessage
+		m.transientStatusKind = uiStatusNoticeError
+	}
+	return tea.Quit
+}

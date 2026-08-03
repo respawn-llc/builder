@@ -84,12 +84,12 @@ func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(Pending
 	s.mu.Lock()
 	items := listPendingPrompts(s.pending[id])
 	delete(s.pending, id)
+	s.mu.Unlock()
 	for _, item := range items {
 		if resolve != nil {
 			resolve(item)
 		}
 	}
-	s.mu.Unlock()
 }
 
 func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(sessionID string, fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {

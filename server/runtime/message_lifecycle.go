@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -425,7 +426,8 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 		})
 		if err != nil {
 			if !result.receipt.Committed {
-				m.queue.RestoreFront(pending)
+				restoreErr := e.steer(stepID, steerQueuedUserMessageRestoreIntent(pending))
+				err = errors.Join(err, restoreErr)
 			}
 			return result, err
 		}
@@ -481,6 +483,20 @@ func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]
 		out = append(out, item.message)
 	}
 	return out
+}
+
+func (m *defaultMessageLifecycle) PendingUserMessages() []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.Snapshot()
+}
+
+func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserSteeringIntent) {
+	if m == nil || m.queue == nil {
+		return
+	}
+	m.queue.RestoreFront(items)
 }
 
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {

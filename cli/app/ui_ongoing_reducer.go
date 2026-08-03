@@ -63,7 +63,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	case ongoingTranscriptEventFailure:
 		err = fmt.Errorf("open transcript subscription: %w", event.Err)
 		m.logf("ongoing.transcript.open.error err=%q", err.Error())
-		return m.handleFatalUIError(fmt.Sprintf("ongoing transcript failed: %v", err), err)
+		return m.handleExpectedUIError(fmt.Sprintf("ongoing transcript failed: %v", err), err)
 	default:
 		if m.debugMode {
 			panic("unknown ongoing transcript event kind")
