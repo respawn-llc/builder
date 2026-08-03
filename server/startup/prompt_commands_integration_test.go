@@ -1,8 +1,8 @@
 package startup
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,8 +195,32 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	})
 	select {
 	case body := <-providerRequests:
-		if !bytes.Contains(body, []byte("server body hello world")) {
-			t.Fatalf("provider request omitted resolved prompt body: %s", body)
+		var payload struct {
+			Input []struct {
+				Type    string `json:"type"`
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		found := false
+		for _, item := range payload.Input {
+			if item.Type != "message" || item.Role != "user" {
+				continue
+			}
+			for _, content := range item.Content {
+				if content.Type == "input_text" && content.Text == "server body hello world" {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("provider request omitted resolved prompt body: %+v", payload.Input)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for provider request")

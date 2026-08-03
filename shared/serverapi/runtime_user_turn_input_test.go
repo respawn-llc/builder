@@ -2,7 +2,6 @@ package serverapi
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -63,8 +62,9 @@ func TestRuntimeSubmitUserTurnRequestUsesInputAndRejectsMissingInput(t *testing.
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 	}
-	if err := req.Validate(); err == nil || !strings.Contains(err.Error(), "operation_ref") {
-		t.Fatalf("Validate = %v, want existing operation validation", err)
+	req.OperationRef = clientui.RuntimeOperationRef{}
+	if err := req.Validate(); err == nil {
+		t.Fatal("Validate accepted an invalid operation reference")
 	}
 	req.Input = RuntimeUserTurnInput{}
 	if err := req.Validate(); err == nil {

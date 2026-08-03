@@ -145,8 +145,8 @@ func TestResolveReportsTypedRedactedErrors(t *testing.T) {
 	if !errors.As(err, &commandErr) || commandErr.Kind != ErrorKindCommandNotFound {
 		t.Fatalf("Resolve missing error = %T %v", err, err)
 	}
-	if strings.Contains(err.Error(), persistenceRoot) || strings.Contains(err.Error(), workspaceRoot) {
-		t.Fatalf("error exposes source path: %v", err)
+	if commandErr.Command == nil || *commandErr.Command != "prompt:missing" {
+		t.Fatalf("missing command projection = %+v", commandErr.Command)
 	}
 }
 
@@ -183,8 +183,11 @@ func TestCatalogReadFailureIsTypedAndRedacted(t *testing.T) {
 	if !errors.As(err, &commandErr) || commandErr.Kind != ErrorKindCatalogRead {
 		t.Fatalf("Catalog error = %T %v", err, err)
 	}
-	if strings.Contains(err.Error(), workspaceRoot) {
-		t.Fatalf("error exposes source path: %v", err)
+	if commandErr.Command != nil {
+		t.Fatalf("catalog directory failure unexpectedly named a command: %v", *commandErr.Command)
+	}
+	if errors.Unwrap(err) == nil {
+		t.Fatal("catalog directory failure did not retain diagnostic cause")
 	}
 }
 

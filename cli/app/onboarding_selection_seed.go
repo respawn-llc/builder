@@ -340,10 +340,13 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 	}
 	for index, choice := range facts.Skills.Choices {
 		field := fmt.Sprintf("facts.imports.skills.choices[%d]", index)
-		if choice.ItemCount < 0 {
-			return conversionError(field+".item_count", choice.ItemCount, "must not be negative")
+		if err := validateImportChoice(field, choice, validateRef); err != nil {
+			return err
 		}
-		if err := validateRef(field+".ref", choice.Ref); err != nil {
+	}
+	for index, choice := range facts.Commands.Choices {
+		field := fmt.Sprintf("facts.imports.commands.choices[%d]", index)
+		if err := validateImportChoice(field, choice, validateRef); err != nil {
 			return err
 		}
 	}
@@ -361,6 +364,16 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 				)
 			}
 		}
+	}
+	return nil
+}
+
+func validateImportChoice(field string, choice serverapi.ImportChoiceFact, validateRef func(string, serverapi.ImportChoiceRef) error) error {
+	if choice.ItemCount < 0 {
+		return conversionError(field+".item_count", choice.ItemCount, "must not be negative")
+	}
+	if err := validateRef(field+".ref", choice.Ref); err != nil {
+		return err
 	}
 	return nil
 }

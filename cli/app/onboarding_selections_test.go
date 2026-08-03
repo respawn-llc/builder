@@ -156,6 +156,14 @@ func TestNewOnboardingFlowStateRejectsMalformedProvenanceAndCapabilityFacts(t *t
 				}}
 			},
 		},
+		{
+			name: "malformed command import choice",
+			mutate: func(_ *config.App, facts *serverapi.CapabilityFactsResponse) {
+				facts.Imports.Commands.Choices = []serverapi.ImportChoiceFact{{
+					Ref: serverapi.ImportChoiceRef{Mode: string(onboardingImportModeSymlinkSource)},
+				}}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

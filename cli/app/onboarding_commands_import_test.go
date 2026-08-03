@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"core/shared/serverapi"
@@ -31,7 +30,7 @@ func TestOnboardingFinalizeProjectsSelectedCommandImportReference(t *testing.T) 
 	}
 }
 
-func TestOnboardingCommandImportOptionsShowProviderLabels(t *testing.T) {
+func TestOnboardingCommandImportOptionsIncludeServerChoices(t *testing.T) {
 	codexRoot := t.TempDir()
 	claudeRoot := t.TempDir()
 	facts := serverapi.ImportCapabilityFacts{
@@ -49,16 +48,10 @@ func TestOnboardingCommandImportOptionsShowProviderLabels(t *testing.T) {
 	if len(screen.Options) != 3 {
 		t.Fatalf("command import options = %+v, want none plus two providers", screen.Options)
 	}
-	for _, provider := range []string{"Codex", "Claude Code"} {
-		found := false
-		for _, option := range screen.Options {
-			if strings.Contains(option.Title, provider) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("command import options omitted provider label %q: %+v", provider, screen.Options)
+	for _, choice := range state.imports.commandChoices {
+		if choice.Mode == onboardingImportModeSymlinkSource && choice.Count > 0 &&
+			!containsOnboardingOption(screen.Options, choice.OptionID) {
+			t.Fatalf("command import choice omitted from options: %+v", choice)
 		}
 	}
 }
