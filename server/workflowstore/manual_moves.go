@@ -27,8 +27,9 @@ type preparedManualMoveExecutionTarget struct {
 }
 
 type manualMoveTargetShape struct {
-	nodeID workflow.NodeID
-	kind   workflow.NodeKind
+	nodeID     workflow.NodeID
+	kind       workflow.NodeKind
+	scriptPath workflow.OptionalScriptPath
 }
 
 var errManualMoveTargetShapeChanged = errors.New("manual move target shape changed after execution-target preparation")
@@ -297,7 +298,11 @@ func (s *Store) prepareManualMoveExecutionTarget(
 		if _, exists := targetShape[edge.ID]; exists {
 			return preparedManualMoveExecutionTarget{}, fmt.Errorf("manual move target preparation contains duplicate edge %q", edge.ID)
 		}
-		targetShape[edge.ID] = manualMoveTargetShape{nodeID: edge.TargetNodeID, kind: targetNode.Kind()}
+		targetShape[edge.ID] = manualMoveTargetShape{
+			nodeID:     edge.TargetNodeID,
+			kind:       targetNode.Kind(),
+			scriptPath: workflow.NodeScriptPath(targetNode),
+		}
 		if targetNode.Kind() == workflow.NodeKindScript {
 			if err := s.validateScriptNodeForExecution(
 				ctx,
@@ -329,7 +334,8 @@ func validatePreparedManualMoveTargetShape(
 		if err != nil {
 			return err
 		}
-		if targetNode.Kind() != expected.kind {
+		if targetNode.Kind() != expected.kind ||
+			workflow.NodeScriptPath(targetNode) != expected.scriptPath {
 			return errManualMoveTargetShapeChanged
 		}
 	}

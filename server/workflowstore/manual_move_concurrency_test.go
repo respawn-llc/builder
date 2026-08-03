@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -167,18 +169,92 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	if err := writer.Commit(); err != nil {
 		t.Fatalf("commit competing workflow change: %v", err)
 	}
-	applied := <-moved
+	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
+}
+
+func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	const validatedScriptPath = "scripts/validated"
+	absoluteScriptPath := filepath.Join(binding.CanonicalRoot, validatedScriptPath)
+	if err := os.MkdirAll(filepath.Dir(absoluteScriptPath), 0o755); err != nil {
+		t.Fatalf("create script directory: %v", err)
+	}
+	if err := os.WriteFile(absoluteScriptPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("create validated script: %v", err)
+	}
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		target := nodeByKey(t, def, "implement")
+		node := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(target))
+		node.Kind = workflow.NodeKindScript
+		node.SubagentRole = ""
+		node.PromptTemplate = ""
+		node.CompletionMode = ""
+		node.ScriptPath = validatedScriptPath
+		node.InputFields = nil
+		edge := edgeByKey(t, def, "next")
+		workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID).PromptTemplate = ""
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+
+	moveStore, writerStore := openConcurrentManualMoveStores(t, cfg)
+	writer := acquireUnrelatedManualMoveWriter(t, ctx, writerStore, binding.ProjectID)
+	moveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	moved := make(chan manualMoveApplyResult, 1)
+	go func() {
+		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		moved <- manualMoveApplyResult{result: result, err: err}
+	}()
+	assertManualMoveWaitsForWriter(t, moved)
+	if _, err := writer.ExecContext(
+		ctx,
+		`UPDATE workflow_nodes SET script_path = 'scripts/missing' WHERE id = ?`,
+		workflow.NodeIDOf(target),
+	); err != nil {
+		t.Fatalf("change competing script path: %v", err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("commit competing workflow change: %v", err)
+	}
+	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
+}
+
+func assertManualMoveTargetShapeDriftRejected(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	taskID workflow.TaskID,
+	source workflow.CurrentNodeReference,
+	applied manualMoveApplyResult,
+) {
+	t.Helper()
 	if !errors.Is(applied.err, errManualMoveTargetShapeChanged) {
 		t.Fatalf("ApplyManualMove error = %T %v, want target-shape drift", applied.err, applied.err)
 	}
-	currentNodes, err := moveStore.ListCurrentNodes(ctx, task.ID)
+	currentNodes, err := store.ListCurrentNodes(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)
 	}
-	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source) {
 		t.Fatalf("current nodes after rejected drift = %+v, want unchanged source", currentNodes)
 	}
-	targetContext, err := moveStore.GetTaskExecutionTargetContext(ctx, task.ID)
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, taskID)
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
