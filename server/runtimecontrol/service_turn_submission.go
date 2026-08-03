@@ -30,6 +30,10 @@ func userTurnMemoRequest(req serverapi.RuntimeSubmitUserTurnRequest) sessionUser
 	if req.Input.PromptCommand != nil {
 		memo.Name = strings.TrimSpace(req.Input.PromptCommand.Name)
 		memo.Arguments = req.Input.PromptCommand.Arguments
+		if req.Input.PromptCommand.HistoryName != nil {
+			historyName := *req.Input.PromptCommand.HistoryName
+			memo.HistoryName = &historyName
+		}
 	}
 	return memo
 }
@@ -39,7 +43,15 @@ func sameSessionUserTurnMemoRequest(left, right sessionUserTurnMemoRequest) bool
 		left.Kind == right.Kind &&
 		left.Text == right.Text &&
 		left.Name == right.Name &&
-		left.Arguments == right.Arguments
+		left.Arguments == right.Arguments &&
+		optionalStringEqual(left.HistoryName, right.HistoryName)
+}
+
+func optionalStringEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func (s *Service) resolveUserTurnInput(ctx context.Context, sessionID string, input serverapi.RuntimeUserTurnInput) (userTurnProjection, error) {

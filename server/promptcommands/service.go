@@ -70,7 +70,8 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 		return "", err
 	}
 	if name, parseErr := runtimeinput.ParsePromptCommandName(command); parseErr == nil {
-		if content, ok := builtinPromptContent(name); ok {
+		if kind, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
+			content, _ := builtinPromptContent(kind)
 			return textutil.ExpandPromptTemplate(content, arguments), nil
 		}
 	}
@@ -90,20 +91,20 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 }
 
 type builtinPromptCommand struct {
-	name    string
+	kind    runtimeinput.BuiltinPromptCommand
 	content string
 }
 
 func builtinPromptCommands() []builtinPromptCommand {
 	return []builtinPromptCommand{
-		{name: "prompt:review", content: prompts.ReviewPrompt},
-		{name: "prompt:init", content: prompts.InitPrompt},
+		{kind: runtimeinput.BuiltinPromptCommandReview, content: prompts.ReviewPrompt},
+		{kind: runtimeinput.BuiltinPromptCommandInit, content: prompts.InitPrompt},
 	}
 }
 
-func builtinPromptContent(name runtimeinput.PromptCommandName) (string, bool) {
+func builtinPromptContent(kind runtimeinput.BuiltinPromptCommand) (string, bool) {
 	for _, command := range builtinPromptCommands() {
-		if command.name == name.String() {
+		if command.kind == kind {
 			return command.content, true
 		}
 	}

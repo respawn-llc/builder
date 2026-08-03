@@ -109,6 +109,10 @@ func NewRuntimePromptCommandInput(name, arguments string) RuntimeUserTurnInput {
 	return runtimeinput.Command(name, arguments)
 }
 
+func NewRuntimeBuiltinPromptCommandInput(command runtimeinput.BuiltinPromptCommand, arguments string) RuntimeUserTurnInput {
+	return runtimeinput.BuiltinCommand(command, arguments)
+}
+
 type RuntimeSubmitUserTurnResponse struct {
 	Message     string `json:"message"`
 	Compacted   bool   `json:"compacted,omitempty"`

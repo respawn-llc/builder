@@ -25,6 +25,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -1576,7 +1577,7 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	req := serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Input:           serverapi.NewRuntimePromptCommandInput("prompt:review", "src/internal"),
+		Input:           serverapi.NewRuntimeBuiltinPromptCommandInput(runtimeinput.BuiltinPromptCommandReview, "src/internal"),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,
@@ -1595,7 +1596,7 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	if got := countUserMessagesWithContent(t, store, "expanded current body"); got != 1 {
 		t.Fatalf("expanded user message count = %d, want 1", got)
 	}
-	if got := countPromptHistoryEvents(t, store, "/prompt:review src/internal"); got != 1 {
+	if got := countPromptHistoryEvents(t, store, "/review src/internal"); got != 1 {
 		t.Fatalf("canonical history count = %d, want 1", got)
 	}
 	if got := countPromptHistoryEvents(t, store, "expanded current body"); got != 0 {
@@ -1612,7 +1613,7 @@ func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(
 	req := serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
 		SessionID:       store.Meta().SessionID,
-		Input:           serverapi.NewRuntimePromptCommandInput("prompt:review", "src"),
+		Input:           serverapi.NewRuntimeBuiltinPromptCommandInput(runtimeinput.BuiltinPromptCommandReview, "src"),
 		OperationRef:    ref,
 		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
 			clientui.RuntimeOperationKindPreSubmitCompact,
@@ -1631,7 +1632,7 @@ func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(
 	if got := countUserMessagesWithContent(t, store, "changed body"); got != 0 {
 		t.Fatalf("changed body user messages = %d, want 0", got)
 	}
-	if got := countPromptHistoryEvents(t, store, "/prompt:review src"); got != 1 {
+	if got := countPromptHistoryEvents(t, store, "/review src"); got != 1 {
 		t.Fatalf("canonical history count = %d, want 1", got)
 	}
 }

@@ -1,6 +1,10 @@
 package commands
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/runtimeinput"
+)
 
 func TestExecuteBuiltins(t *testing.T) {
 	registry := NewDefaultRegistry()
@@ -50,19 +54,26 @@ func TestExecuteBuiltins(t *testing.T) {
 
 func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 	registry := NewDefaultRegistry()
-	for input, suffix := range map[string]string{
-		"/review src/cli/app": "src/cli/app",
-		"/init starter repo":  "starter repo",
+	for _, test := range []struct {
+		input   string
+		command runtimeinput.BuiltinPromptCommand
+		suffix  string
+	}{
+		{input: "/review src/cli/app", command: runtimeinput.BuiltinPromptCommandReview, suffix: "src/cli/app"},
+		{input: "/init starter repo", command: runtimeinput.BuiltinPromptCommandInit, suffix: "starter repo"},
 	} {
-		got := registry.Execute(input)
+		got := registry.Execute(test.input)
 		if !got.Handled || got.PromptCommand == nil || got.Action != ActionNone || !got.FreshConversation {
-			t.Fatalf("Execute(%q) = %+v, want fresh user submission", input, got)
+			t.Fatalf("Execute(%q) = %+v, want fresh user submission", test.input, got)
 		}
-		if got.PromptCommand.Name == "" || got.PromptCommand.Arguments != suffix {
-			t.Fatalf("Execute(%q) prompt command = %+v, want arguments %q", input, got.PromptCommand, suffix)
+		if got.PromptCommand.Name != test.command.Name() ||
+			got.PromptCommand.Arguments != test.suffix ||
+			got.PromptCommand.HistoryName == nil ||
+			*got.PromptCommand.HistoryName != test.command.Alias() {
+			t.Fatalf("Execute(%q) prompt command = %+v, want %s/%s", test.input, got.PromptCommand, test.command.Name(), test.command.Alias())
 		}
 		if got.User != "" || got.Text != "" || got.Args != "" {
-			t.Fatalf("Execute(%q) leaked system text or args: %+v", input, got)
+			t.Fatalf("Execute(%q) leaked system text or args: %+v", test.input, got)
 		}
 	}
 }

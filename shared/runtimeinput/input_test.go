@@ -10,6 +10,10 @@ func TestInputAndCanonicalCommandProjection(t *testing.T) {
 	if got, err := input.CanonicalHistoryText(); err != nil || got != "/prompt:review src" {
 		t.Fatalf("history = %q, %v", got, err)
 	}
+	builtin := BuiltinCommand(BuiltinPromptCommandReview, " src ")
+	if got, err := builtin.CanonicalHistoryText(); err != nil || got != "/review src" {
+		t.Fatalf("built-in history = %q, %v", got, err)
+	}
 }
 
 func TestCommandTokenParsesNamespaceStructurally(t *testing.T) {
@@ -22,5 +26,10 @@ func TestCommandTokenParsesNamespaceStructurally(t *testing.T) {
 	}
 	if _, err := ParsePromptCommandName("prompt:Review"); err == nil {
 		t.Fatal("noncanonical prompt command name validated")
+	}
+	for _, name := range []string{" prompt:review", "prompt:review "} {
+		if _, err := ParsePromptCommandName(name); err == nil {
+			t.Fatalf("prompt command name with outer whitespace validated: %q", name)
+		}
 	}
 }

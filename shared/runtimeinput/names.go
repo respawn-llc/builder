@@ -10,7 +10,68 @@ type PromptCommandName struct {
 	Identifier string
 }
 
-const NamespacePrompt = "prompt"
+const (
+	NamespacePrompt               = "prompt"
+	PromptCommandReviewIdentifier = "review"
+	PromptCommandInitIdentifier   = "init"
+	PromptCommandReviewName       = NamespacePrompt + ":" + PromptCommandReviewIdentifier
+	PromptCommandInitName         = NamespacePrompt + ":" + PromptCommandInitIdentifier
+)
+
+type BuiltinPromptCommand uint8
+
+const (
+	BuiltinPromptCommandReview BuiltinPromptCommand = iota + 1
+	BuiltinPromptCommandInit
+)
+
+func BuiltinPromptCommands() []BuiltinPromptCommand {
+	return []BuiltinPromptCommand{BuiltinPromptCommandReview, BuiltinPromptCommandInit}
+}
+
+func (c BuiltinPromptCommand) Name() string {
+	switch c {
+	case BuiltinPromptCommandReview:
+		return PromptCommandReviewName
+	case BuiltinPromptCommandInit:
+		return PromptCommandInitName
+	default:
+		return ""
+	}
+}
+
+func (c BuiltinPromptCommand) Alias() string {
+	switch c {
+	case BuiltinPromptCommandReview:
+		return PromptCommandReviewIdentifier
+	case BuiltinPromptCommandInit:
+		return PromptCommandInitIdentifier
+	default:
+		return ""
+	}
+}
+
+func BuiltinPromptCommandForName(name PromptCommandName) (BuiltinPromptCommand, bool) {
+	switch name.Identifier {
+	case PromptCommandReviewIdentifier:
+		return BuiltinPromptCommandReview, true
+	case PromptCommandInitIdentifier:
+		return BuiltinPromptCommandInit, true
+	default:
+		return 0, false
+	}
+}
+
+func BuiltinPromptCommandForAlias(alias string) (BuiltinPromptCommand, bool) {
+	switch alias {
+	case PromptCommandReviewIdentifier:
+		return BuiltinPromptCommandReview, true
+	case PromptCommandInitIdentifier:
+		return BuiltinPromptCommandInit, true
+	default:
+		return 0, false
+	}
+}
 
 type CommandToken struct {
 	Namespace  string
@@ -30,11 +91,14 @@ func ParseCommandToken(raw string) (CommandToken, error) {
 }
 
 func ParsePromptCommandName(raw string) (PromptCommandName, error) {
+	if strings.TrimSpace(raw) != raw {
+		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
+	}
 	token, err := ParseCommandToken(raw)
 	if err != nil || token.Namespace != NamespacePrompt || token.Identifier == nil {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q must use the prompt namespace", raw)
 	}
-	rawNamespace, _, _ := strings.Cut(strings.TrimSpace(raw), ":")
+	rawNamespace, _, _ := strings.Cut(raw, ":")
 	if rawNamespace != NamespacePrompt {
 		return PromptCommandName{}, fmt.Errorf("prompt command name %q is not canonical", raw)
 	}

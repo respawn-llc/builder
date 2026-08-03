@@ -25,21 +25,25 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		if err != nil {
 			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
+		history, err := invocation.CanonicalHistoryText()
+		if err != nil {
+			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
 		if commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
 			previousSessionID, err := runtimeids.ParseSessionID(m.sessionID)
 			if err != nil {
 				return m, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), "")
 			}
-			m.nextSessionInitialPrompt = canonical
+			m.nextSessionInitialPrompt = history
 			m.nextSessionInitialPromptHistoryRecorded = true
 			m.nextPreviousSessionID = &previousSessionID
 			m.exitAction = UIActionNewSession
 			return m, tea.Quit
 		}
-		m.rememberPromptCommandHistoryLocally(canonical)
+		m.rememberPromptCommandHistoryLocally(history)
 		return m, c.startTypedSubmissionWithPreSubmitQueuePosition(
 			canonical,
-			runtimeinput.Command(invocation.Name, invocation.Arguments),
+			runtimeinput.Input{Kind: runtimeinput.KindPromptCommand, PromptCommand: invocation},
 			queuePosition,
 			"",
 		)

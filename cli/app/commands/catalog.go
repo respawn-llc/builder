@@ -15,10 +15,10 @@ func NewDefaultRegistryWithPromptCatalog(entries []PromptCommandCatalogEntry) *R
 		if err != nil {
 			continue
 		}
-		if name.Identifier == "review" || name.Identifier == "init" {
-			if registered, ok := r.handlers[name.Identifier]; ok {
+		if builtin, ok := runtimeinput.BuiltinPromptCommandForName(name); ok {
+			if registered, ok := r.handlers[builtin.Alias()]; ok {
 				registered.command.Description = strings.TrimSpace(entry.Preview)
-				r.handlers[name.Identifier] = registered
+				r.handlers[builtin.Alias()] = registered
 				continue
 			}
 		}

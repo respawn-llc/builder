@@ -17,6 +17,25 @@ func CanonicalCommandText(name string, arguments string) (string, error) {
 	return text, nil
 }
 
+func (c PromptCommand) CanonicalHistoryText() (string, error) {
+	name, err := ParsePromptCommandName(c.Name)
+	if err != nil {
+		return "", err
+	}
+	if c.HistoryName != nil {
+		command, ok := BuiltinPromptCommandForAlias(*c.HistoryName)
+		if !ok || command.Name() != name.String() {
+			return "", errors.New("prompt-command history name is invalid")
+		}
+		text := "/" + *c.HistoryName
+		if trimmed := strings.TrimSpace(c.Arguments); trimmed != "" {
+			text += " " + trimmed
+		}
+		return text, nil
+	}
+	return CanonicalCommandText(c.Name, c.Arguments)
+}
+
 func (i Input) CanonicalHistoryText() (string, error) {
 	if err := i.Validate(); err != nil {
 		return "", err
@@ -24,7 +43,7 @@ func (i Input) CanonicalHistoryText() (string, error) {
 	if i.Kind == KindText {
 		return *i.Text, nil
 	}
-	return CanonicalCommandText(i.PromptCommand.Name, i.PromptCommand.Arguments)
+	return i.PromptCommand.CanonicalHistoryText()
 }
 
 func (i Input) ExecutionText(resolve func(PromptCommand) (string, error)) (string, error) {

@@ -14,12 +14,12 @@ func (s Service) Catalog() ([]CatalogEntry, error) {
 	}
 	for _, builtin := range builtinPromptCommands() {
 		for i := range entries {
-			if entries[i].Name == builtin.name {
+			if entries[i].Name == builtin.kind.Name() {
 				entries = append(entries[:i], entries[i+1:]...)
 				break
 			}
 		}
-		entries = append(entries, CatalogEntry{Name: builtin.name, Preview: preview(builtin.content)})
+		entries = append(entries, CatalogEntry{Name: builtin.kind.Name(), Preview: preview(builtin.content)})
 	}
 	return entries, nil
 }
