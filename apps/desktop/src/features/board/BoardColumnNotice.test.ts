@@ -18,12 +18,16 @@ describe("board column notices", () => {
         noticeID: "notice-1",
         retry,
       },
-      { cardsLoadFailed: "Cards failed", retry: "Retry" },
+      {
+        cardsLoadRetryBody: "Cards could not be loaded",
+        cardsLoadFailed: "Cards failed",
+        retry: "Retry",
+      },
     );
 
     expect(notice).toMatchObject({
       actionLabel: "Retry",
-      body: "failed",
+      body: "Cards could not be loaded",
       durationMs: Infinity,
       id: "notice-1",
       title: "Cards failed",
@@ -37,7 +41,11 @@ describe("board column notices", () => {
     expect(
       boardColumnNoticeStatusNotice(
         { kind: "dismiss", noticeID: "notice-1" },
-        { cardsLoadFailed: "Cards failed", retry: "Retry" },
+        {
+          cardsLoadRetryBody: "Cards could not be loaded",
+          cardsLoadFailed: "Cards failed",
+          retry: "Retry",
+        },
       ),
     ).toBeNull();
   });

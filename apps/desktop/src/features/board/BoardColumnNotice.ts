@@ -1,8 +1,8 @@
 import type { StatusNotice } from "@/ui";
-import { errorMessage } from "@/api";
 import type { BoardColumnNoticeEvent } from "./BoardColumnDataOwner";
 
 export type BoardColumnNoticeCopy = Readonly<{
+  cardsLoadRetryBody: string;
   cardsLoadFailed: string;
   retry: string;
 }>;
@@ -16,7 +16,7 @@ export function boardColumnNoticeStatusNotice(
   }
   return {
     actionLabel: copy.retry,
-    body: errorMessage(event.error),
+    body: copy.cardsLoadRetryBody,
     id: event.noticeID,
     onAction: event.retry,
     title: copy.cardsLoadFailed,

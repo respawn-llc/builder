@@ -217,6 +217,7 @@ export const englishResources = {
       dropRejectedBody: "This card cannot be dropped here.",
       loadFailed: "Board refresh failed",
       cardsLoadFailed: "Task cards failed to load",
+      cardsLoadRetryBody: "Task cards could not be loaded. Try again.",
       navigationFailed: "Board navigation failed",
       startFailed: "Task start failed",
       moveFailed: "Task move failed",

@@ -341,6 +341,7 @@ function BoardContent({
   const reportColumnNotice = useCallback(
     (event: BoardColumnNoticeEvent) => {
       const notice = boardColumnNoticeStatusNotice(event, {
+        cardsLoadRetryBody: t("board.cardsLoadRetryBody"),
         cardsLoadFailed: t("board.cardsLoadFailed"),
         retry: t("app.retry"),
       });
