@@ -110,7 +110,7 @@ function reduceReplace(
     return state;
   }
   const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
-  if (existingTaskIndex !== undefined) {
+  if (existingTaskIndex !== undefined && existingTaskIndex < state.entries.length - 1) {
     return {
       ...state,
       activationID: action.activationID ?? state.activationID,

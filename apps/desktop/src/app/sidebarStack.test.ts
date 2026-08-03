@@ -105,6 +105,35 @@ describe("sidebarStackReducer", () => {
     expect(replaced?.activationID).toBe("activation-3");
   });
 
+  it("replaces the current matching Task Detail to preserve the requested focus", () => {
+    const opened = createSidebarStack("lifecycle-1", {
+      entryID: "entry-1",
+      destination: task("task-1"),
+    });
+
+    const replaced = apply(opened, {
+      type: "replace",
+      activationID: "activation-2",
+      entryID: "entry-2",
+      destination: {
+        ...task("task-1"),
+        initialFocus: { kind: "dependencies" },
+      },
+    });
+
+    expect(replaced?.entries).toEqual([
+      {
+        entryID: "entry-2",
+        destination: {
+          kind: "taskDetail",
+          taskID: "task-1",
+          initialFocus: { kind: "dependencies" },
+        },
+      },
+    ]);
+    expect(replaced?.activationID).toBe("activation-2");
+  });
+
   it("ignores stale directional actions after the current token changes", () => {
     const state = createSidebarStack("lifecycle-1", {
       entryID: "entry-1",
