@@ -7,6 +7,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
 )
@@ -458,7 +459,11 @@ func (response WorktreeDeletePreviewResponse) Validate() error {
 	if response.DeletionSelector != deletionSelector {
 		return errors.New("deletion_selector does not match worktree")
 	}
-	if err := response.Cleanliness.Validate(); err != nil {
+	if err := worktreecontract.ValidateDirtyState(
+		response.Cleanliness.Kind,
+		response.Cleanliness.DirtyFileCount,
+		response.Cleanliness.UnknownCause,
+	); err != nil {
 		return err
 	}
 	if response.Worktree.Variant == WorktreeTopologyVariantMissing &&

@@ -324,7 +324,6 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"WorktreeTransitionID.UnmarshalJSON":                      {},
 		"WorktreeTransitionID.Validate":                           {},
 		"WorktreeTransitionOutcome.Validate":                      {},
-		"WorktreeDirtyState.Validate":                             {},
 		"validateHydrationBackgrounds":                            {},
 		"validateHydrationPrompts":                                {},
 		"validateHydrationQueuedMessages":                         {},

@@ -8,6 +8,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/worktreecontract"
 )
 
 func TestWorktreeActionErrorsRenderTypedDiagnostics(t *testing.T) {
@@ -148,14 +149,14 @@ func TestWorktreeStructuredErrorsRejectInvalidTypedData(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("ambiguous selector error without candidates validated")
 	}
-	if err := (clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}).Validate(); err != nil {
+	if err := worktreecontract.ValidateDirtyState(clientui.WorktreeDirtyStateClean, nil, nil); err != nil {
 		t.Fatalf("payloadless clean dirty-state rejected: %v", err)
 	}
-	if err := (clientui.WorktreeDirtyState{
-		Kind:           clientui.WorktreeDirtyStateUnknown,
-		UnknownCause:   stringPointer("status unavailable"),
-		DirtyFileCount: integerPointer(1),
-	}).Validate(); err == nil {
+	if err := worktreecontract.ValidateDirtyState(
+		clientui.WorktreeDirtyStateUnknown,
+		integerPointer(1),
+		stringPointer("status unavailable"),
+	); err == nil {
 		t.Fatal("unknown dirty-state with a count validated")
 	}
 	if err := (&WorktreeTransitionPendingError{
