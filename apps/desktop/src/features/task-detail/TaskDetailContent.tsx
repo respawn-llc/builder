@@ -60,25 +60,33 @@ function relatedTaskDestination(
 function initialTaskDraftState(
   taskID: string,
   serverDraft: TaskDraft,
-  snapshot: SidebarTaskDetailSnapshot | undefined,
+  restoredState: RestoredTaskDetailState,
 ): TaskDraftState {
-  return { taskID, base: serverDraft, draft: snapshot?.titleBodyDraft ?? serverDraft };
+  return { taskID, base: serverDraft, draft: restoredState.titleBodyDraft ?? serverDraft };
 }
 
-function restoredEditingComment(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): Readonly<{ id: string; body: string }> | null {
-  return snapshot?.editedCommentDraft === undefined
-    ? null
-    : { id: snapshot.editedCommentDraft.commentID, body: snapshot.editedCommentDraft.body };
-}
+type RestoredTaskDetailState = Readonly<{
+  titleBodyDraft: TaskDraft | undefined;
+  editingComment: Readonly<{ id: string; body: string }> | null;
+  newCommentBody: string;
+  descriptionPresentation: DescriptionPresentationState;
+  selectedTab: "comments" | "activity";
+}>;
 
-function restoredDescriptionPresentation(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): DescriptionPresentationState {
-  return snapshot === undefined
-    ? initialDescriptionPresentationState
-    : { editing: false, expanded: snapshot.descriptionExpanded };
+function restoredTaskDetailState(snapshot: SidebarTaskDetailSnapshot | undefined): RestoredTaskDetailState {
+  return {
+    descriptionPresentation:
+      snapshot === undefined
+        ? initialDescriptionPresentationState
+        : { editing: false, expanded: snapshot.descriptionExpanded },
+    editingComment:
+      snapshot?.editedCommentDraft === undefined
+        ? null
+        : { id: snapshot.editedCommentDraft.commentID, body: snapshot.editedCommentDraft.body },
+    newCommentBody: snapshot?.newCommentDraft ?? "",
+    selectedTab: snapshot?.selectedTab ?? "comments",
+    titleBodyDraft: snapshot?.titleBodyDraft,
+  };
 }
 
 function useTaskDetailSidebarCapture({
@@ -173,18 +181,18 @@ function taskDetailRenderState({
   draftState,
   loadedTaskID,
   serverDraft,
-  snapshot,
+  restoredState,
 }: Readonly<{
   detail: TaskDetail;
   draftState: TaskDraftState;
   loadedTaskID: string;
   serverDraft: TaskDraft;
-  snapshot: SidebarTaskDetailSnapshot | undefined;
+  restoredState: RestoredTaskDetailState;
 }>): Readonly<{ changed: boolean; state: TaskDraftState }> {
   if (loadedTaskID !== detail.id) {
     return {
       changed: true,
-      state: initialTaskDraftState(detail.id, serverDraft, snapshot),
+      state: initialTaskDraftState(detail.id, serverDraft, restoredState),
     };
   }
   return {
@@ -198,19 +206,16 @@ function useTaskDetailLocalState(
   serverDraft: TaskDraft,
   snapshot: SidebarTaskDetailSnapshot | undefined,
 ) {
+  const restoredState = restoredTaskDetailState(snapshot);
   const [draftState, setDraftState] = useState<TaskDraftState>(() =>
-    initialTaskDraftState(detail.id, serverDraft, snapshot),
+    initialTaskDraftState(detail.id, serverDraft, restoredState),
   );
-  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(() =>
-    restoredEditingComment(snapshot),
+  const [editingComment, setEditingComment] = useState(restoredState.editingComment);
+  const [newCommentBody, setNewCommentBody] = useState(restoredState.newCommentBody);
+  const [descriptionPresentation, setDescriptionPresentation] = useState(
+    restoredState.descriptionPresentation,
   );
-  const [newCommentBody, setNewCommentBody] = useState(snapshot?.newCommentDraft ?? "");
-  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(() =>
-    restoredDescriptionPresentation(snapshot),
-  );
-  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(
-    snapshot?.selectedTab ?? "comments",
-  );
+  const [selectedTab, setSelectedTab] = useState(restoredState.selectedTab);
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
@@ -220,15 +225,15 @@ function useTaskDetailLocalState(
     draftState,
     loadedTaskID,
     serverDraft,
-    snapshot,
+    restoredState,
   });
   if (taskChanged) {
     setLoadedTaskID(detail.id);
-    setEditingComment(restoredEditingComment(snapshot));
-    setNewCommentBody(snapshot?.newCommentDraft ?? "");
-    setDescriptionPresentation(restoredDescriptionPresentation(snapshot));
+    setEditingComment(restoredState.editingComment);
+    setNewCommentBody(restoredState.newCommentBody);
+    setDescriptionPresentation(restoredState.descriptionPresentation);
     setDraftState(reconciled);
-    setSelectedTab(snapshot?.selectedTab ?? "comments");
+    setSelectedTab(restoredState.selectedTab);
     setQuestionSelections(new Map());
   }
   if (reconciled !== draftState) setDraftState(reconciled);
@@ -282,7 +287,8 @@ export function TaskDetailContent({
     registerSidebarStateCapture,
     openSidebar,
   } = useSidebar();
-  const isSidebarSurface = sidebarActivationID !== null && sidebarActivationID !== undefined;
+  const activeSidebarActivationID = sidebarActivationID ?? undefined;
+  const isSidebarSurface = activeSidebarActivationID !== undefined;
   const activeToken = isSidebarSurface ? sidebarActiveToken : null;
   const serverDraft = taskDraft(detail);
   const restoredSnapshot = sidebarSnapshot;
@@ -410,13 +416,13 @@ export function TaskDetailContent({
       updatePending={update.isPending}
       initialScrollOffset={restoredSnapshot?.scrollTop}
       initialScrollOffsetRequestKey={
+        !isSidebarSurface ||
         activeToken === null ||
-        sidebarActivationID === null ||
-        sidebarActivationID === undefined ||
+        initialFocus !== undefined ||
         restoredSnapshot === undefined ||
         !restoredDataReady
           ? undefined
-          : `${sidebarActivationID}:${detail.id}:${restoredSnapshot.scrollTop.toString()}`
+          : `${activeSidebarActivationID}:${detail.id}:${restoredSnapshot.scrollTop.toString()}`
       }
       onScrollElementChange={(element) => {
         scrollElementRef.current = element;
