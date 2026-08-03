@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/serverapi"
 )
 
 type canceledGitCommandRunner struct{}
