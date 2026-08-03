@@ -5,11 +5,11 @@ import { queryKeys } from "@/app-facade";
 
 export type ProjectCatalogAuthority = Readonly<{
   read(signal: AbortSignal): Promise<ProjectLabelCatalog>;
-  supersedeReads(): void;
+  supersedeReads(): number;
   applyCreate(label: ProjectLabel): void;
   applyRename(label: ProjectLabel): void;
   applyDelete(labelID: string): void;
-  installCatalog(catalog: ProjectLabelCatalog): void;
+  installCatalog(catalog: ProjectLabelCatalog, generation: number): void;
   requestRefresh(): void;
 }>;
 
@@ -95,20 +95,24 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     this.#startRefreshIfIdle();
   }
 
-  supersedeReads(): void {
-    this.#advance(false);
+  supersedeReads(): number {
+    return this.#advance(false);
   }
 
-  installCatalog(catalog: ProjectLabelCatalog): void {
+  installCatalog(catalog: ProjectLabelCatalog, generation: number): void {
     this.#assertProject(catalog);
+    if (generation !== this.#generation) {
+      this.#startRefreshIfIdle();
+      return;
+    }
     this.#advance(false);
     this.#deletedLabelIDs.clear();
     this.#queryClient.setQueryData(this.#queryKey, catalog);
   }
 
-  #advance(refreshNeeded: boolean): void {
+  #advance(refreshNeeded: boolean): number {
     this.#generation += 1;
-    this.#refreshNeeded = refreshNeeded;
+    this.#refreshNeeded ||= refreshNeeded;
     try {
       void this.#queryClient
         .cancelQueries(
@@ -125,6 +129,7 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
     } catch {
       // Query cancellation is best effort; generation validation still rejects stale reads.
     }
+    return this.#generation;
   }
 
   #patchLabel(label: ProjectLabel, prepend: boolean): void {

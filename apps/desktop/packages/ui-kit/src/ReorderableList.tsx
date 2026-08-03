@@ -101,13 +101,14 @@ export function ReorderableList<Item, ID extends UniqueIdentifier = UniqueIdenti
     (event, args) => {
       const coordinates = sortableKeyboardCoordinates(event, args);
       if (coordinates !== undefined) {
-        const activeIndex = itemIDs.findIndex((id) => id === args.active);
+        const currentID = args.context.over?.id ?? args.active;
+        const currentIndex = itemIDs.findIndex((id) => id === currentID);
         const destinationIndex =
           event.code === "ArrowDown"
-            ? activeIndex + 1
+            ? currentIndex + 1
             : event.code === "ArrowUp"
-              ? activeIndex - 1
-              : activeIndex;
+              ? currentIndex - 1
+              : currentIndex;
         const destinationID = itemIDs[destinationIndex];
         if (destinationID !== undefined) {
           itemNodes.current.get(destinationID)?.scrollIntoView({ block: "nearest" });

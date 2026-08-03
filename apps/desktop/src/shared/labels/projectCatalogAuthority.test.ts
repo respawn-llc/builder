@@ -95,7 +95,9 @@ describe("Project catalog authority", () => {
       expect(readCount).toBe(1);
     });
 
+    const staleGeneration = authority.supersedeReads();
     authority.applyDelete(labelID);
+    authority.installCatalog({ projectID: "project-1", labels: [{ id: labelID, name: "Before" }] }, staleGeneration);
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([]);
 
     oldRead.resolve({

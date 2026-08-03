@@ -30,13 +30,18 @@ export function useProjectLabelCatalogMutations() {
       mutationFn: async (labelID: string) => api.deleteProjectLabel(projectID, labelID),
       onSuccess: async (labelID) => effects.applyLocalDelete(labelID),
     }),
-    reorder: useMutation<ProjectLabelCatalog, unknown, readonly string[], ProjectLabelCatalog | undefined>({
+    reorder: useMutation<
+      ProjectLabelCatalog,
+      unknown,
+      readonly string[],
+      Readonly<{ generation: number; previous: ProjectLabelCatalog | undefined }>
+    >({
       mutationFn: async (labelIDs) => api.reorderProjectLabels(projectID, labelIDs),
       onMutate(labelIDs) {
-        authority.supersedeReads();
+        const generation = authority.supersedeReads();
         const previous = queryClient.getQueryData<ProjectLabelCatalog>(queryKey);
         if (previous === undefined) {
-          return previous;
+          return { generation, previous };
         }
         const labelsByID = new Map(previous.labels.map((label) => [label.id, label]));
         const labels = labelIDs.map((labelID) => {
@@ -51,16 +56,16 @@ export function useProjectLabelCatalogMutations() {
           throw new Error(`Project label reorder omitted a catalog label in Project ${projectID}.`);
         }
         queryClient.setQueryData(queryKey, { ...previous, labels });
-        return previous;
+        return { generation, previous };
       },
-      onError(_error, _labelIDs, previous) {
-        if (previous !== undefined) {
-          queryClient.setQueryData(queryKey, previous);
+      onError(_error, _labelIDs, context) {
+        if (context?.previous !== undefined) {
+          queryClient.setQueryData(queryKey, context.previous);
         }
         authority.requestRefresh();
       },
-      onSuccess(catalog) {
-        authority.installCatalog(catalog);
+      onSuccess(catalog, _labelIDs, context) {
+        authority.installCatalog(catalog, context.generation);
       },
     }),
   };
