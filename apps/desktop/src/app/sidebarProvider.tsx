@@ -260,7 +260,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       clearCloseTimeout();
       setExitBlockedToken(null);
-      preserveRouteChangeRef.current = null;
       clearCapture(currentToken);
       const nextProfile = sidebarWidthProfile(destination);
       setActiveWidthProfile(nextProfile);

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { LegacyEmptyTaskSelectorError } from "./projectRouteErrors";
 import { createAppRouter } from "./routes";
 
 it("rejects malformed present workflow selectors while preserving omission", () => {
@@ -11,8 +12,6 @@ it("rejects malformed present workflow selectors while preserving omission", () 
     taskId: undefined,
     workflowId: "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0",
   });
-  expect(() => validate({ taskId: "" })).toThrow(
-    "This legacy project URL contains an empty task selector. Remove '?taskId=' from the URL and reload the project.",
-  );
+  expect(() => validate({ taskId: "" })).toThrow(LegacyEmptyTaskSelectorError);
   expect(() => validate({ workflowId: "workflow-1" })).toThrow();
 });

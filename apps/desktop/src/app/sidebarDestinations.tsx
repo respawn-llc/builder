@@ -58,7 +58,10 @@ export function SidebarDestinationView({
             });
           }
         }}
-        onSubmissionStateChange={onSubmissionStateChange}
+        onSubmissionStateChange={pendingSubmissionStateChange(
+          destination.pendingRelationship,
+          onSubmissionStateChange,
+        )}
         projectID={destination.projectID}
         pendingRelationship={destination.pendingRelationship}
         workflowID={destination.workflowID}
@@ -121,6 +124,13 @@ export function SidebarDestinationView({
   }
 
   return <>{destination.content}</>;
+}
+
+function pendingSubmissionStateChange(
+  pendingRelationship: Extract<SidebarDestination, { kind: "newTask" }>["pendingRelationship"],
+  handler: (pending: boolean) => void,
+): ((pending: boolean) => void) | undefined {
+  return pendingRelationship === undefined ? undefined : handler;
 }
 
 function LinkWorkflowDestinationView({

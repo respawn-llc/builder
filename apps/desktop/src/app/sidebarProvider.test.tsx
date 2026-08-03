@@ -552,7 +552,7 @@ describe("SidebarProvider stack contract", () => {
     ).toBe(false);
   });
 
-  it("clears route preservation when the final entry closes or a lifecycle is replaced", () => {
+  it("clears route preservation when the final entry closes and retains it across replacement", () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
     act(() => {
       void result.current.openSidebar({ kind: "taskDetail", taskID: "task-1" });
@@ -596,6 +596,6 @@ describe("SidebarProvider stack contract", () => {
         pathname: "/projects/project-1",
         searchStr: "workflowId=workflow-1",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
