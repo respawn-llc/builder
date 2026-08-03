@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -190,127 +189,49 @@ func TestExecutionTargetLockUsesCapturedWorkspaceAfterRebind(t *testing.T) {
 	}
 }
 
-func TestManagedTargetLockUsesCapturedWorkspaceAfterSourceRebind(t *testing.T) {
+func TestTaskSourceWorkspaceFreezesAfterDurablePlacementWhileContentRemainsEditable(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	oldRoot := binding.CanonicalRoot
 	newBinding, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
 	}
-	worktreeID := "registered-rebind-" + string(task.ID)
-	worktreeRoot := t.TempDir()
-	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-		ID:            worktreeID,
-		WorkspaceID:   binding.WorkspaceID,
-		CanonicalRoot: worktreeRoot,
-		Managed:       true,
-		CreatedBranch: true,
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	worktreeRecord, err := store.queries.GetWorktreeByID(ctx, worktreeID)
-	if err != nil {
-		t.Fatalf("GetWorktreeByID: %v", err)
-	}
-	commitOID := "0123456789abcdef"
-	requestedRef := "HEAD"
-	candidate := &ExecutionTargetCandidate{
-		Snapshot: ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
-			RequestedRef: &requestedRef,
-			CommitOID:    &commitOID,
-			Provenance:   ExecutionTargetProvenanceResolved,
-		},
-		Root: ExecutionRoot{
-			SourceWorkspaceID:   binding.WorkspaceID,
-			SourceWorkspaceRoot: oldRoot,
-			Managed:             &ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRecord.CanonicalRootPath},
-		},
-	}
-	title := "edited after preparation"
-	body := "body edited after preparation"
 	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
 		TaskID:            task.ID,
-		Title:             &title,
-		Body:              &body,
 		SourceWorkspaceID: newBinding.WorkspaceID,
 	}); err != nil {
-		t.Fatalf("UpdateTask after preparation: %v", err)
+		t.Fatalf("UpdateTask source workspace in Backlog: %v", err)
 	}
-	if _, err := store.LockTaskExecutionTarget(ctx, task.ID, candidate); err != nil {
-		t.Fatalf("LockTaskExecutionTarget after source workspace rebind: %v", err)
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
+		t.Fatalf("StartTask: %v", err)
 	}
-	row, err := store.queries.GetTask(ctx, string(task.ID))
+	title := "edited after durable placement"
+	body := "body edited after durable placement"
+	updated, err := store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID: task.ID,
+		Title:  &title,
+		Body:   &body,
+	})
 	if err != nil {
-		t.Fatalf("GetTask after target lock: %v", err)
+		t.Fatalf("UpdateTask content after durable placement: %v", err)
 	}
-	if row.Title != title || row.Body != body || row.SourceWorkspaceID.String != newBinding.WorkspaceID {
-		t.Fatalf("task after target lock = title %q, body %q, workspace %q; want edited fields and workspace %q",
-			row.Title, row.Body, row.SourceWorkspaceID.String, newBinding.WorkspaceID)
+	if updated.Title != title || updated.Body != body {
+		t.Fatalf("updated Task content = title %q body %q, want %q and %q", updated.Title, updated.Body, title, body)
 	}
-	var metadataSnapshot struct {
-		SourceWorkspaceSnapshot struct {
-			WorkspaceID string `json:"workspace_id"`
-		} `json:"source_workspace_snapshot"`
-	}
-	if err := json.Unmarshal([]byte(row.MetadataJson), &metadataSnapshot); err != nil {
-		t.Fatalf("unmarshal task metadata after target lock: %v", err)
-	}
-	if metadataSnapshot.SourceWorkspaceSnapshot.WorkspaceID != newBinding.WorkspaceID {
-		t.Fatalf("task metadata workspace snapshot = %q, want %q",
-			metadataSnapshot.SourceWorkspaceSnapshot.WorkspaceID, newBinding.WorkspaceID)
+	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
+		TaskID:            task.ID,
+		SourceWorkspaceID: binding.WorkspaceID,
+	}); !errors.Is(err, ErrSourceWorkspaceAfterAutomation) {
+		t.Fatalf("UpdateTask source workspace after durable placement = %v, want %v", err, ErrSourceWorkspaceAfterAutomation)
 	}
 	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("GetTaskExecutionTargetContext after rebind: %v", err)
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.SourceWorkspaceID != binding.WorkspaceID {
-		t.Fatalf("locked source workspace = %q, want captured workspace %q", targetContext.SourceWorkspaceID, binding.WorkspaceID)
-	}
-	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-		ID:              worktreeID,
-		WorkspaceID:     binding.WorkspaceID,
-		CanonicalRoot:   worktreeRecord.CanonicalRootPath,
-		Managed:         true,
-		CreatedBranch:   true,
-		GitMetadataJSON: `{"head_oid":"updated-after-lock"}`,
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord after target lock: %v", err)
-	}
-	editedAfterLockTitle := "edited after lock"
-	editedAfterLockBody := "body edited after lock"
-	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
-		TaskID: task.ID,
-		Title:  &editedAfterLockTitle,
-		Body:   &editedAfterLockBody,
-	}); err != nil {
-		t.Fatalf("UpdateTask after target lock: %v", err)
-	}
-	row, err = store.queries.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask after ordinary edit: %v", err)
-	}
-	if row.Title != editedAfterLockTitle || row.Body != editedAfterLockBody ||
-		row.SourceWorkspaceID.String != newBinding.WorkspaceID {
-		t.Fatalf("task after ordinary edit = title %q, body %q, workspace %q; want edited fields and workspace %q",
-			row.Title, row.Body, row.SourceWorkspaceID.String, newBinding.WorkspaceID)
-	}
-	laterTask := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := store.UpdateTask(ctx, UpdateTaskRequest{
-		TaskID:            laterTask.ID,
-		SourceWorkspaceID: newBinding.WorkspaceID,
-	}); err != nil {
-		t.Fatalf("UpdateTask later attempt source workspace: %v", err)
-	}
-	laterContext, err := store.GetTaskExecutionTargetContext(ctx, laterTask.ID)
-	if err != nil {
-		t.Fatalf("GetTaskExecutionTargetContext later attempt: %v", err)
-	}
-	if laterContext.SourceWorkspaceID != newBinding.WorkspaceID {
-		t.Fatalf("later unlocked source workspace = %q, want rebound workspace %q", laterContext.SourceWorkspaceID, newBinding.WorkspaceID)
+	if targetContext.SourceWorkspaceID != newBinding.WorkspaceID {
+		t.Fatalf("source workspace after rejected edit = %q, want %q", targetContext.SourceWorkspaceID, newBinding.WorkspaceID)
 	}
 }
 

@@ -308,6 +308,12 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	metadataJSON := task.MetadataJson
 	if requested := strings.TrimSpace(req.SourceWorkspaceID); requested != "" && requested != sourceWorkspaceID {
+		if _, _, _, err := taskBacklogState(ctx, q, task); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
+			}
+			return TaskRecord{}, err
+		}
 		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 			return TaskRecord{}, ErrSourceWorkspaceAfterAutomation
 		}
@@ -508,24 +514,9 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
+	definition, start, current, err := taskBacklogState(ctx, s.queries, task)
 	if err != nil {
 		return preparedTaskStart{}, err
-	}
-	start, err := startNode(definition)
-	if err != nil {
-		return preparedTaskStart{}, err
-	}
-	reference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(start), nil)
-	if err != nil {
-		return preparedTaskStart{}, err
-	}
-	current, err := currentNodeForReference(ctx, s.queries, reference)
-	if err != nil {
-		return preparedTaskStart{}, err
-	}
-	if current.SessionID != nil || current.Scheduling != nil {
-		return preparedTaskStart{}, sql.ErrNoRows
 	}
 	if err := s.preflightInitialExecution(definition); err != nil {
 		return preparedTaskStart{}, err
@@ -535,6 +526,33 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 		return preparedTaskStart{}, err
 	}
 	return preparedTaskStart{task: task, start: start, target: target, startEdge: edge, startCurrentNode: current}, nil
+}
+
+func taskBacklogState(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	task sqlitegen.TaskRecord,
+) (workflow.Definition, workflow.Node, workflow.CurrentNode, error) {
+	definition, _, err := workflowDefinitionFromQueries(ctx, q, task.WorkflowID)
+	if err != nil {
+		return workflow.Definition{}, nil, workflow.CurrentNode{}, err
+	}
+	start, err := startNode(definition)
+	if err != nil {
+		return workflow.Definition{}, nil, workflow.CurrentNode{}, err
+	}
+	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(task.ID), workflow.NodeIDOf(start), nil)
+	if err != nil {
+		return workflow.Definition{}, nil, workflow.CurrentNode{}, err
+	}
+	current, err := currentNodeForReference(ctx, q, reference)
+	if err != nil {
+		return workflow.Definition{}, nil, workflow.CurrentNode{}, err
+	}
+	if current.SessionID != nil || current.Scheduling != nil {
+		return workflow.Definition{}, nil, workflow.CurrentNode{}, sql.ErrNoRows
+	}
+	return definition, start, current, nil
 }
 
 func (s *Store) preflightInitialExecution(definition workflow.Definition) error {

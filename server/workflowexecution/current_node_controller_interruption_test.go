@@ -618,7 +618,7 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptDrainsPreparationGate(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptFailsWhilePreparationGateActive(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -653,17 +653,14 @@ func TestCurrentNodeControllerTaskInterruptDrainsPreparationGate(t *testing.T) {
 			close(runner.returnQueued)
 		})
 	}
-	releaseInterrupt := func() {
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		releaseQueued()
 		select {
 		case <-store.interruptRelease:
 		default:
 			close(store.interruptRelease)
 		}
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		releaseQueued()
-		releaseInterrupt()
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
 		}
@@ -695,29 +692,31 @@ func TestCurrentNodeControllerTaskInterruptDrainsPreparationGate(t *testing.T) {
 		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID})
 	}()
 	select {
+	case err := <-interruptDone:
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("Task Interrupt while preparation gate active = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Task Interrupt waited for active preparation gate")
+	}
+	select {
 	case <-store.interruptStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not begin durable cleanup")
+		t.Fatal("Task Interrupt persisted an interruption despite the active preparation gate")
+	default:
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), running) {
+		t.Fatalf("running current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
 	}
 	releaseQueued()
-	releaseInterrupt()
-	select {
-	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("Task Interrupt while preparation gate active = %v, want success", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Task Interrupt did not drain active preparation gate")
-	}
 	for _, reference := range []workflow.CurrentNodeReference{running, queued} {
 		interruption, interrupted := store.interruption(reference)
-		if !interrupted {
-			t.Fatalf("current node %v was not interrupted: %+v", reference, interruption)
+		if interrupted {
+			t.Fatalf("current node %v interruption = %+v after rejected Task Interrupt", reference, interruption)
 		}
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptDrainsBlockedPreparation(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptFailsWhileBlockedPreparationContinues(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -780,20 +779,27 @@ func TestCurrentNodeControllerTaskInterruptDrainsBlockedPreparation(t *testing.T
 	go func() {
 		interruptDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: live.TaskID})
 	}()
-	close(runner.released)
 	select {
 	case err := <-interruptDone:
-		if err != nil {
-			t.Fatalf("Task Interrupt while blocked preparation = %v, want success", err)
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("Task Interrupt while blocked preparation = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Task Interrupt did not drain blocked preparation gate")
+	case <-time.After(time.Second):
+		t.Fatal("Task Interrupt waited for blocked preparation gate")
 	}
 	select {
-	case <-runner.finished:
 	case <-runner.canceled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("blocked preparation did not finish or cancel")
+		t.Fatal("Task Interrupt canceled preparation")
+	default:
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), live) {
+		t.Fatalf("live current node changed after rejected Task Interrupt: %+v", controller.Snapshot())
+	}
+	close(runner.released)
+	select {
+	case <-runner.finished:
+	case <-time.After(time.Second):
+		t.Fatal("blocked preparation did not continue to completion")
 	}
 }
 

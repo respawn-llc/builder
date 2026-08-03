@@ -522,16 +522,20 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			}
 			return 1
 		}
-		if _, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied); err != nil {
+		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
+		if err != nil {
 			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		if err != nil {
+			writeWorkflowTaskRunWaitError(stdout, stderr, *jsonOut, err)
 			return 1
 		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
 		}
-		writeTaskResumeResult(stdout, serverapi.WorkflowTaskDetail{
-			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
-		}, resp)
+		writeTaskResumeResult(stdout, detail, resp)
 		return 0
 	})
 }

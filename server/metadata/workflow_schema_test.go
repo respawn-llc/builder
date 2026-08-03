@@ -623,22 +623,14 @@ VALUES ('task-missing-source-workspace', 'link-1', 1, 4, 'BLD-4', 'Task', '', 'w
 VALUES ('task-atomic-lock', 'link-1', 1, 5, 'BLD-5', 'Task', '', ?, ?, ?, '{}')`, binding.WorkspaceID, now, now); err != nil {
 		t.Fatalf("unlocked task without managed worktree should be allowed: %v", err)
 	}
-	if _, err := store.db.Exec(`UPDATE tasks
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
 SET source_workspace_id = ?,
     managed_worktree_id = 'worktree-valid',
     execution_target_mode = 'head',
     execution_target_requested_ref = 'HEAD',
     execution_target_commit_oid = '0123456789abcdef',
     execution_target_provenance = 'resolved'
-WHERE id = 'task-atomic-lock'`, sameProjectWorkspace.WorkspaceID); err != nil {
-		t.Fatalf("atomic managed target lock across same-project workspaces should be allowed: %v", err)
-	}
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
-SET execution_target_requested_ref = 'refs/heads/changed'
-WHERE id = 'task-atomic-lock'`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE tasks
-SET project_workflow_link_id = 'link-2'
-WHERE id = 'task-atomic-lock'`)
+WHERE id = 'task-atomic-lock'`, sameProjectWorkspace.WorkspaceID)
 }
 
 func TestWorkflowExecutionTargetSchemaConstraints(t *testing.T) {

@@ -136,7 +136,7 @@
 
 - New Task requires title and accepts optional body, Project Labels, hidden source information, and source workspace. Workflow selection is outside the form. The workspace defaults to the opened workspace or Project default workspace. With one workspace, selection is shown but unavailable.
 - Selected existing Labels are assigned atomically with Task creation. Creating a Label during Task creation selects it immediately; it remains a Project Label if Task creation is cancelled.
-- Creation makes a Backlog Task; it does not start automation. Title, body, and source workspace are editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
+- Creation makes a Backlog Task; it does not start automation. Title and body remain editable throughout the Task lifecycle. Source workspace is editable only in Backlog. A managed Execution Target remains tied to its original source workspace; no-managed-worktree execution uses the Task's current source workspace.
 - Task creation and editing show server validation errors.
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.

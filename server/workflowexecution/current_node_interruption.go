@@ -128,6 +128,13 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			if c.workerErr != nil {
 				return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
 			}
+			if selector.SessionID == nil {
+				for _, gate := range c.gates {
+					if gate.reference.TaskID == selector.TaskID {
+						return ErrTaskExecutionNotQuiescent
+					}
+				}
+			}
 			if c.interrupts.taskActive(selector.TaskID) {
 				return ErrTaskExecutionNotQuiescent
 			}
