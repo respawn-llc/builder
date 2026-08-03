@@ -8,5 +8,18 @@ func (s Service) Catalog() ([]CatalogEntry, error) {
 	if err := s.validateRoots(ErrorKindCatalogRead); err != nil {
 		return nil, err
 	}
-	return s.scan()
+	entries, err := s.scan()
+	if err != nil {
+		return nil, err
+	}
+	for _, builtin := range builtinPromptCommands() {
+		for i := range entries {
+			if entries[i].Name == builtin.name {
+				entries = append(entries[:i], entries[i+1:]...)
+				break
+			}
+		}
+		entries = append(entries, CatalogEntry{Name: builtin.name, Preview: preview(builtin.content)})
+	}
+	return entries, nil
 }

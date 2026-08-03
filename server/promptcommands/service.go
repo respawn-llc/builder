@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/prompts"
 	"core/shared/runtimeinput"
 	"core/shared/textutil"
 )
@@ -68,6 +69,11 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 	if err := s.validateRoots(ErrorKindCommandRead); err != nil {
 		return "", err
 	}
+	if name, parseErr := runtimeinput.ParsePromptCommandName(command); parseErr == nil {
+		if content, ok := builtinPromptContent(name); ok {
+			return textutil.ExpandPromptTemplate(content, arguments), nil
+		}
+	}
 	candidate, found, err := s.findCandidate(command)
 	if err != nil {
 		return "", err
@@ -81,6 +87,27 @@ func (s Service) Resolve(command, arguments string) (string, error) {
 		return "", &Error{Kind: ErrorKindCommandNotFound, Command: &name}
 	}
 	return textutil.ExpandPromptTemplate(candidate.content, arguments), nil
+}
+
+type builtinPromptCommand struct {
+	name    string
+	content string
+}
+
+func builtinPromptCommands() []builtinPromptCommand {
+	return []builtinPromptCommand{
+		{name: "prompt:review", content: prompts.ReviewPrompt},
+		{name: "prompt:init", content: prompts.InitPrompt},
+	}
+}
+
+func builtinPromptContent(name runtimeinput.PromptCommandName) (string, bool) {
+	for _, command := range builtinPromptCommands() {
+		if command.name == name.String() {
+			return command.content, true
+		}
+	}
+	return "", false
 }
 
 func (s Service) validateRoots(kind ErrorKind) error {

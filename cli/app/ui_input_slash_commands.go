@@ -14,14 +14,13 @@ import (
 func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea.Model, tea.Cmd) {
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
-	_, reservedPrompt := promptCommandToken(text)
 	if selection.shouldAutocomplete() {
 		m.replaceMainInputAtEnd(selection.autocompleteText())
 		return true, m, nil
 	}
 	if !selection.hasCommand || selection.commandText() == "" {
-		if reservedPrompt {
-			return true, m, m.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+			return true, m, cmd
 		}
 		return false, m, nil
 	}
@@ -35,10 +34,9 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, tea.Model, tea.Cmd) {
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
-	_, reservedPrompt := promptCommandToken(text)
 	if !selection.hasCommand {
-		if reservedPrompt {
-			return true, m, m.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+			return true, m, cmd
 		}
 		return false, m, nil
 	}
@@ -69,6 +67,13 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 	return false, m, nil
 }
 
+func (c uiInputController) rejectUnavailablePromptCommand(text string) (tea.Cmd, bool) {
+	if _, reserved := promptCommandToken(text); !reserved {
+		return nil, false
+	}
+	return c.model.sendTransientStatusWithNoticeID("prompt command is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""), true
+}
+
 func promptCommandToken(text string) (runtimeinput.CommandToken, bool) {
 	parsed := parseSlashCommandInput(text)
 	if !parsed.active || parsed.token == "" {
@@ -79,6 +84,18 @@ func promptCommandToken(text string) (runtimeinput.CommandToken, bool) {
 		return token, true
 	}
 	return runtimeinput.CommandToken{}, false
+}
+
+func promptCommandInput(text string) (runtimeinput.Input, bool) {
+	parsed := parseSlashCommandInput(text)
+	if !parsed.active {
+		return runtimeinput.Input{}, false
+	}
+	name, err := runtimeinput.ParsePromptCommandName(parsed.token)
+	if err != nil {
+		return runtimeinput.Input{}, false
+	}
+	return runtimeinput.Command(name.String(), parsed.args), true
 }
 
 func (m *uiModel) clearCommandInput(command commands.Command, draft *tuiinput.EditorSnapshot) {

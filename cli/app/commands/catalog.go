@@ -15,6 +15,13 @@ func NewDefaultRegistryWithPromptCatalog(entries []PromptCommandCatalogEntry) *R
 		if err != nil {
 			continue
 		}
+		if name.Identifier == "review" || name.Identifier == "init" {
+			if registered, ok := r.handlers[name.Identifier]; ok {
+				registered.command.Description = strings.TrimSpace(entry.Preview)
+				r.handlers[name.Identifier] = registered
+				continue
+			}
+		}
 		commandName := name.String()
 		r.handlers[commandName] = registeredCommand{
 			command: Command{

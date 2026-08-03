@@ -1,9 +1,6 @@
 package commands
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestExecuteBuiltins(t *testing.T) {
 	registry := NewDefaultRegistry()
@@ -58,13 +55,13 @@ func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 		"/init starter repo":  "starter repo",
 	} {
 		got := registry.Execute(input)
-		if !got.Handled || !got.SubmitUser || got.Action != ActionNone || !got.FreshConversation {
+		if !got.Handled || got.PromptCommand == nil || got.Action != ActionNone || !got.FreshConversation {
 			t.Fatalf("Execute(%q) = %+v, want fresh user submission", input, got)
 		}
-		if got.User == "" || got.User == input || !strings.HasSuffix(got.User, suffix) {
-			t.Fatalf("Execute(%q) user payload = %q, want injected prompt ending in %q", input, got.User, suffix)
+		if got.PromptCommand.Name == "" || got.PromptCommand.Arguments != suffix {
+			t.Fatalf("Execute(%q) prompt command = %+v, want arguments %q", input, got.PromptCommand, suffix)
 		}
-		if got.Text != "" || got.Args != "" {
+		if got.User != "" || got.Text != "" || got.Args != "" {
 			t.Fatalf("Execute(%q) leaked system text or args: %+v", input, got)
 		}
 	}
@@ -86,8 +83,11 @@ func TestPromptCatalogProxiesExposeOnlyPreviewAndTypedInvocation(t *testing.T) {
 	if result.PromptCommand.Name != "prompt:review_plan" || result.PromptCommand.Arguments != "src" {
 		t.Fatalf("invocation = %+v", result.PromptCommand)
 	}
-	if command, ok := registry.Command("/prompt:review"); !ok || command.Description != "server review" {
-		t.Fatalf("namespaced built-in collision = %+v, %v", command, ok)
+	if command, ok := registry.Command("/review"); !ok || command.Description != "server review" {
+		t.Fatalf("built-in command = %+v, %v", command, ok)
+	}
+	if command, ok := registry.Command("/prompt:review"); ok {
+		t.Fatalf("server built-in leaked namespaced picker command: %+v", command)
 	}
 }
 

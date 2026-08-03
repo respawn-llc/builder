@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"core/prompts"
+	"core/shared/textutil"
 )
 
 func TestCatalogUsesOrderedRootsSortedEntriesAndNormalizedFirstValidPrecedence(t *testing.T) {
@@ -16,6 +19,7 @@ func TestCatalogUsesOrderedRootsSortedEntriesAndNormalizedFirstValidPrecedence(t
 	writePromptFile(t, filepath.Join(workspaceRoot, ".kent", "commands", "review_plan.md"), "shadowed")
 	writePromptFile(t, filepath.Join(persistenceRoot, "prompts", "review_plan.md"), "global")
 	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "Alpha.md"), "alpha")
+	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "review.md"), "file shadow")
 	writePromptFile(t, filepath.Join(persistenceRoot, ".generated", "prompts", "zeta.md"), "zeta")
 	writePromptFile(t, filepath.Join(persistenceRoot, ".generated", "commands", "generated.md"), "generated")
 	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "nested", "ignored.md"), "ignored")
@@ -35,6 +39,8 @@ func TestCatalogUsesOrderedRootsSortedEntriesAndNormalizedFirstValidPrecedence(t
 		"prompt:alpha=alpha",
 		"prompt:zeta=zeta",
 		"prompt:generated=generated",
+		"prompt:review=" + preview(prompts.ReviewPrompt),
+		"prompt:init=" + preview(prompts.InitPrompt),
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("catalog = %v, want %v", got, want)
@@ -71,16 +77,36 @@ func TestCatalogBlankHigherPrecedenceFallsBackAndPreviewCollapsesWhitespaceAtUni
 func TestResolveReadsCurrentWinningContentAndExpandsArguments(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
-	path := filepath.Join(persistenceRoot, "prompts", "review.md")
+	path := filepath.Join(persistenceRoot, "prompts", "review_file.md")
 	writePromptFile(t, path, "before $ARGUMENTS")
 
 	service := New(persistenceRoot, workspaceRoot)
-	if got, err := service.Resolve("prompt:review", "  src/internal  "); err != nil || got != "before src/internal" {
+	if got, err := service.Resolve("prompt:review_file", "  src/internal  "); err != nil || got != "before src/internal" {
 		t.Fatalf("Resolve first = %q, %v", got, err)
 	}
 	writePromptFile(t, path, "after")
-	if got, err := service.Resolve("prompt:review", "retry"); err != nil || got != "after\n\nretry" {
+	if got, err := service.Resolve("prompt:review_file", "retry"); err != nil || got != "after\n\nretry" {
 		t.Fatalf("Resolve current = %q, %v", got, err)
+	}
+}
+
+func TestBuiltInPromptCommandsResolveThroughTheServerService(t *testing.T) {
+	service := New(t.TempDir(), t.TempDir())
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "prompt:review", body: prompts.ReviewPrompt},
+		{name: "prompt:init", body: prompts.InitPrompt},
+	} {
+		got, err := service.Resolve(test.name, "  src/internal  ")
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", test.name, err)
+		}
+		want := textutil.ExpandPromptTemplate(test.body, "  src/internal  ")
+		if got != want {
+			t.Fatalf("Resolve(%q) = %q, want %q", test.name, got, want)
+		}
 	}
 }
 

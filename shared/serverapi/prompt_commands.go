@@ -25,10 +25,10 @@ type PromptCommandCatalogResponse struct {
 func (r PromptCommandCatalogResponse) Validate() error {
 	seen := make(map[string]struct{}, len(r.Commands))
 	for _, command := range r.Commands {
-		name := strings.TrimSpace(command.Name)
-		if name == "" {
+		if strings.TrimSpace(command.Name) == "" {
 			return errors.New("prompt command name is required")
 		}
+		name := command.Name
 		parsed, parseErr := runtimeinput.ParsePromptCommandName(name)
 		if parseErr != nil || parsed.String() != name {
 			return fmt.Errorf("prompt command %q is not canonical", name)

@@ -27,8 +27,20 @@ func (s promptCommandCatalogService) GetPromptCommandCatalog(context.Context, se
 }
 
 type promptCommandRuntimeResolver struct {
+	effectiveWorkspace promptCommandEffectiveWorkspaceResolver
+	metadataStore      *metadata.Store
+}
+
+type promptCommandEffectiveWorkspaceResolver struct {
 	persistenceRoot string
-	metadataStore   *metadata.Store
+}
+
+func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspace(ctx context.Context, workspaceRoot, name, arguments string) (string, error) {
+	content, err := promptcommands.New(r.persistenceRoot, workspaceRoot).Resolve(name, arguments)
+	if err != nil {
+		return "", publicPromptCommandError(err)
+	}
+	return content, nil
 }
 
 func (r promptCommandRuntimeResolver) ResolvePromptCommand(ctx context.Context, sessionID, name, arguments string) (string, error) {
@@ -43,11 +55,7 @@ func (r promptCommandRuntimeResolver) ResolvePromptCommand(ctx context.Context, 
 	if err != nil {
 		return "", err
 	}
-	content, err := promptcommands.New(r.persistenceRoot, binding.CanonicalRoot).Resolve(name, arguments)
-	if err != nil {
-		return "", publicPromptCommandError(err)
-	}
-	return content, nil
+	return r.effectiveWorkspace.ResolvePromptCommandForWorkspace(ctx, binding.CanonicalRoot, name, arguments)
 }
 
 var _ runtimecontrol.PromptCommandResolver = promptCommandRuntimeResolver{}

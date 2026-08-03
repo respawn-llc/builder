@@ -130,6 +130,9 @@ func (m *uiModel) startupSubmitCmd() tea.Cmd {
 		return nil
 	}
 	if m.startupSubmitPromptHistoryRecorded {
+		if input, ok := promptCommandInput(startupText); ok {
+			return m.inputController().startTypedSubmissionWithPreSubmitQueuePosition(startupText, input, preSubmitQueueBack, "")
+		}
 		return m.inputController().startSubmissionWithPreSubmitQueuePosition(startupText, preSubmitQueueBack, "")
 	}
 	return m.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID(startupText, preSubmitQueueBack, "")

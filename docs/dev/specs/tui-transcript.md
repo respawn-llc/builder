@@ -276,9 +276,9 @@
 - `/fast`, `/supervisor`, and `/questions` feedback is a committed transcript entry in an active Session.
 - `/status` opens a read-only detail overlay and refreshes progressively.
 - `/status` shows previous-session and parent-agent-session provenance as separate labeled facts when each relationship is present.
-- Built-in prompt commands use embedded Markdown templates.
+- Built-in prompt commands `/review` and `/init` are canonical server-resolved prompt identities backed by embedded Markdown templates. Clients do not expand their templates.
 - Kent owns file-backed prompt-command discovery, file reads, precedence, normalization, prompt expansion, and submission.
-- The TUI owns built-in commands and composes them with Kent-supplied prompt commands in one picker. Kent does not include built-in commands in the prompt-command catalog.
+- Kent includes built-in prompt identities in the prompt-command catalog. The TUI presents their user-facing aliases together with the catalog projection.
 - Kent reads file-backed prompt commands from these roots in descending precedence: Workspace `.kent/prompts`, Workspace `.kent/commands`, persistence-root `prompts`, persistence-root `commands`, persistence-root `.generated/prompts`, and persistence-root `.generated/commands`.
 - Discovery is non-recursive and includes only `.md` files with non-blank content. A blank higher-precedence file does not hide a valid lower-precedence command.
 - A prompt command ID is `prompt:<normalized-base-name>`. Normalization lowercases letters, keeps letters and digits, collapses whitespace and underscores into one underscore, and discards other characters.

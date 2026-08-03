@@ -1,39 +1,30 @@
 package commands
 
-import "core/shared/textutil"
+import "core/shared/runtimeinput"
 
-type promptCommandSpec struct {
-	Name         string
-	Description  string
-	Prompt       string
-	FreshSession bool
-}
-
-func registerPromptCommands(r *Registry, specs []promptCommandSpec) {
+func registerBuiltinPromptCommands(r *Registry) {
 	if r == nil {
 		return
 	}
-	for _, spec := range specs {
-		commandName := spec.Name
-		commandDescription := spec.Description
-		commandPrompt := spec.Prompt
-		freshSession := spec.FreshSession
-		activeRunPolicy := ActiveRunPolicyRequiresIdle
-		if freshSession {
-			activeRunPolicy = ActiveRunPolicyAllowed
-		}
-		r.RegisterWithOptions(commandName, commandDescription, RegisterOptions{ActiveRunPolicy: activeRunPolicy, PreservePromptHistoryDraft: true}, func(args string) Result {
+	for _, command := range []struct {
+		name        string
+		description string
+		identity    string
+	}{
+		{name: "review", description: "Run code review", identity: "prompt:review"},
+		{name: "init", description: "Run repository initialization prompt", identity: "prompt:init"},
+	} {
+		command := command
+		r.RegisterWithOptions(command.name, command.description, RegisterOptions{
+			ActiveRunPolicy:            ActiveRunPolicyAllowed,
+			PreservePromptHistoryDraft: true,
+		}, func(args string) Result {
 			return Result{
 				Handled:           true,
 				Action:            ActionNone,
-				SubmitUser:        true,
-				User:              buildPromptSubmission(commandPrompt, args),
-				FreshConversation: freshSession,
+				PromptCommand:     &runtimeinput.PromptCommand{Name: command.identity, Arguments: args},
+				FreshConversation: true,
 			}
 		})
 	}
-}
-
-func buildPromptSubmission(prompt, args string) string {
-	return textutil.ExpandPromptTemplate(prompt, args)
 }

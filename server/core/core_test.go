@@ -96,8 +96,30 @@ func TestPromptCommandCatalogUsesRequestedWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPromptCommandCatalog: %v", err)
 	}
-	if len(response.Commands) != 1 || response.Commands[0].Name != "prompt:only_b" {
-		t.Fatalf("workspace B catalog = %+v, want only_b (A binding %q, B binding %q)", response.Commands, bindingA.ProjectID, bindingB.ProjectID)
+	foundWorkspaceB := false
+	for _, command := range response.Commands {
+		if command.Name == "prompt:only_b" && command.Preview == "B" {
+			foundWorkspaceB = true
+			break
+		}
+	}
+	if !foundWorkspaceB {
+		t.Fatalf("workspace B catalog = %+v, want prompt:only_b from B (A binding %q, B binding %q)", response.Commands, bindingA.ProjectID, bindingB.ProjectID)
+	}
+}
+
+func TestPromptCommandEffectiveWorkspaceResolverUsesSuppliedWorkspace(t *testing.T) {
+	persistenceRoot := t.TempDir()
+	workspace := t.TempDir()
+	writeCorePromptFixture(t, workspace, "pre_session", "effective workspace body")
+
+	resolver := promptCommandEffectiveWorkspaceResolver{persistenceRoot: persistenceRoot}
+	got, err := resolver.ResolvePromptCommandForWorkspace(context.Background(), workspace, "prompt:pre_session", "")
+	if err != nil {
+		t.Fatalf("ResolvePromptCommandForWorkspace: %v", err)
+	}
+	if got != "effective workspace body" {
+		t.Fatalf("resolved body = %q, want effective workspace body", got)
 	}
 }
 

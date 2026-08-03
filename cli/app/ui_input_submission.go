@@ -22,6 +22,9 @@ const (
 )
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
 	return c.startTypedSubmissionWithPreSubmitQueuePosition(text, runtimeinput.Text(text), queuePosition, queuedID, activeSubmitOriginDirect)
 }
 
@@ -60,6 +63,9 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
 	}

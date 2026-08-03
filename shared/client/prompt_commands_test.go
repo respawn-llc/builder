@@ -61,7 +61,14 @@ func TestRemotePromptCommandCatalogUsesAttachedWorkspaceAndValidatesResponse(t *
 	if err != nil {
 		t.Fatalf("GetPromptCommandCatalog: %v", err)
 	}
-	if len(catalog.Commands) != 1 || catalog.Commands[0].Name != "prompt:remote_demo" {
+	foundRemoteCommand := false
+	for _, command := range catalog.Commands {
+		if command.Name == "prompt:remote_demo" && command.Preview == "remote" {
+			foundRemoteCommand = true
+			break
+		}
+	}
+	if !foundRemoteCommand {
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
 }
@@ -213,7 +220,14 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 	if err != nil {
 		t.Fatalf("GetPromptCommandCatalog: %v", err)
 	}
-	if len(catalog.Commands) != 1 || catalog.Commands[0].Name != "prompt:remote_demo" {
+	foundRemoteCommand := false
+	for _, command := range catalog.Commands {
+		if command.Name == "prompt:remote_demo" && command.Preview == "server body $ARGUMENTS" {
+			foundRemoteCommand = true
+			break
+		}
+	}
+	if !foundRemoteCommand {
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
 	submitID := runtimeids.NewRuntimeClientRequestID()
