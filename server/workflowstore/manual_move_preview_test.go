@@ -124,6 +124,73 @@ func TestManualMovePreviewExpandsFanoutTransitionChoice(t *testing.T) {
 	}
 }
 
+func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	auditID := workflow.NodeID("node-audit-" + workflowID.String())
+	auditGroupID := workflow.TransitionGroupID("group-audit-" + workflowID.String())
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		synth := nodeByKey(t, def, "synth")
+		doneGroupID := workflow.TransitionGroupID("group-synth-done-" + workflowID.String())
+		req.Nodes = append(req.Nodes, NodeRecord{
+			ID:             auditID,
+			WorkflowID:     workflowID,
+			Key:            "audit",
+			Kind:           workflow.NodeKindAgent,
+			DisplayName:    "Audit",
+			SubagentRole:   "coder",
+			PromptTemplate: "Audit.",
+		})
+		req.TransitionGroups = mutateWorkflowGraphSaveTransitionGroup(
+			req.TransitionGroups,
+			doneGroupID,
+			func(group *TransitionGroupRecord) {
+				group.SourceNodeID = auditID
+			},
+		)
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID:           auditGroupID,
+			WorkflowID:   workflowID,
+			SourceNodeID: workflow.NodeIDOf(synth),
+			TransitionID: "audit",
+			DisplayName:  "Audit",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID:                workflow.EdgeID("edge-audit-" + workflowID.String()),
+			WorkflowID:        workflowID,
+			TransitionGroupID: auditGroupID,
+			Key:               "audit",
+			TargetNodeID:      auditID,
+			ContextMode:       workflow.ContextModeNewSession,
+			PromptTemplate:    "Audit {{.Params.synthesize.joined}}.",
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: auditID,
+	})
+	if err != nil {
+		t.Fatalf("PreviewManualMove: %v", err)
+	}
+	if preview.Outcome != ManualMovePreviewOutcomeTransition ||
+		len(preview.Choices) != 1 ||
+		len(preview.Choices[0].RequiredValues) != 1 {
+		t.Fatalf("preview = %+v, want one Transition with one required value", preview)
+	}
+	required := preview.Choices[0].RequiredValues[0]
+	if required.NodeKey != "join" ||
+		required.OutputName != "joined" ||
+		required.Description != "Joined branch summary." {
+		t.Fatalf("required value = %+v, want described prior Join parameter", required)
+	}
+}
+
 func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")

@@ -2,7 +2,6 @@ package llm
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"strings"
 
@@ -86,7 +85,7 @@ func resolveOpenAITransportProviderVariant(baseURL string, mode OpenAIAuthMode) 
 		return "chatgpt-codex", nil
 	}
 	normalizedBaseURL := normalizeOpenAIBaseURL(baseURL)
-	if normalizedBaseURL == normalizeOpenAIBaseURL(defaultOpenAIBaseURL) || IsOpenAIFirstPartyBaseURL(normalizedBaseURL) || isLoopbackOpenAIBaseURL(normalizedBaseURL) {
+	if normalizedBaseURL == normalizeOpenAIBaseURL(defaultOpenAIBaseURL) || IsOpenAIFirstPartyBaseURL(normalizedBaseURL) {
 		return "openai", nil
 	}
 	if strings.TrimSpace(baseURL) != "" {
@@ -113,22 +112,6 @@ func IsOpenAIFirstPartyBaseURL(baseURL string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(parsed.Hostname()), "api.openai.com")
-}
-
-func isLoopbackOpenAIBaseURL(baseURL string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return false
-	}
-	hostname := strings.TrimSpace(parsed.Hostname())
-	if hostname == "" {
-		return false
-	}
-	if strings.EqualFold(hostname, "localhost") {
-		return true
-	}
-	parsedIP := net.ParseIP(hostname)
-	return parsedIP != nil && parsedIP.IsLoopback()
 }
 
 func LockedModelCapabilitiesForModel(model string) session.LockedModelCapabilities {

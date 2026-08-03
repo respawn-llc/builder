@@ -277,6 +277,7 @@ function attentionItem(taskID: string): Readonly<Record<string, JsonValue>> {
     task_short_id: taskID,
     task_title: taskID,
     approval_id: `approval-${taskID}`,
+    session_name: null,
     message: "Approval required",
     approval_snapshot: {
       source_node_display_name: "Review",

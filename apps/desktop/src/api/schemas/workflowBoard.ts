@@ -586,8 +586,20 @@ export const pendingAskListSchema = z
             SessionID: z.string(),
             Question: z.string(),
             Suggestions: z.array(z.string()).optional().default([]),
-            RecommendedOptionIndex: z.number().optional().default(0),
+            RecommendedOptionIndex: z.number().int().positive().nullable(),
             CreatedAt: z.string().optional().default(""),
+          })
+          .superRefine((value, context) => {
+            if (
+              value.RecommendedOptionIndex !== null &&
+              value.RecommendedOptionIndex > value.Suggestions.length
+            ) {
+              context.addIssue({
+                code: "custom",
+                message: "recommended option index exceeds suggestions",
+                path: ["RecommendedOptionIndex"],
+              });
+            }
           })
           .transform((value): PendingAsk => ({
             askID: value.AskID,

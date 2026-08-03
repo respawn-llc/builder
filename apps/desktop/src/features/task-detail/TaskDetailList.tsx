@@ -108,15 +108,7 @@ export function TaskDetailList({
     () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
     [comments.data],
   );
-  const sourceAttentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
-  const attentionItems = useMemo(
-    () =>
-      sourceAttentionItems.filter(
-        (item) =>
-          item.kind !== "question" || questionSelections.get(item.questionID)?.submission !== "accepted",
-      ),
-    [questionSelections, sourceAttentionItems],
-  );
+  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
   const listItems = useMemo(
     () =>
       taskDetailListItems({

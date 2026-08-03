@@ -464,8 +464,8 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("expected ProviderAPIError from transport path, got %T err=%v", err, err)
 	}
-	if providerErr.ProviderID != "openai" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
-		t.Fatalf("expected openai overflow classification on loopback transport, got %+v", providerErr)
+	if providerErr.ProviderID != "openai-compatible" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
+		t.Fatalf("expected openai-compatible overflow classification on loopback transport, got %+v", providerErr)
 	}
 	if !IsNonRetriableModelError(err) {
 		t.Fatalf("expected 400 overflow response to remain non-retriable, got %v", err)

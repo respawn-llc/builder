@@ -1,12 +1,31 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
+
+func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
+	encoded, err := json.Marshal(validWorkflowAttentionApproval())
+	if err != nil {
+		t.Fatalf("marshal attention item: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode attention item: %v", err)
+	}
+	sessionName, present := fields["session_name"]
+	if !present {
+		t.Fatal("session_name was omitted")
+	}
+	if string(sessionName) != "null" {
+		t.Fatalf("session_name = %s, want null", sessionName)
+	}
+}
 
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {
@@ -40,6 +59,7 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "blank workflow identity", item: question(func(item *WorkflowAttentionItem) { item.WorkflowID = runtimeids.WorkflowID{} }), want: false},
 		{name: "question without current node", item: question(func(item *WorkflowAttentionItem) { item.CurrentNode = nil }), want: false},
 		{name: "question without question", item: question(func(item *WorkflowAttentionItem) { item.QuestionID = nil }), want: false},
+		{name: "question with blank session name", item: question(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("") }), want: false},
 		{name: "question with approval snapshot", item: question(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
 		{name: "question with approval identity", item: question(func(item *WorkflowAttentionItem) { item.ApprovalID = textutil.Value("approval-1") }), want: false},
 		{name: "question with detail", item: question(func(item *WorkflowAttentionItem) { item.DetailJSON = textutil.Value("{}") }), want: false},
@@ -50,6 +70,7 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "approval with malformed snapshot", item: approval(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = &WorkflowAttentionApprovalSnapshot{} }), want: false},
 		{name: "approval with question", item: approval(func(item *WorkflowAttentionItem) { item.QuestionID = textutil.Value("question-1") }), want: false},
 		{name: "approval with session", item: approval(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("session-1") }), want: false},
+		{name: "approval with session name", item: approval(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("Session") }), want: false},
 		{name: "approval with suggestions", item: approval(func(item *WorkflowAttentionItem) { item.Suggestions = []string{} }), want: false},
 		{name: "approval with recommendation", item: approval(func(item *WorkflowAttentionItem) { item.RecommendedOptionIndex = textutil.Value(1) }), want: false},
 		{name: "approval with question metadata", item: approval(func(item *WorkflowAttentionItem) { item.Question = &WorkflowAttentionQuestionPrompt{} }), want: false},
@@ -64,6 +85,7 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 			item.SessionID = &sessionID
 		}), want: true},
 		{name: "interrupted with blank session", item: interrupted(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("") }), want: false},
+		{name: "interrupted with session name", item: interrupted(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("Session") }), want: false},
 		{name: "interrupted with blank detail", item: interrupted(func(item *WorkflowAttentionItem) { item.DetailJSON = textutil.Value("") }), want: false},
 		{name: "interrupted with question", item: interrupted(func(item *WorkflowAttentionItem) { item.QuestionID = textutil.Value("question-1") }), want: false},
 		{name: "interrupted with approval snapshot", item: interrupted(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
@@ -193,6 +215,7 @@ func TestWorkflowTaskActivityResponseValidationOnlyAcceptsDurableActivity(t *tes
 
 func validWorkflowAttentionQuestion() WorkflowAttentionItem {
 	sessionID := "session-1"
+	sessionName := "Session one"
 	questionID := "question-1"
 	recommended := 1
 	return WorkflowAttentionItem{
@@ -206,6 +229,7 @@ func validWorkflowAttentionQuestion() WorkflowAttentionItem {
 		Message:                textutil.Value("Continue?"),
 		CurrentNode:            &WorkflowTaskCurrentNode{NodeID: "node-1", SessionID: &sessionID},
 		SessionID:              &sessionID,
+		SessionName:            &sessionName,
 		QuestionID:             &questionID,
 		Suggestions:            []string{"Continue"},
 		RecommendedOptionIndex: &recommended,

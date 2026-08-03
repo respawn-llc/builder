@@ -22,6 +22,12 @@ This document classifies the current contract surface. “Reusable” means the 
 - Tool, prompt, queue, runtime, compaction, goal, background, worktree, and diagnostic messages.
 - Existing typed tool start/end facts share `ToolCallID` and already support one merged tool row as used by the TUI. Desktop must reuse that seam rather than inventing a reconciliation subsystem or requiring a server-tool refactor.
 
+Hydration reads mutable facts from their authoritative domain owners. The
+session feed sequencer owns event ordering and continuity detection, not cached
+copies of Session or runtime state. A detected hydration/live boundary gap uses
+ordinary Scratch Rehydration; the contract does not require a globally atomic
+cross-owner snapshot, exactly-once boundary delivery, or restart equivalence.
+
 Provider/storage encodings, materialized-versus-synthesized provenance, repair paths, and deduplication bookkeeping are not Desktop product contracts. Suspected dead or legacy duplication is tracked separately in `KENT-303`.
 
 The TUI currently permits expanding a backgrounded Shell/process row while revealing no additional content. Desktop must not copy that behavior: backgrounded tool rows and later completion/kill rows expand to the exact model-visible result/notice payload.
@@ -55,6 +61,39 @@ The desktop client needs typed schemas, DTO adapters, RPC methods, and contract 
 
 These are client gaps, not reasons to duplicate server business logic in React.
 
+### Worktree
+
+Server and shared contracts own Worktree topology, current
+target identity, selector resolution, create and optional setup, enter/leave,
+delete `Completed`/`Scheduled` outcomes, transition lifecycle, structured
+operational errors, and Worktree operation/setup identities. Desktop must adapt
+those contracts rather than reproduce selector matching, target authority,
+setup orchestration, transition scheduling, or mutation ordering.
+
+Desktop Worktree requires four explicit seams:
+
+- Delete confirmation needs one typed, target-local preview operation with
+  exhaustive `Clean`, `Dirty`, and `Unknown` results. `Dirty` carries the
+  modified/untracked file count; `Unknown` carries an authoritative diagnostic.
+  Preview creates no lock, reservation, or revision. Actual Delete rechecks
+  cleanliness through the same authoritative evaluator.
+- Create failures need typed field ownership for Base ref. Blank, validation,
+  and authoritative Git failures owned by Base ref must be distinguishable from
+  form-level failures without parsing diagnostic text.
+- Desktop needs a typed Worktree API adapter covering the existing topology,
+  mutation, setup, and transition contracts plus the two missing contracts
+  above. React remains presentation-only and does not acquire Worktree business
+  rules.
+- Desktop Chat needs one authoritative runtime-state projection for current
+  execution target, reconnect hydration, and later transition outcomes.
+  Worktree UI must not introduce a local current-target authority or infer
+  completion from its initiating request.
+
+The Worktree surface uses explicit reads and mutation-triggered refreshes. It
+adds no polling, speculative reconnect recovery, client-wide mutation lock, or
+client-retained operation replay. Desktop Worktree transport uses domain-owned
+Worktree operation and setup identities, not generic client request identity.
+
 ## Confirmed Product/Contract Decisions Needed
 
 ### Reviewer Feedback Projection
@@ -86,36 +125,23 @@ Desktop also intentionally omits `/ps logs`. Killable rows expose an always-visi
 
 ### Session Destination Scope
 
-The server list is project-scoped. A Home Sessions destination could be:
-
-- Project-scoped.
-- Global across projects.
-- A global shell with project grouping/filtering.
-
-A global destination requires a deliberate server read model and cursor contract; the client must not fetch every project and merge pages in memory.
+The Sessions destination is project-scoped and consumes the existing typed
+project/category cursor page. Desktop adds no all-Project feed, grouping layer,
+or client merge.
 
 ### Session Summary Shape
 
-The existing summary is sufficient for the TUI recency picker but may be too sparse for a desktop session browser. Candidate additions include:
-
-- Project and workspace identity.
-- Task/workflow/run association.
-- Runtime activity.
-- Pending attention.
-- Session target availability.
-- Model/provider facts.
-
-The owning server read model and update mechanism must be decided before adding fields opportunistically.
+The existing `SessionSummary` is sufficient for the locked Desktop row: Session
+identity, category, name, first-prompt preview, and recency. Desktop does not
+widen the list read model with target availability, workflow/task linkage,
+runtime activity, attention, model/provider facts, or workspace identity.
 
 ### Live Session-List Updates
 
-No session-list subscription exists. The design must choose between:
-
-- Explicit refresh plus reconnect refresh.
-- Server invalidation events followed by page refresh.
-- A session-index subscription with typed change events.
-
-The client must not infer liveness from transcript rows or maintain a second activity authority.
+Desktop copies the TUI's read behavior and adds no Session-list subscription or
+polling loop. Entry and category changes read authoritative pages, reconnect
+invalidates visible pages, and local Session materialization invalidates the
+owning Project list. The client does not infer list state from transcript rows.
 
 ### Queue Item Editing
 
@@ -127,7 +153,10 @@ The TUI specification's unbounded in-memory pending queues violate the repositor
 
 ### Prompt History
 
-The TUI receives server-supplied history during its attach flow and records history through runtime control. The desktop route does not have an exposed adapter or confirmed standalone history-read operation. The required read contract and storage cap must be verified after BUI-186.
+Prompt history storage is capped at the newest 100 entries by completed task
+`BUI-186`. TUI attach receives that bounded history through Session launch.
+Desktop still needs a typed read projection and adapter for ordinary existing
+and lazy Chat composers; it must not trim or reconstruct history client-side.
 
 ### Repository Path Suggestions
 
@@ -151,11 +180,18 @@ The ratified desktop flow keeps TUI's zero-form and lazy semantics:
 
 - primary creation uses the project default workspace;
 - an alternate sidebar destination uses the existing cursor-paginated project workspace list;
+- each Project workspace owns at most one outstanding lazy draft, and reopening
+  New Chat for that workspace resumes it;
 - worktree selection remains post-open;
 - no name/model/provider/role fields are added;
 - no durable session exists until the first agentic trigger.
 
 Current `SessionLaunchService.PlanSession` creates an independent session plan but `server/launch.Planner.createSession` calls `EnsureDurable` before first model use. That code/spec drift must be resolved at the server ownership boundary rather than hidden by a desktop-only workaround.
+
+The server therefore needs a workspace-owned draft aggregate that survives
+navigation, detach, relaunch, and server restart, and is consumed into exactly
+one Session when the first agentic trigger materializes it. Desktop must not
+create a Drafts list, orphan drafts, or a per-window persistence authority.
 
 ### Thinking Status And Reasoning Traces
 
@@ -296,7 +332,7 @@ surfaced. Once Goal work is accepted, later provider, tool, or runtime failure
 uses ordinary Session failure behavior and leaves the Session and Goal intact.
 
 The current Task Description Markdown field is feature-local. Goal must not copy
-it. The editor/read-view, overflow, Markdown, focus, accessibility, and draft
+it. The editor/read-view, overflow, Markdown, focus, and draft
 reconciliation behavior need one shared UI-kit module used by both Task Detail
 and Goal. Save and Goal lifecycle controls remain outside that field.
 
@@ -342,7 +378,12 @@ The owning implementation task also requires a developer-only browser fixture th
 
 ### Rollback/Fork Entry Point
 
-The transcript page exposes rollback candidates, and session transitions can fork. A per-message desktop affordance needs a server-authoritative eligibility fact; the client must not infer candidate eligibility from row text or type alone.
+The transcript page exposes typed rollback eligibility, and the existing
+Session transition immediately creates and opens a durable child whose history
+ends before the selected user message. Desktop replaces only the TUI picker
+with the row's Edit action. The server must enforce the TUI active-work
+admission rule; the client must not infer eligibility or become the sole
+blocker.
 
 ### Committed Message Timestamps
 
@@ -372,13 +413,16 @@ Correct arbitrary byte slices are not independently projectable. Assistant tool 
 
 JSONL-backed desktop transcript pages therefore remain compaction segments. The design rejects a JSONL side index, resumable projector checkpoints, cumulative row-offset cursor, and persisted page markers. A roughly 100-row cursor page belongs to the SQLite transcript storage/read-model migration.
 
+That SQLite migration is not a prerequisite or task in the Desktop
+Sessions/Chat initiative. Initial Desktop Chat consumes the existing bounded
+compaction-segment cursor contract.
+
 ## Contracts Requiring Revalidation Before Implementation
 
 - Transcript message union shape after KENT-257.
 - Hydration ownership and subscription sequencing after KENT-258.
-- Queue failure presentation after KENT-272.
-- Prompt-history read/write contract after BUI-186.
-- Session-picker update metadata after KENT-278.
+- Runtime mutation contracts after KENT-346 removes generic request identity
+  and reconciliation.
 - Protocol version at the start of each contract-changing task.
 - Exact TanStack Query `maxPages` retention and resolved Virtual package versions before transcript-list implementation.
 

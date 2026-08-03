@@ -71,6 +71,23 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, activeRoute, serverapi.SessionMainViewRequest{SessionID: fixture.foreignSessionID}); err == nil {
 		t.Fatal("active project foreign session unexpectedly allowed")
 	}
+	deletePreviewRoute := routeForTest(t, protocol.MethodWorktreeDeletePreview)
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		deletePreviewRoute,
+		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.ownSessionID, Selector: "feature"},
+	); err != nil {
+		t.Fatalf("active project own delete preview: %v", err)
+	}
+	if err := executor.authorizeScope(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		deletePreviewRoute,
+		serverapi.WorktreeDeletePreviewRequest{SessionID: fixture.foreignSessionID, Selector: "feature"},
+	); err == nil {
+		t.Fatal("active project foreign delete preview unexpectedly allowed")
+	}
 	transcriptPageRoute := routeForTest(t, protocol.MethodSessionGetTranscriptPage)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, transcriptPageRoute, serverapi.SessionTranscriptPageRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("active project own transcript page: %v", err)

@@ -152,7 +152,7 @@ export type PendingAsk = Readonly<{
   sessionID: string;
   question: string;
   suggestions: readonly string[];
-  recommendedOptionIndex: number;
+  recommendedOptionIndex: number | null;
   createdAt: string;
 }>;
 

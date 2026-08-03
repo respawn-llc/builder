@@ -16,8 +16,14 @@ export type RpcCallOptions = Readonly<{
   timeoutMs?: number | null;
 }>;
 
+export type RpcDedicatedCallOptions = RpcCallOptions &
+  Readonly<{
+    signal?: AbortSignal;
+  }>;
+
 export type RpcTransport = Readonly<{
   connection: ConnectionStore;
   call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown>;
+  callDedicated(method: string, params: JsonValue, options?: RpcDedicatedCallOptions): Promise<unknown>;
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription;
 }>;

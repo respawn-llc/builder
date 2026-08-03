@@ -3653,6 +3653,11 @@ WHERE task_id = sqlc.arg(task_id)
   )
   AND scheduling_state = 'interrupted';
 
+-- name: AcquireManualMoveTaskWriteLock :execrows
+UPDATE tasks
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = sqlc.arg(task_id);
+
 
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (

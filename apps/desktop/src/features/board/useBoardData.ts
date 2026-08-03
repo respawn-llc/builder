@@ -9,9 +9,10 @@ import {
 import { useCallback, useEffect } from "react";
 
 import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
-import { queryKeys } from "@/app-facade";
+import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
+import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
@@ -165,10 +166,16 @@ export function useProjectBoardSubscription(
         queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
       ]);
     }
+    async function refreshTaskSearch(): Promise<void> {
+      await invalidateProjectTaskSearches(queryClient, projectID);
+    }
+    async function refreshSubscriptionBoundary(): Promise<void> {
+      await Promise.all([refresh(), refreshTaskSearch()]);
+    }
     const subscription = api.subscribeProject(projectID, {
       onOpen() {
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refresh().catch(consumeBackgroundError);
+        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
       },
       onEvent(event) {
         void labelEffects.consumeProjectEvent(event).catch(consumeBackgroundError);
@@ -176,18 +183,21 @@ export function useProjectBoardSubscription(
           onSelectedTaskDeleted?.();
         }
         void refreshQuestionTask(event).catch(consumeBackgroundError);
+        if (workflowProjectEventCanChangeTaskSearch(event)) {
+          void refreshTaskSearch().catch(consumeBackgroundError);
+        }
         if (shouldRefreshBoardFromProjectEvent(event, boardQueryWorkflowID, selectedWorkflowID)) {
           void refresh().catch(consumeBackgroundError);
         }
       },
       onComplete() {
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refresh().catch(consumeBackgroundError);
+        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
       },
       onError(error) {
         consumeBackgroundError(error);
         void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refresh().catch(consumeBackgroundError);
+        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
       },
     });
     return () => {
@@ -233,14 +243,17 @@ export function shouldRefreshBoardFromProjectEvent(
   );
 }
 
-export function useBoardTaskActions() {
+export function useBoardTaskActions(projectID: string) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const boardGeneration = useBoardFilterGeneration();
   const refresh = useCallback(async (): Promise<void> => {
     const activeGeneration = boardGeneration.controller.getSnapshot().active.generation;
-    await boardGeneration.queryRegistry.invalidateGeneration(activeGeneration);
-  }, [boardGeneration.controller, boardGeneration.queryRegistry]);
+    await Promise.all([
+      boardGeneration.queryRegistry.invalidateGeneration(activeGeneration),
+      invalidateProjectTaskSearches(queryClient, projectID),
+    ]);
+  }, [boardGeneration.controller, boardGeneration.queryRegistry, projectID, queryClient]);
   const refreshAfterTaskDelete = useCallback(
     async (taskID: string): Promise<void> => {
       await Promise.all([

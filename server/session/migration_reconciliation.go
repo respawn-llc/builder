@@ -143,23 +143,9 @@ func (s *Store) currentEventLogReconciliationObservation(
 		))
 		return currentEventLogReconciliationObservation{}, err
 	}
-	var matchErr error
-	window, err := log.readNewestSegmentBackward(
-		activeTailReverseChunkBytes,
-		func(record EventRecord) bool {
-			kind, err := record.Kind()
-			if err != nil {
-				matchErr = err
-				return true
-			}
-			return kind == EventKindHistoryReplace
-		},
-	)
+	window, err := log.readActiveSegment()
 	if err != nil {
 		return currentEventLogReconciliationObservation{}, err
-	}
-	if matchErr != nil {
-		return currentEventLogReconciliationObservation{}, matchErr
 	}
 	established := false
 	var latestCompactionSequence *int64

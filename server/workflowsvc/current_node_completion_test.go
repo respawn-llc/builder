@@ -245,6 +245,53 @@ func TestAnswerWorkflowTaskQuestionRejectsConflictingIdempotentPayload(t *testin
 	}
 }
 
+func TestAnswerWorkflowTaskQuestionMemoizesAcceptanceBeforeCanceledSuccessorWait(t *testing.T) {
+	successorWaitStarted := make(chan struct{}, 2)
+	releaseSuccessor := make(chan struct{})
+	execution := &currentNodeCompletionExecutionStub{
+		questionAcceptance: workflowQuestionAcceptanceFunc(func(ctx context.Context) error {
+			successorWaitStarted <- struct{}{}
+			select {
+			case <-releaseSuccessor:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}),
+	}
+	service := currentNodeCompletionService(execution)
+	request := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "question-request-canceled-successor",
+		TaskID:          "task-question",
+		AskID:           "ask-question",
+		Answer:          "continue",
+	}
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- service.AnswerWorkflowTaskQuestion(firstCtx, request)
+	}()
+	<-successorWaitStarted
+	cancelFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first canceled answer error = %v, want context cancellation", err)
+	}
+
+	retryDone := make(chan error, 1)
+	go func() {
+		retryDone <- service.AnswerWorkflowTaskQuestion(context.Background(), request)
+	}()
+	<-successorWaitStarted
+	if execution.questionAcceptCalls != 1 {
+		t.Fatalf("accepted answers = %d, want one memoized acceptance", execution.questionAcceptCalls)
+	}
+	close(releaseSuccessor)
+	if err := <-retryDone; err != nil {
+		t.Fatalf("retry accepted answer: %v", err)
+	}
+}
+
 func TestWorkflowTaskQuestionAnswerContractHasNoRunFields(t *testing.T) {
 	for _, contract := range []reflect.Type{
 		reflect.TypeOf(serverapi.WorkflowTaskQuestionAnswerRequest{}),
@@ -262,7 +309,7 @@ func currentNodeCompletionService(execution *currentNodeCompletionExecutionStub)
 	return &Service{
 		readModels:           ReadModels{TaskDetail: currentNodeCompletionUnavailableTaskDetail{}},
 		currentNodeExecution: execution,
-		questionMemo:         requestmemo.New[taskQuestionAnswerMemoRequest, struct{}](),
+		questionMemo:         requestmemo.New[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance](),
 	}
 }
 
@@ -303,6 +350,14 @@ type currentNodeCompletionExecutionStub struct {
 	questionSubmitErr   error
 	questionErr         error
 	approvalPreparation *workflowexecution.LaunchPreparation
+	questionAcceptance  workflowexecution.WorkflowQuestionAcceptance
+	questionAcceptCalls int
+}
+
+type workflowQuestionAcceptanceFunc func(context.Context) error
+
+func (f workflowQuestionAcceptanceFunc) AwaitSuccessor(ctx context.Context) error {
+	return f(ctx)
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTaskWithPreparation(
@@ -389,12 +444,25 @@ func (*currentNodeCompletionExecutionStub) EnsureTaskQuiescent(workflow.TaskID) 
 	return nil
 }
 
-func (s *currentNodeCompletionExecutionStub) AnswerWorkflowQuestion(_ context.Context, taskID workflow.TaskID, askID string, response askquestion.AskQuestionResponse, submitErr error) error {
+func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(
+	_ context.Context,
+	taskID workflow.TaskID,
+	askID string,
+	response askquestion.AskQuestionResponse,
+	submitErr error,
+) (workflowexecution.WorkflowQuestionAcceptance, error) {
+	s.questionAcceptCalls++
 	s.questionTaskID = taskID
 	s.questionAskID = askID
 	s.questionResponse = response
 	s.questionSubmitErr = submitErr
-	return s.questionErr
+	if s.questionErr != nil {
+		return nil, s.questionErr
+	}
+	if s.questionAcceptance != nil {
+		return s.questionAcceptance, nil
+	}
+	return workflowQuestionAcceptanceFunc(func(context.Context) error { return nil }), nil
 }
 
 func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(_ context.Context, sessionID runtimeids.SessionID, _ string, _ map[string]string, _ string) (workflowstore.CurrentNodeCompletionResult, error) {

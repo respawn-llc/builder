@@ -40,6 +40,21 @@ func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg Acq
 	return result.RowsAffected()
 }
 
+const acquireManualMoveTaskWriteLock = `-- name: AcquireManualMoveTaskWriteLock :execrows
+UPDATE tasks
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = ?1
+`
+
+func (q *Queries) AcquireManualMoveTaskWriteLock(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireManualMoveTaskWriteLock, taskID)
+	err = recordQueryError(ctx, err, acquireManualMoveTaskWriteLock, 1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const acquireProjectDeleteWriteLock = `-- name: AcquireProjectDeleteWriteLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms

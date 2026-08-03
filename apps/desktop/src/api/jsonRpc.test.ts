@@ -143,6 +143,51 @@ describe("JsonRpcWebSocketTransport", () => {
     });
   });
 
+  it("runs dedicated calls on a one-use socket without disturbing the control socket", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const readiness = transport.call("server.readiness.get", {});
+    const controlSocket = sockets[0] ?? failTest("control socket missing");
+    controlSocket.open();
+    await waitForSent(controlSocket, 1);
+    ack(controlSocket, 0);
+    await waitForSent(controlSocket, 2);
+    ack(controlSocket, 1);
+    await expect(readiness).resolves.toEqual({});
+
+    const search = transport.callDedicated("workflow.task.search", { query: "needle" });
+    const dedicatedSocket = sockets[1] ?? failTest("dedicated socket missing");
+    dedicatedSocket.open();
+    await waitForSent(dedicatedSocket, 1);
+    ack(dedicatedSocket, 0);
+    await waitForSent(dedicatedSocket, 2);
+    expect(frame(dedicatedSocket, 1)).toMatchObject({ method: "workflow.task.search" });
+    ack(dedicatedSocket, 1);
+
+    await expect(search).resolves.toEqual({});
+    expect(dedicatedSocket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(controlSocket.readyState).toBe(MockWebSocket.OPEN);
+  });
+
+  it("cancels a dedicated call by closing only its socket", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const controller = new AbortController();
+    const search = transport.callDedicated(
+      "workflow.task.search",
+      { query: "needle" },
+      { signal: controller.signal },
+    );
+    const socket = sockets[0] ?? failTest("dedicated socket missing");
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+
+    controller.abort();
+
+    await expect(search).rejects.toThrow("canceled");
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
   it("falls back to a generic RPC error when error data is missing", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const request = transport.call("workflow.project.label.create", {

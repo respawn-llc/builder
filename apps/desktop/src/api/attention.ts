@@ -15,6 +15,7 @@ export type QuestionAttentionItem = AttentionItemBase &
     kind: "question";
     currentNode: TaskCurrentNode;
     sessionID: string | null;
+    sessionName: string | null;
     questionID: string;
     message: string;
     suggestions: readonly string[];

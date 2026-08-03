@@ -10,6 +10,7 @@ import { createAppQueryClient } from "./queryClient";
 import type { AppServices } from "@/app-facade";
 import { AppServicesProvider } from "@/app-facade";
 import { StatusProvider } from "@/app-facade";
+import { TaskSearchMemoryProvider } from "@/app-facade";
 import { WindowChromeTitleProvider } from "@/app-facade";
 
 void initializeI18n();
@@ -28,9 +29,11 @@ export function AppProviders({ services, children }: AppProvidersProps) {
         <AppServicesProvider services={services}>
           <WindowChromeTitleProvider>
             <StatusProvider>
-              <ReconnectRefresh />
-              <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
-              {children}
+              <TaskSearchMemoryProvider>
+                <ReconnectRefresh />
+                <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
+                {children}
+              </TaskSearchMemoryProvider>
             </StatusProvider>
           </WindowChromeTitleProvider>
         </AppServicesProvider>

@@ -8,6 +8,7 @@ import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
+import { taskStatusTone } from "@/shared/task-status";
 import {
   Button,
   Island,
@@ -18,7 +19,6 @@ import {
 } from "@/ui";
 import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
-import { taskStatusTone } from "./taskStatusTone";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskDetailLabels } from "./TaskDetailLabels";
 import { TaskPropertyLine } from "./TaskPropertyLine";

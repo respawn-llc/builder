@@ -19,7 +19,16 @@ type ManualMovePreparation struct {
 	currentNodes            []workflow.CurrentNode
 	noOp                    bool
 	requiresExecutionTarget bool
+	targetShape             map[workflow.EdgeID]manualMoveTargetShape
 }
+
+type manualMoveTargetShape struct {
+	nodeID     workflow.NodeID
+	kind       workflow.NodeKind
+	scriptPath workflow.OptionalScriptPath
+}
+
+var errManualMoveTargetShapeChanged = errors.New("manual move target shape changed after execution-target preparation")
 
 func (p ManualMovePreparation) RequiresExecutionTarget() bool {
 	return p.requiresExecutionTarget
@@ -72,12 +81,17 @@ func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (M
 			return ManualMovePreparation{}, err
 		}
 		choice := preview.Choices[0]
+		targetShape, err := s.manualMoveTargetShape(ctx, req.TaskID, choice)
+		if err != nil {
+			return ManualMovePreparation{}, err
+		}
 		return ManualMovePreparation{
 			request:                 req,
 			target:                  target,
 			choice:                  &choice,
 			requiresExecutionTarget: executableNodeKind(target.Kind()),
 			currentNodes:            preview.CurrentNodes,
+			targetShape:             targetShape,
 		}, nil
 	case ManualMovePreviewOutcomeBlocked:
 		return ManualMovePreparation{}, manualMovePreviewBlockerError(preview.Blocker)
@@ -108,6 +122,13 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	locked, err := q.AcquireManualMoveTaskWriteLock(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if locked != 1 {
+		return ManualMoveResult{}, sql.ErrNoRows
+	}
 	task, err := q.GetTask(ctx, string(prepared.request.TaskID))
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -145,12 +166,18 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
+	if targetDefinition.Kind() != prepared.target.Kind() {
+		return ManualMoveResult{}, errManualMoveTargetShapeChanged
+	}
 	var targets []workflow.CurrentNode
 	if executableNodeKind(targetDefinition.Kind()) {
 		if len(preview.Choices) != 1 {
 			return ManualMoveResult{}, ErrManualMoveTransitionSelectionRequired
 		}
 		choice := preview.Choices[0]
+		if err := validatePreparedManualMoveTargetShape(definition, choice, prepared.targetShape); err != nil {
+			return ManualMoveResult{}, err
+		}
 		valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
 		if err != nil {
 			return ManualMoveResult{}, err
@@ -225,6 +252,62 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		return ManualMoveResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) manualMoveTargetShape(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	choice ManualMoveTransitionChoice,
+) (map[workflow.EdgeID]manualMoveTargetShape, error) {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return nil, err
+	}
+	definition, _, err := workflowDefinitionFromQueries(ctx, s.queries, runtimeids.WorkflowID(task.WorkflowID))
+	if err != nil {
+		return nil, err
+	}
+	targetShape := make(map[workflow.EdgeID]manualMoveTargetShape, len(choice.Edges))
+	for _, edge := range choice.Edges {
+		targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := targetShape[edge.ID]; exists {
+			return nil, fmt.Errorf("manual move target preparation contains duplicate edge %q", edge.ID)
+		}
+		targetShape[edge.ID] = manualMoveTargetShape{
+			nodeID:     edge.TargetNodeID,
+			kind:       targetNode.Kind(),
+			scriptPath: workflow.NodeScriptPath(targetNode),
+		}
+	}
+	return targetShape, nil
+}
+
+func validatePreparedManualMoveTargetShape(
+	definition workflow.Definition,
+	choice ManualMoveTransitionChoice,
+	prepared map[workflow.EdgeID]manualMoveTargetShape,
+) error {
+	if len(choice.Edges) != len(prepared) {
+		return errManualMoveTargetShapeChanged
+	}
+	for _, edge := range choice.Edges {
+		expected, exists := prepared[edge.ID]
+		if !exists || expected.nodeID != edge.TargetNodeID {
+			return errManualMoveTargetShapeChanged
+		}
+		targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return err
+		}
+		if targetNode.Kind() != expected.kind ||
+			workflow.NodeScriptPath(targetNode) != expected.scriptPath {
+			return errManualMoveTargetShapeChanged
+		}
+	}
+	return nil
 }
 
 func manualMovePreviewBlockerError(blocker ManualMoveBlocker) error {

@@ -117,14 +117,14 @@ func captureSessionRequest(
 	}
 	defer func() { _ = md.Close() }()
 
-	store, err := session.OpenByID(
-		persistenceRoot,
-		sessionID,
-		md.AuthoritativeSessionStoreOptions()...,
-	)
+	diagnosticCopy, err := session.OpenDiagnosticSessionCopy(ctx, md, sessionID)
 	if err != nil {
-		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
+		return capturedRequest{}, fmt.Errorf("open isolated diagnostic Session copy: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, diagnosticCopy.Close())
+	}()
+	store := diagnosticCopy.Store()
 	meta := store.Meta()
 	bootstrap, err := launch.ResolveBootstrapPlan(persistenceRoot, launch.BootstrapRequest{SessionID: sessionID})
 	if err != nil {

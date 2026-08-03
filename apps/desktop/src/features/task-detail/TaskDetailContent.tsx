@@ -88,7 +88,7 @@ export function TaskDetailContent({
     setDescriptionPresentation(initialDescriptionPresentationState);
     setQuestionSelections(new Map());
   }
-  const update = useUpdateTask(detail.id);
+  const update = useUpdateTask(detail.id, detail.projectID);
   const reportActionError = useCallback(
     (action: "dependency_remove" | "interrupt", error: unknown) => {
       const notice =

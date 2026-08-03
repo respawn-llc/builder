@@ -258,6 +258,8 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		*taskAttention.Items[0].Message != question.request.Question ||
 		taskAttention.Items[0].SessionID == nil ||
 		*taskAttention.Items[0].SessionID != question.sessionID.String() ||
+		taskAttention.Items[0].SessionName == nil ||
+		*taskAttention.Items[0].SessionName != "Current Node session" ||
 		taskAttention.Items[0].CurrentNode == nil ||
 		taskAttention.Items[0].CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("question attention = %+v", taskAttention.Items)

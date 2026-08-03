@@ -11,6 +11,10 @@ export function workflowProjectQuestionTaskID(event: WorkflowProjectEvent): stri
   return event.primaryEntityID;
 }
 
+export function workflowProjectEventCanChangeTaskSearch(event: WorkflowProjectEvent): boolean {
+  return event.resource === "task" || (event.resource === "workflow" && event.action === "deleted");
+}
+
 // workflowProjectEventAffectsTask reports whether a project event mutates the
 // given task in a way that changes its detail representation. The server emits
 // every task-affecting action with the task as its typed primary entity, so

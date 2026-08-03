@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"core/server/llm"
@@ -15,15 +16,35 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestPersistedWorkflowAssignmentReportsCommitReceiptThroughCompletion(t *testing.T) {
-	t.Run("uncommitted append failure", func(t *testing.T) {
+func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
+	t.Run("preparation failure is returned directly", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		mustBlockTestEventLogAppends(t, store)
 
-		steer, err := SteerPersistedWorkflowAssignment(store, workflowAssignmentForCommitReceiptTest())
-		if err != nil {
-			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
+		_, err := SteerPersistedWorkflowAssignment(
+			store,
+			workflowAssignmentForCommitReceiptTest(),
+			persistedWorkflowAssignmentContextForTest(t),
+		)
+		if err == nil {
+			t.Fatal("SteerPersistedWorkflowAssignment did not return preparation failure")
 		}
+	})
+
+	t.Run("uncommitted assignment append failure", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
+		engine, err := newPersistedSteeringEngine(store)
+		if err != nil {
+			t.Fatalf("prepare persisted steering engine: %v", err)
+		}
+		message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCommitReceiptTest())
+		if err != nil {
+			t.Fatalf("build workflow assignment: %v", err)
+		}
+		mustBlockTestEventLogAppends(t, store)
+
+		steer := completePersistedWorkflowAssignment(engine, message)
 		receipt, waitErr := steer.Wait(t.Context())
 		if waitErr == nil {
 			t.Fatal("workflow assignment completion did not surface append failure")
@@ -37,9 +58,14 @@ func TestPersistedWorkflowAssignmentReportsCommitReceiptThroughCompletion(t *tes
 		observerErr := errors.New("workflow assignment observer failed")
 		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
 		gate.FailNext(observerErr)
 
-		steer, err := SteerPersistedWorkflowAssignment(store, workflowAssignmentForCommitReceiptTest())
+		steer, err := SteerPersistedWorkflowAssignment(
+			store,
+			workflowAssignmentForCommitReceiptTest(),
+			persistedWorkflowAssignmentContextForTest(t),
+		)
 		if err != nil {
 			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
 		}
@@ -51,6 +77,58 @@ func TestPersistedWorkflowAssignmentReportsCommitReceiptThroughCompletion(t *tes
 			t.Fatalf("workflow assignment receipt = %+v, want committed", receipt)
 		}
 	})
+}
+
+func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
+	store := mustCreateTestSession(t)
+	assignment := workflowAssignmentForCommitReceiptTest()
+	message, err := buildWorkflowAssignmentMessage(assignment)
+	if err != nil {
+		t.Fatalf("build workflow assignment: %v", err)
+	}
+	receipt, err := SteerPersistedMessage(store, "", message)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("seed existing workflow assignment = %+v, %v; want committed", receipt, err)
+	}
+
+	steer, err := SteerPersistedWorkflowAssignment(
+		store,
+		assignment,
+		persistedWorkflowAssignmentContextForTest(t),
+	)
+	if err != nil {
+		t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
+	}
+	if receipt, err := steer.Wait(t.Context()); err != nil || !receipt.Committed {
+		t.Fatalf("wait for workflow assignment = %+v, %v; want committed", receipt, err)
+	}
+
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	recent, err := eventLog.ReadRecentRecords(10)
+	if err != nil {
+		t.Fatalf("read recent records: %v", err)
+	}
+	messageTypes := make([]session.MessageType, 0, len(recent.Records))
+	for _, record := range recent.Records {
+		payload, err := record.Payload()
+		if err != nil {
+			t.Fatalf("read event payload: %v", err)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok && message.MessageType != nil {
+			messageTypes = append(messageTypes, *message.MessageType)
+		}
+	}
+	want := []session.MessageType{
+		session.MessageTypeWorkflowMode,
+		session.MessageTypeWorkflowMode,
+	}
+	if !slices.Equal(messageTypes, want) {
+		t.Fatalf("existing Session message types = %v, want assignments only %v", messageTypes, want)
+	}
 }
 
 func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
@@ -70,6 +148,27 @@ func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
 				NodePrompt:  "Perform the assigned workflow step.",
 			},
 		},
+	}
+}
+
+func persistedWorkflowAssignmentContextForTest(t *testing.T) PersistedWorkflowAssignmentContext {
+	t.Helper()
+	return PersistedWorkflowAssignmentContext{
+		Workdir:         t.TempDir(),
+		GlobalConfigDir: t.TempDir(),
+		Model:           "gpt-5",
+	}
+}
+
+func seedPersistedWorkflowBaseContextForCommitReceiptTest(t *testing.T, store *session.Store) {
+	t.Helper()
+	receipt, err := SteerPersistedMessage(store, "", llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeEnvironment),
+		Content:     textutil.Value("test environment context"),
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("seed persisted workflow base context = %+v, %v; want committed", receipt, err)
 	}
 }
 

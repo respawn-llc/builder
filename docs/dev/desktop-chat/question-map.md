@@ -16,13 +16,14 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Sessions and Subagents use category filter chips over one project-scoped virtualized list.
 - The browser uses dense full-width rows with title, first-prompt preview, and recency.
 - The browser stays recency ordered and adds no search or additional status filters.
-- Row click opens full-page chat and secondary actions use a context menu. Pop-out trigger placement is unresolved.
-- Which session classes are visible?
-- Primary New Session uses the project default workspace and opens an empty new-chat destination.
-- New in workspace opens a virtualized cursor-paginated workspace-picker sidebar; worktrees remain post-open.
+- Row click opens full-page Chat. Session rows have no secondary actions or context menu; separate-window access lives only in Chat chrome.
+- `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions. Workflow and headless launch modes create no additional category.
+- Primary New Session uses the Project default workspace and resumes that workspace's outstanding lazy draft, or opens empty when none exists.
+- New in workspace opens a virtualized cursor-paginated workspace-picker sidebar and resumes the selected workspace's outstanding lazy draft when present; worktrees remain post-open.
+- Each Project workspace has at most one outstanding lazy draft. Materialization consumes it into the Session; there is no Drafts destination.
 - New Session has no setup/name/model/provider/role/worktree fields.
 - Creation is lazy: abandoning untouched new chat leaves no durable session; the first agentic trigger materializes it and replaces the route.
-- How are unavailable or detached targets presented?
+- Session rows show no execution-target availability. Opening preserves the recorded target and follows the ordinary Session open, launch, and runtime path without Desktop-specific fallback, retarget, repair, or read-only behavior.
 
 ## 3. Home And Navigation
 
@@ -32,7 +33,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - The base pinned Inbox row has no required badge. An exact nonzero global unresolved count is an optional standalone feature/task backed by an authoritative server aggregate.
 - Home keeps the existing auto-fit responsive behavior: side-by-side when both panes fit and stacked when they do not. The navigation pane is not resizable or drawer-based and gains a semantic maximum width in the side-by-side layout.
 - Selecting a project shows a project workspace with Workflows and Sessions tabs.
-- One window-local last-used Workflows/Sessions tab choice follows navigation between projects; relaunch falls back to Workflows.
+- One last-used Workflows/Sessions tab choice follows navigation between projects and persists with the selected Project across relaunch.
 - The project workspace has a compact sticky header with project identity, Workflows/Sessions control, and contextual Link workflow or New Session action.
 - Project navigation uses compact list rows; title and path each allow two lines, and selection elevates the row by one island level.
 - The project Workflows tab contains project-workflow links; sessions are a parallel project-owned collection. Selecting either row enters its full-screen destination.
@@ -40,9 +41,11 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Workflow definitions leave primary navigation. The reusable Workflow Library remains a secondary `Manage workflows` destination from the Link workflow flow.
 - Link workflow opens the existing overlay with Create workflow and Manage workflows header actions.
 - Chat supports a standalone route, native pop-out, adaptive master-detail, and sidebar/overlay hosting.
+- Pop-out moves Chat into one Session-specific native window and returns the main window to that Project's Sessions tab.
+- The main window may later open the same Session normally alongside its pop-out. It neither focuses nor closes the existing pop-out, and a Session has at most one native pop-out.
 - Task Detail's `Open Chat` navigates to the standalone route.
 - Inbox items continue opening Task Detail in the existing overlay sidebar.
-- What route and scroll/composer state restore after relaunch?
+- Relaunch restores the selected Project and active Workflows/Sessions tab, but never reopens Chat or restores Chat transcript/composer presentation state.
 - Standalone route and native pop-out are the foundational hosting surfaces.
 
 ## 4. Chat Surface Layout
@@ -57,7 +60,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Expansion is row-local presentation state and resets whenever virtualization unmounts the row. Chat has no separate stable-ID expansion registry or persisted expansion marker.
 - Assistant messages remain fully expanded and have no collapse action.
 - Each conversational island has an external footer matching its measured width and role edge. The muted timestamp and all footer actions are always visible.
-- User-message footers contain Copy and one Edit action. Edit forks on submission without rewriting the original session; there is no separate Fork action.
+- Eligible user-message footers contain Copy and one Edit action. Edit immediately creates and opens the TUI-compatible fork child with the selected message as its composer draft; there is no separate Fork action.
 - Assistant-message footers contain Copy only.
 - Message Copy writes the original Markdown source to the clipboard.
 - Footer actions are always-visible icon-only Lucide buttons with accessible names and hover/focus tooltips.
@@ -71,7 +74,7 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Chat uses the existing global sidebar host for explicitly designed capability destinations: `shift` on wide windows and `overlay` on compact windows.
 - Chat adds no embedded host, Chat-specific sidebar runtime, or permanent `custom` destination.
 - Chat has one input-field island containing composer/status elements.
-- Pop-out action placement is unresolved.
+- The separate-window action is icon-only in Chat chrome and appears nowhere in Session rows.
 - Every input/status element must be designed with its own question; no aggregate composition is assumed.
 - Sidebar destination contents, entry actions, placement, sizing, and adaptive behavior.
 - Transcript, pending-work area, prompts, composer, and secondary controls.
@@ -377,66 +380,99 @@ Questions are resolved in dependency order. Later branches should not be specifi
 - Goal stays available with the rest of the bottom row during Question/Approval pickers and does not alter the picker.
 - Process inspection and control.
 - Worktree is a first-class Session execution-target control in the under-composer row.
+- Desktop supports both `/worktree` and `/wt` aliases.
+- Worktree has no `ls` subcommand.
+- Bare `/worktree` and `/wt` open the Worktree list.
+- The picker lists `/worktree` once and keeps `/wt` as an executable hidden alias.
+- `status` opens the list. `new` and `create` open the create state and accept no branch/path arguments.
+- `switch <target>` uses the ordinary Switch action directly without opening the sidebar.
+- `delete [target]`, `remove [target]`, and `rm [target]` open the ordinary delete flow. Omitted target means current Worktree; a supplied selector resolves authoritatively before preview.
+- Malformed or unsupported arguments clear from the composer, change nothing, and use one localized error Sonner. They never create a transcript row or reach the model.
+- Recognized Worktree commands in lazy New Chat follow the same clear + error-Sonner path and never materialize a Session.
 - Untouched lazy New Chat omits Worktree until the Session materializes. Worktree management never materializes the Session.
+- Task-owned Workflow Sessions use the same Worktree controls and mutations as ordinary Sessions. A Session Switch does not rewrite the Task's locked Execution Target, and existing Task/worktree safety blockers remain authoritative.
 - The Worktree control identifies the current concise target and opens the shared adaptive contextual sidebar.
 - Concise target naming is branch name for a branch-backed worktree, Kent display name for a detached or other non-branch worktree, and workspace name for the main workspace.
 - Missing or inaccessible targets preserve their recorded name and add warning iconography/tone. Long names end-truncate; full facts belong in the sidebar.
 - Worktree management is not nested in Settings and does not use a separate full-page destination.
+- Opening the list focuses its first enabled row action, falling back to header `+`; Create focuses Branch or ref.
+- Escape closes delete to list, Create to list, then list-level sidebar. Closing restores focus to the under-composer Worktree control or to the composer for slash-command entry.
 - The sidebar opens directly to a simple complete authoritative topology list. A primary icon-only `+` action in the header opens worktree creation; creation is not a list row.
 - A secondary icon-only Refresh action sits beside `+`. Open performs one fresh list read, successful mutations refresh, and manual Refresh catches out-of-band Git changes. No poll or timer exists.
 - Initial list loading/error uses standard compact Loading and Error + Retry.
+- Reconnection refreshes the authoritative current target and any open Worktree list. Desktop retains no pending Worktree operation to reconstruct or retry and shows no speculative lost-operation warning.
+- Connection loss during Create/setup stops waiting for that request and never retries it. After reconnection, an open Worktree surface returns to a fresh list; retained worktrees appear there, and automatic Switch requires an actual successful Create result.
 - The current row uses the shared UI kit's established selected-list-row treatment, with no bespoke Current badge or marker.
 - Every switchable row has an explicit primary `Switch` action; row activation itself does not switch.
 - Switch copies TUI lifecycle: request-scoped pending only until scheduling acknowledgement, then close the sidebar immediately. Never wait through the Agent Step, never optimistically move selection, and let authoritative target/outcome updates refresh state.
-- An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses the typed outcome and existing model-visible failure Steer.
+- The sidebar remains dismissible during the immediate Switch request, and dismissal does not cancel it.
+- Scheduled acknowledgement and successful completion are silent on Desktop. They show no Sonner or other success notice.
+- An active Agent Step queues the server-owned target change at the ordinary safe boundary before queued user work. Later failure uses Sonner for the typed diagnostic and preserves the existing model-visible failure Steer.
 - The current row omits Switch. A current non-main worktree keeps trash; the main workspace has neither action.
 - Rows use display name as the title. A second line shows branch/ref only when it differs from the title. Rows show no path.
+- At narrow widths, text stays above a separate action line. Rows have no horizontal scroll, overflow menu, hidden actions, or card conversion; long text end-truncates without dropping actions.
 - Before adoption, an External row uses branch name as its title or the final path component when detached. It never shows the full path; ordinary Kent display-name rules apply after adoption.
 - External and Missing are ordinary rows. `External` is a warning-colored chip after the title; `Missing` is an error-colored chip after the title.
 - Every deletable row has an icon-only trash action. Opening its popup performs one typed target-local delete preview with a loading state.
 - Preview reports Clean, Dirty with file count, or Unknown with diagnostic. Dirty/Unknown warnings appear before the action items; List/Status stay free of dirty state.
+- Preview-request failure keeps the popup open with authoritative error-colored plain text and ordinary Close. It shows no Retry, deletion actions, or Sonner; closing and reopening starts a fresh preview.
 - Only branch-backed rows show both `Confirm` and `Confirm + Branch`. Branchless rows show `Confirm` only. The popup remains both confirmation and branch-cleanup selector, with no second dialog.
 - Confirm after Dirty/Unknown authorizes force folder removal; Clean does not. Delete rechecks current state. A clean-to-dirty race refreshes the same popup preview and requires a new informed click, without reservation/revision/locking.
-- Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner. Final outcome refreshes/surfaces failure.
+- Another immediate Delete failure keeps the popup open with the authoritative inline error and restores its existing confirmation actions. Confirm itself is the retry after the blocker is addressed; no separate Retry or Sonner appears.
+- The popup remains dismissible during Delete. Dismissal does not cancel the request; a later failure, including a clean-to-dirty rejection, uses Sonner and never reopens the popup.
+- Delete copies TUI's Completed/Scheduled split. Its popup loads only until one result arrives: Completed closes and refreshes; Scheduled returns to the refreshed list immediately and never keeps a long-lived deletion spinner.
+- Completed deletion, Scheduled deletion, and later successful transition completion show no Sonner or other success notice. Final failure uses Sonner while authoritative outcomes refresh state.
+- A typed Completed result with retained requested branch cleanup or a leftover filesystem root shows one warning Sonner with the branch/root and authoritative diagnostic. It does not reopen the popup.
 - Missing rows cannot Switch and retain trash for stale-record cleanup. Detached available rows can Switch and retain trash without a branch-cleanup choice.
 - The `+` child state is the smart-target create form: Branch or ref first, asynchronous New branch / Existing branch / Detached ref resolution, and no explicit target-kind selector.
 - Branch or ref starts focused and prefills only from the sanitized Session title. Without a usable title it is empty; never fall back to current branch, main, or a generic name.
-- Base ref defaults to HEAD and appears/enables only for New branch. There is no custom path field. Create submits; Back returns to the list.
+- Branch or ref changes resolve after a brief debounce. Only the latest trimmed value may apply; editing clears the prior classification/error and stale responses are discarded.
+- A plain-text line beneath the label shows only a spinner while a nonempty value resolves, with no `Resolving…` copy. Success replaces it with bold `New branch`, `Existing branch`, or `Detached ref`; no chip, badge, or card.
+- Resolution failure replaces that line with the authoritative diagnostic in error-colored plain text, preserves the input, and shows no Sonner.
+- Create pressed before the latest nonempty resolution finishes waits for that result and submits on success. Further editing cancels that pending submit intent. Empty submission shows inline `Branch or ref is required` and sends no request.
+- Base ref defaults to HEAD and appears/enables only for New branch. Every blank, validation, or authoritative Git Base-ref error appears beneath that field. Placement uses typed ownership and never parses diagnostic text. Blank shows `Base ref is required` without submitting.
+- There is no custom path field. Create submits; Back returns to the list.
 - Creation and optional setup use one simple spinner for the complete operation. Do not expose phases, phase labels, percentage, or a progress bar.
-- Setup failure returns immediately to the refreshed list and uses Sonner for the authoritative diagnostic. Preserve the retained worktree; no inline Error, Retry, or automatic deletion.
+- Pre-retention Create failure keeps the form and all entered values intact. Show a non-field-owned authoritative diagnostic as error-colored form-level plain text below the fields, with no Sonner.
+- The Worktree sidebar remains dismissible during creation/setup. Dismissing it does not cancel the submitted operation; creation continues in the background without the sidebar spinner.
+- Reopening during that background operation shows the ordinary fresh list with normal actions. Desktop does not reattach the spinner or add a client-wide mutation lock; server ordering owns concurrent requests.
+- Dismissal does not suppress the ordinary automatic Switch after successful creation/setup. Success remains silent and the authoritative current-target control changes when the Switch applies.
+- Setup failure returns to the refreshed list only while the sidebar remains open. A dismissed sidebar stays closed; Sonner surfaces the diagnostic, and the next open performs its ordinary fresh list read.
+- Preserve the setup-failed worktree; no inline Error, Retry, or automatic deletion.
 - Successful creation completes optional setup and then automatically uses the ordinary Switch operation. If Switch fails, preserve the created worktree, refresh the list, keep the prior Session target, and surface failure without rollback.
+- Worktree remains fully available during Question/Approval pickers and never changes the pending prompt. Target changes use the ordinary server lifecycle before later model work.
 - Review/init/file-backed prompt entry points.
 - Login/logout and account state.
 
 ## 10. Forking And Lineage
 
-- Eligibility rules for user-message Edit.
-- Edit-and-fork composer behavior.
-- Confirmation and naming.
-- Destination transition.
-- Parent/previous-session navigation and lineage presentation.
+- Edit replaces the TUI rollback picker and appears only for a committed user row carrying a typed rollback target.
+- Edit is unavailable while runtime input is blocked or the ordinary composer draft is nonblank; the server owns active-work admission.
+- Edit immediately creates the durable main child with history ending before the selected message. There is no confirmation or naming form.
+- The child uses the existing server name, inherits execution/continuation/locked/worktree context, preserves lineage, and leaves the parent unchanged.
+- Chat opens the child at latest with the selected original text in the focused composer draft.
+- Failure keeps the parent open and unchanged and uses Sonner.
+- `To parent chat` follows previous-Session lineage to the parent at latest. Ordinary Chat continues to omit parent-agent lineage.
 
 ## 11. Failure And Recovery
 
-- Disconnect presentation and action blocking.
-- Transcript sequence-gap recovery.
-- Runtime activation/release failure.
-- Draft persistence failure.
-- Page-load failure at either history edge.
-- Prompt-answer races.
-- Queue/steer/interrupt operation failures.
-- Workspace-target mismatch and unavailable worktrees.
-- Debug fail-fast versus release recovery.
+- Reuse the existing persistent global disconnect/reconnect notice; Chat adds no connection surface. Server mutations are unavailable while disconnected and visible input remains.
+- Reconnect refreshes visible authoritative state, recreates the subscription, and Scratch Rehydrates without replaying ambiguous mutations or showing success feedback.
+- Sequence/subscription continuity loss discards provisional live state and Scratch Rehydrates. Committed content never becomes fake empty/idle state.
+- Initial Retry repeats the complete ordinary Session open path. Missing/inaccessible targets receive no Desktop-specific repair path.
+- A hydrated refresh failure preserves the last authoritative visible state.
+- Transcript edge failure owns only its boundary Retry for the same cursor.
+- Mutation failures preserve the operation's initiating state and use shared status/Sonner feedback without optimistic transcript rows or client replay.
+- Draft-load failure is an initial-open failure. Draft-write or runtime-release failure prevents a controlled navigation/detach/pop-out transition from silently completing.
+- Native pop-out open failure leaves main-window Chat unchanged and uses the existing native-window failure notice.
+- Prompt races and stale results follow the locked picker contract.
+- Impossible states fail fast in development; production uses the owning failure path without placeholders, swallowed errors, or fake success.
 
 ## 12. Accessibility And Input
 
-- Transcript semantics and live-region policy.
-- Screen-reader behavior during streaming.
-- Focus restoration across prompts, sheets, and route changes.
-- Keyboard navigation without hiding primary actions.
-- Reduced motion.
-- Copy/select behavior.
-- High zoom and narrow layouts.
+- Dedicated screen-reader, live-region, ARIA architecture, blind-user QA, and accessibility-only work are outside the initiative.
+- Shared components retain incidental semantics without a Chat-specific accessibility layer.
+- Keep only locked product mechanics: Chat shortcuts, functional focus transitions required by those flows, Copy/select behavior, resizable-window layouts, and already-specified reduced-motion behavior.
 
 ## 13. Delivery And Task Graph
 

@@ -117,6 +117,7 @@ const (
 	MethodWorktreeWorkspaceList                         = "worktree.workspace.list"
 	MethodWorktreeStatus                                = "worktree.status"
 	MethodWorktreeSelectorResolve                       = "worktree.selector.resolve"
+	MethodWorktreeDeletePreview                         = "worktree.deletePreview"
 	MethodWorktreeCreateTargetResolve                   = "worktree.create_target.resolve"
 	MethodWorktreeCreate                                = "worktree.create"
 	MethodWorktreeEnter                                 = "worktree.enter"

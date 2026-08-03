@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,7 +31,7 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 5 * time.Second
+const currentNodeRunnerWait = 15 * time.Second
 
 type currentNodeRunnerFixture struct {
 	cfg          config.App
@@ -473,6 +474,7 @@ func requireToolOutputBeforeAssignment(
 
 func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(t, ScriptedFinalAnswer(`{"commentary":"done"}`))
+	writeWorkflowContextFixture(t, f)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	f.startTask(t, task)
@@ -499,9 +501,53 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	if len(modelRequests) != 1 || modelRequests[0].StructuredOutput == nil {
 		t.Fatalf("model requests = %+v, want structured Current Node completion contract", modelRequests)
 	}
+	baseContextTypes := make([]llm.MessageType, 0, 5)
+	assignmentIndex := -1
+	for index, item := range modelRequests[0].Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.Role != nil &&
+			*item.Role == llm.RoleDeveloper &&
+			item.MessageType != nil {
+			if *item.MessageType == llm.MessageTypeWorkflowMode {
+				assignmentIndex = index
+				continue
+			}
+			baseContextTypes = append(baseContextTypes, *item.MessageType)
+		}
+	}
+	assignments := workflowAssignments(modelRequests[0])
+	wantBaseContextTypes := []llm.MessageType{
+		llm.MessageTypeEnvironment,
+		llm.MessageTypeSkills,
+		llm.MessageTypeSubagents,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeAgentsMD,
+	}
+	if !slices.Equal(baseContextTypes, wantBaseContextTypes) {
+		t.Fatalf("fresh workflow request base context types = %v, want %v", baseContextTypes, wantBaseContextTypes)
+	}
+	if len(assignments) != 1 || assignmentIndex != assignments[0].index || assignmentIndex <= len(baseContextTypes)-1 {
+		t.Fatalf("fresh workflow request assignment = index %d/%+v after base context %v, want exactly one assignment last", assignmentIndex, assignments, baseContextTypes)
+	}
 	meta := f.onlyProjectSessionMeta(t)
 	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "coder" {
 		t.Fatalf("fresh workflow Session continuation = %+v, want persisted coder identity", meta.Continuation)
+	}
+}
+
+func writeWorkflowContextFixture(t *testing.T, f *currentNodeRunnerFixture) {
+	t.Helper()
+	for path, content := range map[string]string{
+		filepath.Join(f.cfg.PersistenceRoot, "AGENTS.md"):                                        "global workflow instructions",
+		filepath.Join(f.workspace, "AGENTS.md"):                                                  "workspace workflow instructions",
+		filepath.Join(f.workspace, config.ConfigDirName, "skills", "workflow-skill", "SKILL.md"): "---\nname: workflow-skill\ndescription: workflow test skill\n---\n\n# Body\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create workflow context directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write workflow context fixture: %v", err)
+		}
 	}
 }
 

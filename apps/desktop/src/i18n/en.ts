@@ -93,6 +93,18 @@ export const englishResources = {
       assignmentFailed: "The label change failed.",
       assignmentRefreshFailed: "The task labels could not be refreshed.",
     },
+    taskSearch: {
+      open: "Search",
+      title: "Search tasks",
+      input: "Search tasks",
+      results: "Task search results",
+      searching: "Searching tasks",
+      failed: "Task search failed.",
+      loadMoreFailed: "More search results could not be loaded.",
+      commentHit: "Comment match",
+      moreHits_one: "{{count}} more hit",
+      moreHits_other: "{{count}} more hits",
+    },
     startup: {
       loadingTitle: "Connecting to Kent service",
       loadingBody: "Checking readiness and authentication state.",

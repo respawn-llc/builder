@@ -271,30 +271,35 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	})
 }
 
-// AnswerWorkflowQuestion delivers an answer only after resolving one exact
+type WorkflowQuestionAcceptance interface {
+	AwaitSuccessor(context.Context) error
+}
+
+// AcceptWorkflowQuestion delivers an answer only after resolving one exact
 // live Authority prompt and proving its Session still owns the same Current
 // Node in durable Task state. Prompt state itself remains volatile.
-func (c *CurrentNodeController) AnswerWorkflowQuestion(
+func (c *CurrentNodeController) AcceptWorkflowQuestion(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	askID string,
 	response askquestion.AskQuestionResponse,
 	submitErr error,
-) error {
+) (WorkflowQuestionAcceptance, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return nil, errors.New("current node workflow controller is required")
 	}
 	if strings.TrimSpace(string(taskID)) == "" {
-		return errors.New("workflow task id is required")
+		return nil, errors.New("workflow task id is required")
 	}
 	askID = strings.TrimSpace(askID)
 	if askID == "" {
-		return errors.New("workflow ask id is required")
+		return nil, errors.New("workflow ask id is required")
 	}
 	if strings.TrimSpace(response.RequestID) != askID {
-		return errors.New("workflow question response does not match ask id")
+		return nil, errors.New("workflow question response does not match ask id")
 	}
-	return c.permit.Run(ctx, func(ctx context.Context) error {
+	var acceptance sessionruntime.PromptResponseAcceptance
+	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		resolution, err := c.authority.ResolvePendingWorkflowPrompt(taskID, askID)
 		if err != nil {
 			return err
@@ -311,8 +316,13 @@ func (c *CurrentNodeController) AnswerWorkflowQuestion(
 			}
 			return err
 		}
-		return c.authority.SubmitPromptResponseForScope(resolution.ScopeID, response, submitErr)
+		acceptance, err = c.authority.AcceptPromptResponseForScope(resolution.ScopeID, response, submitErr)
+		return err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return acceptance, nil
 }
 
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {

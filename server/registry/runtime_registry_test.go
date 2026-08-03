@@ -177,6 +177,162 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	}
 }
 
+func TestSessionTranscriptSubscriptionWaitsForReplacementRuntime(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	sessionID, err := runtimeids.ParseSessionID(engine.SessionID())
+	if err != nil {
+		t.Fatalf("parse runtime Session ID: %v", err)
+	}
+	firstRef, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+	if err != nil {
+		t.Fatalf("first resource reference: %v", err)
+	}
+	registerResource(t, registry, firstRef, engine)
+	first := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	_ = nextTranscriptMessage(t, first)
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(firstRef)); err != nil {
+		t.Fatalf("drain first runtime resource: %v", err)
+	}
+	for {
+		if _, err := first.Next(context.Background()); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("first subscription close error = %v, want EOF", err)
+			}
+			break
+		}
+	}
+
+	type subscribeResult struct {
+		sub serverapi.TranscriptSubscription
+		err error
+	}
+	result := make(chan subscribeResult, 1)
+	subscribeCtx, cancelSubscribe := context.WithCancel(context.Background())
+	defer cancelSubscribe()
+	go func() {
+		sub, err := registry.SubscribeSessionTranscript(
+			subscribeCtx,
+			serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()},
+		)
+		result <- subscribeResult{sub: sub, err: err}
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("replacement subscription returned before runtime wake: %+v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	secondRef, err := runtimeids.NewSessionResourceRef(sessionID, 2)
+	if err != nil {
+		t.Fatalf("second resource reference: %v", err)
+	}
+	registerResource(t, registry, secondRef, engine)
+	t.Cleanup(func() {
+		_ = registry.ResourceDraining(context.Background(), registryTestResource(secondRef))
+	})
+	var replacement serverapi.TranscriptSubscription
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("replacement subscription: %v", got.err)
+		}
+		replacement = got.sub
+	case <-time.After(time.Second):
+		t.Fatal("replacement runtime wake did not open transcript subscription")
+	}
+	defer func() { _ = replacement.Close() }()
+	if hydration := nextTranscriptMessage(t, replacement); hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("replacement first message = %+v, want hydration", hydration)
+	}
+}
+
+func TestSessionTranscriptSubscriptionRacingInitialRuntimeReadyHydrates(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	type subscribeResult struct {
+		sub serverapi.TranscriptSubscription
+		err error
+	}
+	result := make(chan subscribeResult, 1)
+	subscribeCtx, cancelSubscribe := context.WithCancel(context.Background())
+	defer cancelSubscribe()
+	go func() {
+		sub, err := registry.SubscribeSessionTranscript(
+			subscribeCtx,
+			serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()},
+		)
+		result <- subscribeResult{sub: sub, err: err}
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("initial subscription returned before runtime wake: %+v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() {
+		_ = registry.ResourceDraining(
+			context.Background(),
+			registryTestResource(registryTestResourceRef(engine.SessionID())),
+		)
+	})
+	var subscription serverapi.TranscriptSubscription
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("initial subscription after runtime wake: %v", got.err)
+		}
+		subscription = got.sub
+	case <-time.After(time.Second):
+		t.Fatal("initial runtime wake did not open transcript subscription")
+	}
+	defer func() { _ = subscription.Close() }()
+	if hydration := nextTranscriptMessage(t, subscription); hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("initial first message = %+v, want hydration", hydration)
+	}
+}
+
+func TestSessionTranscriptSubscriptionWaitStopsWithContext(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := runtimeids.NewSessionID().String()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := registry.SubscribeSessionTranscript(
+			ctx,
+			serverapi.TranscriptSubscribeRequest{SessionID: sessionID},
+		)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("unavailable transcript subscription returned before cancellation: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled transcript subscription error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled transcript subscription remained blocked")
+	}
+}
+
+func TestSessionTranscriptSubscriptionRejectsMissingSession(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	_, err := registry.SubscribeSessionTranscript(
+		context.Background(),
+		serverapi.TranscriptSubscribeRequest{},
+	)
+	if err == nil {
+		t.Fatal("missing Session subscription did not fail")
+	}
+}
+
 func TestAuthorityRuntimeDrainCannotRestoreAggregateActivityAfterTerminalState(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
@@ -271,6 +427,29 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	projected := transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
 	if projected.OperationID != outcome.OperationID {
 		t.Fatalf("worktree transition projection = %+v, want %+v", projected, outcome)
+	}
+
+	dirtyCount := 2
+	failed := clientui.WorktreeTransitionOutcome{
+		OperationID: clientui.NewWorktreeTransitionID(),
+		Transition:  clientui.WorktreeTransitionDelete,
+		State:       clientui.WorktreeTransitionFailed,
+		Failure: &clientui.WorktreeTransitionFailure{
+			Diagnostic: "delete precondition",
+			DeletePrecondition: &clientui.WorktreeDirtyState{
+				Kind:           clientui.WorktreeDirtyStateDirty,
+				DirtyFileCount: &dirtyCount,
+			},
+		},
+	}
+	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), failed)
+	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
+	projected = transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
+	if projected.DeletePrecondition == nil ||
+		projected.DeletePrecondition.Kind != clientui.WorktreeDirtyStateDirty ||
+		projected.DeletePrecondition.DirtyFileCount == nil ||
+		*projected.DeletePrecondition.DirtyFileCount != dirtyCount {
+		t.Fatalf("typed delete precondition projection = %+v, want dirty count %d", projected, dirtyCount)
 	}
 }
 

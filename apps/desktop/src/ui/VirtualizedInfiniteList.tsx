@@ -23,11 +23,14 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   loadMoreKey?: string | undefined;
   onLoadMore: () => void;
   estimateSize: () => number;
+  id?: string | undefined;
   ariaLabel?: string | undefined;
+  role?: "list" | "listbox" | undefined;
   rowSpacing?: "default" | "compact" | "tight" | undefined;
   testId?: string | undefined;
   initialScrollKey?: string | undefined;
   initialScrollRequestKey?: string | undefined;
+  initialScrollAlign?: "auto" | "start" | undefined;
   paddingEnd?: number | undefined;
   paddingStart?: number | undefined;
   className?: string | undefined;
@@ -54,11 +57,14 @@ export function VirtualizedInfiniteList<TItem>({
   loadMoreKey,
   onLoadMore,
   estimateSize,
+  id,
   ariaLabel,
+  role = "list",
   rowSpacing = "default",
   testId,
   initialScrollKey,
   initialScrollRequestKey,
+  initialScrollAlign = "start",
   paddingEnd = 0,
   paddingStart = 0,
   className,
@@ -229,8 +235,16 @@ export function VirtualizedInfiniteList<TItem>({
       return;
     }
     lastInitialScrollKeyRef.current = scroll.requestKey;
-    virtualizer.scrollToIndex(scroll.scrollIndex, { align: "start", behavior: "auto" });
-  }, [getItemKey, initialScrollKey, initialScrollRequestKey, itemStartIndex, items, virtualizer]);
+    virtualizer.scrollToIndex(scroll.scrollIndex, { align: initialScrollAlign, behavior: "auto" });
+  }, [
+    getItemKey,
+    initialScrollAlign,
+    initialScrollKey,
+    initialScrollRequestKey,
+    itemStartIndex,
+    items,
+    virtualizer,
+  ]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);
@@ -326,9 +340,10 @@ export function VirtualizedInfiniteList<TItem>({
         aria-label={ariaLabel}
         className={className}
         data-testid={testId}
+        id={id}
         onScroll={captureLeadingAnchor}
         ref={setScrollElement}
-        role="list"
+        role={role}
       >
         {fallbackIndexes.map((index) => (
           <div
@@ -343,7 +358,7 @@ export function VirtualizedInfiniteList<TItem>({
               nextBoundaryIndex,
               previousBoundaryCount,
             })}
-            role="listitem"
+            role={virtualizedRowRole(role)}
             style={fallbackRowStyle({ count, index, paddingEnd, paddingStart })}
           >
             {renderRow(index)}
@@ -358,9 +373,10 @@ export function VirtualizedInfiniteList<TItem>({
       aria-label={ariaLabel}
       className={className}
       data-testid={testId}
+      id={id}
       onScroll={captureLeadingAnchor}
       ref={setScrollElement}
-      role="list"
+      role={role}
     >
       <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize().toString()}px` }}>
         {virtualItems.map((virtualItem) => {
@@ -373,7 +389,7 @@ export function VirtualizedInfiniteList<TItem>({
               data-index={virtualItem.index}
               key={virtualItem.key}
               ref={virtualizer.measureElement}
-              role="listitem"
+              role={virtualizedRowRole(role)}
               style={{ transform: `translateY(${virtualItem.start.toString()}px)` }}
             >
               {renderRow(virtualItem.index)}
@@ -383,6 +399,10 @@ export function VirtualizedInfiniteList<TItem>({
       </div>
     </div>
   );
+}
+
+function virtualizedRowRole(role: "list" | "listbox"): "listitem" | "presentation" {
+  return role === "listbox" ? "presentation" : "listitem";
 }
 
 function fallbackRowStyle({

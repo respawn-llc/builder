@@ -3,6 +3,7 @@ package promptcontrol
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"core/server/requestmemo"
@@ -14,18 +15,73 @@ import (
 
 type stubPromptResponder struct {
 	calls     int
+	awaits    int
 	sessionID string
 	response  askquestion.AskQuestionResponse
 	err       error
 	submitErr error
 }
 
-func (s *stubPromptResponder) SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error {
+type stubPromptAcceptance struct {
+	responder *stubPromptResponder
+}
+
+func (a stubPromptAcceptance) AwaitSuccessor(context.Context) error {
+	a.responder.awaits++
+	return nil
+}
+
+func (s *stubPromptResponder) AcceptPromptResponse(
+	sessionID string,
+	resp askquestion.AskQuestionResponse,
+	err error,
+) (PromptResponseAcceptance, error) {
 	s.calls++
 	s.sessionID = sessionID
 	s.response = resp
 	s.err = err
-	return s.submitErr
+	if s.submitErr != nil {
+		return nil, s.submitErr
+	}
+	return stubPromptAcceptance{responder: s}, nil
+}
+
+type cancellationAfterAcceptanceResponder struct {
+	mu        sync.Mutex
+	calls     int
+	accepted  chan struct{}
+	successor chan struct{}
+}
+
+type cancellationAfterAcceptance struct {
+	successor <-chan struct{}
+}
+
+func (a cancellationAfterAcceptance) AwaitSuccessor(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-a.successor:
+		return nil
+	}
+}
+
+func (r *cancellationAfterAcceptanceResponder) AcceptPromptResponse(
+	_ string,
+	_ askquestion.AskQuestionResponse,
+	_ error,
+) (PromptResponseAcceptance, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	r.accepted <- struct{}{}
+	return cancellationAfterAcceptance{successor: r.successor}, nil
+}
+
+func (r *cancellationAfterAcceptanceResponder) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 func newPromptControlTestService() (*PromptControlService, *stubPromptResponder) {
@@ -61,6 +117,9 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	}
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	}
+	if responder.awaits != 1 {
+		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
 	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
 		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
@@ -126,6 +185,35 @@ func TestServiceAnswerAskDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
+func TestServiceAnswerAskRetryAfterCanceledSuccessorWaitDoesNotResubmitAcceptedAnswer(t *testing.T) {
+	responder := &cancellationAfterAcceptanceResponder{
+		accepted:  make(chan struct{}, 2),
+		successor: make(chan struct{}),
+	}
+	service := NewPromptControlService(responder)
+	req := askAnswerRequest("req-canceled-successor-wait")
+	req.Answer = "hello"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- service.AnswerAsk(ctx, req)
+	}()
+	<-responder.accepted
+	cancel()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first AnswerAsk error = %v, want cancellation", err)
+	}
+
+	close(responder.successor)
+	if err := service.AnswerAsk(context.Background(), req); err != nil {
+		t.Fatalf("retry AnswerAsk: %v", err)
+	}
+	if calls := responder.callCount(); calls != 1 {
+		t.Fatalf("accepted answer submissions = %d, want 1", calls)
+	}
+}
+
 func TestServiceAnswerAskRejectsClientRequestIDPayloadMismatch(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-1")
@@ -180,5 +268,8 @@ func TestServiceAnswerApprovalDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	}
+	if responder.awaits != 0 {
+		t.Fatalf("approval unexpectedly awaited a successor %d times", responder.awaits)
 	}
 }

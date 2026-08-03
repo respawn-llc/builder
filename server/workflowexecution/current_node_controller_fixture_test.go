@@ -606,6 +606,20 @@ func (currentNodeQuestionLLMClient) ProviderCapabilities(context.Context) (llm.P
 	}, nil
 }
 
+func (f currentNodeQuestionFixture) answerWorkflowQuestion(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	askID string,
+	response askquestion.AskQuestionResponse,
+	submitErr error,
+) error {
+	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, response, submitErr)
+	if err != nil {
+		return err
+	}
+	return acceptance.AwaitSuccessor(ctx)
+}
+
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 	t.Helper()
 	home := t.TempDir()
@@ -658,6 +672,18 @@ func (f currentNodeQuestionFixture) startAgent(
 	runner func(context.Context, sessionruntime.ExecutionScope) error,
 ) currentNodeAgentExecution {
 	t.Helper()
+	handle, sessionID := f.startQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+		return runner(ctx, scope)
+	})
+	return currentNodeAgentExecution{handle: handle, sessionID: sessionID}
+}
+
+func (f currentNodeQuestionFixture) startQuestionExecution(
+	t *testing.T,
+	reference workflow.CurrentNodeReference,
+	runner sessionruntime.AgentRunner,
+) (sessionruntime.ExecutionHandle, runtimeids.SessionID) {
+	t.Helper()
 	store, err := session.Create(
 		f.sessionDir,
 		filepath.Base(f.sessionDir),
@@ -698,9 +724,7 @@ func (f currentNodeQuestionFixture) startAgent(
 		Runtime:    &plan,
 		Workflow:   &lease,
 		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			return runner(ctx, scope)
-		},
+		Runner:     runner,
 	})
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
@@ -713,7 +737,7 @@ func (f currentNodeQuestionFixture) startAgent(
 	f.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
 	f.controller.liveByNode[key] = lease.ScopeID()
 	f.controller.mu.Unlock()
-	return currentNodeAgentExecution{handle: handle, sessionID: sessionID}
+	return handle, sessionID
 }
 
 func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference workflow.CurrentNodeReference, request askquestion.AskQuestionRequest) currentNodePendingPrompt {

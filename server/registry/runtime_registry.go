@@ -24,6 +24,7 @@ import (
 type RuntimeRegistry struct {
 	authorityMu               sync.RWMutex
 	authorityBySession        map[string]*authorityRuntimeEntry
+	authorityChanged          chan struct{}
 	sleepObserverMu           sync.Mutex
 	sleepObserver             func(active bool)
 	runStateMu                sync.Mutex
@@ -46,6 +47,7 @@ type authorityRuntimeEntry struct {
 
 	mu             sync.Mutex
 	lifecycle      authorityRuntimeEntryLifecycle
+	feedReady      bool
 	nextRetention  uint64
 	retentions     map[uint64]io.Closer
 	readModelUnpin func()
@@ -62,6 +64,7 @@ const (
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
 		authorityBySession:       make(map[string]*authorityRuntimeEntry),
+		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
@@ -110,7 +113,31 @@ func (r *RuntimeRegistry) ResourceReady(
 	if r.readModels != nil {
 		entry.readModelUnpin = r.readModels.Pin(sessionID)
 	}
-	r.publishCurrentRuntimeActivity(sessionID)
+	if err := r.publishCurrentRuntimeActivity(sessionID); err != nil {
+		r.authorityMu.Lock()
+		if r.authorityBySession[sessionID] == entry {
+			delete(r.authorityBySession, sessionID)
+			r.signalAuthorityChangeLocked()
+		}
+		r.authorityMu.Unlock()
+		if entry.readModelUnpin != nil {
+			entry.readModelUnpin()
+		}
+		return fmt.Errorf("initialize authority runtime feed for session %s: %w", sessionID, err)
+	}
+	entry.mu.Lock()
+	ready := entry.lifecycle == authorityRuntimeEntryReady
+	if ready {
+		entry.feedReady = true
+	}
+	entry.mu.Unlock()
+	if ready {
+		r.authorityMu.Lock()
+		if r.authorityBySession[sessionID] == entry {
+			r.signalAuthorityChangeLocked()
+		}
+		r.authorityMu.Unlock()
+	}
 	return nil
 }
 
@@ -140,7 +167,7 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
 		r.publishPromptResolution(entry, sessionID, snapshot)
 	})
-	r.publishCurrentRuntimeActivity(sessionID)
+	_ = r.publishCurrentRuntimeActivity(sessionID)
 	update, err := r.unavailableRuntimeReadModelFeedSnapshot(sessionID)
 	entry.mu.Lock()
 	lifecycle := entry.lifecycle
@@ -163,6 +190,7 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	r.authorityMu.Lock()
 	if r.authorityBySession[sessionID] == entry {
 		delete(r.authorityBySession, sessionID)
+		r.signalAuthorityChangeLocked()
 	}
 	r.authorityMu.Unlock()
 	if entry.readModelUnpin != nil {
@@ -181,6 +209,22 @@ func (r *RuntimeRegistry) authorityEntryBySession(sessionID string) *authorityRu
 	return entry
 }
 
+func (r *RuntimeRegistry) authorityEntryAndChange(sessionID string) (*authorityRuntimeEntry, <-chan struct{}) {
+	r.authorityMu.Lock()
+	defer r.authorityMu.Unlock()
+	if r.authorityChanged == nil {
+		r.authorityChanged = make(chan struct{})
+	}
+	return r.authorityBySession[strings.TrimSpace(sessionID)], r.authorityChanged
+}
+
+func (r *RuntimeRegistry) signalAuthorityChangeLocked() {
+	if r.authorityChanged != nil {
+		close(r.authorityChanged)
+	}
+	r.authorityChanged = make(chan struct{})
+}
+
 func (r *RuntimeRegistry) authorityEntryByRef(ref runtimeids.SessionResourceRef) *authorityRuntimeEntry {
 	entry := r.authorityEntryBySession(ref.SessionID().String())
 	if entry != nil && entry.ref != ref {
@@ -196,7 +240,7 @@ func (r *RuntimeRegistry) withCurrentAuthorityEntry(ref runtimeids.SessionResour
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	return entry.lifecycle == authorityRuntimeEntryReady && mutate(entry)
+	return entry.lifecycle == authorityRuntimeEntryReady && entry.feedReady && mutate(entry)
 }
 
 func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
@@ -205,8 +249,8 @@ func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.lifecycle != authorityRuntimeEntryReady {
-		return 0, fmt.Errorf("authority runtime subscription is draining: %w", serverapi.ErrStreamUnavailable)
+	if e.lifecycle != authorityRuntimeEntryReady || !e.feedReady {
+		return 0, fmt.Errorf("authority runtime subscription is not ready: %w", serverapi.ErrStreamUnavailable)
 	}
 	retention, err := e.retain()
 	if err != nil {
@@ -389,16 +433,17 @@ func (r *RuntimeRegistry) RuntimeActivityRegistrySnapshot(sessionID string) runt
 	return runtimeactivity.RegistrySnapshot{}
 }
 
-func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) {
+func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) error {
 	if r == nil {
-		return
+		return nil
 	}
 	id := strings.TrimSpace(sessionID)
 	update, err := r.runtimeReadModelFeedSnapshot(context.Background(), id, nil)
 	if err != nil {
-		return
+		return err
 	}
 	r.PublishRuntimeReadModelUpdate(id, update)
+	return nil
 }
 
 func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) error {
@@ -574,19 +619,39 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 			Code:   clientui.TranscriptDiagnosticCode("worktree_transition_failed"),
 			Detail: outcome.Failure.Diagnostic,
 		}
+		if outcome.Failure.DeletePrecondition != nil {
+			dirtyState := *outcome.Failure.DeletePrecondition
+			transcriptOutcome.DeletePrecondition = &dirtyState
+		}
 	}
 	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptOutcome)})
 }
 
-func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")
 	}
-	id := strings.TrimSpace(req.SessionID)
-	if authorityEntry := r.authorityEntryBySession(id); authorityEntry != nil {
-		return r.subscribeAuthorityTranscript(id, authorityEntry)
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	id := strings.TrimSpace(req.SessionID)
+	for {
+		authorityEntry, authorityChanged := r.authorityEntryAndChange(id)
+		if authorityEntry != nil {
+			subscription, err := r.subscribeAuthorityTranscript(id, authorityEntry)
+			if err == nil || !errors.Is(err, serverapi.ErrStreamUnavailable) {
+				return subscription, err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case <-authorityChanged:
+		}
+	}
 }
 
 func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authorityRuntimeEntry) (serverapi.TranscriptSubscription, error) {
@@ -641,7 +706,7 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 		})
 	})
 	if projected {
-		r.publishCurrentRuntimeActivity(id)
+		_ = r.publishCurrentRuntimeActivity(id)
 	}
 }
 
@@ -661,7 +726,7 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 		return ok
 	})
 	if resolved {
-		r.publishCurrentRuntimeActivity(id)
+		_ = r.publishCurrentRuntimeActivity(id)
 	}
 }
 

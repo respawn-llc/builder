@@ -460,8 +460,8 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 		return RuntimeAttachment{}, errors.New("runtime owner id is required")
 	}
 	gate := a.gateFor(request.SessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
 	if len(gate.blocks) != 0 {
 		return RuntimeAttachment{}, sessionStartsBlockedError(request.SessionID)
 	}
@@ -503,8 +503,8 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 	}
 	sessionID := request.Resource.SessionID()
 	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
 
 	a.mu.Lock()
 	resource := a.resources[sessionID]
@@ -568,8 +568,8 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	}
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
 
 	resource.mu.Lock()
 	if resource.ownerlessDisposition != agentResourceRetireWhenIdle ||
@@ -635,8 +635,10 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		return nil, errors.New("agent runner is required")
 	}
 	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return nil, err
+	}
+	defer gate.lock.Unlock()
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
