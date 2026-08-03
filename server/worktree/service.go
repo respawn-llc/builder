@@ -33,7 +33,7 @@ const setupDiagnosticLimitBytes = 16 * 1024
 const rollbackSessionTargetTimeout = 5 * time.Second
 
 type runtimePublisher interface {
-	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error
+	PublishSessionIdentity(sessionID string) error
 	PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome)
 }
 

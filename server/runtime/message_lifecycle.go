@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -391,6 +392,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserSteeringIntent
+	m.engine.outputMutationMu.Lock()
 	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		pending = m.queue.Drain()
@@ -399,8 +401,10 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
 	default:
+		m.engine.outputMutationMu.Unlock()
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
+	m.engine.outputMutationMu.Unlock()
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -425,15 +429,18 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 		})
 		if err != nil {
 			if !result.receipt.Committed {
-				m.queue.RestoreFront(pending)
+				restoreErr := e.steer(stepID, steerQueuedUserMessageRestoreIntent(pending))
+				err = errors.Join(err, restoreErr)
 			}
 			return result, err
 		}
 		if !publishAllowed {
+			e.outputMutationMu.Lock()
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
+			e.outputMutationMu.Unlock()
 			result.continueCombinedFlush = false
 			return result, nil
 		}
@@ -481,6 +488,20 @@ func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]
 		out = append(out, item.message)
 	}
 	return out
+}
+
+func (m *defaultMessageLifecycle) PendingUserMessages() []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.Snapshot()
+}
+
+func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserSteeringIntent) {
+	if m == nil || m.queue == nil {
+		return
+	}
+	m.queue.RestoreFront(items)
 }
 
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {

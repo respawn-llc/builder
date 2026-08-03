@@ -164,7 +164,7 @@ The immutable identity of one live agent or Script execution for a Task's Curren
 
 ### Resource Generation
 
-The version of the live Session resources used by an Exact Execution Scope. Replacing those resources advances the Resource Generation. No stale handle can act on the replacement.
+The version of the live Session resources used by an Exact Execution Scope. Replacing those resources advances the Resource Generation. No stale handle can mutate or close the replacement.
 
 ### Script Node
 

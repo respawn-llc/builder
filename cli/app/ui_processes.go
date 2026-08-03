@@ -56,16 +56,17 @@ func (m *uiModel) applyTranscriptBackgroundActivity(activity clientui.Transcript
 		panic("transcript background activity is missing process id")
 	}
 	update := clientui.BackgroundProcess{
-		ID:            processID,
-		OwnerRunID:    activity.OwnerRunID.String(),
-		OwnerStepID:   activity.OwnerStepID.String(),
-		State:         string(activity.Lifecycle),
-		Command:       activity.Command,
-		Workdir:       activity.Workdir,
-		ExitCode:      activity.ExitCode,
-		Running:       activity.Lifecycle == clientui.BackgroundLifecycleBackgrounded,
-		Backgrounded:  true,
-		KillRequested: activity.UserRequestedKill,
+		ID:             processID,
+		OwnerSessionID: m.sessionID,
+		OwnerRunID:     activity.OwnerRunID.String(),
+		OwnerStepID:    activity.OwnerStepID.String(),
+		State:          string(activity.Lifecycle),
+		Command:        activity.Command,
+		Workdir:        activity.Workdir,
+		ExitCode:       activity.ExitCode,
+		Running:        activity.Lifecycle == clientui.BackgroundLifecycleBackgrounded,
+		Backgrounded:   true,
+		KillRequested:  activity.UserRequestedKill,
 	}
 	if activity.LogPath != nil {
 		update.LogPath = *activity.LogPath

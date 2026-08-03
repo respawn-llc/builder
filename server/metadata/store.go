@@ -2075,6 +2075,18 @@ func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID str
 	return sessionExecutionTargetFromRow(row), nil
 }
 
+func (s *Store) ResolveOptionalSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !row.ExecutionTargetWorkspaceBinding.Valid && !row.WorktreeID.Valid {
+		return nil, nil
+	}
+	target := sessionExecutionTargetFromRow(row)
+	return &target, nil
+}
+
 func (s *Store) ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
 	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
 	if err != nil {

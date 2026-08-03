@@ -16,27 +16,29 @@ import (
 	"core/server/runtimeview"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type RuntimeRegistry struct {
-	authorityMu               sync.RWMutex
-	authorityBySession        map[string]*authorityRuntimeEntry
-	authorityChanged          chan struct{}
-	sleepObserverMu           sync.Mutex
-	sleepObserver             func(active bool)
-	runStateMu                sync.Mutex
-	blockingActivitySessions  map[string]bool
-	operations                *runtimeops.Coordinator
-	readModels                *runtimeactivity.CoordinatorCache
-	pendingPrompts            *pendingPromptStore
-	attentionBroker           *attentionnotify.Broker
-	questionBatches           *attentionnotify.QuestionBatchTracker
-	workflowEventPublisher    func(context.Context, serverapi.WorkflowProjectEvent) error
-	workflowAttentionSnapshot WorkflowAttentionNotificationSnapshotSource
-	executionTargetResolver   func(context.Context, string) (clientui.SessionExecutionTarget, error)
+	authorityMu                sync.RWMutex
+	authorityBySession         map[string]*authorityRuntimeEntry
+	authorityChanged           chan struct{}
+	sleepObserverMu            sync.Mutex
+	sleepObserver              func(active bool)
+	runStateMu                 sync.Mutex
+	blockingActivitySessions   map[string]bool
+	operations                 *runtimeops.Coordinator
+	readModels                 *runtimeactivity.CoordinatorCache
+	pendingPrompts             *pendingPromptStore
+	attentionBroker            *attentionnotify.Broker
+	questionBatches            *attentionnotify.QuestionBatchTracker
+	workflowEventPublisher     func(context.Context, serverapi.WorkflowProjectEvent) error
+	workflowAttentionSnapshot  WorkflowAttentionNotificationSnapshotSource
+	executionTargetResolver    func(context.Context, string) (*clientui.SessionExecutionTarget, error)
+	backgroundProcessSnapshots func() []shelltool.Snapshot
 }
 
 type authorityRuntimeEntry struct {
@@ -288,11 +290,19 @@ func (r *RuntimeRegistry) WithOperationCoordinator(coordinator *runtimeops.Coord
 	return r
 }
 
-func (r *RuntimeRegistry) WithExecutionTargetResolver(resolver func(context.Context, string) (clientui.SessionExecutionTarget, error)) *RuntimeRegistry {
+func (r *RuntimeRegistry) WithExecutionTargetResolver(resolver func(context.Context, string) (*clientui.SessionExecutionTarget, error)) *RuntimeRegistry {
 	if r == nil {
 		return nil
 	}
 	r.executionTargetResolver = resolver
+	return r
+}
+
+func (r *RuntimeRegistry) WithBackgroundProcessSnapshots(source func() []shelltool.Snapshot) *RuntimeRegistry {
+	if r == nil {
+		return nil
+	}
+	r.backgroundProcessSnapshots = source
 	return r
 }
 
@@ -480,20 +490,21 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 		entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
 	}
 	if runtimeEventShouldPublishSessionStatus(evt) {
-		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
-		if err != nil {
+		if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+			status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+			if err != nil {
+				return nil, err
+			}
+			return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
+		}); err != nil {
 			return err
 		}
-		entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)})
 	}
 	r.recordQueuedMessageOperationStatus(evt)
 	return nil
 }
 
-func (r *RuntimeRegistry) PublishSessionIdentity(
-	sessionID string,
-	target *clientui.SessionExecutionTarget,
-) error {
+func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 	if r == nil {
 		return nil
 	}
@@ -502,18 +513,18 @@ func (r *RuntimeRegistry) PublishSessionIdentity(
 	if entry == nil {
 		return nil
 	}
-	identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
-	if err != nil {
-		return err
-	}
-	if target != nil {
-		normalized := clientui.NormalizeSessionExecutionTarget(*target)
-		identity.ExecutionTarget = &normalized
-	} else if resolved, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
-		identity.ExecutionTarget = &resolved
-	}
-	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)})
-	return nil
+	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+		if err != nil {
+			return nil, err
+		}
+		target, err := r.resolveSessionExecutionTarget(context.Background(), id)
+		if err != nil {
+			return nil, err
+		}
+		identity.ExecutionTarget = target
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)}, nil
+	})
 }
 
 func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
@@ -524,23 +535,31 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
-	if err != nil {
-		return err
-	}
-	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)})
-	return nil
+	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		if err != nil {
+			return nil, err
+		}
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
+	})
 }
 
-func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, bool) {
+func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
 	if r == nil || r.executionTargetResolver == nil {
-		return clientui.SessionExecutionTarget{}, false
+		return nil, nil
 	}
 	target, err := r.executionTargetResolver(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
-		return clientui.SessionExecutionTarget{}, false
+		return nil, fmt.Errorf("resolve execution target for session %q: %w", strings.TrimSpace(sessionID), err)
 	}
-	return clientui.NormalizeSessionExecutionTarget(target), true
+	if target == nil {
+		return nil, nil
+	}
+	normalized := clientui.NormalizeSessionExecutionTarget(*target)
+	if clientui.SessionExecutionTargetIsZero(normalized) {
+		return nil, fmt.Errorf("resolve execution target for session %q returned an empty target", strings.TrimSpace(sessionID))
+	}
+	return &normalized, nil
 }
 
 func runtimeEventShouldPublishSessionStatus(evt runtime.Event) bool {
@@ -641,7 +660,7 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req se
 	for {
 		authorityEntry, authorityChanged := r.authorityEntryAndChange(id)
 		if authorityEntry != nil {
-			subscription, err := r.subscribeAuthorityTranscript(id, authorityEntry)
+			subscription, err := r.subscribeAuthorityTranscript(ctx, id, authorityEntry)
 			if err == nil || !errors.Is(err, serverapi.ErrStreamUnavailable) {
 				return subscription, err
 			}
@@ -654,7 +673,7 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req se
 	}
 }
 
-func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authorityRuntimeEntry) (serverapi.TranscriptSubscription, error) {
+func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id string, entry *authorityRuntimeEntry) (serverapi.TranscriptSubscription, error) {
 	retentionID, err := entry.retainSubscription()
 	if err != nil {
 		return nil, err
@@ -665,20 +684,9 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authori
 	var sub *transcriptSubscription
 	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
 		var subscribeErr error
-		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
-		hydration.SessionStatus, subscribeErr = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
-		if subscribeErr != nil {
-			return subscribeErr
-		}
-		hydration.SessionIdentity, subscribeErr =
-			runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
-		if subscribeErr != nil {
-			return subscribeErr
-		}
-		if target, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
-			hydration.SessionIdentity.ExecutionTarget = &target
-		}
-		sub, subscribeErr = entry.sessionFeed.Subscribe(hydration)
+		sub, subscribeErr = entry.sessionFeed.Subscribe(func() (clientui.TranscriptHydration, error) {
+			return r.composeTranscriptHydration(ctx, id, entry, snapshot)
+		})
 		return subscribeErr
 	})
 	if err != nil {
@@ -698,15 +706,18 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 		panic(fmt.Sprintf("execution prompt pending projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
 	id := resource.SessionID().String()
-	projected := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
-		return r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt, func(snapshot PendingPromptSnapshot) {
-			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
-			r.publishAttentionPending(id, snapshot)
-			r.publishTaskQuestionWaiting(id, snapshot)
-		})
+	entry := r.authorityEntryByRef(resource)
+	var snapshot PendingPromptSnapshot
+	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
+		var admitted bool
+		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt)
+		return admitted
 	})
-	if projected {
-		_ = r.publishCurrentRuntimeActivity(id)
+	if projected && entry != nil {
+		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+		r.publishAttentionPending(id, snapshot)
+		r.publishTaskQuestionWaiting(id, snapshot)
+		r.publishCurrentRuntimeActivity(id)
 	}
 }
 
@@ -718,15 +729,19 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 		panic(fmt.Sprintf("execution prompt resolved projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
 	id := resource.SessionID().String()
-	resolved := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
-		snapshot, ok := r.pendingPrompts.Complete(id, resource, scopeID, requestID)
-		if ok {
-			r.publishPromptResolution(entry, id, snapshot)
-		}
+	var snapshot PendingPromptSnapshot
+	entry := r.authorityEntryByRef(resource)
+	resolved := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
+		var ok bool
+		snapshot, ok = r.pendingPrompts.Complete(id, resource, scopeID, requestID)
 		return ok
 	})
 	if resolved {
-		_ = r.publishCurrentRuntimeActivity(id)
+		if entry != nil {
+			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventResolved)
+		}
+		r.publishAttentionResolved(id, snapshot)
+		r.publishCurrentRuntimeActivity(id)
 	}
 }
 
@@ -760,8 +775,9 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID s
 		return false
 	}
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.lifecycle == authorityRuntimeEntryRetired && activeForControl {
+	lifecycle := entry.lifecycle
+	entry.mu.Unlock()
+	if lifecycle == authorityRuntimeEntryRetired && activeForControl {
 		return false
 	}
 	r.authorityMu.RLock()
