@@ -21,6 +21,18 @@ type ManualMovePreparation struct {
 	requiresExecutionTarget bool
 }
 
+type preparedManualMoveExecutionTarget struct {
+	mutation    preparedExecutionTargetMutation
+	targetShape map[workflow.EdgeID]manualMoveTargetShape
+}
+
+type manualMoveTargetShape struct {
+	nodeID workflow.NodeID
+	kind   workflow.NodeKind
+}
+
+var errManualMoveTargetShapeChanged = errors.New("manual move target shape changed after execution-target preparation")
+
 func (p ManualMovePreparation) RequiresExecutionTarget() bool {
 	return p.requiresExecutionTarget
 }
@@ -102,12 +114,23 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || (!prepared.noOp && prepared.target == nil) {
 		return ManualMoveResult{}, errors.New("manual move preparation is invalid")
 	}
+	executionTargetPreparation, err := s.prepareManualMoveExecutionTarget(ctx, prepared, executionTarget)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	locked, err := q.AcquireManualMoveTaskWriteLock(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	if locked != 1 {
+		return ManualMoveResult{}, sql.ErrNoRows
+	}
 	task, err := q.GetTask(ctx, string(prepared.request.TaskID))
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -145,12 +168,18 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
+	if targetDefinition.Kind() != prepared.target.Kind() {
+		return ManualMoveResult{}, errManualMoveTargetShapeChanged
+	}
 	var targets []workflow.CurrentNode
 	if executableNodeKind(targetDefinition.Kind()) {
 		if len(preview.Choices) != 1 {
 			return ManualMoveResult{}, ErrManualMoveTransitionSelectionRequired
 		}
 		choice := preview.Choices[0]
+		if err := validatePreparedManualMoveTargetShape(definition, choice, executionTargetPreparation.targetShape); err != nil {
+			return ManualMoveResult{}, err
+		}
 		valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
 		if err != nil {
 			return ManualMoveResult{}, err
@@ -158,36 +187,14 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 			return ManualMoveResult{}, err
 		}
-		targetMutation, err := s.prepareExecutionTargetMutation(ctx, task, executionTarget)
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		executionRoot := targetMutation.executionRoot
-		if targetMutation.candidateToLock != nil {
-			executionRoot = targetMutation.candidateToLock.Root
-		}
-		for _, edge := range choice.Edges {
-			targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
-			if err != nil {
-				return ManualMoveResult{}, err
-			}
-			if targetNode.Kind() == workflow.NodeKindScript {
-				if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(targetNode), &executionRoot); err != nil {
-					return ManualMoveResult{}, err
-				}
-			}
-		}
 		targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, s.now().UnixMilli()); err != nil {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, s.now().UnixMilli()); err != nil {
 			return ManualMoveResult{}, err
 		}
 	} else {
-		if executionTarget != nil {
-			return ManualMoveResult{}, errors.New("manual move to a non-executable target does not accept an execution target")
-		}
 		targets = []workflow.CurrentNode{{
 			Reference: workflow.CurrentNodeReference{},
 		}}
@@ -250,6 +257,83 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		return ManualMoveResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) prepareManualMoveExecutionTarget(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (preparedManualMoveExecutionTarget, error) {
+	if prepared.noOp {
+		return preparedManualMoveExecutionTarget{}, nil
+	}
+	if !executableNodeKind(prepared.target.Kind()) {
+		if executionTarget != nil {
+			return preparedManualMoveExecutionTarget{}, errors.New("manual move to a non-executable target does not accept an execution target")
+		}
+		return preparedManualMoveExecutionTarget{}, nil
+	}
+	if prepared.choice == nil {
+		return preparedManualMoveExecutionTarget{}, ErrManualMoveTransitionSelectionRequired
+	}
+	task, err := s.queries.GetTask(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return preparedManualMoveExecutionTarget{}, err
+	}
+	targetMutation, err := s.prepareExecutionTargetMutation(ctx, task, executionTarget)
+	if err != nil {
+		return preparedManualMoveExecutionTarget{}, err
+	}
+	definition, _, err := workflowDefinitionFromQueries(ctx, s.queries, runtimeids.WorkflowID(task.WorkflowID))
+	if err != nil {
+		return preparedManualMoveExecutionTarget{}, err
+	}
+	targetShape := make(map[workflow.EdgeID]manualMoveTargetShape, len(prepared.choice.Edges))
+	for _, edge := range prepared.choice.Edges {
+		targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return preparedManualMoveExecutionTarget{}, err
+		}
+		if _, exists := targetShape[edge.ID]; exists {
+			return preparedManualMoveExecutionTarget{}, fmt.Errorf("manual move target preparation contains duplicate edge %q", edge.ID)
+		}
+		targetShape[edge.ID] = manualMoveTargetShape{nodeID: edge.TargetNodeID, kind: targetNode.Kind()}
+		if targetNode.Kind() == workflow.NodeKindScript {
+			if err := s.validateScriptNodeForExecution(
+				ctx,
+				s.queries,
+				workflow.NodeIDOf(targetNode),
+				&targetMutation.executionRoot,
+			); err != nil {
+				return preparedManualMoveExecutionTarget{}, err
+			}
+		}
+	}
+	return preparedManualMoveExecutionTarget{mutation: targetMutation, targetShape: targetShape}, nil
+}
+
+func validatePreparedManualMoveTargetShape(
+	definition workflow.Definition,
+	choice ManualMoveTransitionChoice,
+	prepared map[workflow.EdgeID]manualMoveTargetShape,
+) error {
+	if len(choice.Edges) != len(prepared) {
+		return errManualMoveTargetShapeChanged
+	}
+	for _, edge := range choice.Edges {
+		expected, exists := prepared[edge.ID]
+		if !exists || expected.nodeID != edge.TargetNodeID {
+			return errManualMoveTargetShapeChanged
+		}
+		targetNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return err
+		}
+		if targetNode.Kind() != expected.kind {
+			return errManualMoveTargetShapeChanged
+		}
+	}
+	return nil
 }
 
 func manualMovePreviewBlockerError(blocker ManualMoveBlocker) error {
