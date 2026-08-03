@@ -454,15 +454,15 @@ func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Co
 	}, nil
 }
 
-func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetMaterializeRequest) (workflowstore.ManagedExecutionRoot, error) {
+func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetMaterializeRequest) (workflowsvc.ExecutionTargetMaterialization, error) {
 	if i.service == nil {
-		return workflowstore.ManagedExecutionRoot{}, errors.New("worktree service is required")
+		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("worktree service is required")
 	}
 	if err := req.Snapshot.Validate(); err != nil {
-		return workflowstore.ManagedExecutionRoot{}, err
+		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
 	if req.Snapshot.RequestedRef == nil || req.Snapshot.CommitOID == nil {
-		return workflowstore.ManagedExecutionRoot{}, errors.New("managed execution target snapshot is incomplete")
+		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("managed execution target snapshot is incomplete")
 	}
 	materialized, err := i.service.MaterializeInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
 		TaskID:           req.TaskID,
@@ -476,20 +476,22 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err != nil {
 		var retained *serverapi.WorktreeSetupRetainedError
 		if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
-			return workflowstore.ManagedExecutionRoot{}, err
+			return workflowsvc.ExecutionTargetMaterialization{}, err
 		}
-		return workflowstore.ManagedExecutionRoot{
+		root := workflowstore.ManagedExecutionRoot{
 			WorktreeID: retained.Worktree.Registered.Kent.WorktreeID,
 			Root:       retained.Worktree.Registered.Git.CanonicalRoot,
-		}, err
+		}
+		return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, err
 	}
 	if materialized.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered || materialized.Worktree.Registered == nil {
-		return workflowstore.ManagedExecutionRoot{}, errors.New("materialized task worktree is not registered")
+		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("materialized task worktree is not registered")
 	}
-	return workflowstore.ManagedExecutionRoot{
+	root := workflowstore.ManagedExecutionRoot{
 		WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
 		Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
-	}, nil
+	}
+	return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, nil
 }
 
 func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetRestoreRequest) error {

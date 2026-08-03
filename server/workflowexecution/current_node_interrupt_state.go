@@ -9,6 +9,8 @@ import (
 
 type currentNodeInterruptFence struct {
 	taskID workflow.TaskID
+	done   chan struct{}
+	closed bool
 }
 
 // currentNodeInterruptState indexes one Task-wide lifecycle fence only through
@@ -30,21 +32,25 @@ func (s *currentNodeInterruptState) beginTask(taskID workflow.TaskID) (*currentN
 	if s.taskActive(taskID) {
 		return nil, ErrTaskExecutionNotQuiescent
 	}
-	return &currentNodeInterruptFence{taskID: taskID}, nil
+	return &currentNodeInterruptFence{taskID: taskID, done: make(chan struct{})}, nil
 }
 
 func (s *currentNodeInterruptState) taskActive(taskID workflow.TaskID) bool {
+	return s.taskFence(taskID) != nil
+}
+
+func (s *currentNodeInterruptState) taskFence(taskID workflow.TaskID) *currentNodeInterruptFence {
 	for _, fence := range s.byScope {
 		if fence.taskID == taskID {
-			return true
+			return fence
 		}
 	}
 	for _, fence := range s.byCurrentNode {
 		if fence.taskID == taskID {
-			return true
+			return fence
 		}
 	}
-	return false
+	return nil
 }
 
 func (s *currentNodeInterruptState) addScope(fence *currentNodeInterruptFence, scopeID runtimeids.ExecutionScopeID) {
@@ -73,11 +79,23 @@ func (s *currentNodeInterruptState) currentNodeFenced(key workflow.CurrentNodeRe
 }
 
 func (s *currentNodeInterruptState) finishScope(scopeID runtimeids.ExecutionScopeID) {
+	fence := s.byScope[scopeID]
 	delete(s.byScope, scopeID)
+	s.finishFence(fence)
 }
 
 func (s *currentNodeInterruptState) finishCurrentNode(key workflow.CurrentNodeReferenceKey) {
+	fence := s.byCurrentNode[key]
 	delete(s.byCurrentNode, key)
+	s.finishFence(fence)
+}
+
+func (s *currentNodeInterruptState) finishFence(fence *currentNodeInterruptFence) {
+	if fence == nil || fence.closed || s.fenceActive(fence) {
+		return
+	}
+	fence.closed = true
+	close(fence.done)
 }
 
 func (s *currentNodeInterruptState) fenceActive(fence *currentNodeInterruptFence) bool {

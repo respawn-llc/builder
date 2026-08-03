@@ -103,7 +103,7 @@ func (e *manualMoveNoOpBeforeInterruptError) Error() string {
 
 type executionTargetInfrastructure interface {
 	ResolveExecutionTarget(context.Context, ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error)
-	MaterializeExecutionTarget(context.Context, ExecutionTargetMaterializeRequest) (workflowstore.ManagedExecutionRoot, error)
+	MaterializeExecutionTarget(context.Context, ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error)
 	RestoreExecutionTarget(context.Context, ExecutionTargetRestoreRequest) error
 }
 
@@ -116,6 +116,10 @@ type ExecutionTargetMaterializeRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID serverapi.WorktreeSetupOperationID
 	Snapshot         workflowstore.ExecutionTargetSnapshot
+}
+
+type ExecutionTargetMaterialization struct {
+	RetainedRoot *workflowstore.ManagedExecutionRoot
 }
 
 type ExecutionTargetRestoreRequest struct {
@@ -1099,22 +1103,29 @@ func (s *Service) materializeInitiatingActionTarget(
 ) (*workflowstore.ExecutionTargetCandidate, error) {
 	targetContext := preflight.context
 	if snapshot != nil {
-		managedRoot, materializationErr := s.executionTargets.MaterializeExecutionTarget(ctx, ExecutionTargetMaterializeRequest{
+		materialization, materializationErr := s.executionTargets.MaterializeExecutionTarget(ctx, ExecutionTargetMaterializeRequest{
 			TaskID:           taskID,
 			SetupOperationID: setupOperationID,
 			Snapshot:         *snapshot,
 		})
-		if materializationErr != nil && strings.TrimSpace(managedRoot.WorktreeID) == "" {
+		if materialization.RetainedRoot == nil {
+			if materializationErr == nil {
+				return nil, errors.New("execution target materialization returned no managed root")
+			}
 			return nil, materializationErr
 		}
-		return &workflowstore.ExecutionTargetCandidate{
+		candidate := &workflowstore.ExecutionTargetCandidate{
 			Snapshot: *snapshot,
 			Root: workflowstore.ExecutionRoot{
 				SourceWorkspaceID:   targetContext.SourceWorkspaceID,
 				SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
-				Managed:             &managedRoot,
+				Managed:             materialization.RetainedRoot,
 			},
-		}, materializationErr
+		}
+		if err := candidate.Validate(); err != nil {
+			return nil, errors.Join(materializationErr, err)
+		}
+		return candidate, materializationErr
 	}
 	return &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{

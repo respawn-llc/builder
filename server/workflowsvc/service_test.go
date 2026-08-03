@@ -822,7 +822,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
-		materialize: func(taskID workflow.TaskID) (workflowstore.ManagedExecutionRoot, error) {
+		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
 			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 				ID:            worktreeID,
 				WorkspaceID:   binding.WorkspaceID,
@@ -843,7 +843,8 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 			if updated != 1 {
 				t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
 			}
-			return workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}, nil
+			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
+			return ExecutionTargetMaterialization{RetainedRoot: &root}, nil
 		},
 	}
 	service.executionTargets = infrastructure
@@ -898,17 +899,18 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
-		materialize: func(taskID workflow.TaskID) (workflowstore.ManagedExecutionRoot, error) {
+		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
 			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 				ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, Managed: true,
 			}); err != nil {
-				return workflowstore.ManagedExecutionRoot{}, err
+				return ExecutionTargetMaterialization{}, err
 			}
 			_, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
 				ID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
 				UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
 			})
-			return workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}, err
+			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
+			return ExecutionTargetMaterialization{RetainedRoot: &root}, err
 		},
 		materializeErr: setupErr,
 	}
@@ -1560,7 +1562,7 @@ type recordingExecutionTargetInfrastructure struct {
 	materializeTaskID workflow.TaskID
 	restoreTaskID     workflow.TaskID
 	setupOperationID  serverapi.WorktreeSetupOperationID
-	materialize       func(workflow.TaskID) (workflowstore.ManagedExecutionRoot, error)
+	materialize       func(workflow.TaskID) (ExecutionTargetMaterialization, error)
 	resolveErr        error
 	materializeErr    error
 	restoreErr        error
@@ -1733,18 +1735,18 @@ func (i *recordingExecutionTargetInfrastructure) ResolveExecutionTarget(_ contex
 	return i.resolution, nil
 }
 
-func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (workflowstore.ManagedExecutionRoot, error) {
+func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error) {
 	i.materializeTaskID = req.TaskID
 	i.setupOperationID = req.SetupOperationID
-	var root workflowstore.ManagedExecutionRoot
+	var materialization ExecutionTargetMaterialization
 	if i.materialize != nil {
 		var err error
-		root, err = i.materialize(req.TaskID)
+		materialization, err = i.materialize(req.TaskID)
 		if err != nil {
-			return root, err
+			return materialization, err
 		}
 	}
-	return root, i.materializeErr
+	return materialization, i.materializeErr
 }
 
 func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {

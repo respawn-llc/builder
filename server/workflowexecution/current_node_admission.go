@@ -227,6 +227,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	c.mu.Unlock()
 
 	var lease sessionruntime.WorkflowExecutionLease
+retryAdmission:
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
@@ -301,7 +302,22 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		lease = next
 		return nil
 	}); err != nil {
-		return currentNodeAdmissionError{cause: err}
+		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+			return currentNodeAdmissionError{cause: err}
+		}
+		c.mu.Lock()
+		fence := c.interrupts.taskFence(reference.TaskID)
+		selected := c.interrupts.currentNodeFenced(key)
+		c.mu.Unlock()
+		if fence == nil || selected {
+			return currentNodeAdmissionError{cause: err}
+		}
+		select {
+		case <-fence.done:
+		case <-ctx.Done():
+			return currentNodeAdmissionError{cause: context.Cause(ctx)}
+		}
+		goto retryAdmission
 	}
 	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
 		return currentNodeAdmissionError{
