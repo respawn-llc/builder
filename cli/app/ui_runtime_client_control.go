@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -209,10 +208,6 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 		})
 	})
 	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req), requestID), err
-}
-
-func newRuntimeTextInput(text string) runtimeinput.Input {
-	return runtimeinput.Text(text)
 }
 
 func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {

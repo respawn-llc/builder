@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -148,7 +149,7 @@ func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (cl
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
 		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           newRuntimeTextInput(text),
+		Input:                           runtimeinput.Text(text),
 	})
 }
 

@@ -204,6 +204,34 @@ func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.
 	}
 }
 
+func TestOnboardingCommandTargetSkipOffersOnlyNoneAfterImportError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "commands")
+	commandKind := serverapi.ImportErrorItemKindCommand
+	facts := serverapi.ImportCapabilityFacts{
+		Commands: serverapi.ImportItemGroupFact{
+			Choices: []serverapi.ImportChoiceFact{skillSymlinkChoiceFact("codex", root, 1)},
+			Target:  serverapi.ImportTargetFact{Skip: true, Conflicts: []serverapi.ImportConflictFact{{SourceKind: "global"}}},
+		},
+		Errors: []serverapi.ImportErrorFact{{
+			Code:      "target_read_failed",
+			Scope:     "target",
+			ItemKind:  &commandKind,
+			Operation: "read_import_target",
+			Message:   "permission denied",
+		}},
+	}
+	state := testOnboardingFlowStatePtr(t, nil)
+	state.imports = onboardingImportDiscoveryFromFacts(facts)
+	screen := buildCommandImportScreen(state)
+	noneID, ok := noneChoiceID(state.imports.commandChoices)
+	if !ok || len(screen.Options) != 1 || screen.Options[0].ID != noneID {
+		t.Fatalf("expected only none option for skipped commands, got %+v", screen.Options)
+	}
+	if screen.ErrorText == "" {
+		t.Fatal("expected command import target error on skipped screen")
+	}
+}
+
 func TestOnboardingModelBackspaceTogglesMultiSelect(t *testing.T) {
 	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{

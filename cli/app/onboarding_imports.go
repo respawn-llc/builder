@@ -326,6 +326,9 @@ func buildSkillImportScreen(state *onboardingFlowState) onboardingScreen {
 }
 
 func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
+	if state.imports.skipCommands {
+		return skippedImportScreen("commands_import", "Import slash commands?", "slash-command import", state.imports.commandChoices, state.imports.commandErr)
+	}
 	options := make([]onboardingOption, 0, len(state.imports.commandChoices))
 	for _, choice := range state.imports.commandChoices {
 		switch choice.Mode {
