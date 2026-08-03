@@ -1,5 +1,5 @@
 import {
-  sidebarDestinationMatchesTask,
+  sidebarDestinationIndexForTask,
   type SidebarDestination,
   type SidebarEntryToken,
 } from "@/app-facade";
@@ -9,10 +9,9 @@ export function sidebarEntryTokenForDeletedTask(
   tokens: readonly SidebarEntryToken[],
   taskID: string,
 ): SidebarEntryToken | undefined {
-  for (const [index, destination] of destinations.entries()) {
-    if (sidebarDestinationMatchesTask(destination, taskID)) {
-      return tokens[index];
-    }
+  const index = sidebarDestinationIndexForTask(destinations, taskID);
+  if (index !== undefined) {
+    return tokens[index];
   }
   return undefined;
 }

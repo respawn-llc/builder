@@ -1,5 +1,5 @@
 import {
-  sidebarDestinationMatchesTask,
+  sidebarDestinationIndexForTask,
   type SidebarDestination,
   type SidebarDestinationSnapshot,
 } from "@/app-facade";
@@ -242,10 +242,8 @@ export function findTaskDetailIndex(
   if (destination.kind !== "taskDetail") {
     return undefined;
   }
-  for (const [index, entry] of entries.entries()) {
-    if (sidebarDestinationMatchesTask(entry.destination, destination.taskID)) {
-      return index;
-    }
-  }
-  return undefined;
+  return sidebarDestinationIndexForTask(
+    entries.map((entry) => entry.destination),
+    destination.taskID,
+  );
 }

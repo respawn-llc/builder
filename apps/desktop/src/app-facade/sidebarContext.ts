@@ -141,6 +141,18 @@ export function sidebarDestinationMatchesTask(destination: SidebarDestination, t
   return destination.kind === "taskDetail" && destination.taskID === taskID;
 }
 
+export function sidebarDestinationIndexForTask(
+  destinations: readonly SidebarDestination[],
+  taskID: string,
+): number | undefined {
+  for (const [index, destination] of destinations.entries()) {
+    if (sidebarDestinationMatchesTask(destination, taskID)) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
   activeActivationID: string | null;
