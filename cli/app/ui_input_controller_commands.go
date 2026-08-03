@@ -46,6 +46,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 			runtimeinput.Input{Kind: runtimeinput.KindPromptCommand, PromptCommand: invocation},
 			queuePosition,
 			"",
+			origin,
 		)
 	}
 	if commandResult.SubmitUser {

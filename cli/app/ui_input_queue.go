@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -128,7 +129,7 @@ func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientReq
 			ClientRequestID: clientRequestID,
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            text,
+		Input:                           runtimeinput.Text(text),
 	})
 	if err != nil {
 		return clientui.QueuedUserMessage{}, false, err
