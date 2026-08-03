@@ -1,8 +1,12 @@
-import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
+import { useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FilterIcon, XIcon } from "lucide-react";
+import { CheckCircle2Icon, FilterIcon, XIcon } from "lucide-react";
 
-import { taskLabelFilterConditionCount } from "@/api";
+import {
+  boardFilterWithDependencyFilter,
+  boardFilterWithLabelFilter,
+  taskLabelFilterConditionCount,
+} from "@/api";
 import {
   LabelChooser,
   type LabelMembershipRefreshEffect,
@@ -26,7 +30,8 @@ export function BoardMembershipRefreshBinding({
         type: "label.deleted",
         labelID: effect.labelID,
       });
-      generation.controller.setDesiredFilter(next.filter);
+      const current = generation.snapshot.desiredFilter ?? generation.snapshot.active.filter;
+      generation.controller.setDesiredFilter(boardFilterWithLabelFilter(current, next.filter));
     }
     const activeGeneration = generation.controller.getSnapshot().active.generation;
     await generation.queryRegistry.invalidateGeneration(activeGeneration);
@@ -42,7 +47,7 @@ export function BoardMembershipRefreshBinding({
   return null;
 }
 
-export function BoardLabelFilterChrome() {
+export function BoardFilterChrome() {
   const { t } = useTranslation();
   const filter = useProjectLabelFilter();
   const generation = useBoardFilterGeneration();
@@ -53,59 +58,79 @@ export function BoardLabelFilterChrome() {
       : filter.state.filter.kind === "unlabeled"
         ? t("labels.unlabeled")
         : t("labels.filter");
-  const dispatch = useCallback(
-    (action: Parameters<typeof filter.dispatch>[0]): void => {
-      const next = reduceLabelFilterState(filter.state, action);
-      generation.controller.setDesiredFilter(next.filter);
-      filter.dispatch(action);
-    },
-    [filter, generation.controller],
-  );
+  const dispatch = useStableCallback((action: Parameters<typeof filter.dispatch>[0]): void => {
+    const next = reduceLabelFilterState(filter.state, action);
+    const currentSnapshot = generation.controller.getSnapshot();
+    const current = currentSnapshot.desiredFilter ?? currentSnapshot.active.filter;
+    generation.controller.setDesiredFilter(boardFilterWithLabelFilter(current, next.filter));
+    filter.dispatch(action);
+  });
+  const current = generation.snapshot.desiredFilter ?? generation.snapshot.active.filter;
+  const unblocked = current.dependencyFilter === true;
+  const toggleDependencyFilter = useStableCallback(() => {
+    const latestSnapshot = generation.controller.getSnapshot();
+    const latest = latestSnapshot.desiredFilter ?? latestSnapshot.active.filter;
+    generation.controller.setDesiredFilter(
+      boardFilterWithDependencyFilter(latest, latest.dependencyFilter === true ? null : true),
+    );
+  });
   return (
-    <span className="relative inline-flex">
-      <LabelChooser
-        invocation={{
-          kind: "filter",
-          state: filter.state,
-          onAction: dispatch,
-        }}
-        trigger={
-          <InteractiveChip
-            className="board-label-filter-trigger"
-            selected={active}
-            style={{
-              paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
-              paddingInlineStart: "var(--space-3)",
-            }}
-            tone={active ? "primary" : "neutral"}
-          >
-            <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-            <AnimatedFilterSummary text={summary} />
-          </InteractiveChip>
-        }
-      />
-      <span
-        aria-hidden={active ? undefined : true}
-        className={cx(
-          "board-label-filter-clear absolute inset-y-0 right-0 z-10 grid overflow-hidden",
-          active ? "w-7 scale-100 opacity-100" : "w-0 scale-90 opacity-0",
-        )}
-        inert={active ? undefined : true}
-      >
-        <Button
-          aria-label={t("labels.clearFilter")}
-          className="h-full w-7"
-          onClick={() => {
-            dispatch({ type: "clear" });
+    <>
+      <span className="relative inline-flex">
+        <LabelChooser
+          invocation={{
+            kind: "filter",
+            state: filter.state,
+            onAction: dispatch,
           }}
-          size="icon-sm"
-          style={{ color: "var(--color-primary)" }}
-          variant="ghost"
+          trigger={
+            <InteractiveChip
+              className="board-label-filter-trigger"
+              selected={active}
+              style={{
+                paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
+                paddingInlineStart: "var(--space-3)",
+              }}
+              tone={active ? "primary" : "neutral"}
+            >
+              <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
+              <AnimatedFilterSummary text={summary} />
+            </InteractiveChip>
+          }
+        />
+        <span
+          aria-hidden={active ? undefined : true}
+          className={cx(
+            "board-label-filter-clear absolute inset-y-0 right-0 z-10 grid overflow-hidden",
+            active ? "w-7 scale-100 opacity-100" : "w-0 scale-90 opacity-0",
+          )}
+          inert={active ? undefined : true}
         >
-          <XIcon aria-hidden="true" size={15} strokeWidth={1.75} />
-        </Button>
+          <Button
+            aria-label={t("labels.clearFilter")}
+            className="h-full w-7"
+            onClick={() => {
+              dispatch({ type: "clear" });
+            }}
+            size="icon-sm"
+            style={{ color: "var(--color-primary)" }}
+            variant="ghost"
+          >
+            <XIcon aria-hidden="true" size={15} strokeWidth={1.75} />
+          </Button>
+        </span>
       </span>
-    </span>
+      <InteractiveChip
+        aria-pressed={unblocked}
+        onClick={toggleDependencyFilter}
+        selected={unblocked}
+        style={{ paddingInline: "var(--space-3)" }}
+        tone={unblocked ? "primary" : "neutral"}
+      >
+        <CheckCircle2Icon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
+        {t("board.unblocked")}
+      </InteractiveChip>
+    </>
   );
 }
 

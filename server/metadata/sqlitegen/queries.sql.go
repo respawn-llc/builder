@@ -3728,7 +3728,8 @@ label_filter_args AS (
     SELECT
         CAST(?2 AS TEXT) AS label_filter_kind,
         CAST(?3 AS TEXT) AS label_filter_mode,
-        CAST(?4 AS TEXT) AS label_ids_json
+        CAST(?4 AS TEXT) AS label_ids_json,
+        CAST(?5 AS INTEGER) AS dependency_filter
 ),
 effective_current_nodes AS (
     SELECT
@@ -3736,8 +3737,8 @@ effective_current_nodes AS (
         current_node.node_id
     FROM task_current_nodes current_node
     JOIN task_records t ON t.id = current_node.task_id
-    WHERE t.project_id = ?5
-      AND t.workflow_id = ?6
+    WHERE t.project_id = ?6
+      AND t.workflow_id = ?7
 )
 SELECT
     node_id,
@@ -3799,6 +3800,39 @@ WHERE (
         )
     )
 )
+AND
+    (
+        label_filter_args.dependency_filter IS NULL
+        OR (
+            CAST(label_filter_args.dependency_filter AS INTEGER) != 0
+            AND NOT EXISTS (
+                SELECT 1
+                FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                WHERE dependency.blocked_task_id = effective_current_nodes.task_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM workflow_task_status_records status
+                      WHERE status.task_id = dependency.blocker_task_id
+                        AND status.is_done != 0
+                  )
+            )
+        )
+        OR (
+            CAST(label_filter_args.dependency_filter AS INTEGER) = 0
+            AND EXISTS (
+                SELECT 1
+                FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                WHERE dependency.blocked_task_id = effective_current_nodes.task_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM workflow_task_status_records status
+                      WHERE status.task_id = dependency.blocker_task_id
+                        AND status.is_done != 0
+                  )
+            )
+        )
+    )
+
 GROUP BY node_id
 ORDER BY node_id ASC
 `
@@ -3808,6 +3842,7 @@ type ListBoardColumnTaskCountsParams struct {
 	LabelFilterKind      string
 	LabelFilterMode      sql.NullString
 	LabelIdsJson         string
+	DependencyFilter     sql.NullInt64
 	ProjectID            string
 	WorkflowID           runtimeids.WorkflowID
 }
@@ -3823,10 +3858,11 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 		arg.LabelFilterKind,
 		arg.LabelFilterMode,
 		arg.LabelIdsJson,
+		arg.DependencyFilter,
 		arg.ProjectID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 6)
+	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 7)
 
 	if err != nil {
 		return nil, err
@@ -3835,15 +3871,15 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 	var items []ListBoardColumnTaskCountsRow
 	for rows.Next() {
 		var i ListBoardColumnTaskCountsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 6); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 7); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 6); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 7); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 6); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 7); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -3930,44 +3966,77 @@ WITH board_node_tasks AS (
               )
           )
       )
+      AND
+          (
+              ?7 IS NULL
+              OR (
+                  CAST(?7 AS INTEGER) != 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+              OR (
+                  CAST(?7 AS INTEGER) = 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+          )
+
       AND (
           EXISTS (
               SELECT 1
               FROM task_current_nodes current_node
               WHERE current_node.task_id = t.id
-                AND current_node.node_id = ?7
+                AND current_node.node_id = ?8
           )
       )
 ),
 older_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?8 = 'older'
+    WHERE ?9 = 'older'
       AND (
-          ?9 IS NULL
-          OR t.updated_at_unix_ms < ?9
+          ?10 IS NULL
+          OR t.updated_at_unix_ms < ?10
           OR (
-              t.updated_at_unix_ms = ?9
-              AND t.id < ?10
+              t.updated_at_unix_ms = ?10
+              AND t.id < ?11
           )
       )
     ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT ?11
+    LIMIT ?12
 ),
 newer_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?8 = 'newer'
-      AND ?9 IS NOT NULL
+    WHERE ?9 = 'newer'
+      AND ?10 IS NOT NULL
       AND (
-          t.updated_at_unix_ms > ?9
+          t.updated_at_unix_ms > ?10
           OR (
-              t.updated_at_unix_ms = ?9
-              AND t.id > ?10
+              t.updated_at_unix_ms = ?10
+              AND t.id > ?11
           )
       )
     ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT ?11
+    LIMIT ?12
 ),
 dependency_progress AS (
     SELECT
@@ -4047,6 +4116,7 @@ type ListBoardNodeTasksParams struct {
 	LabelFilterMode       interface{}
 	LabelIdsJson          interface{}
 	ExcludedLabelIdsJson  interface{}
+	DependencyFilter      interface{}
 	NodeID                string
 	CursorDirection       interface{}
 	CursorUpdatedAtUnixMs interface{}
@@ -4087,13 +4157,14 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.LabelFilterMode,
 		arg.LabelIdsJson,
 		arg.ExcludedLabelIdsJson,
+		arg.DependencyFilter,
 		arg.NodeID,
 		arg.CursorDirection,
 		arg.CursorUpdatedAtUnixMs,
 		arg.CursorTaskID,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listBoardNodeTasks, 11)
+	err = recordQueryError(ctx, err, listBoardNodeTasks, 12)
 
 	if err != nil {
 		return nil, err
@@ -4125,15 +4196,15 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.MetadataJson,
 			&i.DependencySatisfiedCount,
 			&i.DependencyTotalCount,
-		), listBoardNodeTasks, 11); err != nil {
+		), listBoardNodeTasks, 12); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 11); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 12); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 11); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7723,33 +7794,34 @@ args AS (
         CAST(?10 AS TEXT) AS label_filter_kind,
         CAST(?11 AS TEXT) AS label_filter_mode,
         CAST(?12 AS TEXT) AS label_ids_json,
-        CAST(?13 AS INTEGER) AS offset_rows,
-        CAST(?14 AS INTEGER) AS sort_selector_count,
-        CAST(?15 AS TEXT) AS sort_1_field,
-        CAST(?16 AS INTEGER) AS sort_1_desc,
-        CAST(?17 AS TEXT) AS sort_2_field,
-        CAST(?18 AS INTEGER) AS sort_2_desc,
-        CAST(?19 AS TEXT) AS sort_3_field,
-        CAST(?20 AS INTEGER) AS sort_3_desc,
-        CAST(?21 AS TEXT) AS sort_4_field,
-        CAST(?22 AS INTEGER) AS sort_4_desc,
-        CAST(?23 AS TEXT) AS sort_5_field,
-        CAST(?24 AS INTEGER) AS sort_5_desc,
-        CAST(?25 AS TEXT) AS sort_6_field,
-        CAST(?26 AS INTEGER) AS sort_6_desc,
-        CAST(?27 AS TEXT) AS sort_7_field,
-        CAST(?28 AS INTEGER) AS sort_7_desc,
+        CAST(?13 AS INTEGER) AS dependency_filter,
+        CAST(?14 AS INTEGER) AS offset_rows,
+        CAST(?15 AS INTEGER) AS sort_selector_count,
+        CAST(?16 AS TEXT) AS sort_1_field,
+        CAST(?17 AS INTEGER) AS sort_1_desc,
+        CAST(?18 AS TEXT) AS sort_2_field,
+        CAST(?19 AS INTEGER) AS sort_2_desc,
+        CAST(?20 AS TEXT) AS sort_3_field,
+        CAST(?21 AS INTEGER) AS sort_3_desc,
+        CAST(?22 AS TEXT) AS sort_4_field,
+        CAST(?23 AS INTEGER) AS sort_4_desc,
+        CAST(?24 AS TEXT) AS sort_5_field,
+        CAST(?25 AS INTEGER) AS sort_5_desc,
+        CAST(?26 AS TEXT) AS sort_6_field,
+        CAST(?27 AS INTEGER) AS sort_6_desc,
+        CAST(?28 AS TEXT) AS sort_7_field,
+        CAST(?29 AS INTEGER) AS sort_7_desc,
         CASE WHEN
-            (CAST(?14 AS INTEGER) >= 1 AND CAST(?15 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 2 AND CAST(?17 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 3 AND CAST(?19 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 4 AND CAST(?21 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 5 AND CAST(?23 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 6 AND CAST(?25 AS TEXT) = 'labels') OR
-            (CAST(?14 AS INTEGER) >= 7 AND CAST(?27 AS TEXT) = 'labels')
+            (CAST(?15 AS INTEGER) >= 1 AND CAST(?16 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 2 AND CAST(?18 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 3 AND CAST(?20 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 4 AND CAST(?22 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 5 AND CAST(?24 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 6 AND CAST(?26 AS TEXT) = 'labels') OR
+            (CAST(?15 AS INTEGER) >= 7 AND CAST(?28 AS TEXT) = 'labels')
         THEN 1 ELSE 0 END AS labels_requested,
-        CAST(?29 AS TEXT) AS live_task_states_json,
-        CAST(?30 AS INTEGER) AS limit_rows
+        CAST(?30 AS TEXT) AS live_task_states_json,
+        CAST(?31 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
@@ -7917,7 +7989,7 @@ eligible_rows AS (
                   )
                   OR EXISTS (
                       SELECT 1
-                      FROM json_each(?31) excluded_label
+                      FROM json_each(?32) excluded_label
                       WHERE NOT EXISTS (
                           SELECT 1
                           FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -7942,7 +8014,7 @@ eligible_rows AS (
               )
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?31) excluded_label
+                  FROM json_each(?32) excluded_label
                   JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                     ON assignment.label_id = excluded_label.value
                   WHERE assignment.task_id = t.id
@@ -7957,6 +8029,39 @@ eligible_rows AS (
               )
           )
       )
+      AND
+          (
+              args.dependency_filter IS NULL
+              OR (
+                  CAST(args.dependency_filter AS INTEGER) != 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+              OR (
+                  CAST(args.dependency_filter AS INTEGER) = 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+          )
+
 ),
 task_label_values AS (
     SELECT
@@ -8177,6 +8282,7 @@ type ListWorkflowTaskListRowsParams struct {
 	LabelFilterKind      string
 	LabelFilterMode      sql.NullString
 	LabelIdsJson         string
+	DependencyFilter     sql.NullInt64
 	OffsetRows           int64
 	SortSelectorCount    int64
 	Sort1Field           string
@@ -8244,6 +8350,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.LabelFilterKind,
 		arg.LabelFilterMode,
 		arg.LabelIdsJson,
+		arg.DependencyFilter,
 		arg.OffsetRows,
 		arg.SortSelectorCount,
 		arg.Sort1Field,
@@ -8264,7 +8371,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.LimitRows,
 		arg.ExcludedLabelIdsJson,
 	)
-	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 31)
+	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 32)
 
 	if err != nil {
 		return nil, err
@@ -8303,15 +8410,15 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.AttentionTypesJson,
 			&i.TitleSort,
 			&i.MatchingWorkflowCount,
-		), listWorkflowTaskListRows, 31); err != nil {
+		), listWorkflowTaskListRows, 32); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 31); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskListRows, 32); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 31); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskListRows, 32); err != nil {
 		return nil, err
 	}
 	return items, nil

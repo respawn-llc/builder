@@ -33,7 +33,7 @@ func generateTaskSearchSchemaContractCommand(args []string) error {
 
 type taskSearchQueryAdapterSpec struct {
 	command    string
-	render     func([]byte, []byte, []byte) ([]byte, error)
+	render     func([]byte, []byte, []byte, []byte) ([]byte, error)
 	generate   func([]byte) ([]byte, error)
 	outputNoun string
 }
@@ -43,6 +43,7 @@ func generateTaskSearchQueryAdapterCommand(args []string, spec taskSearchQueryAd
 	fs.SetOutput(io.Discard)
 	input := fs.String("input", "", "metadata query template input")
 	fragment := fs.String("fragment", "", "task label filter template fragment")
+	dependencyFragment := fs.String("dependency-fragment", "", "task dependency filter template fragment")
 	statusFragment := fs.String("status-fragment", "", "task status projection template fragment")
 	output := fs.String("output", "", "generated Go output")
 	if err := fs.Parse(args); err != nil {
@@ -52,10 +53,11 @@ func generateTaskSearchQueryAdapterCommand(args []string, spec taskSearchQueryAd
 		return fmt.Errorf("%s does not accept positional arguments", spec.command)
 	}
 	for name, value := range map[string]string{
-		"input":           *input,
-		"fragment":        *fragment,
-		"status-fragment": *statusFragment,
-		"output":          *output,
+		"input":               *input,
+		"fragment":            *fragment,
+		"dependency-fragment": *dependencyFragment,
+		"status-fragment":     *statusFragment,
+		"output":              *output,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", name)
@@ -69,11 +71,15 @@ func generateTaskSearchQueryAdapterCommand(args []string, spec taskSearchQueryAd
 	if err != nil {
 		return fmt.Errorf("read task label filter template: %w", err)
 	}
+	dependencySource, err := os.ReadFile(*dependencyFragment)
+	if err != nil {
+		return fmt.Errorf("read task dependency filter template: %w", err)
+	}
 	statusSource, err := os.ReadFile(*statusFragment)
 	if err != nil {
 		return fmt.Errorf("read task status projection template: %w", err)
 	}
-	query, err := spec.render(querySource, filterSource, statusSource)
+	query, err := spec.render(querySource, filterSource, dependencySource, statusSource)
 	if err != nil {
 		return err
 	}

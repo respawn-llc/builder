@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
+import { boardFiltersEqual, type BoardColumn, type BoardFilter, type SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
 import { useProjectLabelCatalog } from "@/shared/labels";
-import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
+import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
@@ -28,6 +28,21 @@ export type BoardColumnQuerySnapshot =
       data: BoardColumnQueryDataSnapshot;
     }>;
 
+export type BoardColumnNoticeEvent =
+  | Readonly<{
+      kind: "failure";
+      columnID: string;
+      error: unknown;
+      filter: BoardFilter;
+      generation: number;
+      noticeID: string;
+      retry: () => void;
+    }>
+  | Readonly<{
+      kind: "dismiss";
+      noticeID: string;
+    }>;
+
 export type BoardColumnDataView = Readonly<{
   cards: readonly KanbanCardVM[];
   hasNextPage: boolean;
@@ -44,6 +59,7 @@ export type BoardColumnDataView = Readonly<{
 export function BoardColumnDataOwner({
   board,
   column,
+  onBoardColumnNotice,
   onCardsLoadError,
   onDataViewChange,
   onDataViewRelease,
@@ -51,6 +67,7 @@ export function BoardColumnDataOwner({
 }: Readonly<{
   board: SelectedWorkflowBoard;
   column: BoardColumn;
+  onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
   onCardsLoadError: (error: unknown) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
@@ -59,6 +76,12 @@ export function BoardColumnDataOwner({
   const { t } = useTranslation();
   const labelCatalog = useProjectLabelCatalog();
   const filterGeneration = useBoardFilterGeneration();
+  const stableOnBoardColumnNotice = useStableCallback(onBoardColumnNotice);
+  const stableOnCardsLoadError = useStableCallback(onCardsLoadError);
+  const stableOnDataViewChange = useStableCallback(onDataViewChange);
+  const stableOnDataViewRelease = useStableCallback(onDataViewRelease);
+  const stableOnReportColumnSnapshot = useStableCallback(onReportColumnSnapshot);
+  const activeFilterGeneration = filterGeneration.snapshot.active;
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
   const hydratedFilterGenerationRef = useRef<number | null>(null);
@@ -97,14 +120,41 @@ export function BoardColumnDataOwner({
     isPending,
     refetch,
   } = cardsQuery;
-  const requestEnabled =
-    !filterGeneration.snapshot.active.retiring && filterGeneration.snapshot.desiredFilter === null;
+  const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
   const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
   const retryInitial = useCallback(() => {
     if (requestEnabled) {
       void refetch();
     }
   }, [refetch, requestEnabled]);
+  const mountedRef = useRef(true);
+  const noticeRef = useRef<Readonly<{ generation: number; noticeID: string }> | null>(null);
+  const noticeID = boardColumnNoticeID(
+    board.projectID,
+    board.selectedWorkflow.id,
+    column.id,
+    activeFilterGeneration.generation,
+  );
+  const retryReplacement = useCallback(() => {
+    if (!mountedRef.current) {
+      return;
+    }
+    const current = filterGeneration.controller.getSnapshot();
+    if (
+      current.active.generation !== activeFilterGeneration.generation ||
+      current.active.retiring ||
+      current.desiredFilter !== null ||
+      !boardFiltersEqual(current.active.filter, activeFilterGeneration.filter)
+    ) {
+      return;
+    }
+    void refetch();
+  }, [
+    activeFilterGeneration.filter,
+    activeFilterGeneration.generation,
+    filterGeneration.controller,
+    refetch,
+  ]);
   const loadNewer = useCallback(() => {
     if (paginationEnabled && hasPreviousPage && !isFetchingPreviousPage) {
       void fetchPreviousPage();
@@ -185,14 +235,66 @@ export function BoardColumnDataOwner({
   );
 
   useLayoutEffect(() => {
-    onDataViewChange(dataView);
-  }, [dataView, onDataViewChange]);
+    stableOnDataViewChange(dataView);
+  }, [dataView, stableOnDataViewChange]);
 
   useEffect(() => {
-    if (isError) {
-      onCardsLoadError(error);
+    if (isError && !isPlaceholderData) {
+      stableOnCardsLoadError(error);
     }
-  }, [error, isError, onCardsLoadError]);
+  }, [error, isError, isPlaceholderData, stableOnCardsLoadError]);
+
+  useEffect(() => {
+    const notice = noticeRef.current;
+    if (
+      notice !== null &&
+      (notice.generation !== activeFilterGeneration.generation ||
+        activeFilterGeneration.retiring ||
+        filterGeneration.snapshot.desiredFilter !== null)
+    ) {
+      stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
+      noticeRef.current = null;
+    }
+  }, [
+    activeFilterGeneration.generation,
+    activeFilterGeneration.retiring,
+    filterGeneration.snapshot.desiredFilter,
+    stableOnBoardColumnNotice,
+  ]);
+
+  useEffect(() => {
+    if (isError && isPlaceholderData && cardsQuery.data !== undefined && requestEnabled) {
+      noticeRef.current = { generation: activeFilterGeneration.generation, noticeID };
+      stableOnBoardColumnNotice({
+        kind: "failure",
+        columnID: column.id,
+        error,
+        filter: activeFilterGeneration.filter,
+        generation: activeFilterGeneration.generation,
+        noticeID,
+        retry: retryReplacement,
+      });
+      return;
+    }
+    const notice = noticeRef.current;
+    if (notice !== null && notice.noticeID === noticeID && !isFetching && !isError && !isPlaceholderData) {
+      stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
+      noticeRef.current = null;
+    }
+  }, [
+    activeFilterGeneration.filter,
+    activeFilterGeneration.generation,
+    cardsQuery.data,
+    column.id,
+    error,
+    isError,
+    isFetching,
+    isPlaceholderData,
+    noticeID,
+    stableOnBoardColumnNotice,
+    requestEnabled,
+    retryReplacement,
+  ]);
 
   useEffect(() => {
     if (isFetchingPreviousPage || isFetchingNextPage || isFetchPreviousPageError || isFetchNextPageError) {
@@ -202,13 +304,14 @@ export function BoardColumnDataOwner({
 
   useEffect(() => {
     const activeFilterGeneration = filterGeneration.snapshot.active.generation;
-    const cause: BoardColumnUpdateCause = hydratedFilterGenerationRef.current !== activeFilterGeneration
-      ? "hydration"
-      : paginationInFlightRef.current
-        ? "pagination"
-        : "domain";
+    const cause: BoardColumnUpdateCause =
+      hydratedFilterGenerationRef.current !== activeFilterGeneration
+        ? "hydration"
+        : paginationInFlightRef.current
+          ? "pagination"
+          : "domain";
     generationRef.current += 1;
-    onReportColumnSnapshot(column.id, {
+    stableOnReportColumnSnapshot(column.id, {
       cause,
       data: {
         cards: cardVMs,
@@ -236,18 +339,33 @@ export function BoardColumnDataOwner({
     isFetchingPreviousPage,
     isPending,
     isPlaceholderData,
-    onReportColumnSnapshot,
+    stableOnReportColumnSnapshot,
   ]);
 
-  useEffect(
-    () => () => {
-      onDataViewRelease();
-      onReportColumnSnapshot(column.id, { cause: "deactivation" });
-    },
-    [column.id, onDataViewRelease, onReportColumnSnapshot],
-  );
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const notice = noticeRef.current;
+      if (notice !== null) {
+        stableOnBoardColumnNotice({ kind: "dismiss", noticeID: notice.noticeID });
+        noticeRef.current = null;
+      }
+      stableOnDataViewRelease();
+      stableOnReportColumnSnapshot(column.id, { cause: "deactivation" });
+    };
+  }, [column.id, stableOnBoardColumnNotice, stableOnDataViewRelease, stableOnReportColumnSnapshot]);
 
   return null;
+}
+
+function boardColumnNoticeID(
+  projectID: string,
+  workflowID: string,
+  columnID: string,
+  generation: number,
+): string {
+  return `board-cards:${projectID}:${workflowID}:${columnID}:${generation.toString()}`;
 }
 
 function directionalBoundary(

@@ -194,7 +194,12 @@
 
 ## Labels
 
-- Boards have one transparent label-filter row. It provides no status, attention, column, or sort filter.
+- Boards have one transparent filter row. It provides Labels and Unblocked filters, but no status, attention, column, or sort filter.
+- The Unblocked filter uses a two-state chip labeled `Unblocked`. Its inactive state applies no dependency restriction. Its selected state includes only Tasks with no direct Task Dependencies or no unsatisfied direct Task Dependencies.
+- The Unblocked chip uses the same styling and padding as the other filter chips. It appears after the other filters and before search.
+- The Unblocked filter applies to every board column and every column count. It combines with the Labels filter so a shown Task must satisfy both active filters.
+- The Unblocked selection belongs only to the current board route. Desktop resets it when the operator leaves the board or selects another Project or Workflow. Desktop does not persist it across relaunches.
+- Unblocked filter changes apply immediately through server filtering. Existing cards and counts remain visible until their corresponding replacement arrives, and each authoritative result applies as it arrives. If a replacement fails, Desktop retains the affected prior result and shows a persistent Retry error.
 - The trigger says `Labels` with no filter, `Labels · N` with named Label conditions, and `No labels` for the unlabeled filter. N counts included and excluded Label conditions. A clear action appears only for an active filter.
 - One Label filter and its OR/AND mode apply to every board in a Project and persist for that Project in the desktop installation. They are not shared with other clients. OR is the default.
 - Board Label filtering uses the shared Label-expression semantics in the Workflow orchestration specification.

@@ -1,23 +1,30 @@
-import { canonicalTaskLabelFilter, type TaskLabelFilter } from "@/api";
+import { canonicalBoardFilter, type BoardFilterInput } from "@/api";
 
 const attentionKey = ["attention"] as const;
 
-function labelFilterKey(filter: TaskLabelFilter): readonly string[] {
-  const canonical = canonicalTaskLabelFilter(filter);
-  switch (canonical.kind) {
+function boardFilterKey(filter: BoardFilterInput): readonly string[] {
+  const canonical = canonicalBoardFilter(filter);
+  const label = canonical.labelFilter;
+  switch (label.kind) {
     case "none":
     case "unlabeled":
-      return [canonical.kind];
+      return [label.kind, "dependency", dependencyFilterKey(canonical.dependencyFilter)];
     case "named":
       return [
-        canonical.kind,
-        canonical.mode,
+        label.kind,
+        label.mode,
         "included",
-        ...canonical.labelIDs,
+        ...label.labelIDs,
         "excluded",
-        ...canonical.excludedLabelIDs,
+        ...label.excludedLabelIDs,
+        "dependency",
+        dependencyFilterKey(canonical.dependencyFilter),
       ];
   }
+}
+
+function dependencyFilterKey(filter: boolean | null): string {
+  return filter === null ? "dependency:null" : filter ? "dependency:true" : "dependency:false";
 }
 
 export const queryKeys = {
@@ -47,11 +54,11 @@ export const queryKeys = {
   allPendingAsks: ["pending-asks"],
   boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
   projectBoardsRoot: (projectID: string) => ["board", projectID],
-  board: (projectID: string, workflowID: string | undefined, labelFilter: TaskLabelFilter) => [
+  board: (projectID: string, workflowID: string | undefined, filter: BoardFilterInput) => [
     "board",
     projectID,
     workflowID,
-    ...labelFilterKey(labelFilter),
+    ...boardFilterKey(filter),
   ],
   workflows: (query: string) => ["workflow", query],
   workflowDefinition: (workflowID: string) => ["workflow-definition", workflowID],
@@ -90,17 +97,17 @@ export const queryKeys = {
     projectID,
     workflowID,
   ],
-  boardNodeCardsRoot: (projectID: string, workflowID: string, labelFilter: TaskLabelFilter) => [
+  boardNodeCardsRoot: (projectID: string, workflowID: string, filter: BoardFilterInput) => [
     "board-node-cards",
     projectID,
     workflowID,
-    ...labelFilterKey(labelFilter),
+    ...boardFilterKey(filter),
   ],
-  boardNodeCards: (projectID: string, workflowID: string, nodeID: string, labelFilter: TaskLabelFilter) => [
+  boardNodeCards: (projectID: string, workflowID: string, nodeID: string, filter: BoardFilterInput) => [
     "board-node-cards",
     projectID,
     workflowID,
-    ...labelFilterKey(labelFilter),
+    ...boardFilterKey(filter),
     nodeID,
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],

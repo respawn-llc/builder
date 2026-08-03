@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { TaskLabelFilter } from "@/api";
+import { canonicalBoardFilter, type BoardFilter, type TaskLabelFilter } from "@/api";
 import { useStableCallback } from "@/ui";
 import { createBoardFilterGenerationController } from "./BoardFilterGenerationController";
 import { createBoardGenerationRequestAdapter } from "./BoardGenerationRequestAdapter";
@@ -12,12 +12,12 @@ export function BoardFilterGenerationProvider({
   children,
   initialFilter,
   onBackgroundError,
-  desiredFilter = initialFilter,
+  desiredLabelFilter,
   queriesEnabled = true,
 }: Readonly<{
   children: ReactNode;
-  desiredFilter?: TaskLabelFilter;
-  initialFilter: TaskLabelFilter;
+  desiredLabelFilter?: TaskLabelFilter;
+  initialFilter: BoardFilter;
   onBackgroundError?: ((error: unknown) => void) | undefined;
   queriesEnabled?: boolean;
 }>) {
@@ -45,8 +45,18 @@ export function BoardFilterGenerationProvider({
   const getSnapshot = useCallback(() => controller.getSnapshot(), [controller]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   useLayoutEffect(() => {
-    controller.setDesiredFilter(desiredFilter);
-  }, [controller, desiredFilter]);
+    if (desiredLabelFilter === undefined) {
+      return;
+    }
+    const snapshot = controller.getSnapshot();
+    const current = snapshot.desiredFilter ?? snapshot.active.filter;
+    controller.setDesiredFilter(
+      canonicalBoardFilter({
+        labelFilter: desiredLabelFilter,
+        dependencyFilter: current.dependencyFilter,
+      }),
+    );
+  }, [controller, desiredLabelFilter]);
   const value = useMemo(
     () => ({
       controller,

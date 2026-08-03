@@ -1,0 +1,31 @@
+{{.Indent}}(
+{{.Indent}}    {{.DependencyFilter}} IS NULL
+{{.Indent}}    OR (
+{{.Indent}}        CAST({{.DependencyFilter}} AS INTEGER) != 0
+{{.Indent}}        AND NOT EXISTS (
+{{.Indent}}            SELECT 1
+{{.Indent}}            FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+{{.Indent}}            WHERE dependency.blocked_task_id = {{.TaskID}}
+{{.Indent}}              AND NOT EXISTS (
+{{.Indent}}                  SELECT 1
+{{.Indent}}                  FROM workflow_task_status_records status
+{{.Indent}}                  WHERE status.task_id = dependency.blocker_task_id
+{{.Indent}}                    AND status.is_done != 0
+{{.Indent}}              )
+{{.Indent}}        )
+{{.Indent}}    )
+{{.Indent}}    OR (
+{{.Indent}}        CAST({{.DependencyFilter}} AS INTEGER) = 0
+{{.Indent}}        AND EXISTS (
+{{.Indent}}            SELECT 1
+{{.Indent}}            FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+{{.Indent}}            WHERE dependency.blocked_task_id = {{.TaskID}}
+{{.Indent}}              AND NOT EXISTS (
+{{.Indent}}                  SELECT 1
+{{.Indent}}                  FROM workflow_task_status_records status
+{{.Indent}}                  WHERE status.task_id = dependency.blocker_task_id
+{{.Indent}}                    AND status.is_done != 0
+{{.Indent}}              )
+{{.Indent}}        )
+{{.Indent}}    )
+{{.Indent}})

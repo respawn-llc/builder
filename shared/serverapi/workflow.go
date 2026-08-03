@@ -1131,9 +1131,10 @@ type WorkflowTaskCommentDeleteRequest struct {
 }
 
 type WorkflowBoardRequest struct {
-	ProjectID   string                  `json:"project_id"`
-	WorkflowID  *runtimeids.WorkflowID  `json:"workflow_id,omitempty"`
-	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
+	ProjectID        string                  `json:"project_id"`
+	WorkflowID       *runtimeids.WorkflowID  `json:"workflow_id,omitempty"`
+	LabelFilter      WorkflowTaskLabelFilter `json:"label_filter"`
+	DependencyFilter *bool                   `json:"dependency_filter,omitempty"`
 }
 
 type WorkflowTaskStatusKind string
@@ -1216,15 +1217,16 @@ type WorkflowTaskListSort struct {
 }
 
 type WorkflowTaskListRequest struct {
-	ProjectID      *string                     `json:"project_id,omitempty"`
-	WorkflowID     *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
-	ColumnKeys     []string                    `json:"column_keys,omitempty"`
-	StatusKinds    []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
-	AttentionKinds []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
-	LabelFilter    WorkflowTaskLabelFilter     `json:"label_filter"`
-	Sort           []WorkflowTaskListSort      `json:"sort,omitempty"`
-	Offset         *int                        `json:"offset,omitempty"`
-	Limit          *int                        `json:"limit,omitempty"`
+	ProjectID        *string                     `json:"project_id,omitempty"`
+	WorkflowID       *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
+	ColumnKeys       []string                    `json:"column_keys,omitempty"`
+	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
+	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
+	LabelFilter      WorkflowTaskLabelFilter     `json:"label_filter"`
+	DependencyFilter *bool                       `json:"dependency_filter,omitempty"`
+	Sort             []WorkflowTaskListSort      `json:"sort,omitempty"`
+	Offset           *int                        `json:"offset,omitempty"`
+	Limit            *int                        `json:"limit,omitempty"`
 }
 
 type WorkflowTaskListScope struct {
@@ -1352,12 +1354,13 @@ type WorkflowBoardResponse struct {
 }
 
 type WorkflowBoardNodeCardsListRequest struct {
-	ProjectID   string                  `json:"project_id"`
-	WorkflowID  runtimeids.WorkflowID   `json:"workflow_id"`
-	NodeID      string                  `json:"node_id"`
-	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
-	PageSize    int                     `json:"page_size"`
-	PageToken   *string                 `json:"page_token"`
+	ProjectID        string                  `json:"project_id"`
+	WorkflowID       runtimeids.WorkflowID   `json:"workflow_id"`
+	NodeID           string                  `json:"node_id"`
+	LabelFilter      WorkflowTaskLabelFilter `json:"label_filter"`
+	DependencyFilter *bool                   `json:"dependency_filter,omitempty"`
+	PageSize         int                     `json:"page_size"`
+	PageToken        *string                 `json:"page_token"`
 }
 
 type WorkflowBoardNodeCardsListResponse struct {

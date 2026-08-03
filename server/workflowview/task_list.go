@@ -98,6 +98,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		statusKinds:        req.StatusKinds,
 		attentionKinds:     req.AttentionKinds,
 		labelFilter:        labelFilter,
+		dependencyFilter:   req.DependencyFilter,
 		sortSelectors:      sortSelectors,
 		offset:             window.Offset,
 		limit:              window.Limit + 1,

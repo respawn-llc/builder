@@ -1432,7 +1432,8 @@ label_filter_args AS (
     SELECT
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
-        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter
 ),
 effective_current_nodes AS (
     SELECT
@@ -1503,6 +1504,39 @@ WHERE (
         )
     )
 )
+AND
+    (
+        label_filter_args.dependency_filter IS NULL
+        OR (
+            CAST(label_filter_args.dependency_filter AS INTEGER) != 0
+            AND NOT EXISTS (
+                SELECT 1
+                FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                WHERE dependency.blocked_task_id = effective_current_nodes.task_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM workflow_task_status_records status
+                      WHERE status.task_id = dependency.blocker_task_id
+                        AND status.is_done != 0
+                  )
+            )
+        )
+        OR (
+            CAST(label_filter_args.dependency_filter AS INTEGER) = 0
+            AND EXISTS (
+                SELECT 1
+                FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                WHERE dependency.blocked_task_id = effective_current_nodes.task_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM workflow_task_status_records status
+                      WHERE status.task_id = dependency.blocker_task_id
+                        AND status.is_done != 0
+                  )
+            )
+        )
+    )
+
 GROUP BY node_id
 ORDER BY node_id ASC;
 
@@ -1522,6 +1556,7 @@ args AS (
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
+        CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter,
         CAST(sqlc.arg(offset_rows) AS INTEGER) AS offset_rows,
         CAST(sqlc.arg(sort_selector_count) AS INTEGER) AS sort_selector_count,
         CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
@@ -1756,6 +1791,39 @@ eligible_rows AS (
               )
           )
       )
+      AND
+          (
+              args.dependency_filter IS NULL
+              OR (
+                  CAST(args.dependency_filter AS INTEGER) != 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+              OR (
+                  CAST(args.dependency_filter AS INTEGER) = 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+          )
+
 ),
 task_label_values AS (
     SELECT
@@ -4170,6 +4238,39 @@ WITH board_node_tasks AS (
               )
           )
       )
+      AND
+          (
+              sqlc.narg(dependency_filter) IS NULL
+              OR (
+                  CAST(sqlc.narg(dependency_filter) AS INTEGER) != 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+              OR (
+                  CAST(sqlc.narg(dependency_filter) AS INTEGER) = 0
+                  AND EXISTS (
+                      SELECT 1
+                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
+                      WHERE dependency.blocked_task_id = t.id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM workflow_task_status_records status
+                            WHERE status.task_id = dependency.blocker_task_id
+                              AND status.is_done != 0
+                        )
+                  )
+              )
+          )
+
       AND (
           EXISTS (
               SELECT 1

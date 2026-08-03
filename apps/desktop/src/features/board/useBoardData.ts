@@ -82,7 +82,7 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
             projectID,
             workflowID,
             nodeID,
-            labelFilter: active.filter,
+            filter: active.filter,
             pageToken: pageParam,
           }),
       }),

@@ -83,6 +83,13 @@ CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
 	node_id TEXT NOT NULL
 );
+CREATE TABLE task_dependencies (
+	blocker_task_id TEXT NOT NULL,
+	blocked_task_id TEXT NOT NULL,
+	PRIMARY KEY (blocker_task_id, blocked_task_id)
+);
+CREATE INDEX task_dependencies_reverse_idx
+	ON task_dependencies(blocked_task_id, blocker_task_id);
 CREATE TABLE task_label_assignments (
 	task_id TEXT NOT NULL,
 	label_id TEXT NOT NULL,
@@ -108,6 +115,7 @@ CREATE INDEX task_label_assignments_label_task_idx
 		"none",
 		"",
 		"[]",
+		nil,
 		int64(0),
 		"updated",
 		int64(1),

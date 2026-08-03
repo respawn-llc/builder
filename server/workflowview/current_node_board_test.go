@@ -5,6 +5,7 @@ import (
 	"sort"
 	"testing"
 
+	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
@@ -123,4 +124,120 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 	if _, err := fixture.board.ListNodeCards(fixture.ctx, request); !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("board token replay with changed filter error = %v, want invalid page token", err)
 	}
+}
+
+func TestBoardListNodeCardsDependencyFilterRunsBeforePaginationAndBindsCursor(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	noDependencies := fixture.startTask(t, "No dependencies")
+	satisfied := fixture.startTask(t, "Satisfied")
+	blocked := fixture.startTask(t, "Blocked")
+	blockedAgain := fixture.startTask(t, "Blocked again")
+	for _, task := range []startedCurrentNodeViewTask{noDependencies, satisfied, blocked, blockedAgain} {
+		fixture.setTaskUpdatedAt(t, task.task.ID, 1_000)
+	}
+
+	satisfiedBlocker := createViewTask(t, fixture, "Satisfied blocker")
+	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+		BlockerTaskID: satisfiedBlocker.ID,
+		BlockedTaskID: satisfied.task.ID,
+	}); err != nil {
+		t.Fatalf("AddTaskDependency satisfied: %v", err)
+	}
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
+		TaskID:       satisfiedBlocker.ID,
+		TargetNodeID: terminalNodeID(t, definition),
+	}); err != nil {
+		t.Fatalf("ManualMoveTask satisfied blocker: %v", err)
+	}
+
+	otherWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, otherWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow other workflow: %v", err)
+	}
+	otherWorkflowBlocker, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &otherWorkflowID,
+		Title:      "Other workflow blocker",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask other workflow blocker: %v", err)
+	}
+	for _, task := range []startedCurrentNodeViewTask{blocked, blockedAgain} {
+		if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+			BlockerTaskID: otherWorkflowBlocker.ID,
+			BlockedTaskID: task.task.ID,
+		}); err != nil {
+			t.Fatalf("AddTaskDependency blocked task %q: %v", task.task.ID, err)
+		}
+	}
+	fixture.setTaskUpdatedAt(t, blocked.task.ID, 4_000)
+	fixture.setTaskUpdatedAt(t, blockedAgain.task.ID, 3_000)
+	fixture.setTaskUpdatedAt(t, noDependencies.task.ID, 2_000)
+	fixture.setTaskUpdatedAt(t, satisfied.task.ID, 1_000)
+
+	filterValue := func(value bool) *bool { return &value }
+	requestFor := func(filter *bool) serverapi.WorkflowBoardNodeCardsListRequest {
+		return serverapi.WorkflowBoardNodeCardsListRequest{
+			ProjectID:        fixture.binding.ProjectID,
+			WorkflowID:       fixture.workflowID,
+			NodeID:           string(fixture.agentNodeID),
+			DependencyFilter: filter,
+			PageSize:         1,
+			LabelFilter:      serverapi.WorkflowTaskLabelFilterNone(),
+		}
+	}
+	filters := []*bool{nil, filterValue(true), filterValue(false)}
+	tokens := make([]string, len(filters))
+	for index, filter := range filters {
+		page, err := fixture.board.ListNodeCards(fixture.ctx, requestFor(filter))
+		if err != nil {
+			t.Fatalf("ListNodeCards filter %d: %v", index, err)
+		}
+		if len(page.Cards) != 1 || page.NextPageToken == nil {
+			t.Fatalf("filter %d page = %+v, want one card and next token", index, page)
+		}
+		tokens[index] = *page.NextPageToken
+	}
+
+	unblockedPage, err := fixture.board.ListNodeCards(fixture.ctx, requestFor(filterValue(true)))
+	if err != nil {
+		t.Fatalf("ListNodeCards unblocked first page: %v", err)
+	}
+	if unblockedPage.Cards[0].TaskID != string(noDependencies.task.ID) {
+		t.Fatalf("unblocked first page card = %q, want no-dependency task %q", unblockedPage.Cards[0].TaskID, noDependencies.task.ID)
+	}
+	unblockedPage, err = fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filterValue(true)), unblockedPage.NextPageToken))
+	if err != nil {
+		t.Fatalf("ListNodeCards unblocked second page: %v", err)
+	}
+	if len(unblockedPage.Cards) != 1 || unblockedPage.Cards[0].TaskID != string(satisfied.task.ID) {
+		t.Fatalf("unblocked second page = %+v, want satisfied task %q", unblockedPage.Cards, satisfied.task.ID)
+	}
+	newer, err := fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filterValue(true)), unblockedPage.PreviousPageToken))
+	if err != nil {
+		t.Fatalf("ListNodeCards unblocked newer page: %v", err)
+	}
+	if len(newer.Cards) != 1 || newer.Cards[0].TaskID != string(noDependencies.task.ID) {
+		t.Fatalf("unblocked newer page = %+v, want no-dependency task %q", newer.Cards, noDependencies.task.ID)
+	}
+
+	for sourceIndex, token := range tokens {
+		for targetIndex, filter := range filters {
+			if sourceIndex == targetIndex {
+				continue
+			}
+			if _, err := fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filter), &token)); !errors.Is(err, ErrInvalidPageToken) {
+				t.Fatalf("token from filter %d replayed under filter %d with error %v, want invalid page token", sourceIndex, targetIndex, err)
+			}
+		}
+	}
+}
+
+func requestWithToken(request serverapi.WorkflowBoardNodeCardsListRequest, token *string) serverapi.WorkflowBoardNodeCardsListRequest {
+	request.PageToken = token
+	return request
 }

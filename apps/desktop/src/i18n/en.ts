@@ -199,6 +199,7 @@ export const englishResources = {
     board: {
       title: "Workflow board",
       menu: "Board menu",
+      unblocked: "Unblocked",
       workflowPicker: "Workflows",
       newTask: "New Task",
       backlog: "Backlog",

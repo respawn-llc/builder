@@ -22,6 +22,7 @@ type taskListCommandContext struct {
 	ExcludedLabelSelectors []string
 	LabelMatch             *serverapi.WorkflowTaskNamedLabelFilterMode
 	Unlabeled              bool
+	DependencyFilter       *bool
 	Offset                 int
 	Limit                  int
 	JSON                   bool
@@ -346,6 +347,13 @@ func taskListRetryCommandArgsForSelector(commandContext taskListCommandContext, 
 	}
 	if commandContext.Unlabeled {
 		args = append(args, "--unlabeled")
+	}
+	if commandContext.DependencyFilter != nil {
+		if *commandContext.DependencyFilter {
+			args = append(args, "--unblocked")
+		} else {
+			args = append(args, "--blocked")
+		}
 	}
 	args = append(args, "--limit", fmt.Sprintf("%d", commandContext.Limit))
 	if commandContext.JSON {

@@ -14,6 +14,7 @@ import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/
 import {
   BoardColumnDataOwner,
   type BoardColumnDataView,
+  type BoardColumnNoticeEvent,
   type BoardColumnQuerySnapshot,
 } from "./BoardColumnDataOwner";
 import { boardCardInstanceKey } from "./BoardCardInstance";
@@ -37,6 +38,7 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
+  onBoardColumnNotice: (event: BoardColumnNoticeEvent) => void;
   onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
@@ -84,6 +86,7 @@ export function BoardColumnMotionBoundary({
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
+  onBoardColumnNotice,
   onCardsLoadError,
   onDeleteTask,
   onDropTask,
@@ -171,6 +174,7 @@ export function BoardColumnMotionBoundary({
         <BoardColumnDataOwner
           board={board}
           column={column}
+          onBoardColumnNotice={onBoardColumnNotice}
           onCardsLoadError={onCardsLoadError}
           onDataViewChange={setDataView}
           onDataViewRelease={releaseDataView}

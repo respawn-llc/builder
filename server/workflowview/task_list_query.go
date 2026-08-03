@@ -38,6 +38,7 @@ type workflowTaskListQueryRequest struct {
 	statusKinds        []serverapi.WorkflowTaskStatusKind
 	attentionKinds     []serverapi.WorkflowTaskAttentionKind
 	labelFilter        workflowTaskLabelFilterFacts
+	dependencyFilter   *bool
 	sortSelectors      []serverapi.WorkflowTaskListSort
 	liveTaskStatesJSON string
 	offset             int
@@ -119,6 +120,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		LabelFilterMode:      labelFilterArgs.mode,
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
 		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+		DependencyFilter:     workflowTaskDependencyFilterQueryArg(req.dependencyFilter),
 		OffsetRows:           int64(req.offset),
 		SortSelectorCount:    int64(len(req.sortSelectors)),
 		Sort1Field:           string(workflowTaskListSortSelector(req.sortSelectors, 0).Field),

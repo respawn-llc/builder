@@ -2,7 +2,12 @@ import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import {
+  canonicalBoardFilter,
+  hasSelectedWorkflow,
+  type BoardColumn,
+  type SelectedWorkflowBoard,
+} from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -23,6 +28,8 @@ import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { BoardRailMotionController } from "./BoardRailMotionController";
+import type { BoardColumnNoticeEvent } from "./BoardColumnDataOwner";
+import { boardColumnNoticeStatusNotice } from "./BoardColumnNotice";
 import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 import type { BoardColumnDropState } from "./BoardDragTypes";
@@ -38,7 +45,7 @@ import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
-import { BoardLabelFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
+import { BoardFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
 import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
@@ -105,8 +112,12 @@ function BoardRouteWithLabels({
   const filter = useProjectLabelFilter();
   return (
     <BoardFilterGenerationProvider
-      desiredFilter={filter.state.filter}
-      initialFilter={filter.state.filter}
+      desiredLabelFilter={filter.state.filter}
+      initialFilter={canonicalBoardFilter({
+        labelFilter: filter.state.filter,
+        dependencyFilter: null,
+      })}
+      key={`${projectId}:${workflowId ?? "default"}`}
       onBackgroundError={onBackgroundError}
       queriesEnabled={filter.persistence.status !== "loading"}
     >
@@ -225,7 +236,7 @@ function BoardContent({
   const [expandedEmptyColumns, setExpandedEmptyColumns] = useState<
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
   >(() => ({ ids: new Set(), scope: "" }));
-  const { push } = useStatusController();
+  const { dismiss, push } = useStatusController();
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
@@ -326,6 +337,20 @@ function BoardContent({
       reportActionError("board-cards-load-error", t("board.cardsLoadFailed"), error);
     },
     [reportActionError, t],
+  );
+  const reportColumnNotice = useCallback(
+    (event: BoardColumnNoticeEvent) => {
+      const notice = boardColumnNoticeStatusNotice(event, {
+        cardsLoadFailed: t("board.cardsLoadFailed"),
+        retry: t("app.retry"),
+      });
+      if (notice === null) {
+        dismiss(event.noticeID);
+        return;
+      }
+      push(notice);
+    },
+    [dismiss, push, t],
   );
   const reportNavigationError = useCallback(
     (error: unknown) => {
@@ -563,7 +588,7 @@ function BoardContent({
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
-        <BoardLabelFilterChrome />
+        <BoardFilterChrome />
         <BoardTaskSearchChrome onOpenTask={openTask} projectID={board.projectID} />
       </div>
       <div className="relative min-h-0 min-w-0 flex-1">
@@ -587,6 +612,7 @@ function BoardContent({
             onCardDragStart={(drag) => {
               setActiveDrag(drag);
             }}
+            onBoardColumnNotice={reportColumnNotice}
             onCardsLoadError={reportCardsLoadError}
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
