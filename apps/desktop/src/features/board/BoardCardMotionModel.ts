@@ -127,10 +127,7 @@ export function boardRailLayoutSignature(
   return `${board.projectID}:${board.selectedWorkflow.id}:${firstActiveID ?? ""}:${sectionSignature}`;
 }
 
-export function cardBelongsToColumn(
-  column: Pick<BoardColumn, "id" | "isBacklog" | "isDone">,
-  card: KanbanCardVM,
-): boolean {
+export function cardBelongsToColumn(column: BoardColumn, card: KanbanCardVM): boolean {
   if (column.isBacklog) {
     return card.statusKind === "backlog";
   }

@@ -49,11 +49,6 @@ type BoardColumnDataOwnerBoard = Readonly<{
   selectedWorkflow: Pick<SelectedWorkflowBoard["selectedWorkflow"], "id">;
 }>;
 
-type BoardColumnDataOwnerColumn = Pick<
-  BoardColumn,
-  "id" | "isBacklog" | "isDone" | "taskCount"
->;
-
 export function BoardColumnDataOwner({
   board,
   column,
@@ -62,7 +57,7 @@ export function BoardColumnDataOwner({
   onReportColumnSnapshot,
 }: Readonly<{
   board: BoardColumnDataOwnerBoard;
-  column: BoardColumnDataOwnerColumn;
+  column: BoardColumn;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;

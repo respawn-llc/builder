@@ -1,7 +1,7 @@
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { canonicalBoardFilter } from "@/api";
+import { canonicalBoardFilter, type BoardColumn } from "@/api";
 import type {
   BoardFilterGenerationController,
   BoardFilterGenerationSnapshot,
@@ -63,7 +63,7 @@ const board = {
   projectID: "project-1",
   selectedWorkflow: { id: "workflow-1" },
 };
-const column = { id: "column-1", isBacklog: false, isDone: false, taskCount: 1 };
+const column: BoardColumn = { id: "column-1", key: "column-1", kind: "agent", name: "Column", assigneeRole: "", outputFields: [], groupID: "group-1", sortOrder: 0, isBacklog: false, isDone: false, taskCount: 1 };
 
 afterEach(() => {
   queryByColumn.clear();
@@ -227,7 +227,7 @@ function Owner({
   onDataViewRelease = vi.fn(),
   onView,
 }: Readonly<{
-  column?: typeof column;
+  column?: BoardColumn;
   onDataViewRelease?: () => void;
   onView(view: BoardColumnDataView): void;
 }>) {
