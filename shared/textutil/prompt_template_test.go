@@ -27,3 +27,10 @@ func TestExpandPromptTemplateTreatsUnicodeAdjacentTextAsLiteral(t *testing.T) {
 		t.Fatalf("unicode-adjacent placeholder = %q", got)
 	}
 }
+
+func TestExpandPromptTemplateTreatsUnicodeConnectorPunctuationAsLiteral(t *testing.T) {
+	prompt := "Review $ARGUMENTS‿suffix"
+	if got := ExpandPromptTemplate(prompt, "src"); got != prompt+"\n\nsrc" {
+		t.Fatalf("connector-adjacent placeholder = %q", got)
+	}
+}

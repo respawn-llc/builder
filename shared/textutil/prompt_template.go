@@ -93,5 +93,8 @@ func promptTokenCharacterAfter(prompt string, index int) bool {
 }
 
 func isPromptTokenCharacter(value rune) bool {
-	return value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value) || unicode.IsMark(value)
+	return unicode.Is(unicode.Pc, value) ||
+		unicode.IsLetter(value) ||
+		unicode.IsDigit(value) ||
+		unicode.IsMark(value)
 }
