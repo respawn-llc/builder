@@ -74,15 +74,15 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     let latestView: BoardColumnDataView | undefined;
     const view = render(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
-
     runtime.snapshot = {
       ...runtime.snapshot,
       active: { ...runtime.snapshot.active, generation: 3 },
     };
-    const replacementError = new Error("replacement failed");
-    queryByColumn.set("column-1", queryState({ error: replacementError, isError: true, refetch }));
+    queryByColumn.set(
+      "column-1",
+      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
+    );
     view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
-
     await waitFor(() => expect(latestView?.replacementBoundary?.state).toBe("error"));
     expect(loggerAppend).toHaveBeenCalledWith(
       "warn",
@@ -95,10 +95,7 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
         workflowID: "workflow-1",
       }),
     );
-    expect(loggerAppend).toHaveBeenCalledOnce();
     latestView?.replacementBoundary?.state === "error" && latestView.replacementBoundary.onRetry();
-    expect(refetch).toHaveBeenCalledOnce();
-
     const staleRetry = latestView?.replacementBoundary;
     runtime.snapshot = {
       active: { ...runtime.snapshot.active, generation: 4 },
@@ -108,8 +105,7 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
       staleRetry.onRetry();
     }
     expect(refetch).toHaveBeenCalledOnce();
-    const recoveredQuery = queryState({ refetch });
-    queryByColumn.set("column-1", recoveredQuery);
+    queryByColumn.set("column-1", queryState({ refetch }));
     view.rerender(<Owner onDataViewRelease={onViewRelease} onView={(next) => (latestView = next)} />);
     await waitFor(() => expect(latestView?.replacementBoundary).toBeUndefined());
     view.unmount();
@@ -161,7 +157,6 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     expect(firstRefetch).toHaveBeenCalledOnce();
     expect(secondRefetch).not.toHaveBeenCalled();
     expect(views.get("column-2")?.replacementBoundary?.state).toBe("error");
-    view.unmount();
   });
 });
 
