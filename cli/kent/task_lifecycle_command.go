@@ -362,13 +362,13 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		if err != nil {
+			writeWorkflowTaskRunWaitError(stdout, stderr, err)
+			return 1
+		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
 		}
 		detail, err = workflowTaskDetailForCLI(detail)
 		if err != nil {
@@ -635,9 +635,9 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 			fmt.Fprintf(stderr, "approved workflow change %s but response did not include task id for output\n", positionals[0])
 			return 1
 		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
+		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, applied.TaskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 		if err != nil {
-			fmt.Fprintf(stderr, "approved workflow change %s but failed to load task detail for output: %v\n", positionals[0], err)
+			writeWorkflowTaskRunWaitError(stdout, stderr, err)
 			return 1
 		}
 		writeTaskLifecycleResult(stdout, "Approved", detail)
@@ -815,17 +815,18 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			writeTaskLifecycleResult(stdout, "No-op move", detail)
 			return 0
 		}
-		if _, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied); err != nil {
+		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
+		if err != nil {
 			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.CurrentNodes, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		if err != nil {
+			writeWorkflowTaskRunWaitError(stdout, stderr, err)
 			return 1
 		}
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, resp)
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
 		}
 		writeTaskLifecycleResult(stdout, "Moved", detail)
 		return 0
@@ -926,13 +927,7 @@ func runWorkflowMutationWithSetupProgress[T any](
 		stopSetupProgress = func() error { return nil }
 	}
 	resp, mutateErr := mutate(ctx, setupOperationID)
-	return resp, func() error {
-		if setupProgressErr := stopSetupProgress(); setupProgressErr != nil {
-			fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", setupProgressErr)
-			return setupProgressErr
-		}
-		return nil
-	}, mutateErr
+	return resp, stopSetupProgress, mutateErr
 }
 
 func setupProgressStopper(stderr io.Writer, stop func() error) func() {
@@ -1056,7 +1051,7 @@ func waitForWorkflowTaskRunSession(
 		if remaining < sleepFor {
 			sleepFor = remaining
 		}
-		timer := time.NewTimer(interval)
+		timer := time.NewTimer(sleepFor)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -1097,9 +1092,15 @@ func workflowTaskRunAcknowledged(
 	targets []serverapi.WorkflowTaskCurrentNode,
 ) bool {
 	for _, target := range targets {
+		if detail.Status.Kind == serverapi.WorkflowTaskStatusKindDone {
+			continue
+		}
 		current, found := workflowTaskCurrentNode(detail.CurrentNodes, target)
 		if !found {
 			if workflowTaskCurrentScript(detail.CurrentScripts, target) {
+				continue
+			}
+			if len(detail.CurrentNodes) > 0 || len(detail.CurrentScripts) > 0 {
 				continue
 			}
 			return false

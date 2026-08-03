@@ -420,14 +420,6 @@ kent task resume <task> --execution-target none|head|default-branch|ref:<revisio
 
 These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.
 
-Task Start, executable Move, Resume, and Approval acknowledge the durable
-workflow mutation before environment preparation finishes. Desktop refreshes the
-authoritative task state and displays the ordinary task status while preparation
-continues. The CLI waits for each affected Current Node to publish a live
-Session or Script scope, or to advance beyond that node; Script scope
-acknowledgement does not guarantee that its operating-system process has started.
-Preparation failures appear as interrupted Current Node attention with copyable
-diagnostic details. Resume selection keeps the task interrupted and retries the
-same moved Current Nodes after a concrete target is chosen.
+Task Start, executable Move, Resume, and Approval acknowledge the durable workflow mutation before environment preparation finishes. Desktop refreshes the authoritative task state and displays the ordinary task status while preparation continues. The CLI waits for each affected Current Node to publish a live Session or Script scope, or to advance beyond that node; Script scope acknowledgement does not guarantee that its operating-system process has started. Preparation failures appear as interrupted Current Node attention with copyable diagnostic details. Resume selection keeps the task interrupted and retries the same moved Current Nodes after a concrete target is chosen.
 
 More about worktrees on the [Worktree](../worktrees/) page.

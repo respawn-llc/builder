@@ -1068,6 +1068,7 @@ func launchPreparationForTarget(
 			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 			Selection:           preflight.selection,
 			SetupOperationID:    setupOperationID,
+			Coordinator:         workflowexecution.NewLaunchPreparationCoordinator(),
 		}, nil
 	}
 	return workflowexecution.LaunchPreparation{
@@ -1076,6 +1077,7 @@ func launchPreparationForTarget(
 		SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 		Selection:           preflight.selection,
 		SetupOperationID:    setupOperationID,
+		Coordinator:         workflowexecution.NewLaunchPreparationCoordinator(),
 	}, nil
 }
 

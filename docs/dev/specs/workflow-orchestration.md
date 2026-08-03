@@ -446,11 +446,11 @@
 - An unresolvable configured target asks the operator to select a concrete target and explains which configured target failed and why.
 - Selection-required results distinguish two reasons: the Workflow requires selection, or the configured target is unavailable. Every selection flow offers all four concrete modes.
 - Failure to resolve an explicitly selected custom ref is a validation failure. It does not recursively request selection or fall back to another target.
-- A Task locks target-selection provenance only when the initiating action successfully reaches its first executable current Node. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
+- A Task locks target-selection provenance when environment-dependent preparation establishes its Execution Root after the durable Workflow mutation. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
 - A Task with a legacy managed worktree and usable recorded `HEAD` continues to use that worktree. Kent identifies its observed commit as legacy provenance and does not present it as a known original branch point.
 - A legacy Task without a managed worktree remains unlocked and uses its Workflow's source-`HEAD` policy.
-- Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
-- Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
+- Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent runs the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
+- Managed worktree setup failure leaves the durable movement applied, interrupts the affected Current Node, and retains the locked target and created worktree for inspection or manual repair.
 - Setup runs only when an operation creates or recreates a worktree root. A later retry does not rerun setup for an existing compatible root.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.
 - Workflow Task setup has no Session identity. Its JSON input represents the Session as `null`, and its Session environment value is absent. Session-originated setup supplies the requesting Session identity in both inputs.

@@ -1,9 +1,12 @@
 package workflowexecution
 
 import (
+	"context"
 	"errors"
+	"sync"
 
 	"core/server/workflow"
+	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
@@ -22,6 +25,36 @@ type LaunchPreparation struct {
 	SourceWorkspaceRoot string
 	Selection           workflow.ExecutionTargetSelection
 	SetupOperationID    serverapi.WorktreeSetupOperationID
+	Coordinator         *LaunchPreparationCoordinator
+}
+
+type LaunchTargetPreparer interface {
+	PrepareExecutionTarget(context.Context, workflow.CurrentNodeReference, LaunchPreparation) (workflowstore.ExecutionRoot, error)
+}
+
+type LaunchPreparationCoordinator struct {
+	once sync.Once
+	root workflowstore.ExecutionRoot
+	err  error
+}
+
+func NewLaunchPreparationCoordinator() *LaunchPreparationCoordinator {
+	return &LaunchPreparationCoordinator{}
+}
+
+func (c *LaunchPreparationCoordinator) Prepare(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	preparation LaunchPreparation,
+	preparer LaunchTargetPreparer,
+) (workflowstore.ExecutionRoot, error) {
+	if preparer == nil {
+		return workflowstore.ExecutionRoot{}, errors.New("execution target preparer is required")
+	}
+	c.once.Do(func() {
+		c.root, c.err = preparer.PrepareExecutionTarget(ctx, reference, preparation)
+	})
+	return c.root, c.err
 }
 
 func (p LaunchPreparation) Validate() error {

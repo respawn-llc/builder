@@ -48,9 +48,7 @@ type RuntimeStore interface {
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 }
 
-type ExecutionTargetPreparer interface {
-	PrepareExecutionTarget(context.Context, workflow.CurrentNodeReference, workflowexecution.LaunchPreparation) (workflowstore.ExecutionRoot, error)
-}
+type ExecutionTargetPreparer = workflowexecution.LaunchTargetPreparer
 
 type WorkflowAttentionRegistry interface {
 	workflowattention.QuestionAttentionRegistry
@@ -132,7 +130,13 @@ func (s *Starter) StartCurrentNodeWithPreparation(
 		if s.executionTarget == nil {
 			return errors.New("workflow execution target preparer is required")
 		}
-		root, err := s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
+		var root workflowstore.ExecutionRoot
+		var err error
+		if preparation.Coordinator != nil {
+			root, err = preparation.Coordinator.Prepare(ctx, reference, preparation, s.executionTarget)
+		} else {
+			root, err = s.executionTarget.PrepareExecutionTarget(ctx, reference, preparation)
+		}
 		if err != nil {
 			if preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedNone ||
 				preparation.Kind == workflowexecution.LaunchPreparationEstablishUnlockedManaged {
