@@ -193,6 +193,40 @@ describe("Board Task Search", () => {
     });
   });
 
+  it("retains each Project selection while switching Project scope", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const view = renderSearch(services, "project-first");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const firstInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(firstInput, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(firstInput, { key: "ArrowDown" });
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+
+    view.rerender(
+      <TestAppProviders services={services}>
+        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-second" />
+      </TestAppProviders>,
+    );
+    const secondInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+    });
+    fireEvent.keyDown(secondInput, { key: "ArrowDown" });
+    fireEvent.keyDown(secondInput, { key: "ArrowUp" });
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+
+    view.rerender(
+      <TestAppProviders services={services}>
+        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-first" />
+      </TestAppProviders>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    });
+  });
+
   it("keeps the prior Task result actionable while a replacement query debounces", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
