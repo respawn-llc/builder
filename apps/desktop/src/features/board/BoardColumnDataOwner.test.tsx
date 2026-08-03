@@ -116,6 +116,57 @@ describe("BoardColumnDataOwner retained replacement notices", () => {
     await waitFor(() => expect(events.at(-1)?.kind).toBe("dismiss"));
   });
 
+  it("keeps repeated failed replacement retries on the same persistent notice", async () => {
+    const refetch = vi.fn(async () => undefined);
+    const onCardsLoadError = vi.fn();
+    queryByColumn.set("column-1", queryState({ refetch }));
+    const events: BoardColumnNoticeEvent[] = [];
+    const view = render(
+      <StrictMode>
+        <Owner onCardsLoadError={onCardsLoadError} onNotice={(event) => events.push(event)} />
+      </StrictMode>,
+    );
+
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      active: { ...runtime.snapshot.active, generation: 3 },
+    };
+    queryByColumn.set(
+      "column-1",
+      queryState({ error: new Error("replacement failed"), isError: true, refetch }),
+    );
+    view.rerender(
+      <StrictMode>
+        <Owner onCardsLoadError={onCardsLoadError} onNotice={(event) => events.push(event)} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(events.at(-1)?.kind).toBe("failure"));
+
+    const firstFailure = events.find(
+      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
+    );
+    firstFailure?.retry();
+    expect(refetch).toHaveBeenCalledOnce();
+
+    queryByColumn.set(
+      "column-1",
+      queryState({ error: new Error("replacement failed again"), isError: true, refetch }),
+    );
+    view.rerender(
+      <StrictMode>
+        <Owner onCardsLoadError={onCardsLoadError} onNotice={(event) => events.push(event)} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(events.filter((event) => event.kind === "failure")).toHaveLength(2));
+
+    const failures = events.filter(
+      (event): event is Extract<BoardColumnNoticeEvent, { kind: "failure" }> => event.kind === "failure",
+    );
+    expect(new Set(failures.map((event) => event.noticeID))).toEqual(new Set([firstFailure?.noticeID]));
+    expect(onCardsLoadError).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it("keeps visible column notices independent and removes them on owner unmount", async () => {
     const firstRefetch = vi.fn(async () => undefined);
     const secondRefetch = vi.fn(async () => undefined);
@@ -163,9 +214,11 @@ describe("BoardColumnDataOwner retained replacement notices", () => {
 
 function Owner({
   column: ownerColumn = column,
+  onCardsLoadError = vi.fn(),
   onNotice,
 }: Readonly<{
   column?: BoardColumn;
+  onCardsLoadError?: (error: unknown) => void;
   onNotice(event: BoardColumnNoticeEvent): void;
 }>) {
   return (
@@ -173,7 +226,7 @@ function Owner({
       board={board}
       column={ownerColumn}
       onBoardColumnNotice={onNotice}
-      onCardsLoadError={vi.fn()}
+      onCardsLoadError={onCardsLoadError}
       onDataViewChange={vi.fn()}
       onDataViewRelease={vi.fn()}
       onReportColumnSnapshot={vi.fn()}

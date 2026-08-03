@@ -326,7 +326,7 @@ export function BoardColumnDataOwner({
         taskCount: column.taskCount,
       },
     });
-    if (cardsQuery.data !== undefined && !isPlaceholderData) {
+    if (cardsQuery.data !== undefined && !isPlaceholderData && !isError) {
       hydratedFilterGenerationRef.current = activeFilterGeneration;
     }
     if (!isFetchingPreviousPage && !isFetchingNextPage) {
@@ -338,6 +338,7 @@ export function BoardColumnDataOwner({
     column.id,
     column.taskCount,
     filterGeneration.snapshot.active.generation,
+    isError,
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
