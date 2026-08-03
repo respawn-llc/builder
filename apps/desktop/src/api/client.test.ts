@@ -126,7 +126,9 @@ describe("ApiClient", () => {
       client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter),
       client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null }),
     ]);
-    expect(transport.calls.slice(2)).toEqual([expect.objectContaining({ method: "workflow.board.get", params: expect.objectContaining({ dependency_filter: true }) }), expect.objectContaining({ method: "workflow.board.nodeCards.list", params: expect.objectContaining({ dependency_filter: true }) })]);
+    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
+    expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
+    expect(transport.calls[3]?.params).toMatchObject({ dependency_filter: true });
   });
 
   it("rejects malformed Workflow IDs before direct client RPCs or subscriptions", async () => {
