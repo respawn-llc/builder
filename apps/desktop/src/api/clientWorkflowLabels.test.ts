@@ -8,6 +8,41 @@ const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
 
 describe("ApiClient workflow labels", () => {
+  it("reorders a Project label catalog and preserves the authoritative response order", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.project.label.reorder",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [
+              { id: urgentID, name: "Urgent" },
+              { id: priorityID, name: "Priority" },
+            ],
+          },
+        },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(client.reorderProjectLabels("project-1", [urgentID, priorityID])).resolves.toEqual({
+      projectID: "project-1",
+      labels: [
+        { id: urgentID, name: "Urgent" },
+        { id: priorityID, name: "Priority" },
+      ],
+    });
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.project.label.reorder",
+        params: {
+          project_id: "project-1",
+          label_ids: [urgentID, priorityID],
+        },
+      },
+    ]);
+  });
+
   it("creates a related task through one atomic relationship intent", async () => {
     const transport = new FakeRpcTransport([
       {

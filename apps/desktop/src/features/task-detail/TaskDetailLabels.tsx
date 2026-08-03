@@ -1,9 +1,13 @@
 import { Plus } from "lucide-react";
-import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
-import { LabelChooser, useProjectLabelCatalog, useTaskLabelAssignment } from "@/shared/labels";
+import {
+  LabelChooser,
+  orderedAssignedLabels,
+  useProjectLabelCatalog,
+  useTaskLabelAssignment,
+} from "@/shared/labels";
 import { Badge, Button, Spinner } from "@/ui";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 
@@ -11,15 +15,9 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const assignment = useTaskLabelAssignment();
-  const labelNamesByID = useMemo(
-    () => new Map(catalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
-    [catalog.data?.labels],
-  );
   const selectedLabelIDs = assignment.snapshot.visibleLabelIDs;
-  const visibleLabels = selectedLabelIDs.flatMap((labelID) => {
-    const name = labelNamesByID.get(labelID);
-    return name === undefined ? [] : [{ id: labelID, name }];
-  });
+  const visibleLabels =
+    catalog.data === undefined ? [] : orderedAssignedLabels(catalog.data, selectedLabelIDs);
   const pendingLabelIDs = new Set(assignment.snapshot.pendingLabelIDs);
   const triggerDisabled = disabled || assignment.snapshot.closed;
   const triggerLoading = catalog.isPending;
@@ -32,6 +30,12 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
             invocation={{
               kind: "assignment",
               selectedLabelIDs,
+              onLabelCreated(labelID) {
+                assignment.controller.replaceAvailableLabelIDs([
+                  ...(catalog.data?.labels.map((label) => label.id) ?? []),
+                  labelID,
+                ]);
+              },
               onSelectionChange(labelID, selected) {
                 assignment.controller.setDesired(labelID, selected);
               },
@@ -53,10 +57,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
                     </span>
                   ) : null}
                   {visibleLabels.map((label) => (
-                    <span
-                      className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined}
-                      key={label.id}
-                    >
+                    <span className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined} key={label.id}>
                       <Badge tone="neutral">{label.name}</Badge>
                     </span>
                   ))}

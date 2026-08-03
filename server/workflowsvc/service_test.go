@@ -1171,6 +1171,60 @@ func TestServiceRenamesAndDeletesProjectLabels(t *testing.T) {
 	}
 }
 
+func TestServiceReordersProjectLabelsAndOnlyPublishesChangedOrder(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	first, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "First",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel First: %v", err)
+	}
+	second, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "Second",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel Second: %v", err)
+	}
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	ordered := []string{first.Label.ID, second.Label.ID}
+	applied, err := service.ReorderWorkflowProjectLabels(ctx, serverapi.WorkflowProjectLabelReorderRequest{
+		ProjectID: binding.ProjectID,
+		LabelIDs:  ordered,
+	})
+	if err != nil {
+		t.Fatalf("ReorderWorkflowProjectLabels applied: %v", err)
+	}
+	if got := []string{applied.Catalog.Labels[0].ID, applied.Catalog.Labels[1].ID}; !reflect.DeepEqual(got, ordered) {
+		t.Fatalf("applied order = %+v, want %+v", got, ordered)
+	}
+	event := nextWorkflowProjectEvent(t, sub)
+	if event.Resource != serverapi.WorkflowProjectEventResourceLabel ||
+		event.Action != serverapi.WorkflowProjectEventActionReordered ||
+		event.PrimaryEntityID != binding.ProjectID ||
+		!stringPointerEquals(event.ProjectID, binding.ProjectID) {
+		t.Fatalf("reorder event = %+v", event)
+	}
+
+	if _, err := service.ReorderWorkflowProjectLabels(ctx, serverapi.WorkflowProjectLabelReorderRequest{
+		ProjectID: binding.ProjectID,
+		LabelIDs:  ordered,
+	}); err != nil {
+		t.Fatalf("ReorderWorkflowProjectLabels unchanged: %v", err)
+	}
+	noEventCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := sub.Next(noEventCtx); err == nil {
+		t.Fatal("unchanged reorder published an event")
+	}
+}
+
 func TestServiceGetsAndUpdatesTaskLabels(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1205,7 +1259,7 @@ func TestServiceGetsAndUpdatesTaskLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateWorkflowTaskLabels: %v", err)
 	}
-	if !reflect.DeepEqual(updated.Assignment.LabelIDs, []string{zulu.Label.ID, alpha.Label.ID}) {
+	if !reflect.DeepEqual(updated.Assignment.LabelIDs, []string{alpha.Label.ID, zulu.Label.ID}) {
 		t.Fatalf("updated assignment = %+v, want project-order IDs", updated.Assignment)
 	}
 	event := nextWorkflowProjectEvent(t, sub)

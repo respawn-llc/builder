@@ -1,4 +1,12 @@
-import type { BoardCard, BoardColumn, BoardGroup, MarkdownPreview, TaskStatusKind } from "@/api";
+import type {
+  BoardCard,
+  BoardColumn,
+  BoardGroup,
+  MarkdownPreview,
+  ProjectLabelCatalog,
+  TaskStatusKind,
+} from "@/api";
+import { orderedAssignedLabels } from "@/shared/labels";
 
 export type KanbanGroupVM = Readonly<{
   id: string;
@@ -65,7 +73,7 @@ export function toKanbanColumnVM(column: BoardColumn): KanbanColumnVM {
 export function toKanbanCardVM(
   card: BoardCard,
   workspaceContext: BoardWorkspaceContext,
-  labelNamesByID: ReadonlyMap<string, string>,
+  labelCatalog: ProjectLabelCatalog | null,
 ): KanbanCardVM {
   return {
     id: card.id,
@@ -76,7 +84,7 @@ export function toKanbanCardVM(
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
     dependencyProgress: card.dependencyProgress,
-    labels: cardLabels(card.labelIDs, labelNamesByID),
+    labels: orderedAssignedLabels(labelCatalog, card.labelIDs),
     workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
     borderTone: boardCardBorderTone(card.status.kind),
     actions: {
@@ -86,20 +94,6 @@ export function toKanbanCardVM(
       canDelete: card.actions.canDelete,
     },
   };
-}
-
-function cardLabels(
-  labelIDs: readonly string[],
-  labelNamesByID: ReadonlyMap<string, string>,
-): readonly KanbanCardLabelVM[] {
-  const labels: KanbanCardLabelVM[] = [];
-  for (const labelID of labelIDs) {
-    const name = labelNamesByID.get(labelID);
-    if (name !== undefined) {
-      labels.push({ id: labelID, name });
-    }
-  }
-  return labels;
 }
 
 function workspaceChipLabel(card: BoardCard, context: BoardWorkspaceContext): string | null {

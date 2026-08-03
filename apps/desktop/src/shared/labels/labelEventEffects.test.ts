@@ -36,8 +36,8 @@ describe("Project label event effects", () => {
     });
 
     await effects.applyLocalCreate({ id: alphaID, name: "Alpha" });
-    await effects.consumeProjectEvent(labelEvent("created", alphaID));
-    await effects.consumeProjectEvent(labelEvent("renamed", alphaID));
+    const createdEvent = effects.consumeProjectEvent(labelEvent("created", alphaID));
+    const renamedEvent = effects.consumeProjectEvent(labelEvent("renamed", alphaID));
 
     expect(readCount).toBe(1);
     expect(queryClient.getQueryData<ProjectLabelCatalog>(key)?.labels).toEqual([
@@ -59,6 +59,42 @@ describe("Project label event effects", () => {
       projectID: "project-1",
       labels: [{ id: alphaID, name: "Alpha" }],
     });
+    await Promise.all([createdEvent, renamedEvent]);
+  });
+
+  it("refreshes the catalog after a Project label reorder event", async () => {
+    const refreshed = deferred<ProjectLabelCatalog>();
+    let reads = 0;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => {
+        reads += 1;
+        return refreshed.promise;
+      },
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      projectID: "project-1",
+      queryClient,
+    });
+
+    const reorderEvent = effects.consumeProjectEvent(labelEvent("reordered", alphaID));
+
+    await waitFor(() => {
+      expect(reads).toBe(1);
+    });
+    refreshed.resolve({
+      projectID: "project-1",
+      labels: [
+        { id: betaID, name: "Beta" },
+        { id: alphaID, name: "Alpha" },
+      ],
+    });
+    await reorderEvent;
   });
 
   it("keeps local delete and its event echo pruned before membership refresh", async () => {
@@ -151,7 +187,9 @@ describe("Project label event effects", () => {
     });
     const assignmentKey = queryKeys.taskLabels("task-1");
     const boardKey = queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" });
-    const unrelatedBoardKey = queryKeys.board("project-2", "11111111-1111-4111-8111-111111111111", { kind: "none" });
+    const unrelatedBoardKey = queryKeys.board("project-2", "11111111-1111-4111-8111-111111111111", {
+      kind: "none",
+    });
     const taskListKey = queryKeys.projectTaskListsRoot("project-1");
     const unrelatedTaskListKey = queryKeys.projectTaskListsRoot("project-2");
     queryClient.setQueryData(assignmentKey, { taskID: "task-1", labelIDs: [alphaID] });
@@ -268,9 +306,44 @@ describe("Project label event effects", () => {
   });
 });
 
+describe("Project catalog authority projections", () => {
+  it("prepends creates, replaces renames in place, and preserves delete survivor order", () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const key = queryKeys.projectLabels("project-1");
+    queryClient.setQueryData<ProjectLabelCatalog>(key, {
+      projectID: "project-1",
+      labels: [
+        { id: alphaID, name: "First" },
+        { id: betaID, name: "Second" },
+      ],
+    });
+
+    authority.applyCreate({ id: "11111111-1111-4111-8111-111111111111", name: "New" });
+    authority.applyRename({ id: betaID, name: "Renamed" });
+    authority.applyDelete(alphaID);
+
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(key)).toEqual({
+      projectID: "project-1",
+      labels: [
+        { id: "11111111-1111-4111-8111-111111111111", name: "New" },
+        { id: betaID, name: "Renamed" },
+      ],
+    });
+  });
+
+});
+
 const pendingCatalog = deferred<ProjectLabelCatalog>();
 
-function labelEvent(action: "created" | "renamed" | "deleted", labelID: string): WorkflowProjectEvent {
+function labelEvent(
+  action: "created" | "renamed" | "deleted" | "reordered",
+  labelID: string,
+): WorkflowProjectEvent {
   return {
     action,
     occurredAtUnixMs: 1,

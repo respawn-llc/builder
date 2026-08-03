@@ -13,6 +13,7 @@ export const architectureOwners = Object.freeze({
   TEST_SUPPORT: "test-support",
   TOOLING: "tooling",
   UI: "ui",
+  UI_KIT: "ui-kit",
   VENDOR: "vendor",
 });
 
@@ -47,6 +48,11 @@ export const architectureElements = Object.freeze([
   Object.freeze({
     type: architectureOwners.UI,
     pattern: "src/ui",
+    partialMatch: false,
+  }),
+  Object.freeze({
+    type: architectureOwners.UI_KIT,
+    pattern: "packages/ui-kit",
     partialMatch: false,
   }),
   Object.freeze({
@@ -101,6 +107,7 @@ export const architectureEntrypoints = Object.freeze({
   API_COMPOSITION: "composition/index.ts",
   INDEX: "index.ts",
   NATIVE_PACKAGE: "src/index.ts",
+  UI_KIT: "src/ReorderableList.tsx",
   VENDOR_ELK_API: "elkjs-types.ts",
   VENDOR_ELK_BUNDLED: "elkjs-bundled-types.ts",
   VENDOR_XYFLOW: "xyflow-react-types.ts",
@@ -242,6 +249,12 @@ const featureDependencyPolicies = Object.freeze([
   }),
   allowOwnerDependency({
     from: architectureOwners.FEATURE,
+    to: architectureOwners.UI_KIT,
+    source: "@app/ui-kit",
+    targetFile: architectureEntrypoints.UI_KIT,
+  }),
+  allowOwnerDependency({
+    from: architectureOwners.FEATURE,
     to: architectureOwners.API,
     source: "@/api",
   }),
@@ -288,6 +301,12 @@ const sharedDependencyPolicies = Object.freeze([
   }),
   allowOwnerDependency({
     from: architectureOwners.SHARED,
+    to: architectureOwners.UI_KIT,
+    source: "@app/ui-kit",
+    targetFile: architectureEntrypoints.UI_KIT,
+  }),
+  allowOwnerDependency({
+    from: architectureOwners.SHARED,
     to: architectureOwners.SHARED,
     source: "@/shared/*",
   }),
@@ -308,6 +327,15 @@ const sharedDependencyPolicies = Object.freeze([
     to: architectureOwners.VENDOR,
     source: "elkjs/lib/elk.bundled.js",
     targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
+  }),
+]);
+
+const uiKitDependencyPolicies = Object.freeze([
+  allowOwnerDependency({
+    from: architectureOwners.UI_KIT,
+    to: architectureOwners.UI_KIT,
+    source: "@app/ui-kit",
+    targetFile: architectureEntrypoints.UI_KIT,
   }),
 ]);
 
@@ -429,6 +457,7 @@ export const architectureDependencyOptions = Object.freeze({
     ...appFacadeDependencyPolicies,
     ...featureDependencyPolicies,
     ...sharedDependencyPolicies,
+    ...uiKitDependencyPolicies,
     ...testSupportDependencyPolicies,
     ...toolingDependencyPolicies,
     ...testDependencyPolicies,

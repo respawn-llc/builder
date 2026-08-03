@@ -9,7 +9,12 @@ import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
 import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
+import {
+  LabelChooser,
+  ProjectLabelsProvider,
+  orderedAssignedLabels,
+  useProjectLabelCatalog,
+} from "@/shared/labels";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
 import { Badge, Button, Dialog, FieldShell, SelectField, TextArea, TextInput } from "@/ui";
@@ -161,6 +166,7 @@ function NewTaskFormContent({
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
+  const [labelCreatePending, setLabelCreatePending] = useState(false);
   const effectiveSelectedLabelIDs = useMemo(() => {
     if (catalog.data === undefined) {
       return selectedLabelIDs;
@@ -185,7 +191,10 @@ function NewTaskFormContent({
     },
   });
   const canSubmit =
-    connection.phase === "connected" && !createTask.isPending && initialWorkspaceID !== undefined;
+    connection.phase === "connected" &&
+    !createTask.isPending &&
+    !labelCreatePending &&
+    initialWorkspaceID !== undefined;
 
   useEffect(() => {
     if (!initializedRef.current && initialWorkspaceID !== undefined) {
@@ -252,6 +261,7 @@ function NewTaskFormContent({
       />
       <NewTaskLabels
         disabled={connection.phase !== "connected"}
+        onCreatePendingChange={setLabelCreatePending}
         onSelectionChange={(labelID, selected) => {
           setSelectedLabelIDs((current) => {
             if (selected) {
@@ -302,18 +312,19 @@ function NewTaskFormContent({
 
 function NewTaskLabels({
   disabled,
+  onCreatePendingChange,
   onSelectionChange,
   selectedLabelIDs,
 }: Readonly<{
   disabled: boolean;
+  onCreatePendingChange(pending: boolean): void;
   onSelectionChange(labelID: string, selected: boolean): void;
   selectedLabelIDs: readonly string[];
 }>) {
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const inputID = useId();
-  const selected = new Set(selectedLabelIDs);
-  const labels = catalog.data?.labels.filter((label) => selected.has(label.id)) ?? [];
+  const labels = catalog.data === undefined ? [] : orderedAssignedLabels(catalog.data, selectedLabelIDs);
   return (
     <FieldShell
       errorId={`${inputID}-error`}
@@ -324,6 +335,7 @@ function NewTaskLabels({
       <LabelChooser
         invocation={{
           kind: "assignment",
+          onCreatePendingChange,
           selectedLabelIDs,
           onSelectionChange,
         }}

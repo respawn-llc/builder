@@ -70,21 +70,6 @@ func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID s
 	return result.RowsAffected()
 }
 
-const acquireProjectLabelWriteLock = `-- name: AcquireProjectLabelWriteLock :one
-UPDATE projects
-SET updated_at_unix_ms = updated_at_unix_ms
-WHERE id = ?1
-RETURNING id
-`
-
-func (q *Queries) AcquireProjectLabelWriteLock(ctx context.Context, projectID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, acquireProjectLabelWriteLock, projectID)
-	var id string
-	err := recordQueryError(ctx, row.Scan(&id), acquireProjectLabelWriteLock, 1)
-
-	return id, err
-}
-
 const acquireTaskDependencyWriteLock = `-- name: AcquireTaskDependencyWriteLock :one
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -2809,27 +2794,23 @@ INSERT INTO project_labels (
     id,
     project_id,
     name,
-    ordinal,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    ordinal
 ) SELECT
     ?1,
     ?2,
     ?3,
-    (
-        SELECT COALESCE(MAX(project_labels.ordinal), 0) + 1
-        FROM project_labels
-        WHERE project_labels.project_id = ?2
-    ),
     ?4,
-    ?5
+    ?5,
+    ?6
 FROM projects
 WHERE projects.id = ?2
   AND (
       SELECT COUNT(*)
       FROM project_labels
       WHERE project_labels.project_id = ?2
-  ) < CAST(?6 AS INTEGER)
+  ) < CAST(?7 AS INTEGER)
 RETURNING id, project_id, name, ordinal
 `
 
@@ -2839,6 +2820,7 @@ type InsertProjectLabelParams struct {
 	Name            string
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
+	Ordinal         int64
 	CatalogLimit    int64
 }
 
@@ -2856,6 +2838,7 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		arg.Name,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
+		arg.Ordinal,
 		arg.CatalogLimit,
 	)
 	var i InsertProjectLabelRow
@@ -2864,7 +2847,7 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		&i.ProjectID,
 		&i.Name,
 		&i.Ordinal,
-	), insertProjectLabel, 6)
+	), insertProjectLabel, 7)
 
 	return i, err
 }
@@ -5340,7 +5323,7 @@ const listProjectLabels = `-- name: ListProjectLabels :many
 SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE project_id = ?1
-ORDER BY ordinal ASC, id ASC
+ORDER BY ordinal ASC
 LIMIT 101
 `
 
@@ -8869,7 +8852,7 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 	return result.RowsAffected()
 }
 
-const moveProjectLabelOrdinalsToTemporaryBand = `-- name: MoveProjectLabelOrdinalsToTemporaryBand :execrows
+const moveProjectLabelOrdinalsToTemporaryBand = `-- name: MoveProjectLabelOrdinalsToTemporaryBand :exec
 UPDATE project_labels
 SET ordinal = ordinal + CAST(?1 AS INTEGER)
 WHERE project_id = ?2
@@ -8880,13 +8863,10 @@ type MoveProjectLabelOrdinalsToTemporaryBandParams struct {
 	ProjectID           string
 }
 
-func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, arg.TemporaryBandOffset, arg.ProjectID)
+func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, arg MoveProjectLabelOrdinalsToTemporaryBandParams) error {
+	_, err := q.db.ExecContext(ctx, moveProjectLabelOrdinalsToTemporaryBand, arg.TemporaryBandOffset, arg.ProjectID)
 	err = recordQueryError(ctx, err, moveProjectLabelOrdinalsToTemporaryBand, 2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return err
 }
 
 const reconcileSessionEventLog = `-- name: ReconcileSessionEventLog :execrows
@@ -9222,7 +9202,7 @@ func (q *Queries) SetProjectKey(ctx context.Context, arg SetProjectKeyParams) (i
 	return result.RowsAffected()
 }
 
-const setProjectLabelOrdinal = `-- name: SetProjectLabelOrdinal :execrows
+const setProjectLabelOrdinal = `-- name: SetProjectLabelOrdinal :exec
 UPDATE project_labels
 SET ordinal = ?1
 WHERE id = ?2
@@ -9235,13 +9215,10 @@ type SetProjectLabelOrdinalParams struct {
 	ProjectID string
 }
 
-func (q *Queries) SetProjectLabelOrdinal(ctx context.Context, arg SetProjectLabelOrdinalParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setProjectLabelOrdinal, arg.Ordinal, arg.ID, arg.ProjectID)
+func (q *Queries) SetProjectLabelOrdinal(ctx context.Context, arg SetProjectLabelOrdinalParams) error {
+	_, err := q.db.ExecContext(ctx, setProjectLabelOrdinal, arg.Ordinal, arg.ID, arg.ProjectID)
 	err = recordQueryError(ctx, err, setProjectLabelOrdinal, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return err
 }
 
 const setProjectPrimaryWorkspace = `-- name: SetProjectPrimaryWorkspace :execrows

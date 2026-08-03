@@ -1478,6 +1478,7 @@ const (
 	WorkflowProjectEventActionCreated                = protocol.WorkflowProjectEventActionCreated
 	WorkflowProjectEventActionUpdated                = protocol.WorkflowProjectEventActionUpdated
 	WorkflowProjectEventActionRenamed                = protocol.WorkflowProjectEventActionRenamed
+	WorkflowProjectEventActionReordered              = protocol.WorkflowProjectEventActionReordered
 	WorkflowProjectEventActionDeleted                = protocol.WorkflowProjectEventActionDeleted
 	WorkflowProjectEventActionNodeAdded              = protocol.WorkflowProjectEventActionNodeAdded
 	WorkflowProjectEventActionNodeUpdated            = protocol.WorkflowProjectEventActionNodeUpdated
@@ -1632,6 +1633,7 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 		switch action {
 		case WorkflowProjectEventActionCreated,
 			WorkflowProjectEventActionRenamed,
+			WorkflowProjectEventActionReordered,
 			WorkflowProjectEventActionDeleted:
 			return true
 		}

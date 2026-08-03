@@ -57,12 +57,16 @@
 - Label changes do not change a Task's update time, reorder Tasks, or move pagination anchors.
 - Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
 - Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count. Desktop deletion uses explicit confirmation; invoking the explicit CLI delete command is sufficient confirmation and does not prompt or require a separate confirmation flag.
-- Labels have no color.
-- A Project Label catalog has one authoritative order. New Labels append to the catalog. Deleting a Label preserves the relative order of the remaining Labels.
-- `kent task label move` changes the authoritative catalog order and accepts exactly one placement: first, last, before another Label, or after another Label.
-- Label catalogs and task assignments use the authoritative Project Label order.
-- Kent sorts Tasks by Label only when the caller explicitly supplies the
-  `labels` sort selector.
+- Labels have no color. A Project owns one durable manual Label sequence.
+- Creating a Label places it at the beginning of the sequence. Renaming a Label preserves its position. Deleting a Label preserves the relative order of every surviving Label.
+- Every Label catalog and assigned-Label projection uses the Project sequence, including `kent task label list`. The catalog sequence is authoritative; clients do not receive a separate position value.
+- A reorder applies to one Project and must identify every current Label in that Project exactly once. Kent rejects missing, duplicate, unknown, and cross-Project Label identities without changing the sequence.
+- Reordering to the current sequence succeeds without a durable change or Project event. Changing the sequence persists atomically and emits one Project event.
+- Kent does not guarantee the relative outcome of concurrent reorder requests.
+- Concurrent Label catalog mutations may fail. A failed mutation leaves the catalog unchanged, and Kent does not retry it automatically.
+- The Desktop board filter chooser is the Label reorder surface. `kent task label` has no reorder command.
+- Kent does not promise the initial relative sequence of Labels that predate manual ordering.
+- Existing Task-list `labels` sorting remains available when explicitly requested; board Task ordering does not use Label order.
 - Kent applies Label filters before pagination for Workflow boards and Task lists.
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.

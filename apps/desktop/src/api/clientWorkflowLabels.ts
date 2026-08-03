@@ -61,6 +61,21 @@ export async function createProjectLabel(
   );
 }
 
+export async function reorderProjectLabels(
+  transport: RpcTransport,
+  projectID: string,
+  labelIDs: readonly string[],
+): Promise<ProjectLabelCatalog> {
+  return parse(
+    "workflow.project.label.reorder",
+    projectLabelCatalogSchema,
+    await transport.call("workflow.project.label.reorder", {
+      project_id: projectID,
+      label_ids: labelIDs,
+    }),
+  );
+}
+
 export async function renameProjectLabel(
   transport: RpcTransport,
   projectID: string,

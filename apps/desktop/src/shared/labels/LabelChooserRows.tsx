@@ -1,10 +1,10 @@
-import { Check, Pencil, Trash2, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { Check, GripVertical, Pencil, Trash2, X } from "lucide-react";
+import { useCallback, useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
 import type { ProjectLabel } from "@/api";
-import { useTextFieldSubmitShortcut } from "@/app-facade";
+import type { ReorderableListItemRenderProps } from "@app/ui-kit";
 import {
   ActionableListRow,
   Button,
@@ -48,31 +48,25 @@ const conditionIndicatorVisibility = {
 } as const;
 
 export function LabelRenameEditor({
+  catalogMutationPending,
   onCancel,
   onChange,
   onCommit,
   rename,
 }: Readonly<{
+  catalogMutationPending: boolean;
   onCancel(): void;
   onChange(draft: string): void;
   onCommit(): void;
   rename: RenameState;
 }>) {
   const { t } = useTranslation();
-  const canSubmit = !rename.pending;
-  const formShortcut = useTextFieldSubmitShortcut({
-    available: canSubmit,
-    kind: "form",
-  });
   return (
     <form
       className="grid gap-[var(--space-1)] rounded-[var(--radius-s)] bg-[var(--color-island-1)] p-[var(--space-1)]"
-      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        if (canSubmit) {
-          onCommit();
-        }
+        onCommit();
       }}
       role="listitem"
     >
@@ -81,14 +75,14 @@ export function LabelRenameEditor({
           aria-label={t("labels.renameField")}
           autoFocus
           className={`${fieldInputClassName} min-w-0 flex-1 py-[var(--space-1)]`}
-          disabled={!canSubmit}
+          disabled={rename.pending || catalogMutationPending}
           onChange={(event) => {
             onChange(event.currentTarget.value);
           }}
           value={rename.draft}
         />
         <IconTooltipButton
-          disabled={!canSubmit}
+          disabled={rename.pending || catalogMutationPending}
           label={t("labels.saveRename")}
           onClick={onCommit}
           size="icon-sm"
@@ -115,6 +109,7 @@ export function LabelRenameEditor({
 }
 
 export function LabelResultRow({
+  catalogMutationPending = false,
   deletion,
   highlighted,
   label,
@@ -122,8 +117,10 @@ export function LabelResultRow({
   onDeleteOpenChange,
   onRename,
   onSelect,
+  reorder,
   selection,
 }: Readonly<{
+  catalogMutationPending?: boolean;
   deletion: DeleteState | null;
   highlighted: boolean;
   label: ProjectLabel;
@@ -131,13 +128,27 @@ export function LabelResultRow({
   onDeleteOpenChange(open: boolean): void;
   onRename(): void;
   onSelect(): void;
+  reorder?: ReorderableListItemRenderProps | undefined;
   selection: LabelResultRowSelection;
 }>) {
   const { t } = useTranslation();
+  const reorderActivatorRef = useCallback(
+    (element: HTMLButtonElement | null) => {
+      reorder?.activatorRef(element);
+    },
+    [reorder],
+  );
+  const reorderAttributes = reorder?.activatorAttributes;
+  const reorderListeners = reorder?.activatorListeners;
   const deleteAction = (
     <Popover onOpenChange={onDeleteOpenChange} open={deletion !== null}>
       <PopoverTrigger asChild>
-        <Button aria-label={t("labels.delete", { name: label.name })} size="icon-sm" variant="ghost">
+        <Button
+          aria-label={t("labels.delete", { name: label.name })}
+          disabled={catalogMutationPending}
+          size="icon-sm"
+          variant="ghost"
+        >
           <Trash2 aria-hidden="true" className="text-[var(--color-error)]" size={14} strokeWidth={1.8} />
         </Button>
       </PopoverTrigger>
@@ -148,7 +159,11 @@ export function LabelResultRow({
             {deletion.error}
           </span>
         )}
-        <Button disabled={deletion?.pending === true} onClick={onDeleteConfirm} variant="danger">
+        <Button
+          disabled={deletion?.pending === true || catalogMutationPending}
+          onClick={onDeleteConfirm}
+          variant="danger"
+        >
           {t("app.confirm")}
         </Button>
       </PopoverContent>
@@ -157,18 +172,35 @@ export function LabelResultRow({
   return (
     <LabelSelectionRow
       contextualActions={
-        <>
+        <div className="flex items-center gap-[var(--space-1)]">
           {deleteAction}
           <IconTooltipButton
+            disabled={catalogMutationPending}
             label={t("labels.rename", { name: label.name })}
             onClick={onRename}
             size="icon-sm"
           >
             <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
           </IconTooltipButton>
-        </>
+        </div>
       }
       highlighted={highlighted}
+      leadingActions={
+        reorder === undefined ? undefined : (
+          <Button
+            aria-label={t("labels.reorder", { name: label.name })}
+            className="text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
+            disabled={catalogMutationPending}
+            ref={reorderActivatorRef}
+            {...reorderAttributes}
+            {...reorderListeners}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <GripVertical aria-hidden="true" size={15} strokeWidth={1.8} />
+          </Button>
+        )
+      }
       name={label.name}
       onSelect={onSelect}
       selection={selection}
@@ -200,12 +232,14 @@ export function UnlabeledResultRow({
 function LabelSelectionRow({
   contextualActions,
   highlighted,
+  leadingActions,
   name,
   onSelect,
   selection,
 }: Readonly<{
   contextualActions?: ReactNode;
   highlighted: boolean;
+  leadingActions?: ReactNode;
   name: string;
   onSelect(): void;
   selection: LabelResultRowSelection;
@@ -234,6 +268,7 @@ function LabelSelectionRow({
     <ActionableListRow
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
       contextualActions={contextualActions}
+      leadingActions={leadingActions}
       role="listitem"
       selectButtonProps={presentation.selectButtonProps}
       selected={presentation.selected}

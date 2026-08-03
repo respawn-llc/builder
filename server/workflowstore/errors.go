@@ -172,20 +172,10 @@ func (e ProjectLabelLimitError) Is(target error) bool {
 
 type ProjectLabelOrderError struct {
 	ProjectID string
-	LabelID   *string
-	Reason    string
 }
 
 func (e ProjectLabelOrderError) Error() string {
-	if e.LabelID == nil {
-		return fmt.Sprintf("project %q label order is invalid: %s", e.ProjectID, e.Reason)
-	}
-	return fmt.Sprintf(
-		"project %q label order contains invalid label %q: %s",
-		e.ProjectID,
-		*e.LabelID,
-		e.Reason,
-	)
+	return fmt.Sprintf("project %q label order is invalid", e.ProjectID)
 }
 
 func (e ProjectLabelOrderError) Is(target error) bool {

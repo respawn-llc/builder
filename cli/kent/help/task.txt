@@ -16,7 +16,6 @@ Usage of kent task:
   kent task dep list <short-id-or-task-id> [--direction blocks|blocked-by] [--project <project>] [--json]
   kent task label create <name> [--project <project>] [--json]
   kent task label list [--project <project>] [--name <name>] [--json]
-  kent task label move --label <name-or-uuid> (--first|--last|--before <name-or-uuid>|--after <name-or-uuid>) [--project <project>] [--json]
   kent task label rename --label <name-or-uuid> <new-name> [--project <project>] [--json]
   kent task label delete --label <name-or-uuid> [--project <project>] [--json]
   kent task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]

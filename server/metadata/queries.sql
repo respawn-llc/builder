@@ -82,20 +82,16 @@ INSERT INTO project_labels (
     id,
     project_id,
     name,
-    ordinal,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    ordinal
 ) SELECT
     sqlc.arg(id),
     sqlc.arg(project_id),
     sqlc.arg(name),
-    (
-        SELECT COALESCE(MAX(project_labels.ordinal), 0) + 1
-        FROM project_labels
-        WHERE project_labels.project_id = sqlc.arg(project_id)
-    ),
     sqlc.arg(created_at_unix_ms),
-    sqlc.arg(updated_at_unix_ms)
+    sqlc.arg(updated_at_unix_ms),
+    sqlc.arg(ordinal)
 FROM projects
 WHERE projects.id = sqlc.arg(project_id)
   AND (
@@ -109,22 +105,16 @@ RETURNING id, project_id, name, ordinal;
 SELECT id, project_id, name, ordinal
 FROM project_labels
 WHERE project_id = sqlc.arg(project_id)
-ORDER BY ordinal ASC, id ASC
+ORDER BY ordinal ASC
 LIMIT 101;
 
--- name: AcquireProjectLabelWriteLock :one
-UPDATE projects
-SET updated_at_unix_ms = updated_at_unix_ms
-WHERE id = sqlc.arg(project_id)
-RETURNING id;
-
--- name: SetProjectLabelOrdinal :execrows
+-- name: SetProjectLabelOrdinal :exec
 UPDATE project_labels
 SET ordinal = sqlc.arg(ordinal)
 WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id);
 
--- name: MoveProjectLabelOrdinalsToTemporaryBand :execrows
+-- name: MoveProjectLabelOrdinalsToTemporaryBand :exec
 UPDATE project_labels
 SET ordinal = ordinal + CAST(sqlc.arg(temporary_band_offset) AS INTEGER)
 WHERE project_id = sqlc.arg(project_id);
@@ -4309,7 +4299,6 @@ WHERE task_id = sqlc.arg(task_id)
 UPDATE tasks
 SET updated_at_unix_ms = updated_at_unix_ms
 WHERE id = sqlc.arg(task_id);
-
 
 -- name: ListUnknownTaskSearchProjectIDs :many
 WITH requested_projects AS (

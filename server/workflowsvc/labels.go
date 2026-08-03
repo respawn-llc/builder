@@ -113,6 +113,15 @@ func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverap
 			Labels:    labels,
 		},
 	}
+	if result.Changed {
+		s.publishProjectEvent(
+			ctx,
+			req.ProjectID,
+			serverapi.WorkflowProjectEventResourceLabel,
+			serverapi.WorkflowProjectEventActionReordered,
+			req.ProjectID,
+		)
+	}
 	return response, nil
 }
 
@@ -221,7 +230,6 @@ func workflowLabelError(err error, scope workflowLabelErrorScope) error {
 		return &serverapi.WorkflowLabelError{
 			Reason:    serverapi.WorkflowLabelErrorReasonInvalidMutation,
 			ProjectID: &projectID,
-			LabelID:   orderErr.LabelID,
 			Field:     &field,
 		}
 	}

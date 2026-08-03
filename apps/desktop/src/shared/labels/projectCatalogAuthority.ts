@@ -2,13 +2,14 @@ import { CancelledError, type QueryClient } from "@tanstack/react-query";
 
 import { workflowLabelMaxIDs, type ProjectLabel, type ProjectLabelCatalog } from "@/api";
 import { queryKeys } from "@/app-facade";
-import { compareLabelNames } from "./labelComparison";
 
 export type ProjectCatalogAuthority = Readonly<{
   read(signal: AbortSignal): Promise<ProjectLabelCatalog>;
+  supersedeReads(): number;
   applyCreate(label: ProjectLabel): void;
   applyRename(label: ProjectLabel): void;
   applyDelete(labelID: string): void;
+  installCatalog(catalog: ProjectLabelCatalog, generation: number): void;
   requestRefresh(): void;
 }>;
 
@@ -58,19 +59,19 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   applyCreate(label: ProjectLabel): void {
-    this.#advance();
-    this.#patchLabel(label);
+    this.#advance(true);
+    this.#patchLabel(label, true);
     this.#startRefreshIfIdle();
   }
 
   applyRename(label: ProjectLabel): void {
-    this.#advance();
-    this.#patchLabel(label);
+    this.#advance(true);
+    this.#patchLabel(label, false);
     this.#startRefreshIfIdle();
   }
 
   applyDelete(labelID: string): void {
-    this.#advance();
+    this.#advance(true);
     this.#deletedLabelIDs.add(labelID);
     if (this.#deletedLabelIDs.size > workflowLabelMaxIDs) {
       throw new Error(
@@ -90,39 +91,70 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   requestRefresh(): void {
-    this.#advance();
+    this.#advance(true);
     this.#startRefreshIfIdle();
   }
 
-  #advance(): void {
-    this.#generation += 1;
-    this.#refreshNeeded = true;
-    void this.#queryClient.cancelQueries(
-      {
-        queryKey: this.#queryKey,
-        exact: true,
-      },
-      {
-        revert: false,
-        silent: true,
-      },
-    );
+  supersedeReads(): number {
+    return this.#advance(false);
   }
 
-  #patchLabel(label: ProjectLabel): void {
+  installCatalog(catalog: ProjectLabelCatalog, generation: number): void {
+    this.#assertProject(catalog);
+    if (generation !== this.#generation) {
+      this.#startRefreshIfIdle();
+      return;
+    }
+    this.#advance(false);
+    this.#deletedLabelIDs.clear();
+    this.#queryClient.setQueryData(this.#queryKey, catalog);
+  }
+
+  #advance(refreshNeeded: boolean): number {
+    this.#generation += 1; this.#refreshNeeded ||= refreshNeeded;
+    void this.#queryClient
+      .cancelQueries(
+        {
+          queryKey: this.#queryKey,
+          exact: true,
+        },
+        {
+          revert: false,
+          silent: true,
+        },
+      )
+      .catch(() => undefined);
+    return this.#generation;
+  }
+
+  #patchLabel(label: ProjectLabel, prepend: boolean): void {
     this.#deletedLabelIDs.delete(label.id);
     this.#queryClient.setQueryData<ProjectLabelCatalog>(this.#queryKey, (catalog) => {
       if (catalog === undefined) {
         return undefined;
       }
-      const labels = catalog.labels.filter((candidate) => candidate.id !== label.id);
-      labels.push(label);
-      labels.sort(compareProjectLabels);
+      const indexByID = new Map(catalog.labels.map((candidate, candidateIndex) => [candidate.id, candidateIndex]));
+      const index = indexByID.get(label.id);
+      if (!prepend && index === undefined) {
+        return catalog;
+      }
+      const labels =
+        index === undefined
+          ? [label, ...catalog.labels]
+          : catalog.labels.map((candidate, candidateIndex) => (candidateIndex === index ? label : candidate));
       return {
         ...catalog,
         labels,
       };
     });
+  }
+
+  #assertProject(catalog: ProjectLabelCatalog): void {
+    if (catalog.projectID !== this.#projectID) {
+      throw new Error(
+        `Project catalog authority received ${catalog.projectID} while serving ${this.#projectID}.`,
+      );
+    }
   }
 
   #startRead(generation: number): ActiveCatalogRead {
@@ -151,21 +183,20 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   }
 
   #startRefreshIfIdle(): void {
-    if (this.#activeRead !== null || !this.#refreshNeeded) {
+    if (this.#activeRead !== null) {
+      return;
+    }
+    if (!this.#refreshNeeded) {
       return;
     }
     this.#refreshNeeded = false;
-    void this.#queryClient
+    const refresh = this.#queryClient
       .fetchQuery({
         queryKey: this.#queryKey,
         queryFn: async ({ signal }) => this.read(signal),
         staleTime: 0,
       })
-      .catch(() => undefined);
+      .then(() => undefined);
+    void refresh.catch(() => undefined);
   }
-}
-
-function compareProjectLabels(left: ProjectLabel, right: ProjectLabel): number {
-  const byName = compareLabelNames(left.name, right.name);
-  return byName === 0 ? left.id.localeCompare(right.id) : byName;
 }

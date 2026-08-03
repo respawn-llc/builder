@@ -27,6 +27,7 @@ export default defineConfig({
     alias: {
       "@": fileURLToPath(new URL("../src", import.meta.url)),
       "@app/native-bridge": fileURLToPath(new URL("../packages/native-bridge/src/index.ts", import.meta.url)),
+      "@app/ui-kit": fileURLToPath(new URL("../packages/ui-kit/src/ReorderableList.tsx", import.meta.url)),
     },
   },
   server: {
