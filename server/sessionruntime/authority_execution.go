@@ -316,18 +316,41 @@ type executionPromptResult struct {
 }
 
 // PromptResponseAcceptance is returned after a prompt response mutation has
-// been accepted. Waiting for a prepared successor is a separate, repeatable
-// observation and does not change the accepted mutation.
+// been accepted. Successor observation is latched, so every retry sees the
+// same accepted result even after the successor has already been resolved.
 type PromptResponseAcceptance struct {
-	store        *executionPromptStore
-	successorIDs []string
+	observation *promptSuccessorObservation
 }
 
 func (a PromptResponseAcceptance) AwaitSuccessor(ctx context.Context) error {
-	if a.store == nil {
+	if a.observation == nil {
 		return errors.New("prompt response acceptance is required")
 	}
-	return a.store.AwaitAnyPendingOrClosed(ctx, a.successorIDs)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-a.observation.done:
+		return nil
+	default:
+	}
+	select {
+	case <-a.observation.done:
+		return nil
+	case <-ctx.Done():
+		select {
+		case <-a.observation.done:
+			return nil
+		default:
+			return context.Cause(ctx)
+		}
+	}
+}
+
+type promptSuccessorObservation struct {
+	done         chan struct{}
+	observed     bool
+	successorIDs []string
 }
 
 type executionPromptEntry struct {
@@ -349,12 +372,12 @@ type executionPromptStore struct {
 	// mu is the sole synchronization for pending prompts. Prompt lifecycle
 	// mutations must not acquire Authority.mu because status snapshots hold it
 	// while reading live execution state.
-	mu      sync.RWMutex
-	scope   ExecutionScope
-	feed    ExecutionPromptFeed
-	closed  bool
-	changed chan struct{}
-	pending map[string]*executionPromptEntry
+	mu                    sync.RWMutex
+	scope                 ExecutionScope
+	feed                  ExecutionPromptFeed
+	closed                bool
+	pending               map[string]*executionPromptEntry
+	successorObservations map[string]map[*promptSuccessorObservation]struct{}
 }
 
 func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed ExecutionPromptFeed) executionPromptStore {
@@ -362,7 +385,6 @@ func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed Ex
 		authority: authority,
 		scope:     scope,
 		feed:      feed,
-		changed:   make(chan struct{}),
 		pending:   make(map[string]*executionPromptEntry),
 	}
 }
@@ -397,17 +419,14 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
+	s.observePromptSuccessorLocked(requestID)
 	s.mu.Unlock()
 	s.publishPending(snapshot)
-	s.mu.Lock()
-	s.signalLocked()
-	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		current := s.pending[requestID]
 		if current == entry {
 			delete(s.pending, requestID)
-			s.signalLocked()
 		}
 		s.mu.Unlock()
 		if current == entry {
@@ -423,7 +442,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 }
 
 func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr error) error {
-	_, err := s.submit(resp, submitErr)
+	_, err := s.submit(resp, submitErr, false)
 	return err
 }
 
@@ -431,54 +450,63 @@ func (s *executionPromptStore) Accept(
 	resp tools.AskQuestionResponse,
 	submitErr error,
 ) (PromptResponseAcceptance, error) {
-	successorIDs, err := s.submit(resp, submitErr)
+	acceptance, err := s.submit(resp, submitErr, true)
 	if err != nil {
 		return PromptResponseAcceptance{}, err
 	}
-	return PromptResponseAcceptance{
-		store:        s,
-		successorIDs: successorIDs,
-	}, nil
+	return acceptance, nil
 }
 
 func (s *executionPromptStore) submit(
 	resp tools.AskQuestionResponse,
 	submitErr error,
-) ([]string, error) {
+	latchSuccessor bool,
+) (PromptResponseAcceptance, error) {
 	requestID := strings.TrimSpace(resp.RequestID)
 	if requestID == "" {
-		return nil, errors.New("prompt response request id is required")
+		return PromptResponseAcceptance{}, errors.New("prompt response request id is required")
 	}
 	if s.authority == nil {
-		return nil, errors.New("session runtime authority is required")
+		return PromptResponseAcceptance{}, errors.New("session runtime authority is required")
 	}
 	s.mu.Lock()
 	entry := s.pending[requestID]
 	if entry == nil {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
+		return PromptResponseAcceptance{}, fmt.Errorf(
+			"prompt %q not found: %w",
+			requestID,
+			serverapi.ErrPromptNotFound,
+		)
 	}
 	if submitErr == nil {
 		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
 			s.mu.Unlock()
-			return nil, err
+			return PromptResponseAcceptance{}, err
 		}
 	}
 	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
 	if err != nil {
 		delete(s.pending, requestID)
-		s.signalLocked()
 		s.mu.Unlock()
 		s.publishResolved(entry.snapshot)
 		entry.response <- executionPromptResult{err: err}
-		return nil, err
+		return PromptResponseAcceptance{}, err
+	}
+	acceptance := PromptResponseAcceptance{}
+	if latchSuccessor {
+		observation := &promptSuccessorObservation{
+			done:         make(chan struct{}),
+			successorIDs: successorIDs,
+		}
+		acceptance.observation = observation
+		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	delete(s.pending, requestID)
-	s.signalLocked()
 	s.mu.Unlock()
 	s.publishResolved(entry.snapshot)
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
-	return successorIDs, nil
+	return acceptance, nil
 }
 
 func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) ([]string, error) {
@@ -545,46 +573,6 @@ func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) (
 	return append([]string(nil), batch.BatchPromptIDs[batch.CandidateOrdinal+1:]...), nil
 }
 
-func (s *executionPromptStore) AwaitAnyPendingOrClosed(ctx context.Context, requestIDs []string) error {
-	if len(requestIDs) == 0 {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ids := make(map[string]struct{}, len(requestIDs))
-	for index, raw := range requestIDs {
-		requestID := strings.TrimSpace(raw)
-		if requestID == "" {
-			return fmt.Errorf("successor prompt id at index %d is blank", index)
-		}
-		if _, exists := ids[requestID]; exists {
-			return fmt.Errorf("successor prompt id %q is duplicated", requestID)
-		}
-		ids[requestID] = struct{}{}
-	}
-	for {
-		s.mu.RLock()
-		for requestID := range ids {
-			if _, exists := s.pending[requestID]; exists {
-				s.mu.RUnlock()
-				return nil
-			}
-		}
-		if s.closed {
-			s.mu.RUnlock()
-			return nil
-		}
-		changed := s.changed
-		s.mu.RUnlock()
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-changed:
-		}
-	}
-}
-
 func (s *executionPromptStore) Close(err error) {
 	if err == nil {
 		err = context.Canceled
@@ -618,13 +606,76 @@ func (s *executionPromptStore) closeAndSignalLocked(err error) []ExecutionPrompt
 	for _, entry := range entries {
 		entry.response <- executionPromptResult{err: err}
 	}
-	s.signalLocked()
+	observations := make(map[*promptSuccessorObservation]struct{})
+	for _, byObservation := range s.successorObservations {
+		for observation := range byObservation {
+			observations[observation] = struct{}{}
+		}
+	}
+	for observation := range observations {
+		s.markPromptSuccessorObservedLocked(observation)
+	}
 	return snapshots
 }
 
-func (s *executionPromptStore) signalLocked() {
-	close(s.changed)
-	s.changed = make(chan struct{})
+func (s *executionPromptStore) registerPromptSuccessorObservationLocked(
+	observation *promptSuccessorObservation,
+) {
+	if observation == nil {
+		panic("prompt successor observation is required")
+	}
+	if len(observation.successorIDs) == 0 || s.closed {
+		s.markPromptSuccessorObservedLocked(observation)
+		return
+	}
+	for _, requestID := range observation.successorIDs {
+		if _, pending := s.pending[requestID]; pending {
+			s.markPromptSuccessorObservedLocked(observation)
+			return
+		}
+	}
+	if s.successorObservations == nil {
+		s.successorObservations = make(map[string]map[*promptSuccessorObservation]struct{})
+	}
+	for _, requestID := range observation.successorIDs {
+		observations := s.successorObservations[requestID]
+		if observations == nil {
+			observations = make(map[*promptSuccessorObservation]struct{})
+			s.successorObservations[requestID] = observations
+		}
+		observations[observation] = struct{}{}
+	}
+}
+
+func (s *executionPromptStore) observePromptSuccessorLocked(requestID string) {
+	observations := s.successorObservations[requestID]
+	if len(observations) == 0 {
+		return
+	}
+	pending := make([]*promptSuccessorObservation, 0, len(observations))
+	for observation := range observations {
+		pending = append(pending, observation)
+	}
+	for _, observation := range pending {
+		s.markPromptSuccessorObservedLocked(observation)
+	}
+}
+
+func (s *executionPromptStore) markPromptSuccessorObservedLocked(
+	observation *promptSuccessorObservation,
+) {
+	if observation == nil || observation.observed {
+		return
+	}
+	observation.observed = true
+	close(observation.done)
+	for _, requestID := range observation.successorIDs {
+		observations := s.successorObservations[requestID]
+		delete(observations, observation)
+		if len(observations) == 0 {
+			delete(s.successorObservations, requestID)
+		}
+	}
 }
 
 func (s *executionPromptStore) hasPending() bool {

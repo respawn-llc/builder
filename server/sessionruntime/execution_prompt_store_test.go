@@ -114,6 +114,64 @@ func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSucc
 	}
 }
 
+func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing.T) {
+	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
+	first := batchedPromptRequest("ask-1", 0)
+	second := batchedPromptRequest("ask-2", 1)
+	firstResult := make(chan executionPromptResult, 1)
+	go func() {
+		response, err := store.Await(context.Background(), first)
+		firstResult <- executionPromptResult{response: response, err: err}
+	}()
+	requirePromptPending(t, &store, first.ID)
+
+	acceptance, err := store.Accept(
+		tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("accept first prompt response: %v", err)
+	}
+	select {
+	case result := <-firstResult:
+		if result.err != nil || result.response.RequestID != first.ID {
+			t.Fatalf("first prompt result = %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for first prompt response")
+	}
+
+	secondResult := make(chan executionPromptResult, 1)
+	go func() {
+		response, err := store.Await(context.Background(), second)
+		secondResult <- executionPromptResult{response: response, err: err}
+	}()
+	requirePromptPending(t, &store, second.ID)
+	if err := store.Submit(
+		tools.AskQuestionResponse{RequestID: second.ID, Answer: "two"},
+		nil,
+	); err != nil {
+		t.Fatalf("submit second prompt response: %v", err)
+	}
+	select {
+	case result := <-secondResult:
+		if result.err != nil || result.response.RequestID != second.ID {
+			t.Fatalf("second prompt result = %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for second prompt response")
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		err := acceptance.AwaitSuccessor(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("await resolved successor attempt %d: %v", attempt, err)
+		}
+	}
+}
+
 func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {
 	return tools.AskQuestionRequest{
 		ID:       id,
