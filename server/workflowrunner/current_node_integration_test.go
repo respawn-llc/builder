@@ -30,7 +30,10 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 5 * time.Second
+// Controller finalization crosses several runtime goroutines and can be
+// delayed by CI's concurrent package scheduling even after the scripted work
+// has completed.
+const currentNodeRunnerWait = 15 * time.Second
 
 type currentNodeRunnerFixture struct {
 	cfg          config.App
