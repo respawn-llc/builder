@@ -1,9 +1,11 @@
 package workflowstore
 
 import (
+	"context"
 	"testing"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func TestPreflightTaskResumeRejectsEditedTransitionParameterWithoutMutatingCurrentNode(t *testing.T) {
@@ -100,30 +102,8 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 
-	definition, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
 	edgeID := *review.EnteredByEdgeID
-	foundEdge := false
-	for index := range request.Edges {
-		if request.Edges[index].ID != edgeID {
-			continue
-		}
-		foundEdge = true
-		request.Edges[index].Parameters = append(request.Edges[index].Parameters, workflow.Parameter{
-			Key:         "risk",
-			Description: "New risk.",
-		})
-	}
-	if !foundEdge {
-		t.Fatalf("workflow edge %q not found in save request", edgeID)
-	}
-	saved, err := store.SaveWorkflowGraph(ctx, request)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph parameter edit: %v", err)
-	}
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, edgeID)
 	if !saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_contract_changed") != 0 {
 		t.Fatalf("SaveWorkflowGraph parameter edit = %+v, want saved without active-transition blocker", saved)
 	}
@@ -141,6 +121,146 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 		diagnostic.ParameterKey != "risk" {
 		t.Fatalf("resume diagnostic = %+v, want exact Current Node, entering Edge, and Parameter context", diagnostic)
 	}
+}
+
+func TestWorkflowGraphSaveBlocksParameterEditForReadyCurrentNode(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, *started.EnteredByEdgeID)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("ready Current Node parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksParameterEditForAdmittedCurrentNode(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	if err := store.AdmitCurrentNode(ctx, started.Reference); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, *started.EnteredByEdgeID)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("admitted Current Node parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksParameterEditBetweenAdmissionAndRunnerStart(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	admitted := make(chan struct{})
+	releaseRunnerPreparation := make(chan struct{})
+	admissionErr := make(chan error, 1)
+	go func() {
+		err := store.AdmitCurrentNode(ctx, started.Reference)
+		close(admitted)
+		<-releaseRunnerPreparation
+		admissionErr <- err
+	}()
+	<-admitted
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, *started.EnteredByEdgeID)
+	close(releaseRunnerPreparation)
+	if err := <-admissionErr; err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("admit-to-runner parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksParameterEditForPendingApproval(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "review")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil || completed.PendingApproval == nil {
+		t.Fatalf("CompleteCurrentNode = %+v, %v; want pending approval", completed, err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	edgeID := edgeByKey(t, definition, "review").ID
+
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, edgeID)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("pending Approval parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksParameterEditForUnresolvedParallelBranch(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil || len(split.Mutation.Created) != 2 {
+		t.Fatalf("CompleteCurrentNode split = %+v, %v; want two parallel branches", split, err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	edgeID := edgeByKey(t, definition, "split_a").ID
+
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, edgeID)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("parallel branch parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
+func saveWorkflowParameterEdit(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	workflowID runtimeids.WorkflowID,
+	edgeID workflow.EdgeID,
+) WorkflowGraphSaveResult {
+	t.Helper()
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition before parameter edit: %v", err)
+	}
+	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
+	for index := range request.Edges {
+		if request.Edges[index].ID != edgeID {
+			continue
+		}
+		request.Edges[index].Parameters = append(request.Edges[index].Parameters, workflow.Parameter{
+			Key:         "risk",
+			Description: "New risk.",
+		})
+		saved, saveErr := store.SaveWorkflowGraph(ctx, request)
+		if saveErr != nil {
+			t.Fatalf("SaveWorkflowGraph parameter edit: %v", saveErr)
+		}
+		return saved
+	}
+	t.Fatalf("workflow edge %q not found in parameter edit request", edgeID)
+	return WorkflowGraphSaveResult{}
 }
 
 func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {

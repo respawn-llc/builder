@@ -2364,6 +2364,56 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 	return i, err
 }
 
+const getWorkflowEdgeParameterEditPolicyImpact = `-- name: GetWorkflowEdgeParameterEditPolicyImpact :one
+SELECT
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = ?1
+          AND current_node.entered_by_edge_id = ?2
+          AND (
+              current_node.scheduling_state IS NULL
+              OR current_node.scheduling_state != 'interrupted'
+          )
+    ) AS active_current_node_count,
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = ?1
+          AND current_node.entered_by_edge_id = ?2
+          AND current_node.transition_branch_key IS NOT NULL
+    ) AS unresolved_parallel_branch_count,
+    (
+        SELECT CAST(COUNT(DISTINCT approval.id) AS INTEGER)
+        FROM task_pending_approvals approval
+        JOIN task_records task ON task.id = approval.source_task_id
+        JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
+        WHERE task.workflow_id = ?1
+          AND json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?2
+    ) AS pending_approval_count
+`
+
+type GetWorkflowEdgeParameterEditPolicyImpactParams struct {
+	WorkflowID runtimeids.WorkflowID
+	EdgeID     sql.NullString
+}
+
+type GetWorkflowEdgeParameterEditPolicyImpactRow struct {
+	ActiveCurrentNodeCount        int64
+	UnresolvedParallelBranchCount int64
+	PendingApprovalCount          int64
+}
+
+func (q *Queries) GetWorkflowEdgeParameterEditPolicyImpact(ctx context.Context, arg GetWorkflowEdgeParameterEditPolicyImpactParams) (GetWorkflowEdgeParameterEditPolicyImpactRow, error) {
+	row := q.db.QueryRowContext(ctx, getWorkflowEdgeParameterEditPolicyImpact, arg.WorkflowID, arg.EdgeID)
+	var i GetWorkflowEdgeParameterEditPolicyImpactRow
+	err := recordQueryError(ctx, row.Scan(&i.ActiveCurrentNodeCount, &i.UnresolvedParallelBranchCount, &i.PendingApprovalCount), getWorkflowEdgeParameterEditPolicyImpact, 2)
+
+	return i, err
+}
+
 const getWorkflowGraphActiveWorkPolicyImpact = `-- name: GetWorkflowGraphActiveWorkPolicyImpact :one
 SELECT
     (
