@@ -3,24 +3,20 @@ package metadata
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	metadatamigrations "core/server/metadata/migrations"
 	"core/server/metadata/sqlitegen"
 	"core/shared/config"
 
 	"github.com/pressly/goose/v3"
 	goosedatabase "github.com/pressly/goose/v3/database"
 )
-
-//go:embed migrations/*.up.sql
-var migrationsFS embed.FS
 
 const metadataSQLiteConnectionPoolSize = 8
 
@@ -144,25 +140,11 @@ func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, p
 }
 
 func newMetadataMigrationProvider(db *sql.DB) (*goose.Provider, error) {
-	migrations, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		return nil, fmt.Errorf("open embedded metadata migrations: %w", err)
-	}
 	var logger goose.Logger = goose.NopLogger()
 	if metadataMigrationDebugLogs && metadataMigrationLogWriter != nil {
 		logger = &metadataMigrationLogger{out: metadataMigrationLogWriter, debug: metadataMigrationDebugLogs}
 	}
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		db,
-		migrations,
-		goose.WithLogger(logger),
-		goose.WithDisableGlobalRegistry(true),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create metadata migration provider: %w", err)
-	}
-	return provider, nil
+	return metadatamigrations.NewProvider(db, logger)
 }
 
 type metadataMigrationLogger struct {
