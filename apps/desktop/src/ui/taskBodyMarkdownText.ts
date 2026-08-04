@@ -20,6 +20,7 @@ const blockTypes = new Set([
   "listItem",
   "table",
   "tableRow",
+  "tableCell",
   "code",
   "thematicBreak",
 ]);
