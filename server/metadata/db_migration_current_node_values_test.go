@@ -173,7 +173,6 @@ INSERT INTO task_transitions (
 		t.Fatalf("open migrated store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-
 	var currentInputs, priorNodeValues, enteredByEdgeID string
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT current_input_values_json, prior_node_values_json, entered_by_edge_id
