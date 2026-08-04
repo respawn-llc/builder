@@ -211,7 +211,8 @@ cat >"$tmp_formula" <<EOF
 class ${formula_class} < Formula
   desc "Minimal terminal coding agent for professional engineering workflows"
   homepage "https://github.com/respawn-llc/kent"
-  version "$bare_version"
+  url "${release_base}/kent_${bare_version}_darwin_arm64.tar.gz"
+  sha256 "$darwin_arm64_sha256"
   license "AGPL-3.0-only"
 
   bottle do
@@ -222,9 +223,6 @@ class ${formula_class} < Formula
 
   on_macos do
     depends_on arch: :arm64
-
-    url "${release_base}/kent_${bare_version}_darwin_arm64.tar.gz"
-    sha256 "$darwin_arm64_sha256"
   end
 
   on_linux do

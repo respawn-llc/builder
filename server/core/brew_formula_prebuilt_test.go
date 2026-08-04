@@ -32,8 +32,8 @@ func TestBrewTapGeneratorKeepsAppleSiliconPrebuiltInstall(t *testing.T) {
 		t.Fatalf("Apple Silicon Kent install must install exactly one prebuilt executable, got %v", result.Installed)
 	}
 	for source, destination := range result.Installed {
-		if source == "" {
-			t.Fatal("Apple Silicon Kent install must install a release archive executable")
+		if source != "kent_1.2.3_darwin_arm64" {
+			t.Fatalf("Apple Silicon Kent install source = %q, want versioned release archive executable", source)
 		}
 		if destination != "kent" {
 			t.Fatalf("Apple Silicon Kent install destination = %q, want kent", destination)
@@ -96,7 +96,8 @@ type formulaEvaluation struct {
 func evaluateFormulaOnMac(t *testing.T, formulaPath string, appleSilicon bool) formulaEvaluation {
 	t.Helper()
 	evaluateFormula := exec.Command("ruby", "-rjson", "-e", `
-apple_silicon = ARGV.fetch(1) == "arm"
+$apple_silicon = ARGV.fetch(1) == "arm"
+fixture_version = ARGV.fetch(2)
 
 module OS
   def self.mac?
@@ -128,12 +129,17 @@ class Formula
     def homepage(*); end
 
     def version(value)
+      if @inferred_version == value
+        raise "explicit version #{value} is redundant with the stable URL"
+      end
       @formula_version = value
     end
 
     def license(*); end
     def root_url(*); end
-    def sha256(*); end
+    def sha256(*)
+      raise "sha256 cannot be declared directly inside on_macos" if @platform_block == :macos
+    end
     def caveats(*); end
     def test(*); end
 
@@ -147,21 +153,35 @@ class Formula
     end
 
     def on_macos
+      previous_platform_block = @platform_block
+      @platform_block = :macos
       yield
+    ensure
+      @platform_block = previous_platform_block
     end
 
     def on_linux; end
 
     def on_arm
+      previous_platform_block = @platform_block
+      @platform_block = :arm
       yield if $apple_silicon
+    ensure
+      @platform_block = previous_platform_block
     end
 
     def on_intel
+      previous_platform_block = @platform_block
+      @platform_block = :intel
       yield unless $apple_silicon
+    ensure
+      @platform_block = previous_platform_block
     end
 
     def url(value)
+      raise "url cannot be declared directly inside on_macos" if @platform_block == :macos
       @formula_url = value
+      @inferred_version = $fixture_version if @platform_block.nil?
     end
   end
 
@@ -172,10 +192,11 @@ class Formula
   end
 
   def version
-    self.class.formula_version
+    self.class.formula_version || $fixture_version
   end
 end
 
+$fixture_version = fixture_version
 load ARGV.fetch(0)
 formula = Kent.new
 formula.install
@@ -184,10 +205,10 @@ puts JSON.generate(
   requires_arm64: Kent.dependencies.include?({ arch: :arm64 }),
   installed: formula.bin.installed,
 )
-`, formulaPath, map[bool]string{true: "arm", false: "intel"}[appleSilicon])
-	output, err := evaluateFormula.Output()
+`, formulaPath, map[bool]string{true: "arm", false: "intel"}[appleSilicon], "1.2.3")
+	output, err := evaluateFormula.CombinedOutput()
 	if err != nil {
-		t.Fatalf("evaluate generated formula on macOS: %v", err)
+		t.Fatalf("evaluate generated formula on macOS: %v\n%s", err, output)
 	}
 
 	var result formulaEvaluation
