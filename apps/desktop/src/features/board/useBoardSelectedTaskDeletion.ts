@@ -26,15 +26,17 @@ export function useBoardSelectedTaskDeletion({
     const attempt = { taskID: selectedTaskId };
     onSelectedTaskDeleted?.(attempt);
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
-    void navigation.closeProjectTask(projectId, workflowId).then(
-      () => {
+    void navigation.closeProjectTask(projectId, workflowId).then((result) => {
+      if (result.status === "completed") {
         onSelectedTaskDeletionNavigationSucceeded?.(attempt);
-      },
-      (error: unknown) => {
-        onSelectedTaskDeletionNavigationFailed?.(attempt);
-        onNavigationError(error);
-      },
-    );
+        return;
+      }
+      onSelectedTaskDeletionNavigationFailed?.(attempt);
+      onNavigationError(result.error);
+    }, (error: unknown) => {
+      onSelectedTaskDeletionNavigationFailed?.(attempt);
+      onNavigationError(error);
+    });
   }, [
     invalidateSidebar,
     navigation,

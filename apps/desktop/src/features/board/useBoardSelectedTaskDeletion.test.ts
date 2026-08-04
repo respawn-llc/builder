@@ -23,7 +23,7 @@ import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
 describe("useBoardSelectedTaskDeletion", () => {
   it("reports a failed navigation for the exact deletion attempt", async () => {
     const error = new Error("navigation failed");
-    navigation.closeProjectTask.mockRejectedValueOnce(error);
+    navigation.closeProjectTask.mockResolvedValueOnce({ error, status: "failed" });
     const onNavigationError = vi.fn<(receivedError: unknown) => void>();
     const onSelectedTaskDeleted = vi.fn<(attempt: BoardTaskDeletionAttempt) => void>();
     const onSelectedTaskDeletionNavigationFailed = vi.fn<(attempt: BoardTaskDeletionAttempt) => void>();

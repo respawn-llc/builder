@@ -386,7 +386,9 @@ function BoardContent({
         taskID: next,
       }).then((result) => {
         if (taskDetailRouteShouldClose(result)) {
-          void navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id).catch(reportNavigationError);
+          void navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id).then((result) => {
+            if (result.status === "failed") reportNavigationError(result.error);
+          });
         }
       });
     }
@@ -458,9 +460,11 @@ function BoardContent({
     try {
       await actions.delete.mutateAsync(target.taskID);
       if (target.taskID === selectedTaskId) {
-        await navigation
-          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
-          .catch(reportNavigationError);
+        const navigationResult = await navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id);
+        if (navigationResult.status === "failed") {
+          reportNavigationError(navigationResult.error);
+          return;
+        }
       }
       close();
     } catch (error) {

@@ -7,6 +7,10 @@ import { useAppServices } from "./useAppServices";
 
 type NavigationStackAction = "PUSH" | "REPLACE" | "FORWARD" | "BACK" | "GO";
 
+export type AppNavigationResult =
+  | Readonly<{ status: "completed" }>
+  | Readonly<{ status: "failed"; error: unknown }>;
+
 export type AppNavigation = Readonly<{
   back(): Promise<void>;
   forward(): Promise<void>;
@@ -17,7 +21,7 @@ export type AppNavigation = Readonly<{
   openTask(taskID: string): Promise<void>;
   replaceTask(taskID: string): Promise<void>;
   openProjectTask(projectID: string, workflowID: string, taskID: string): Promise<void>;
-  closeProjectTask(projectID: string, workflowID?: string): Promise<void>;
+  closeProjectTask(projectID: string, workflowID?: string): Promise<AppNavigationResult>;
 }>;
 
 export type NavigationStackState = Readonly<{
@@ -48,6 +52,18 @@ export function useAppNavigation(): AppNavigation {
         await action();
       } catch (error) {
         await logger.append("warn", "Navigation failed", { error: errorMessage(error) });
+      }
+    },
+    [logger],
+  );
+  const runImmediateNavigationResult = useCallback(
+    async (action: () => Promise<void>): Promise<AppNavigationResult> => {
+      try {
+        await action();
+        return { status: "completed" };
+      } catch (error) {
+        await logger.append("warn", "Navigation failed", { error: errorMessage(error) });
+        return { error, status: "failed" };
       }
     },
     [logger],
@@ -116,7 +132,7 @@ export function useAppNavigation(): AppNavigation {
         });
       },
       async closeProjectTask(projectID, workflowID) {
-        await runImmediateNavigation(async () => {
+        return runImmediateNavigationResult(async () => {
           await navigate({
             to: "/projects/$projectId",
             params: { projectId: projectID },
@@ -125,7 +141,7 @@ export function useAppNavigation(): AppNavigation {
         });
       },
     }),
-    [navigate, router.history, runImmediateNavigation, runNavigation],
+    [navigate, router.history, runImmediateNavigation, runImmediateNavigationResult, runNavigation],
   );
 }
 

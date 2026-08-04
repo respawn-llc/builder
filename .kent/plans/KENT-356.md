@@ -676,8 +676,10 @@
   operation-scoped attempts, generic VirtualizedInfiniteList changes were
   removed, and route/deletion regression coverage was added. Final automated
   verification passed: `./scripts/test.sh desktop` (81 files / 367 tests) and
-  `./scripts/build.sh desktop`. Third remediation restored the canonical
-  virtualizer-owned offset seam and requires a successful deletion attempt
-  before preserving a selector transition. Final verification passed again:
-  `./scripts/test.sh desktop` (82 files / 370 tests) and
-  `./scripts/build.sh desktop`.
+  `./scripts/build.sh desktop`. Current remediation removes the generic
+  VirtualizedInfiniteList offset seam and its test per the Design prohibition,
+  restores Task Detail's existing scroll-element seam, and requires a
+  successful deletion attempt before preserving a selector transition.
+  Navigation now returns a typed close-project outcome from the real adapter,
+  so Board failure handling observes and surfaces the production result.
+  Final verification is rerunning after this round.
