@@ -97,7 +97,7 @@
   - A large paste filled the screen.
 - Outside the exhaustive trigger list, a bug is never resolved by re-emitting committed state, in any code path, under any severity.
 - Rehydration erases only the Mutable Band, reopens the Session, and appends the received active segment below existing Scrollback. It never clears Scrollback, changes emitted content, or compares the received segment with existing terminal output. Duplicate-looking output after rehydration is acceptable.
-- Only the operator's local input and navigation state survives rehydration. Kent reloads fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state from the reopened Session. If rehydration fails, the TUI exits with a clear error; it does not fabricate empty state or continue with stale state.
+- Only the operator's local input and navigation state survives rehydration. Kent reloads fresh server-authoritative transcript, RuntimeActivity, Session identity and status, execution target, active execution, reasoning, Reviewer, compaction, tool, Queue, prompt, background-process, context-usage, and Goal state from the reopened Session. A runtime transport failure keeps the TUI open under the connection-loss contract while Kent retries reopening the subscription. Any other rehydration failure exits the TUI with a clear error; it does not fabricate empty state or continue with stale state.
 
 ## Errors
 
@@ -105,4 +105,4 @@
 - In debug mode, unclear developer failures are logged with the same diagnostics and then panic. In normal operation, Kent logs them and continues when possible.
 - No error or recovery path may: drop, skip, or defer rendering of received committed content; drop or disable the native surface; hand the ongoing transcript to an app-managed viewport; trigger scratch rehydration; store content for later comparison; or re-emit. An error path that cannot satisfy these constraints exits the TUI with a clear message instead.
 - Immediate terminal write failures surface synchronously and follow the same debug and normal-operation recovery rules.
-- When an ongoing transcript subscription cannot open because of a runtime transport failure, the TUI exits cleanly with the exact `server connection lost` status and does not expose low-level transport details. Other failures while opening or rehydrating Chat retain the existing clear-error and debug-diagnostic path.
+- When an ongoing transcript subscription cannot open because of a runtime transport failure, the TUI keeps the existing transcript visible, shows the persistent connection-loss status-line notice, and retries without exposing low-level transport details. A successful hydration clears the notice. Other failures while opening or rehydrating Chat retain the existing clear-error and debug-diagnostic path.

@@ -3,9 +3,12 @@ package app
 import (
 	"errors"
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 
 	"core/cli/tui/ongoing"
+	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -38,7 +41,7 @@ func TestOngoingSurfaceErrorPanicsInDebug(t *testing.T) {
 	_ = m.handleOngoingSurfaceError(errors.New("terminal write failed"))
 }
 
-func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
+func TestOngoingTranscriptNonTransportOpenFailureExitsTUI(t *testing.T) {
 	controller := newNoopOngoingTranscriptController(&ongoingSurfaceSpy{}, ongoingTestFrameProvider)
 	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 
@@ -56,11 +59,81 @@ func TestOngoingTranscriptOpenFailureExitsTUI(t *testing.T) {
 	if !m.Transition().Exit {
 		t.Fatal("transcript-open failure did not request clear TUI exit")
 	}
-	m = newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
+}
+
+func TestOngoingTranscriptTransportOpenFailureKeepsTUIAndShowsDisconnect(t *testing.T) {
+	controller := newNoopOngoingTranscriptController(&ongoingSurfaceSpy{}, ongoingTestFrameProvider)
+	m := newProjectedTestUIModel(
+		&runtimeControlFakeClient{},
+		withUIOngoingTranscriptController(controller),
+	)
 	err := &net.OpError{Err: errors.New("connection refused")}
-	_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventFailure, Err: err})
-	if m.transientStatus == err.Error() {
-		t.Fatal("connection failure leaked transport detail")
+
+	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventFailure, Err: err})
+
+	if cmd != nil {
+		for _, msg := range collectCmdMessages(t, cmd) {
+			if _, quit := msg.(tea.QuitMsg); quit {
+				t.Fatal("transport failure requested TUI exit")
+			}
+		}
+	}
+	if m.Transition().Exit {
+		t.Fatal("transport failure requested clear TUI exit")
+	}
+	if !m.runtimeDisconnectStatusVisible() {
+		t.Fatal("transport failure did not show the runtime disconnect status")
+	}
+	if got := m.runtimeDisconnectStatusText(); got != runtimeDisconnectedStatusMessage {
+		t.Fatalf("disconnect status = %q, want %q", got, runtimeDisconnectedStatusMessage)
+	}
+}
+
+func TestRecoveredTranscriptHydrationClearsDisconnectStatusLine(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	m := newProjectedTestUIModel(
+		&runtimeControlFakeClient{},
+		WithUIOngoingSurface(ongoing.NewSurface(nil)),
+	)
+	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
+	m.terminalGeometry = terminalGeometryKnown(80, 24)
+	m.setRuntimeDisconnected(true)
+
+	_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: ongoingHydrationMessage(1),
+	})
+
+	if m.runtimeDisconnectStatusVisible() {
+		t.Fatal("successful transcript hydration did not clear the disconnect state")
+	}
+	if got, want := surface.callKinds(), []string{"apply", "render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("recovery surface calls = %v, want %v", got, want)
+	}
+	for _, section := range surface.calls[1].frame.Sections {
+		for _, line := range section.Lines {
+			if strings.Contains(line, runtimeDisconnectedStatusMessage) {
+				t.Fatalf("recovery repaint retained disconnect status: %q", line)
+			}
+		}
+	}
+}
+
+func TestRejectedPostReconnectTranscriptMessageRetainsDisconnectStatus(t *testing.T) {
+	controller := newNoopOngoingTranscriptController(&ongoingSurfaceSpy{}, ongoingTestFrameProvider)
+	m := newProjectedTestUIModel(
+		&runtimeControlFakeClient{},
+		withUIOngoingTranscriptController(controller),
+	)
+	m.setRuntimeDisconnected(true)
+
+	_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: ongoingTranscriptMessage(2, clientui.TranscriptMessageSessionStatus),
+	})
+
+	if !m.runtimeDisconnectStatusVisible() {
+		t.Fatal("rejected post-reconnect message cleared the disconnect status")
 	}
 }
 

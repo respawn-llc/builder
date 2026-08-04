@@ -40,6 +40,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	)
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
+		wasRuntimeDisconnected := m.runtimeDisconnectStatusVisible()
 		var stateCmd tea.Cmd
 		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
 		if err != nil {
@@ -49,14 +50,25 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 			}
 			return m.handleOngoingSurfaceError(err)
 		}
+		acceptedHydration := m.ongoingTranscript.acceptedHydration(event.Message)
+		if acceptedHydration {
+			m.observeRuntimeRequestResult(nil)
+		}
 		stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
-		if m.ongoingTranscript.acceptedHydration(event.Message) {
+		if acceptedHydration {
 			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
 		}
 		m.inputController().notifyTurnQueueDrainedIfIdle()
 		m.layout().syncViewport()
-		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
+		var connectionStatusCmd tea.Cmd
+		if wasRuntimeDisconnected && acceptedHydration {
+			connectionStatusCmd = m.renderNativeOngoingSurface()
+		}
+		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true), connectionStatusCmd)
 	case ongoingTranscriptEventLoss:
+		if runtimeattach.IsRuntimeConnectionError(event.Err) {
+			m.observeRuntimeRequestResult(event.Err)
+		}
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
@@ -65,7 +77,9 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		err = fmt.Errorf("open transcript subscription: %w", event.Err)
 		m.logf("ongoing.transcript.open.error err=%q", err.Error())
 		if runtimeattach.IsRuntimeConnectionError(event.Err) {
-			return m.exitWithUIError("server connection lost")
+			m.observeRuntimeRequestResult(event.Err)
+			m.layout().syncViewport()
+			return m.renderNativeOngoingSurface()
 		}
 		return m.handleFatalUIError(fmt.Sprintf("ongoing transcript failed: %v", err), err)
 	default:
