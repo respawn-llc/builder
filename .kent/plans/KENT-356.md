@@ -676,4 +676,8 @@
   operation-scoped attempts, generic VirtualizedInfiniteList changes were
   removed, and route/deletion regression coverage was added. Final automated
   verification passed: `./scripts/test.sh desktop` (81 files / 367 tests) and
+  `./scripts/build.sh desktop`. Third remediation restored the canonical
+  virtualizer-owned offset seam and requires a successful deletion attempt
+  before preserving a selector transition. Final verification passed again:
+  `./scripts/test.sh desktop` (82 files / 370 tests) and
   `./scripts/build.sh desktop`.

@@ -45,5 +45,5 @@ export function boardTaskDeletionCauseMatches(
   previousTaskID: string | null,
   nextTaskID: string | null,
 ): boolean {
-  return cause?.taskID === previousTaskID && nextTaskID === null;
+  return cause?.succeeded === true && cause.taskID === previousTaskID && nextTaskID === null;
 }

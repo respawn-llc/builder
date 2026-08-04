@@ -50,4 +50,19 @@ describe("board task deletion causes", () => {
 
     expect(cause).toBeNull();
   });
+
+  it("does not preserve an ordinary absence while deletion navigation is pending", () => {
+    const pending = recordBoardTaskDeletionAttempt(null, { taskID: "task-1" });
+
+    expect(boardTaskDeletionCauseMatches(pending, "task-1", null)).toBe(false);
+  });
+
+  it("does not preserve an ordinary absence after the pending navigation fails", () => {
+    const attempt = { taskID: "task-1" };
+    const pending = recordBoardTaskDeletionAttempt(null, attempt);
+    const failed = settleBoardTaskDeletionAttempt(pending, attempt, "failed");
+
+    expect(failed).toBeNull();
+    expect(boardTaskDeletionCauseMatches(failed, "task-1", null)).toBe(false);
+  });
 });

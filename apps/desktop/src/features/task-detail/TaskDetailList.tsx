@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ActivityItem, AttentionItem, TaskComment, TaskDetail, TaskDependencyDirection } from "@/api";
@@ -160,29 +160,6 @@ export function TaskDetailList({
     return keys.size === 0 ? undefined : keys;
   }, [attention.isPending, initialFocus]);
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
-  const scrollElementRef = useRef<HTMLDivElement | null>(null);
-  const restoredScrollTopRef = useRef<number | null>(null);
-  const handleScrollElementChange = useCallback(
-    (element: HTMLDivElement | null) => {
-      scrollElementRef.current = element;
-      onScrollElementChange(element);
-    },
-    [onScrollElementChange],
-  );
-  useLayoutEffect(() => {
-    const element = scrollElementRef.current;
-    if (
-      !restoredDataReady ||
-      restoredScrollTop === undefined ||
-      element === null ||
-      restoredScrollTopRef.current === restoredScrollTop
-    ) {
-      return;
-    }
-    element.scrollTop = Math.max(0, restoredScrollTop);
-    restoredScrollTopRef.current = restoredScrollTop;
-  }, [listItems.length, restoredDataReady, restoredScrollTop]);
-
   return (
     <VirtualizedInfiniteList
       ariaLabel={t("task.title")}
@@ -194,13 +171,17 @@ export function TaskDetailList({
       initialScrollRequestKey={
         initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
+      initialScrollOffset={restoredScrollTop}
+      initialScrollOffsetRequestKey={
+        restoredDataReady && restoredScrollTop !== undefined ? `${detail.id}:restored` : undefined
+      }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
-      onScrollElementChange={handleScrollElementChange}
+      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
       rowSpacing="compact"
