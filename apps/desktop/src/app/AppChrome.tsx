@@ -18,7 +18,8 @@ import {
 import { useAppNavigation, useNavigationStackState } from "@/app-facade";
 import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
-import { useSidebar, type SidebarDestination } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { sidebarDestinationProjectID } from "./sidebarDestinationAdapter";
 import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -153,14 +154,16 @@ function ProjectDeletionEventHandler() {
   const queryClient = useQueryClient();
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
-  const { closeSidebar, stackDestinations } = useSidebar();
+  const { activeDestination, closeSidebar } = useSidebar();
   const { push } = useStatusController();
   useProjectDeletedEvents(
     nativeBridge,
     useCallback(
       (event) => {
         const routeMatches = routeReferencesProject(location.pathname, event.projectID);
-        const sidebarMatches = sidebarReferencesProject(stackDestinations, event.projectID);
+        const sidebarMatches =
+          activeDestination !== null &&
+          sidebarDestinationProjectID(activeDestination) === event.projectID;
         void completeProjectDeletion({
           closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
           navigateHome: routeMatches ? navigation.openHome : noopNavigation,
@@ -175,7 +178,7 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [closeSidebar, location.pathname, navigation.openHome, push, queryClient, stackDestinations, t],
+      [activeDestination, closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
@@ -184,18 +187,6 @@ function ProjectDeletionEventHandler() {
 function routeReferencesProject(pathname: string, projectID: string): boolean {
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   return segments[0] === "projects" && segments[1] === projectID;
-}
-
-function sidebarReferencesProject(
-  destinations: readonly SidebarDestination[],
-  projectID: string,
-): boolean {
-  return destinations.some((destination) => {
-    if ("projectID" in destination && destination.projectID === projectID) {
-      return true;
-    }
-    return destination.kind === "linkWorkflow" && destination.projectID === projectID;
-  });
 }
 
 function noopCloseSidebar(): void {

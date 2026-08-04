@@ -71,14 +71,13 @@ describe("sidebar Task Detail navigation", () => {
 function SidebarScenario() {
   const {
     activeDestination,
-    activeSnapshot,
     backSidebar,
     closeSidebar,
     openSidebar,
     resolveSidebar,
   } = useSidebar();
   useEffect(() => {
-    void openSidebar({ kind: "taskDetail", taskID: "task-1" });
+    void openSidebar({ kind: "taskDetail", projectID: "project-1", taskID: "task-1" });
   }, [openSidebar]);
   if (activeDestination === null) {
     return null;
@@ -89,7 +88,6 @@ function SidebarScenario() {
         Back
       </button>
       <SidebarDestinationView
-        activeSnapshot={activeSnapshot}
         closeSidebar={closeSidebar}
         destination={activeDestination}
         resolveSidebar={resolveSidebar}

@@ -3,7 +3,11 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage, rpcErrorCodes, RpcError, type TaskDetail, type TaskLabelAssignment } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
-import type { SidebarTaskDetailSnapshot, TaskDetailInitialFocus } from "@/app-facade";
+import type {
+  SidebarStateCapture,
+  SidebarTaskDetailSnapshot,
+  TaskDetailInitialFocus,
+} from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
@@ -16,6 +20,7 @@ export type TaskDetailSurfaceProps = Readonly<{
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
+  onCaptureSidebarState?: ((capture: SidebarStateCapture) => () => void) | undefined;
   onMissingTask?: (() => void) | undefined;
 }>;
 
@@ -25,6 +30,7 @@ export function TaskDetailSurface({
   initialFocus,
   onMutated,
   sidebarSnapshot,
+  onCaptureSidebarState,
   onMissingTask,
 }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
@@ -69,6 +75,7 @@ export function TaskDetailSurface({
           detail={detail.data}
           initialFocus={initialFocus}
           onMutated={onMutated}
+          onCaptureSidebarState={onCaptureSidebarState}
           openLink={openLink}
           restoredDataReady={
             !detail.isFetching &&

@@ -334,6 +334,7 @@ function BoardContent({
       kind: "taskDetail",
       mode: "overlay",
       onMutated: undefined,
+      projectID: board.projectID,
       taskID: selectedTaskId,
     }).then((result) => {
       if (active && taskDetailRouteShouldClose(result)) {
@@ -513,6 +514,7 @@ function BoardContent({
       kind: "taskDetail" as const,
       initialFocus: { kind: "dependencies" as const },
       mode: "overlay" as const,
+      projectID: board.projectID,
       taskID,
     };
     if (activeDestination?.kind === "taskDetail") {

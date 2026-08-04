@@ -64,6 +64,7 @@ export type SidebarDestination =
       kind: "taskDetail";
       mode?: SidebarMode;
       initialFocus?: TaskDetailInitialFocus | undefined;
+      projectID: string;
       taskID: string;
       onMutated?: (() => void) | undefined;
       // Set when opened from the Home inbox so the sidebar header exposes live
@@ -108,11 +109,6 @@ export type SidebarDestination =
       content: ReactNode;
     }>;
 
-export type SidebarEntryToken = Readonly<{
-  lifecycleID: string;
-  entryID: string;
-}>;
-
 export type SidebarTaskDetailSnapshot = Readonly<{
   kind: "taskDetail";
   scrollTop: number;
@@ -126,32 +122,28 @@ export type SidebarTaskDetailSnapshot = Readonly<{
 export type SidebarDestinationSnapshot = SidebarTaskDetailSnapshot;
 export type SidebarStateCapture = () => SidebarDestinationSnapshot | null;
 
+export type SidebarInvalidationTarget =
+  | Readonly<{ kind: "task"; taskID: string }>
+  | Readonly<{ kind: "project"; projectID: string }>;
+
+export type SidebarInvalidationResult =
+  | Readonly<{ kind: "absent" }>
+  | Readonly<{ kind: "discarded" }>
+  | Readonly<{ kind: "closed" }>;
+
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
-  activeSnapshot: SidebarDestinationSnapshot | null;
-  activeToken: SidebarEntryToken | null;
   backSidebar(): void;
   canGoBack: boolean;
   closeSidebar(reason?: SidebarCancelReason): void;
-  closeSidebarIfCurrent(token: SidebarEntryToken, reason?: SidebarCancelReason): void;
+  invalidateSidebar(target: SidebarInvalidationTarget): SidebarInvalidationResult;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   pushSidebar(destination: SidebarDestination): void;
-  preserveSidebarOnNextRouteChange(): void;
-  consumeSidebarRouteChangePreservation(): boolean;
-  registerSidebarStateCapture(token: SidebarEntryToken, capture: SidebarStateCapture): () => void;
-  removeSidebarEntry(token: SidebarEntryToken): void;
   replaceSidebar(destination: SidebarDestination): void;
-  replaceSidebarIfCurrent(token: SidebarEntryToken, destination: SidebarDestination): void;
   phase: SidebarPhase;
   resolveSidebar(result: Exclude<SidebarResult, SidebarCanceledResult>): void;
-  resolveSidebarIfCurrent(
-    token: SidebarEntryToken,
-    result: Exclude<SidebarResult, SidebarCanceledResult>,
-  ): void;
   resizeSidebar(width: ResolvedSidebarWidth): void;
   sidebarWidthPx: number;
-  stackDestinations: readonly SidebarDestination[];
-  stackEntryTokens: readonly SidebarEntryToken[];
 }>;
 
 export const SidebarContext = createContext<SidebarController | null>(null);

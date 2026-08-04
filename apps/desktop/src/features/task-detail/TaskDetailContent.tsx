@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
-import type { SidebarDestination, SidebarTaskDetailSnapshot, TaskDetailInitialFocus } from "@/app-facade";
+import type {
+  SidebarDestination,
+  SidebarStateCapture,
+  SidebarTaskDetailSnapshot,
+  TaskDetailInitialFocus,
+} from "@/app-facade";
 import { useAppNavigation, useConnectionSnapshot, useSidebar, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
 import {
@@ -58,10 +63,59 @@ function relatedTaskDestination(
 ): Extract<SidebarDestination, { kind: "taskDetail" }> {
   return {
     kind: "taskDetail",
+    projectID: current.projectID,
     taskID,
     ...(current.mode === undefined ? {} : { mode: current.mode }),
     ...(current.onMutated === undefined ? {} : { onMutated: current.onMutated }),
   };
+}
+
+function useTaskDetailSidebarCapture({
+  captureState,
+  descriptionExpanded,
+  editingComment,
+  newCommentBody,
+  savePending,
+  scrollElementRef,
+  selectedTab,
+  titleBodyDraft,
+}: Readonly<{
+  captureState: ((capture: SidebarStateCapture) => () => void) | undefined;
+  descriptionExpanded: boolean;
+  editingComment: Readonly<{ id: string; body: string }> | null;
+  newCommentBody: string;
+  savePending: boolean;
+  scrollElementRef: Readonly<{ current: HTMLDivElement | null }>;
+  selectedTab: "comments" | "activity";
+  titleBodyDraft: TaskDraft | undefined;
+}>) {
+  useEffect(() => {
+    if (captureState === undefined) return;
+    return captureState(() =>
+      savePending
+        ? null
+        : taskDetailSnapshot({
+            descriptionExpanded,
+            editedCommentDraft:
+              editingComment === null
+                ? undefined
+                : { body: editingComment.body, commentID: editingComment.id },
+            newCommentDraft: newCommentBody,
+            scrollTop: scrollElementRef.current?.scrollTop ?? 0,
+            selectedTab,
+            titleBodyDraft,
+          }),
+    );
+  }, [
+    captureState,
+    descriptionExpanded,
+    editingComment,
+    newCommentBody,
+    savePending,
+    scrollElementRef,
+    selectedTab,
+    titleBodyDraft,
+  ]);
 }
 
 function initialTaskDraftState(
@@ -86,57 +140,6 @@ function restoredDescriptionPresentation(
   return snapshot === undefined
     ? initialDescriptionPresentationState
     : { editing: false, expanded: snapshot.descriptionExpanded };
-}
-
-function useTaskDetailSidebarCapture({
-  activeToken,
-  descriptionExpanded,
-  editingComment,
-  newCommentBody,
-  registerSidebarStateCapture,
-  savePending,
-  scrollElementRef,
-  selectedTab,
-  titleBodyDraft,
-}: Readonly<{
-  activeToken: ReturnType<typeof useSidebar>["activeToken"];
-  descriptionExpanded: boolean;
-  editingComment: Readonly<{ id: string; body: string }> | null;
-  newCommentBody: string;
-  registerSidebarStateCapture: ReturnType<typeof useSidebar>["registerSidebarStateCapture"];
-  savePending: boolean;
-  scrollElementRef: Readonly<{ current: HTMLDivElement | null }>;
-  selectedTab: "comments" | "activity";
-  titleBodyDraft: TaskDraft | undefined;
-}>) {
-  useEffect(() => {
-    if (activeToken === null) return;
-    return registerSidebarStateCapture(activeToken, () =>
-      savePending
-        ? null
-        : taskDetailSnapshot({
-            descriptionExpanded,
-            editedCommentDraft:
-              editingComment === null
-                ? undefined
-                : { body: editingComment.body, commentID: editingComment.id },
-            newCommentDraft: newCommentBody,
-            scrollTop: scrollElementRef.current?.scrollTop ?? 0,
-            selectedTab,
-            titleBodyDraft,
-          }),
-    );
-  }, [
-    activeToken,
-    descriptionExpanded,
-    editingComment,
-    newCommentBody,
-    registerSidebarStateCapture,
-    savePending,
-    scrollElementRef,
-    selectedTab,
-    titleBodyDraft,
-  ]);
 }
 
 function useTaskDetailNavigation({
@@ -262,6 +265,7 @@ export function TaskDetailContent({
   initialFocus,
   onMutated,
   openLink,
+  onCaptureSidebarState,
   restoredDataReady,
   sidebarSnapshot,
 }: Readonly<{
@@ -272,6 +276,7 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
+  onCaptureSidebarState?: ((capture: SidebarStateCapture) => () => void) | undefined;
   restoredDataReady: boolean;
   sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
 }>) {
@@ -280,9 +285,7 @@ export function TaskDetailContent({
   const navigation = useAppNavigation();
   const {
     activeDestination,
-    activeToken,
     pushSidebar,
-    registerSidebarStateCapture,
     openSidebar,
   } = useSidebar();
   const serverDraft = taskDraft(detail);
@@ -343,11 +346,10 @@ export function TaskDetailContent({
   const reconciled = draftState;
 
   useTaskDetailSidebarCapture({
-    activeToken,
+    captureState: onCaptureSidebarState,
     descriptionExpanded: descriptionPresentation.expanded,
     editingComment,
     newCommentBody,
-    registerSidebarStateCapture,
     savePending,
     scrollElementRef,
     selectedTab,
@@ -406,12 +408,6 @@ export function TaskDetailContent({
       setTab={setSelectedTab}
       updateError={update.error}
       updatePending={update.isPending}
-      initialScrollOffset={restoredSnapshot?.scrollTop}
-      initialScrollOffsetRequestKey={
-        activeToken === null
-          ? undefined
-          : `${activeToken.entryID}:${restoredDataReady ? "ready" : "loading"}`
-      }
       onScrollElementChange={(element) => {
         scrollElementRef.current = element;
       }}

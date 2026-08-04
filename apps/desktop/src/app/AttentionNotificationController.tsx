@@ -27,6 +27,7 @@ import {
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
+import { taskDetailSidebarDestination } from "./sidebarDestinationAdapter";
 import { useStatusController } from "@/app-facade";
 
 export function AttentionNotificationController() {
@@ -49,13 +50,17 @@ export function AttentionNotificationController() {
         });
       }
       try {
-        await openSidebar({
-          kind: "taskDetail",
-          initialFocus: taskDetailInitialFocus(target.focus),
-          inboxNav: true,
-          mode: "overlay",
-          taskID: target.taskID,
-        });
+        const projectID =
+          target.kind === "workflow_task" && target.projectID !== undefined
+            ? target.projectID
+            : (await api.getTask(target.taskID)).projectID;
+        await openSidebar(
+          taskDetailSidebarDestination(target.taskID, projectID, {
+            initialFocus: taskDetailInitialFocus(target.focus),
+            inboxNav: true,
+            mode: "overlay",
+          }),
+        );
       } catch (error) {
         await logger.append("warn", "Opening attention notification target failed.", {
           error: errorMessage(error),

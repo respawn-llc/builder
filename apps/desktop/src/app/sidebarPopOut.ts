@@ -1,6 +1,6 @@
 import type { NativeDialogWindowOptions } from "@app/native-bridge";
 
-import type { SidebarDestination, SidebarEntryToken } from "@/app-facade";
+import type { SidebarDestination } from "@/app-facade";
 
 export const taskDetailNativeDialogPath = "/native-dialog/task-detail";
 
@@ -27,15 +27,4 @@ export function sidebarPopOutOptions(
     };
   }
   return null;
-}
-
-export function shouldCloseSidebarAfterPopOut(
-  openedToken: SidebarEntryToken,
-  currentToken: SidebarEntryToken | null,
-): boolean {
-  return (
-    currentToken !== null &&
-    openedToken.lifecycleID === currentToken.lifecycleID &&
-    openedToken.entryID === currentToken.entryID
-  );
 }

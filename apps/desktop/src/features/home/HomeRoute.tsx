@@ -260,6 +260,7 @@ const AttentionRow = memo(function AttentionRow({
           inboxNav: true,
           mode: "overlay",
           onMutated: undefined,
+          projectID: item.projectID,
           taskID: item.taskID,
         });
       }}

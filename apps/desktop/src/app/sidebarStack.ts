@@ -1,174 +1,227 @@
-import type { SidebarDestination, SidebarDestinationSnapshot } from "@/app-facade";
+import {
+  createHistory,
+  createMemoryHistory,
+  type HistoryLocation,
+} from "@tanstack/react-router";
 
-export const sidebarStackCapacity = 50;
+export const sidebarHistoryCapacity = 50;
 
-export type SidebarStackEntry = Readonly<{
-  entryID: string;
-  destination: SidebarDestination;
-  snapshot?: SidebarDestinationSnapshot | undefined;
+export type SidebarHistorySnapshot<T, R> = Readonly<{
+  destination: T;
+  retainedState: R | null;
+  key: string;
+  canGoBack: boolean;
+  direction: "push" | "back" | null;
 }>;
 
-export type SidebarStackState = Readonly<{
-  lifecycleID: string;
-  entries: readonly SidebarStackEntry[];
+export type SidebarHistory<T, R> = Readonly<{
+  snapshot(): SidebarHistorySnapshot<T, R> | null;
+  subscribe(listener: () => void): () => void;
+  push(request: Readonly<{
+    sourceKey: string;
+    destination: T;
+    retainedState: R | null;
+    deactivateDestination?: ((destination: T) => T) | undefined;
+    sameDestination: (destination: T) => boolean;
+  }>): boolean;
+  replace(request: Readonly<{
+    sourceKey: string;
+    destination: T;
+    retainedState: R | null;
+  }>): boolean;
+  back(request: Readonly<{ sourceKey: string; retainedState: R | null }>): boolean;
+  remove(predicate: (destination: T) => boolean): Readonly<{
+    removedCount: number;
+    currentRemoved: boolean;
+    empty: boolean;
+  }>;
+  destroy(): void;
 }>;
 
-export type SidebarStackAction =
-  | Readonly<{
-      type: "open";
-      lifecycleID: string;
-      entryID: string;
-      destination: SidebarDestination;
-      snapshot?: SidebarDestinationSnapshot | undefined;
-    }>
-  | Readonly<{
-      type: "replace";
-      entryID: string;
-      destination: SidebarDestination;
-    }>
-  | Readonly<{
-      type: "push";
-      entryID: string;
-      lifecycleID?: string;
-      sourceEntryID?: string;
-      destination: SidebarDestination;
-    }>
-  | Readonly<{ type: "back"; lifecycleID: string; entryID: string }>
-  | Readonly<{
-      type: "remove";
-      lifecycleID: string;
-      entryID: string;
-    }>
-  | Readonly<{
-      type: "capture";
-      lifecycleID: string;
-      entryID: string;
-      snapshot: SidebarDestinationSnapshot;
-    }>
-  | Readonly<{ type: "close"; lifecycleID: string }>;
+type Entry<T, R> = {
+  destination: T;
+  retainedState: R | null;
+  location: HistoryLocation;
+};
 
-export function createSidebarStack(
-  lifecycleID: string,
-  root: SidebarStackEntry,
-): SidebarStackState {
-  return {
-    lifecycleID,
-    entries: [root],
-  };
-}
+export function createSidebarHistory<T, R>(
+  root: T,
+  rootRetainedState: R | null = null,
+): SidebarHistory<T, R> {
+  const seed = createMemoryHistory({ initialEntries: ["/"] });
+  let entries: Entry<T, R>[] = [{ destination: root, retainedState: rootRetainedState, location: seed.location }];
+  let currentIndex = 0;
+  let destroyed = false;
+  let direction: SidebarHistorySnapshot<T, R>["direction"] = null;
+  let cachedSnapshot: SidebarHistorySnapshot<T, R> | null = null;
+  let pending: Readonly<{ destination: T; retainedState: R | null }> | null = null;
+  const listeners = new Set<() => void>();
 
-export function sidebarStackReducer(
-  state: SidebarStackState | null,
-  action: SidebarStackAction,
-): SidebarStackState | null {
-  switch (action.type) {
-    case "open": return reduceOpen(action);
-    case "replace": return reduceReplace(state, action);
-    case "push": return reducePush(state, action);
-    case "back": return reduceBack(state, action);
-    case "remove": return reduceRemove(state, action);
-    case "capture": return reduceCapture(state, action);
-    case "close":
-      return state?.lifecycleID === action.lifecycleID ? null : state;
-  }
-}
-
-function reduceOpen(action: Extract<SidebarStackAction, { type: "open" }>): SidebarStackState {
-  return createSidebarStack(action.lifecycleID, {
-    entryID: action.entryID,
-    destination: action.destination,
-    ...(action.snapshot === undefined ? {} : { snapshot: action.snapshot }),
+  const location = (path: string, state: HistoryLocation["state"]): HistoryLocation => ({
+    href: path,
+    pathname: path,
+    search: "",
+    hash: "",
+    state,
   });
-}
-
-function reduceReplace(
-  state: SidebarStackState | null,
-  action: Extract<SidebarStackAction, { type: "replace" }>,
-): SidebarStackState | null {
-  return state === null || state.entries.length === 0
-    ? state
-    : {
-        ...state,
-        entries: [
-          ...state.entries.slice(0, -1),
-          { entryID: action.entryID, destination: action.destination },
-        ],
-      };
-}
-
-function reducePush(
-  state: SidebarStackState | null,
-  action: Extract<SidebarStackAction, { type: "push" }>,
-): SidebarStackState | null {
-  if (
-    state === null ||
-    (action.lifecycleID !== undefined && action.lifecycleID !== state.lifecycleID) ||
-    (action.sourceEntryID !== undefined && state.entries.at(-1)?.entryID !== action.sourceEntryID)
-  )
-    return state;
-  const existingTaskIndex = findTaskDetailIndex(state.entries, action.destination);
-  if (existingTaskIndex !== undefined) return { ...state, entries: state.entries.slice(0, existingTaskIndex + 1) };
-  const root = state.entries[0];
-  if (root === undefined) return state;
-  const entries = state.entries.length >= sidebarStackCapacity ? [root, ...state.entries.slice(2)] : state.entries;
-  return {
-    ...state,
-    entries: [
-      ...entries.map((entry, index) => (index === entries.length - 1 ? deactivateEntry(entry) : entry)),
-      { entryID: action.entryID, destination: action.destination },
-    ],
+  const currentLocation = (): HistoryLocation => {
+    const entry = entries[currentIndex];
+    if (entry === undefined) throw new Error("Sidebar history has no current location.");
+    return entry.location;
   };
-}
+  const currentKey = (): string => {
+    const key = currentLocation().state.__TSR_key;
+    if (key === undefined) throw new Error("Sidebar history location has no TanStack key.");
+    return key;
+  };
+  const notify = (nextDirection: SidebarHistorySnapshot<T, R>["direction"]): void => {
+    direction = nextDirection;
+    const entry = entries[currentIndex];
+    cachedSnapshot =
+      entry === undefined
+        ? null
+        : {
+            destination: entry.destination,
+            retainedState: entry.retainedState,
+            key: currentKey(),
+            canGoBack: currentIndex > 0,
+            direction,
+          };
+    listeners.forEach((listener) => listener());
+  };
+  const rebase = (): void => {
+    entries = entries.map((entry, index) => ({
+      ...entry,
+      location: location(entry.location.href, { ...entry.location.state, __TSR_index: index }),
+    }));
+    if (entries.length !== 0) history.notify({ type: "REPLACE" });
+  };
+  const history = createHistory({
+    getLocation: currentLocation,
+    getLength: () => entries.length,
+    pushState: (path, state) => {
+      if (pending === null) throw new Error("Sidebar history push has no typed destination.");
+      entries = entries.slice(0, currentIndex + 1);
+      entries.push({ ...pending, location: location(path, state) });
+      currentIndex = entries.length - 1;
+      pending = null;
+    },
+    replaceState: (path, state) => {
+      if (pending === null) throw new Error("Sidebar history replace has no typed destination.");
+      entries[currentIndex] = { ...pending, location: location(path, state) };
+      pending = null;
+    },
+    go: (offset) => {
+      currentIndex = Math.min(Math.max(currentIndex + offset, 0), entries.length - 1);
+    },
+    back: () => {
+      currentIndex = Math.max(currentIndex - 1, 0);
+    },
+    forward: () => {
+      currentIndex = Math.min(currentIndex + 1, entries.length - 1);
+    },
+    createHref: (path) => path,
+    notifyOnIndexChange: false,
+  });
+  seed.destroy();
+  notify(null);
 
-function reduceBack(
-  state: SidebarStackState | null,
-  action: Extract<SidebarStackAction, { type: "back" }>,
-): SidebarStackState | null {
-  return state?.lifecycleID !== action.lifecycleID ||
-    state.entries.length <= 1 ||
-    state.entries.at(-1)?.entryID !== action.entryID
-    ? state
-    : { ...state, entries: state.entries.slice(0, -1) };
-}
+  const refreshCurrent = (
+    entry: Readonly<{ destination: T; retainedState: R | null }>,
+  ): void => {
+    pending = entry;
+    history.replace("/", undefined);
+  };
 
-function reduceRemove(
-  state: SidebarStackState | null,
-  action: Extract<SidebarStackAction, { type: "remove" }>,
-): SidebarStackState | null {
-  if (state?.lifecycleID !== action.lifecycleID) return state;
-  const index = state.entries.findIndex((entry) => entry.entryID === action.entryID);
-  return index < 0 ? state : state.entries.length === 1 ? null : { ...state, entries: state.entries.filter((_, i) => i !== index) };
-}
+  const push = (request: Parameters<SidebarHistory<T, R>["push"]>[0]): boolean => {
+    if (destroyed || request.sourceKey !== currentKey()) return false;
+    if (request.sameDestination(entries[currentIndex]!.destination)) return false;
+    entries[currentIndex] = {
+      ...entries[currentIndex]!,
+      destination:
+        request.deactivateDestination?.(entries[currentIndex]!.destination) ??
+        entries[currentIndex]!.destination,
+      retainedState: request.retainedState,
+    };
+    const earlierIndex = entries
+      .slice(0, currentIndex)
+      .findIndex((entry) => request.sameDestination(entry.destination));
+    if (earlierIndex !== -1) {
+      entries = entries.slice(0, earlierIndex + 1);
+      currentIndex = earlierIndex;
+      rebase();
+      refreshCurrent(entries[currentIndex]!);
+      notify("push");
+      return true;
+    }
+    if (entries.length >= sidebarHistoryCapacity) {
+      entries.splice(1, 1);
+      currentIndex -= 1;
+      rebase();
+    }
+    pending = { destination: request.destination, retainedState: null };
+    history.push("/", undefined);
+    notify("push");
+    return true;
+  };
 
-function reduceCapture(
-  state: SidebarStackState | null,
-  action: Extract<SidebarStackAction, { type: "capture" }>,
-): SidebarStackState | null {
-  if (state?.lifecycleID !== action.lifecycleID) return state;
-  const index = state.entries.findIndex((entry) => entry.entryID === action.entryID);
-  return index < 0
-    ? state
-    : { ...state, entries: state.entries.map((entry, i) => (i === index ? { ...entry, snapshot: action.snapshot } : entry)) };
-}
+  const replace = (request: Parameters<SidebarHistory<T, R>["replace"]>[0]): boolean => {
+    if (destroyed || request.sourceKey !== currentKey()) return false;
+    refreshCurrent(request);
+    notify("push");
+    return true;
+  };
 
-function deactivateEntry(entry: SidebarStackEntry): SidebarStackEntry {
-  if (entry.destination.kind !== "taskDetail") {
-    return entry;
-  }
-  const { initialFocus, ...destination } = entry.destination;
-  if (initialFocus === undefined) return entry;
-  return { ...entry, destination };
-}
+  const back = (request: Parameters<SidebarHistory<T, R>["back"]>[0]): boolean => {
+    if (destroyed || request.sourceKey !== currentKey() || currentIndex === 0) return false;
+    entries[currentIndex] = { ...entries[currentIndex]!, retainedState: request.retainedState };
+    entries = entries.slice(0, currentIndex);
+    currentIndex -= 1;
+    rebase();
+    refreshCurrent(entries[currentIndex]!);
+    notify("back");
+    return true;
+  };
 
-function findTaskDetailIndex(
-  entries: readonly SidebarStackEntry[],
-  destination: SidebarDestination,
-): number | undefined {
-  if (destination.kind !== "taskDetail") {
-    return undefined;
-  }
-  const index = entries.findIndex(
-    (entry) => entry.destination.kind === "taskDetail" && entry.destination.taskID === destination.taskID,
-  );
-  return index === -1 ? undefined : index;
+  const remove = (predicate: (destination: T) => boolean) => {
+    if (destroyed) return { removedCount: 0, currentRemoved: false, empty: false };
+    const matches = entries.map((entry) => predicate(entry.destination));
+    const removedCount = matches.filter(Boolean).length;
+    if (removedCount === 0) return { removedCount: 0, currentRemoved: false, empty: false };
+    const oldIndex = currentIndex;
+    const currentRemoved = matches[currentIndex] === true;
+    entries = entries.filter((_entry, index) => matches[index] !== true);
+    if (entries.length === 0) {
+      destroyed = true;
+      notify(null);
+      return { removedCount, currentRemoved, empty: true };
+    }
+    currentIndex = oldIndex - matches.slice(0, oldIndex).filter(Boolean).length;
+    currentIndex = Math.min(currentIndex, entries.length - 1);
+    rebase();
+    if (currentRemoved) refreshCurrent(entries[currentIndex]!);
+    notify(currentRemoved ? "back" : null);
+    return { removedCount, currentRemoved, empty: false };
+  };
+
+  return {
+    snapshot: () => {
+      return cachedSnapshot;
+    },
+    subscribe: (listener) => {
+      if (destroyed) return () => {};
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    push,
+    replace,
+    back,
+    remove,
+    destroy: () => {
+      destroyed = true;
+      pending = null;
+      listeners.clear();
+      history.destroy();
+    },
+  };
 }

@@ -25,7 +25,8 @@ import { useStatusController } from "@/app-facade";
 import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-facade";
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { SidebarHeaderOffsetContext } from "@/app-facade";
-import { sidebarPopOutOptions, shouldCloseSidebarAfterPopOut } from "./sidebarPopOut";
+import { sidebarPopOutOptions } from "./sidebarPopOut";
+import { useSidebarHost } from "./sidebarHostContext";
 import { sidebarTitle } from "@/app-facade";
 import { sidebarSizePreference } from "@/app-facade";
 import { useSidebar, type SidebarDestination } from "@/app-facade";
@@ -40,27 +41,15 @@ import {
 
 export function SidebarRouteChangeCloser() {
   const location = useLocation();
-  const {
-    closeSidebar,
-    consumeSidebarRouteChangePreservation,
-    stackDestinations,
-  } = useSidebar();
-  const routeKey = `${location.pathname}?${location.searchStr}`;
-  const previousRouteKeyRef = useRef(routeKey);
+  const { activeDestination, closeSidebar } = useSidebar();
+  const previousPathRef = useRef(location.pathname);
 
   useLayoutEffect(() => {
-    if (previousRouteKeyRef.current !== routeKey) {
-      previousRouteKeyRef.current = routeKey;
-      if (stackDestinations.length > 0 && !consumeSidebarRouteChangePreservation()) {
-        closeSidebar("route_change");
-      }
+    if (previousPathRef.current !== location.pathname) {
+      previousPathRef.current = location.pathname;
+      if (activeDestination !== null) closeSidebar("route_change");
     }
-  }, [
-    closeSidebar,
-    consumeSidebarRouteChangePreservation,
-    routeKey,
-    stackDestinations.length,
-  ]);
+  }, [activeDestination, closeSidebar, location.pathname]);
 
   return null;
 }
@@ -69,7 +58,6 @@ export function SidebarHost() {
   const { t } = useTranslation();
   const {
     activeDestination,
-    activeSnapshot,
     backSidebar,
     canGoBack,
     closeSidebar,
@@ -327,7 +315,6 @@ export function SidebarHost() {
         >
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView
-              activeSnapshot={activeSnapshot}
               closeSidebar={closeSidebar}
               destination={activeDestination}
               resolveSidebar={resolveSidebar}
@@ -360,12 +347,8 @@ function SidebarPopOutSlot({
 function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindowOptions }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const { activeToken, closeSidebarIfCurrent } = useSidebar();
+  const { actions } = useSidebarHost();
   const { push } = useStatusController();
-  const activeTokenRef = useRef(activeToken);
-  useEffect(() => {
-    activeTokenRef.current = activeToken;
-  }, [activeToken]);
   if (!nativeBridge.capabilities.dialogWindows) {
     return null;
   }
@@ -373,16 +356,11 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
     <IconTooltipButton
       label={t("app.popOut")}
       onClick={() => {
-        const openedToken = activeToken;
-        if (openedToken === null) {
-          return;
-        }
+        const close = actions.close;
         void nativeBridge.dialogs
           .openWindow(options)
           .then(() => {
-            if (shouldCloseSidebarAfterPopOut(openedToken, activeTokenRef.current)) {
-              closeSidebarIfCurrent(openedToken, "closed");
-            }
+            close("closed");
           })
           .catch((error: unknown) => {
             push({

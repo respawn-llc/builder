@@ -181,6 +181,7 @@ export function BoardColumnMotionBoundary({
         actionsDisabled={actionsDisabled}
         cards={renderedCards}
         column={columnVM}
+        projectID={board.projectID}
         columnRef={setRegisteredColumnElement}
         scrollportRef={setRegisteredScrollElement}
         dropState={dropState}

@@ -66,8 +66,6 @@ export function TaskDetailList({
   setTab,
   updateError,
   updatePending,
-  initialScrollOffset,
-  initialScrollOffsetRequestKey,
   onScrollElementChange,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
@@ -97,8 +95,6 @@ export function TaskDetailList({
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
   updatePending: boolean;
-  initialScrollOffset?: number | undefined;
-  initialScrollOffsetRequestKey?: string | undefined;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
 }>) {
   const { t } = useTranslation();
@@ -170,8 +166,6 @@ export function TaskDetailList({
       initialScrollRequestKey={
         initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
-      initialScrollOffset={initialScrollOffset}
-      initialScrollOffsetRequestKey={initialScrollOffsetRequestKey}
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}

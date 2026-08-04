@@ -7,8 +7,6 @@ export function createTestSidebarController(
 ): SidebarController {
   return {
     activeDestination: null,
-    activeSnapshot: null,
-    activeToken: null,
     backSidebar() {
       return;
     },
@@ -16,8 +14,8 @@ export function createTestSidebarController(
     closeSidebar() {
       return;
     },
-    closeSidebarIfCurrent() {
-      return;
+    invalidateSidebar() {
+      return { kind: "absent" };
     },
     async openSidebar(destination) {
       onOpen(destination);
@@ -26,38 +24,16 @@ export function createTestSidebarController(
     pushSidebar(destination) {
       onOpen(destination);
     },
-    preserveSidebarOnNextRouteChange() {
-      return;
-    },
-    consumeSidebarRouteChangePreservation() {
-      return false;
-    },
-    registerSidebarStateCapture() {
-      return () => {
-        return;
-      };
-    },
-    removeSidebarEntry() {
-      return;
-    },
     replaceSidebar(destination) {
-      onOpen(destination);
-    },
-    replaceSidebarIfCurrent(_token, destination) {
       onOpen(destination);
     },
     phase: "open",
     resolveSidebar() {
       return;
     },
-    resolveSidebarIfCurrent() {
-      return;
-    },
     resizeSidebar() {
       return;
     },
     sidebarWidthPx: 320,
-    stackDestinations: [],
-    stackEntryTokens: [],
   };
 }

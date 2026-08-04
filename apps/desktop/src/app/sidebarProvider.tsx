@@ -1,17 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 
 import {
   SidebarContext,
-  runViewTransition,
   type SidebarCanceledResult,
   type SidebarCancelReason,
   type SidebarController,
   type SidebarDestination,
-  type SidebarEntryToken,
+  type SidebarDestinationSnapshot,
+  type SidebarInvalidationResult,
+  type SidebarInvalidationTarget,
   type SidebarPhase,
   type SidebarResult,
   type SidebarStateCapture,
 } from "@/app-facade";
+import {
+  sidebarDestinationMatches,
+  sidebarDestinationProjectID,
+  sameSidebarDestination,
+  deactivateSidebarDestination,
+} from "./sidebarDestinationAdapter";
+import { SidebarHostContext, type SidebarHostState } from "./sidebarHostContext";
+import {
+  createSidebarHistory,
+  type SidebarHistory,
+  type SidebarHistorySnapshot,
+} from "./sidebarStack";
 import {
   sidebarSizePreference,
   sidebarWidthProfile,
@@ -19,44 +40,53 @@ import {
   type SidebarWidthProfile,
 } from "@/app-facade";
 import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "@/app-facade";
-import {
-  sidebarStackReducer,
-  type SidebarStackAction,
-  type SidebarStackState,
-} from "./sidebarStack";
 
 const sidebarExitAnimationMs = 140;
-type SidebarWidthEntry = Readonly<{
-  profile: SidebarWidthProfile;
-  widthPx: number;
-}>;
+type SidebarWidthEntry = Readonly<{ profile: SidebarWidthProfile; widthPx: number }>;
 type SidebarWidths = readonly SidebarWidthEntry[];
 const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing: null };
-
+type History = SidebarHistory<SidebarDestination, SidebarDestinationSnapshot>;
+type HistorySnapshot = SidebarHistorySnapshot<SidebarDestination, SidebarDestinationSnapshot>;
 type PendingSidebar = Readonly<{
-  lifecycleID: string;
+  history: History;
   resolve: (result: SidebarResult) => void;
 }>;
+type VisibleSidebar = Readonly<{
+  destination: SidebarDestination;
+  snapshot: SidebarDestinationSnapshot | null;
+}>;
+type CompletedSidebarResult = Exclude<SidebarResult, SidebarCanceledResult>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
-  const [stackState, setStackState] = useState<SidebarStackState | null>(null);
+  const [currentHistory, setCurrentHistory] = useState<History | null>(null);
+  const [outgoing, setOutgoing] = useState<VisibleSidebar | null>(null);
+  const [phase, setPhase] = useState<SidebarPhase>("open");
   const [activeWidthProfile, setActiveWidthProfile] =
     useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
-  const [phase, setPhase] = useState<SidebarPhase>("open");
   const [sidebarWidths, setSidebarWidths] = useState<SidebarWidths>(() => [
     { profile: defaultSidebarWidthProfile, widthPx: defaultSidebarWidth() },
   ]);
-  const stackStateRef = useRef<SidebarStackState | null>(stackState);
   const pendingRef = useRef<PendingSidebar | null>(null);
-  const captureRef = useRef(new Map<string, SidebarStateCapture>());
-  const preserveRouteChangeRef = useRef(false);
+  const currentHistoryRef = useRef<History | null>(null);
+  const captureRef = useRef<SidebarStateCapture | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nextIDRef = useRef(0);
+  const closingHistoryRef = useRef<History | null>(null);
 
-  const nextID = useCallback((prefix: "lifecycle" | "entry"): string => {
-    nextIDRef.current += 1;
-    return `${prefix}-${nextIDRef.current.toString()}`;
-  }, []);
+  currentHistoryRef.current = currentHistory;
+
+  const subscribe = useCallback(
+    (listener: () => void) => currentHistory?.subscribe(listener) ?? (() => {}),
+    [currentHistory],
+  );
+  const getSnapshot = useCallback(
+    () => currentHistory?.snapshot() ?? null,
+    [currentHistory],
+  );
+  const historySnapshot = useSyncExternalStore<HistorySnapshot | null>(
+    subscribe,
+    getSnapshot,
+    () => null,
+  );
 
   const clearCloseTimeout = useCallback(() => {
     if (closeTimeoutRef.current !== null) {
@@ -65,432 +95,296 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     }
   }, []);
 
-  const dispatchStack = useCallback((action: SidebarStackAction) => {
-    setStackState((current) => {
-      const next = sidebarStackReducer(current, action);
-      stackStateRef.current = next;
-      return next;
-    });
+  const setWidthFor = useCallback((destination: SidebarDestination | null) => {
+    if (destination !== null) {
+      const profile = sidebarWidthProfile(destination);
+      setActiveWidthProfile(profile);
+      setSidebarWidths((current) =>
+        sidebarWidthForProfile(current, profile) === undefined
+          ? [...current, { profile, widthPx: defaultSidebarWidth(destination) }]
+          : current,
+      );
+    }
   }, []);
 
-  const clearCapture = useCallback((token: SidebarEntryToken) => {
-    captureRef.current.delete(tokenKey(token));
-  }, []);
-
-  const clearAllCaptures = useCallback(() => {
-    captureRef.current.clear();
-  }, []);
-
-  const isCurrentToken = useCallback((token: SidebarEntryToken): boolean => {
-    const state = stackStateRef.current;
-    const pending = pendingRef.current;
-    const activeEntry = state?.entries.at(-1);
+  const isCurrent = useCallback((history: History, key: string): boolean => {
     return (
-      pending?.lifecycleID === token.lifecycleID &&
-      state?.lifecycleID === token.lifecycleID &&
-      activeEntry?.entryID === token.entryID
+      currentHistoryRef.current === history &&
+      pendingRef.current?.history === history &&
+      history.snapshot()?.key === key
     );
   }, []);
 
-  const activeTokenForState = useCallback(
-    (state: SidebarStackState | null): SidebarEntryToken | null => {
-      const activeEntry = state?.entries.at(-1);
-      return activeEntry === undefined || state === null
-        ? null
-        : { entryID: activeEntry.entryID, lifecycleID: state.lifecycleID };
-    },
-    [],
-  );
-
-  const animateClosed = useCallback(
-    (lifecycleID: string) => {
-      clearCloseTimeout();
+  const settleAndClose = useCallback(
+    (history: History, result: SidebarResult, visible: VisibleSidebar | null = null) => {
+      if (pendingRef.current?.history !== history) return;
+      const pending = pendingRef.current;
+      const current = visible ?? readVisible(history.snapshot());
+      pendingRef.current = null;
+      captureRef.current = null;
+      history.destroy();
+      closingHistoryRef.current = history;
+      setCurrentHistory(null);
+      setOutgoing(current);
       setPhase("closing");
+      pending.resolve(result);
+      clearCloseTimeout();
       closeTimeoutRef.current = setTimeout(() => {
+        if (closingHistoryRef.current !== history) return;
         closeTimeoutRef.current = null;
-        if (stackStateRef.current?.lifecycleID !== lifecycleID) {
-          return;
-        }
-        dispatchStack({ type: "close", lifecycleID });
+        closingHistoryRef.current = null;
+        setOutgoing(null);
         setPhase("open");
       }, sidebarExitAnimationMs);
     },
-    [clearCloseTimeout, dispatchStack],
+    [clearCloseTimeout],
   );
 
   const closeSidebar = useCallback(
     (reason: SidebarCancelReason = "closed") => {
-      const state = stackStateRef.current;
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      clearAllCaptures();
-      pending?.resolve({ status: "canceled", reason });
-      if (state !== null) {
-        animateClosed(state.lifecycleID);
-      }
+      const history = currentHistoryRef.current;
+      if (history !== null) settleAndClose(history, { status: "canceled", reason });
     },
-    [animateClosed, clearAllCaptures],
+    [settleAndClose],
   );
-
-  const preserveSidebarOnNextRouteChange = useCallback(() => {
-    preserveRouteChangeRef.current = true;
-  }, []);
-
-  const consumeSidebarRouteChangePreservation = useCallback(() => {
-    const preserved = preserveRouteChangeRef.current;
-    preserveRouteChangeRef.current = false;
-    return preserved;
-  }, []);
 
   const openSidebar = useCallback(
-    async (destination: SidebarDestination): Promise<SidebarResult> => {
+    (destination: SidebarDestination): Promise<SidebarResult> => {
       clearCloseTimeout();
-      const previousPending = pendingRef.current;
-      pendingRef.current = null;
-      clearAllCaptures();
-      previousPending?.resolve({ status: "canceled", reason: "replaced" });
-
-      const lifecycleID = nextID("lifecycle");
-      const entryID = nextID("entry");
-      const nextProfile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(nextProfile);
-      setSidebarWidths((current) => {
-        if (sidebarWidthForProfile(current, nextProfile) !== undefined) {
-          return current;
-        }
-        return [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }];
-      });
-      setPhase("open");
-      dispatchStack({
-        type: "open",
-        lifecycleID,
-        entryID,
+      closingHistoryRef.current = null;
+      const previous = pendingRef.current;
+      if (previous !== undefined && previous !== null) {
+        pendingRef.current = null;
+        captureRef.current = null;
+        previous.history.destroy();
+        previous.resolve({ status: "canceled", reason: "replaced" });
+      }
+      const history = createSidebarHistory<SidebarDestination, SidebarDestinationSnapshot>(
         destination,
-      });
-      return new Promise<SidebarResult>((resolve) => {
-        pendingRef.current = { lifecycleID, resolve };
-      });
-    },
-    [clearAllCaptures, clearCloseTimeout, dispatchStack, nextID],
-  );
-
-  const replaceSidebar = useCallback(
-    (destination: SidebarDestination): void => {
-      const state = stackStateRef.current;
-      if (state === null || pendingRef.current === null) {
-        throw new Error("Sidebar replacement requires an active destination lifecycle.");
-      }
-      clearCloseTimeout();
-      const currentEntry = state.entries.at(-1);
-      if (currentEntry === undefined) {
-        throw new Error("Sidebar replacement requires an active destination.");
-      }
-      clearCapture({ entryID: currentEntry.entryID, lifecycleID: state.lifecycleID });
-      const nextProfile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(nextProfile);
-      setSidebarWidths((current) =>
-        sidebarWidthForProfile(current, nextProfile) === undefined
-          ? [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }]
-          : current,
+        null,
       );
-      setPhase("open");
-      dispatchStack({
-        type: "replace",
-        entryID: nextID("entry"),
-        destination,
+      const promise = new Promise<SidebarResult>((resolve) => {
+        pendingRef.current = { history, resolve };
       });
+      setOutgoing(null);
+      setCurrentHistory(history);
+      setPhase("open");
+      setWidthFor(destination);
+      return promise;
     },
-    [clearCapture, clearCloseTimeout, dispatchStack, nextID],
+    [clearCloseTimeout, setWidthFor],
   );
 
-  const captureCurrentState = useCallback((): boolean => {
-    const state = stackStateRef.current;
-    const pending = pendingRef.current;
-    const activeEntry = state?.entries.at(-1);
-    if (state === null || pending === null || activeEntry === undefined) {
-      return false;
-    }
-    const token = { entryID: activeEntry.entryID, lifecycleID: state.lifecycleID };
-    const capture = captureRef.current.get(tokenKey(token));
-    if (capture === undefined) {
-      return true;
-    }
+  const captureCurrent = useCallback((): SidebarDestinationSnapshot | null | false => {
+    const capture = captureRef.current;
+    if (capture === null) return null;
     const snapshot = capture();
-    if (snapshot === null) {
-      return false;
-    }
-    dispatchStack({
-      type: "capture",
-      lifecycleID: token.lifecycleID,
-      entryID: token.entryID,
-      snapshot,
-    });
-    clearCapture(token);
-    return true;
-  }, [clearCapture, dispatchStack]);
+    if (snapshot === null) return false;
+    captureRef.current = null;
+    return snapshot;
+  }, []);
 
   const pushSidebar = useCallback(
-    (destination: SidebarDestination): void => {
-      const state = stackStateRef.current;
-      const pending = pendingRef.current;
-      if (state === null || pending === null || !captureCurrentState()) {
-        return;
+    (destination: SidebarDestination) => {
+      const history = currentHistoryRef.current;
+      const snapshot = history?.snapshot() ?? null;
+      if (history === null || history === undefined || snapshot === null) return;
+      const retainedState = captureCurrent();
+      if (retainedState === false) return;
+      if (
+        history.push({
+          sourceKey: snapshot.key,
+          destination,
+          retainedState,
+          deactivateDestination: deactivateSidebarDestination,
+          sameDestination: (candidate) => sameSidebarDestination(candidate, destination),
+        })
+      ) {
+        setPhase("open");
+        setWidthFor(history.snapshot()?.destination ?? destination);
       }
-      const activeEntry = state.entries.at(-1);
-      if (activeEntry === undefined) {
-        return;
-      }
-      const existingTask = state.entries.find(
-        (entry) =>
-          destination.kind === "taskDetail" &&
-          entry.destination.kind === "taskDetail" &&
-          entry.destination.taskID === destination.taskID,
-      );
-      clearCloseTimeout();
-      clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
-      const nextDestination = existingTask?.destination ?? destination;
-      setActiveWidthProfile(sidebarWidthProfile(nextDestination));
-      setPhase("open");
-      void runViewTransition({
-        scope: "sidebar-push",
-        update: () => {
-          dispatchStack({
-            type: "push",
-            lifecycleID: state.lifecycleID,
-            entryID: nextID("entry"),
-            sourceEntryID: activeEntry.entryID,
-            destination,
-          });
-        },
-      });
     },
-    [captureCurrentState, clearCapture, clearCloseTimeout, dispatchStack, nextID],
+    [captureCurrent, setWidthFor],
   );
 
-  const backSidebar = useCallback((): void => {
-    const state = stackStateRef.current;
-    const activeEntry = state?.entries.at(-1);
-    if (state === null || state.entries.length <= 1 || activeEntry === undefined) {
-      return;
+  const backSidebar = useCallback(() => {
+    const history = currentHistoryRef.current;
+    const snapshot = history?.snapshot() ?? null;
+    if (history === null || history === undefined || snapshot === null || !snapshot.canGoBack) return;
+    const retainedState = captureCurrent();
+    if (retainedState === false) return;
+    if (history.back({ sourceKey: snapshot.key, retainedState })) {
+      setPhase("open");
+      setWidthFor(history.snapshot()?.destination ?? null);
     }
-    clearCapture({ entryID: activeEntry.entryID, lifecycleID: state.lifecycleID });
-    const previousEntry = state.entries.at(-2);
-    if (previousEntry === undefined) {
-      return;
-    }
-    clearCloseTimeout();
-    setActiveWidthProfile(sidebarWidthProfile(previousEntry.destination));
-    setPhase("open");
-    void runViewTransition({
-      scope: "sidebar-back",
-      update: () => {
-        dispatchStack({
-          type: "back",
-          lifecycleID: state.lifecycleID,
-          entryID: activeEntry.entryID,
-        });
-      },
-    });
-  }, [clearCapture, clearCloseTimeout, dispatchStack]);
+  }, [captureCurrent, setWidthFor]);
 
-  const resolveSidebar = useCallback(
-    (result: Exclude<SidebarResult, SidebarCanceledResult>) => {
-      const state = stackStateRef.current;
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      clearAllCaptures();
-      pending?.resolve(result);
-      if (state !== null) {
-        animateClosed(state.lifecycleID);
+  const replaceSidebar = useCallback(
+    (destination: SidebarDestination) => {
+      const history = currentHistoryRef.current;
+      const snapshot = history?.snapshot() ?? null;
+      if (history === null || history === undefined || snapshot === null) {
+        throw new Error("Sidebar replacement requires an active destination.");
+      }
+      captureRef.current = null;
+      if (history.replace({ sourceKey: snapshot.key, destination, retainedState: null })) {
+        setPhase("open");
+        setWidthFor(destination);
       }
     },
-    [animateClosed, clearAllCaptures],
+    [setWidthFor],
+  );
+
+  const resolveSidebar = useCallback(
+    (result: CompletedSidebarResult) => {
+      const history = currentHistoryRef.current;
+      if (history !== null) settleAndClose(history, result);
+      else pendingRef.current?.resolve(result);
+    },
+    [settleAndClose],
+  );
+
+  const invalidateSidebar = useCallback(
+    (target: SidebarInvalidationTarget): SidebarInvalidationResult => {
+      const history = currentHistoryRef.current;
+      if (history === null) return { kind: "absent" };
+      const visible = readVisible(history.snapshot());
+      const result = history.remove((destination) => sidebarDestinationMatches(destination, target));
+      if (result.removedCount === 0) return { kind: "absent" };
+      if (result.empty) {
+        settleAndClose(history, { status: "canceled", reason: "closed" }, visible);
+        return { kind: "closed" };
+      }
+      if (result.currentRemoved) setWidthFor(history.snapshot()?.destination ?? null);
+      return { kind: "discarded" };
+    },
+    [setWidthFor, settleAndClose],
   );
 
   const resizeSidebar = useCallback(
     (width: ResolvedSidebarWidth) => {
-      setSidebarWidths((current) => setSidebarWidthForProfile(current, activeWidthProfile, width.px));
+      setSidebarWidths((current) =>
+        current.map((entry) =>
+          sidebarWidthProfileEquals(entry.profile, activeWidthProfile)
+            ? { ...entry, widthPx: Math.max(0, Math.round(width.px)) }
+            : entry,
+        ),
+      );
     },
     [activeWidthProfile],
   );
 
-  const registerSidebarStateCapture = useCallback(
-    (token: SidebarEntryToken, capture: SidebarStateCapture): (() => void) => {
-      if (!isCurrentToken(token)) {
-        return () => {
-          return;
-        };
-      }
-      const key = tokenKey(token);
-      captureRef.current.set(key, capture);
-      return () => {
-        if (captureRef.current.get(key) === capture) {
-          captureRef.current.delete(key);
-        }
-      };
-    },
-    [isCurrentToken],
-  );
-
-  const removeSidebarEntry = useCallback(
-    (token: SidebarEntryToken): void => {
-      const state = stackStateRef.current;
-      if (
-        state === null ||
-        pendingRef.current?.lifecycleID !== token.lifecycleID ||
-        state.lifecycleID !== token.lifecycleID ||
-        !state.entries.some((entry) => entry.entryID === token.entryID)
-      ) {
-        return;
-      }
-      clearCapture(token);
-      if (state.entries.length === 1) {
-        closeSidebar("closed");
-        return;
-      }
-      dispatchStack({
-        type: "remove",
-        lifecycleID: token.lifecycleID,
-        entryID: token.entryID,
-      });
-    },
-    [clearCapture, closeSidebar, dispatchStack],
-  );
-
-  const closeSidebarIfCurrent = useCallback(
-    (token: SidebarEntryToken, reason: SidebarCancelReason = "closed"): void => {
-      if (isCurrentToken(token)) {
-        closeSidebar(reason);
-      }
-    },
-    [closeSidebar, isCurrentToken],
-  );
-
-  const replaceSidebarIfCurrent = useCallback(
-    (token: SidebarEntryToken, destination: SidebarDestination): void => {
-      if (isCurrentToken(token)) {
-        replaceSidebar(destination);
-      }
-    },
-    [isCurrentToken, replaceSidebar],
-  );
-
-  const resolveSidebarIfCurrent = useCallback(
-    (
-      token: SidebarEntryToken,
-      result: Exclude<SidebarResult, SidebarCanceledResult>,
-    ): void => {
-      if (isCurrentToken(token)) {
-        resolveSidebar(result);
-      }
-    },
-    [isCurrentToken, resolveSidebar],
-  );
-
-  useEffect(() => {
-    return () => {
-      clearCloseTimeout();
-      pendingRef.current = null;
-      clearAllCaptures();
+  const hostState = useMemo<SidebarHostState>(() => {
+    const history = currentHistory;
+    const key = historySnapshot?.key ?? null;
+    const current = historySnapshot;
+    const currentAction = (operation: () => void) => {
+      if (history !== null && key !== null && isCurrent(history, key)) operation();
     };
-  }, [clearAllCaptures, clearCloseTimeout]);
+    return {
+      snapshot: current?.retainedState ?? null,
+      actions: {
+        capture: (capture) => {
+          if (history === null || key === null || !isCurrent(history, key)) return () => {};
+          captureRef.current = capture;
+          return () => {
+            if (captureRef.current === capture) captureRef.current = null;
+          };
+        },
+        close: (reason) => currentAction(() => closeSidebar(reason)),
+        invalidate: () =>
+          currentAction(() => {
+            if (current !== null) invalidateSidebar({ kind: "task", taskID: taskIDOf(current.destination) });
+          }),
+        replace: (destination) => currentAction(() => replaceSidebar(destination)),
+        resolve: (result) => currentAction(() => resolveSidebar(result)),
+      },
+    };
+  }, [
+    closeSidebar,
+    currentHistory,
+    historySnapshot,
+    invalidateSidebar,
+    isCurrent,
+    replaceSidebar,
+    resolveSidebar,
+  ]);
 
-  const activeDestination = stackState?.entries.at(-1)?.destination ?? null;
-  const activeSnapshot = stackState?.entries.at(-1)?.snapshot ?? null;
-  const activeToken = activeTokenForState(stackState);
-  const stackDestinations = useMemo(
-    () => stackState?.entries.map((entry) => entry.destination) ?? [],
-    [stackState],
-  );
-  const stackEntryTokens = useMemo(
-    () =>
-      stackState?.entries.map((entry) => ({ entryID: entry.entryID, lifecycleID: stackState.lifecycleID })) ??
-      [],
-    [stackState],
-  );
+  const visible = currentHistory === null ? outgoing : readVisible(historySnapshot);
+  const activeDestination = visible?.destination ?? null;
   const sidebarWidthPx =
     sidebarWidthForProfile(sidebarWidths, activeWidthProfile) ?? defaultSidebarWidth(activeDestination);
-
-  const value = useMemo<SidebarController>(
+  const controller = useMemo<SidebarController>(
     () => ({
       activeDestination,
-      activeSnapshot,
-      activeToken,
       backSidebar,
-      canGoBack: (stackState?.entries.length ?? 0) > 1,
+      canGoBack: historySnapshot?.canGoBack ?? false,
       closeSidebar,
-      closeSidebarIfCurrent,
+      invalidateSidebar,
       openSidebar,
-      preserveSidebarOnNextRouteChange,
-      consumeSidebarRouteChangePreservation,
       pushSidebar,
-      registerSidebarStateCapture,
-      removeSidebarEntry,
       replaceSidebar,
-      replaceSidebarIfCurrent,
       phase,
-      resizeSidebar,
       resolveSidebar,
-      resolveSidebarIfCurrent,
+      resizeSidebar,
       sidebarWidthPx,
-      stackDestinations,
-      stackEntryTokens,
     }),
     [
       activeDestination,
-      activeSnapshot,
-      activeToken,
       backSidebar,
       closeSidebar,
-      closeSidebarIfCurrent,
+      historySnapshot?.canGoBack,
+      invalidateSidebar,
       openSidebar,
-      preserveSidebarOnNextRouteChange,
-      consumeSidebarRouteChangePreservation,
       phase,
       pushSidebar,
-      registerSidebarStateCapture,
-      removeSidebarEntry,
       replaceSidebar,
-      replaceSidebarIfCurrent,
-      resizeSidebar,
       resolveSidebar,
-      resolveSidebarIfCurrent,
+      resizeSidebar,
       sidebarWidthPx,
-      stackDestinations,
-      stackEntryTokens,
-      stackState?.entries.length,
     ],
   );
 
-  return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;
+  useEffect(
+    () => () => {
+      clearCloseTimeout();
+      pendingRef.current?.history.destroy();
+      pendingRef.current = null;
+    },
+    [clearCloseTimeout],
+  );
+
+  return (
+    <SidebarContext.Provider value={controller}>
+      <SidebarHostContext.Provider value={hostState}>{children}</SidebarHostContext.Provider>
+    </SidebarContext.Provider>
+  );
 }
 
-function tokenKey(token: SidebarEntryToken): string {
-  return `${token.lifecycleID}:${token.entryID}`;
+function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {
+  return snapshot === null
+    ? null
+    : { destination: snapshot.destination, snapshot: snapshot.retainedState };
+}
+
+function taskIDOf(destination: SidebarDestination): string {
+  if (destination.kind !== "taskDetail") {
+    throw new Error("Only Task Detail destinations can be invalidated through the current action.");
+  }
+  return destination.taskID;
 }
 
 function defaultSidebarWidth(destination: SidebarDestination | null = null): number {
-  const sizePreference = sidebarSizePreference(destination);
-  if (typeof window === "undefined") {
-    return initialSidebarWidthForViewport(0, sizePreference);
-  }
-  return initialSidebarWidthForViewport(window.innerWidth, sizePreference);
+  const preference = sidebarSizePreference(destination);
+  return initialSidebarWidthForViewport(
+    typeof window === "undefined" ? 0 : window.innerWidth,
+    preference,
+  );
 }
 
-function sidebarWidthForProfile(widths: SidebarWidths, profile: SidebarWidthProfile): number | undefined {
-  return widths.find((entry) => sidebarWidthProfileEquals(entry.profile, profile))?.widthPx;
-}
-
-function setSidebarWidthForProfile(
+function sidebarWidthForProfile(
   widths: SidebarWidths,
   profile: SidebarWidthProfile,
-  widthPx: number,
-): SidebarWidths {
-  const resolvedWidthPx = Math.max(0, Math.round(widthPx));
-  if (sidebarWidthForProfile(widths, profile) === undefined) {
-    return [...widths, { profile, widthPx: resolvedWidthPx }];
-  }
-  return widths.map((entry) =>
-    sidebarWidthProfileEquals(entry.profile, profile) ? { ...entry, widthPx: resolvedWidthPx } : entry,
-  );
+): number | undefined {
+  return widths.find((entry) => sidebarWidthProfileEquals(entry.profile, profile))?.widthPx;
 }

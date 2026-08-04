@@ -7,46 +7,33 @@ import { WorkflowEditorRoute, WorkflowInspectorSidebar } from "@/features/workfl
 import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
 import { useAppNavigation, useSidebar } from "@/app-facade";
 import type { SidebarController, SidebarDestination } from "@/app-facade";
+import { taskDetailSidebarDestination } from "./sidebarDestinationAdapter";
+import { useSidebarHost } from "./sidebarHostContext";
 
 export function SidebarDestinationView({
-  activeSnapshot,
   closeSidebar,
   destination,
   resolveSidebar,
 }: Readonly<{
-  activeSnapshot: SidebarController["activeSnapshot"];
   closeSidebar: SidebarController["closeSidebar"];
   destination: SidebarDestination;
   resolveSidebar: SidebarController["resolveSidebar"];
 }>): ReactElement {
-  const {
-    activeToken,
-    removeSidebarEntry,
-    replaceSidebarIfCurrent,
-    resolveSidebarIfCurrent,
-  } = useSidebar();
+  const { actions, snapshot } = useSidebarHost();
   if (destination.kind === "newTask") {
-    const formToken = activeToken;
     return (
       <NewTaskForm
         boardQueryWorkflowID={destination.boardQueryWorkflowID}
         className="w-full"
         initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
         onSubmitted={(taskID) => {
-          if (destination.pendingRelationship !== undefined && taskID !== undefined && formToken !== null) {
-            replaceSidebarIfCurrent(formToken, {
-              kind: "taskDetail",
-              taskID,
-              ...(destination.mode === undefined ? {} : { mode: destination.mode }),
-            });
+          if (destination.pendingRelationship !== undefined && taskID !== undefined) {
+            actions.replace(
+              taskDetailSidebarDestination(taskID, destination.projectID, { mode: destination.mode }),
+            );
             return;
           }
-          if (formToken !== null) {
-            resolveSidebarIfCurrent(formToken, {
-              destination: "newTask",
-              status: "submitted",
-            });
-          }
+          actions.resolve({ destination: "newTask", status: "submitted" });
         }}
         projectID={destination.projectID}
         pendingRelationship={destination.pendingRelationship}
@@ -60,11 +47,10 @@ export function SidebarDestinationView({
       <TaskDetailSurface
         enabled
         initialFocus={destination.initialFocus}
-        sidebarSnapshot={activeSnapshot?.kind === "taskDetail" ? activeSnapshot : undefined}
+        sidebarSnapshot={snapshot?.kind === "taskDetail" ? snapshot : undefined}
+        onCaptureSidebarState={actions.capture}
         onMissingTask={() => {
-          if (activeToken !== null) {
-            removeSidebarEntry(activeToken);
-          }
+          actions.invalidate();
         }}
         onMutated={destination.onMutated}
         taskId={destination.taskID}
