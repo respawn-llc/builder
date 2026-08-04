@@ -15,10 +15,17 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
+
+type realStoreResumeRoleResolver struct{}
+
+func (realStoreResumeRoleResolver) RoleExists(string) bool                   { return true }
+func (realStoreResumeRoleResolver) RoleToolEnabled(string, toolspec.ID) bool { return true }
 
 func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLiveSwap(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
@@ -89,6 +96,120 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	snapshot = controller.Snapshot()
 	if len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
 		t.Fatalf("post-retirement snapshot = %+v, want no gate or live scope", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerResumeUsesRealStoreForMixedValidation(t *testing.T) {
+	ctx := context.Background()
+	metadataStore := testsetup.OpenStore(t, t.TempDir())
+	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(realStoreResumeRoleResolver{}))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	created, _, err := store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
+		Name:          "Real resume boundary",
+		ProjectID:     binding.ProjectID,
+		DefaultPolicy: workflowstore.WorkflowLinkDefaultAlways,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	definition, record, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var startID, doneID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			doneID = workflow.NodeIDOf(node)
+		}
+	}
+	sourceID := workflow.NodeID("node-source")
+	branchAID := workflow.NodeID("node-branch-a")
+	branchBID := workflow.NodeID("node-branch-b")
+	joinID := workflow.NodeID("node-join")
+	splitGroup := workflow.TransitionGroupID("group-split")
+	startGroup := workflow.TransitionGroupID("group-start")
+	doneAGroup := workflow.TransitionGroupID("group-done-a")
+	doneBGroup := workflow.TransitionGroupID("group-done-b")
+	joinDoneGroup := workflow.TransitionGroupID("group-join-done")
+	req := workflowstore.WorkflowGraphSaveRequest{
+		WorkflowID:      created.ID,
+		ExpectedVersion: record.Version,
+		Nodes: []workflowstore.NodeRecord{
+			{ID: startID, WorkflowID: created.ID, Key: "start", Kind: workflow.NodeKindStart, DisplayName: "Start"},
+			{ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent, DisplayName: "Source", SubagentRole: config.DefaultSubagentRole},
+			{ID: branchAID, WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent, DisplayName: "Branch A", SubagentRole: config.DefaultSubagentRole},
+			{ID: branchBID, WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent, DisplayName: "Branch B", SubagentRole: config.DefaultSubagentRole},
+			{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join"},
+			{ID: doneID, WorkflowID: created.ID, Key: "done", Kind: workflow.NodeKindTerminal, DisplayName: "Done"},
+		},
+		TransitionGroups: []workflowstore.TransitionGroupRecord{
+			{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+			{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
+			{ID: doneAGroup, WorkflowID: created.ID, SourceNodeID: branchAID, TransitionID: "join_a", DisplayName: "Join"},
+			{ID: doneBGroup, WorkflowID: created.ID, SourceNodeID: branchBID, TransitionID: "join_b", DisplayName: "Join"},
+			{ID: joinDoneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+		},
+		Edges: []workflowstore.EdgeRecord{
+			{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Start."},
+			{ID: "edge-branch-a", WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "A."},
+			{ID: "edge-branch-b", WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "B."},
+			{ID: "edge-done-a", WorkflowID: created.ID, TransitionGroupID: doneAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+			{ID: "edge-done-b", WorkflowID: created.ID, TransitionGroupID: doneBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+			{ID: "edge-join-done", WorkflowID: created.ID, TransitionGroupID: joinDoneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
+		},
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil || !saved.Saved {
+		t.Fatalf("SaveWorkflowGraph = %+v, err=%v", saved, err)
+	}
+	task, err := store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &created.ID, Title: "Resume", Body: "Resume"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := store.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	split, err := store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{Source: started.Mutation.Created[0].Reference, TransitionID: "split"})
+	if err != nil || len(split.Mutation.Created) != 2 {
+		t.Fatalf("CompleteCurrentNode split = %+v, err=%v", split, err)
+	}
+	for _, currentNode := range split.Mutation.Created {
+		if err := store.InterruptCurrentNode(ctx, currentNode.Reference, workflow.CurrentNodeInterruptionReasonUserInterrupt, workflow.CurrentNodeInterruptionDetail{}); err != nil {
+			t.Fatalf("InterruptCurrentNode: %v", err)
+		}
+	}
+	metadataStore.DB().ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = 'edge-branch-a'`, `[{"key":"risk","description":"Risk."}]`)
+
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{AgentConcurrency: 2, AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{}})
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close(); _ = authority.Close(ctx) })
+	resumed, err := controller.ResumeTask(ctx, task.ID)
+	if err == nil {
+		t.Fatal("ResumeTask returned nil error for mixed real-store validation")
+	}
+	var validationErr *workflowstore.CurrentNodeResumeValidationError
+	if !errors.As(err, &validationErr) || len(validationErr.Diagnostics) != 1 || validationErr.Diagnostics[0].ParameterKey != "risk" {
+		t.Fatalf("ResumeTask error = %T %v, want typed risk diagnostic", err, err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 1
+	}, "real-store valid sibling did not start")
+	if len(resumed) != 1 {
+		t.Fatalf("real-store mixed resume = resumed=%+v, want one valid sibling", resumed)
 	}
 }
 
