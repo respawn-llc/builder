@@ -140,10 +140,26 @@ function ordinaryHtmlStart(value: string, start: number): { index: number; state
   if (!isTagNameStartChar(value.charAt(index))) return;
   while (isNameChar(value.charAt(index))) index += 1;
   if (index === nameStart) return;
+  if (findTagEnd(value, index) === undefined) return;
   return {
     index,
     state: closing ? { kind: "tag" } : { kind: "tag", name: value.slice(nameStart, index).toLowerCase() },
   };
+}
+function findTagEnd(value: string, start: number): number | undefined {
+  let quote: string | undefined;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value.charAt(index);
+    if (quote !== undefined) {
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === ">") return index;
+  }
 }
 type TagState = Extract<HtmlState, { kind: "declaration" | "processing" | "tag" }>;
 function htmlAdvance(
