@@ -671,4 +671,9 @@
   excluded. During remediation, the human approved a revised production-scope
   cap exception to preserve the complete behavior contract; the exact current
   production measurement and remediation verification remain the final
-  handoff evidence.
+  handoff evidence. Second remediation completed: Project deletion re-reads
+  the current typed route after cleanup, Board deletion causes track
+  operation-scoped attempts, generic VirtualizedInfiniteList changes were
+  removed, and route/deletion regression coverage was added. Final automated
+  verification passed: `./scripts/test.sh desktop` (81 files / 367 tests) and
+  `./scripts/build.sh desktop`.

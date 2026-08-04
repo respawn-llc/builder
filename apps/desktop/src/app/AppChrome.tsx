@@ -1,4 +1,4 @@
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Home, SunMoon } from "lucide-react";
 import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from "react";
@@ -16,7 +16,11 @@ import {
   appChromeTitlePlacementClassNames,
 } from "./appChromeStyles";
 import { useAppNavigation, useNavigationStackState } from "@/app-facade";
-import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
+import {
+  completeProjectDeletion,
+  projectRouteIsCurrent,
+  useProjectDeletedEvents,
+} from "@/app-facade";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
 import { useSidebar } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
@@ -149,7 +153,7 @@ function AppChromeFloatingUpdateChip({
 
 function ProjectDeletionEventHandler() {
   const { t } = useTranslation();
-  const location = useLocation();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
@@ -159,13 +163,12 @@ function ProjectDeletionEventHandler() {
     nativeBridge,
     useCallback(
       (event) => {
-        const routeMatches = routeReferencesProject(location.pathname, event.projectID);
         void completeProjectDeletion({
-          closeSidebar: routeMatches ? closeSidebar : noopCloseSidebar,
+          closeSidebar,
           invalidateSidebar,
-          navigateHome: routeMatches ? navigation.openHome : noopNavigation,
+          isProjectRouteCurrent: () => projectRouteIsCurrent(router, event.projectID),
+          navigateHome: navigation.openHome,
           projectID: event.projectID,
-          routeMatchesProject: routeMatches,
           pushDeletedToast: () => {
             push({
               id: "project-delete-deleted",
@@ -176,23 +179,10 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [closeSidebar, invalidateSidebar, location.pathname, navigation.openHome, push, queryClient, t],
+      [closeSidebar, invalidateSidebar, navigation.openHome, push, queryClient, router, t],
     ),
   );
   return null;
-}
-
-function routeReferencesProject(pathname: string, projectID: string): boolean {
-  const segments = pathname.split("/").filter((segment) => segment.length > 0);
-  return segments[0] === "projects" && segments[1] === projectID;
-}
-
-function noopCloseSidebar(): void {
-  return;
-}
-
-async function noopNavigation(): Promise<void> {
-  return;
 }
 
 function isPlainPrimaryClick(event: MouseEvent): boolean {

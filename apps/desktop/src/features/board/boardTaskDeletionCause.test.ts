@@ -1,0 +1,53 @@
+import {
+  boardTaskDeletionCauseMatches,
+  recordBoardTaskDeletionAttempt,
+  settleBoardTaskDeletionAttempt,
+  type BoardTaskDeletionCause,
+} from "./boardTaskDeletionCause";
+
+describe("board task deletion causes", () => {
+  it("keeps the cause when an older attempt fails and a newer attempt succeeds", () => {
+    const first = { taskID: "task-1" };
+    const second = { taskID: "task-1" };
+    let cause: BoardTaskDeletionCause | null = recordBoardTaskDeletionAttempt(null, first);
+    cause = recordBoardTaskDeletionAttempt(cause, second);
+
+    const afterFirst = settleBoardTaskDeletionAttempt(cause, first, "failed");
+    if (afterFirst === null) throw new Error("The second deletion attempt must remain pending.");
+    const afterSecond = settleBoardTaskDeletionAttempt(afterFirst, second, "succeeded");
+    if (afterSecond === null) throw new Error("A successful deletion attempt must retain its cause.");
+    cause = afterSecond;
+
+    expect(cause.succeeded).toBe(true);
+    expect(boardTaskDeletionCauseMatches(cause, "task-1", null)).toBe(true);
+  });
+
+  it("keeps the cause when a newer attempt fails after an older attempt succeeds", () => {
+    const first = { taskID: "task-1" };
+    const second = { taskID: "task-1" };
+    let cause: BoardTaskDeletionCause | null = recordBoardTaskDeletionAttempt(null, first);
+    cause = recordBoardTaskDeletionAttempt(cause, second);
+
+    const afterFirst = settleBoardTaskDeletionAttempt(cause, first, "succeeded");
+    if (afterFirst === null) throw new Error("A successful deletion attempt must retain its cause.");
+    const afterSecond = settleBoardTaskDeletionAttempt(afterFirst, second, "failed");
+    if (afterSecond === null) throw new Error("A successful deletion attempt must retain its cause.");
+    cause = afterSecond;
+
+    expect(cause.succeeded).toBe(true);
+    expect(boardTaskDeletionCauseMatches(cause, "task-1", null)).toBe(true);
+  });
+
+  it("clears the cause only after every attempt fails", () => {
+    const first = { taskID: "task-1" };
+    const second = { taskID: "task-1" };
+    let cause: BoardTaskDeletionCause | null = recordBoardTaskDeletionAttempt(null, first);
+    cause = recordBoardTaskDeletionAttempt(cause, second);
+
+    cause = settleBoardTaskDeletionAttempt(cause, first, "failed");
+    expect(cause).not.toBeNull();
+    cause = settleBoardTaskDeletionAttempt(cause, second, "failed");
+
+    expect(cause).toBeNull();
+  });
+});

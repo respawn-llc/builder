@@ -3,6 +3,17 @@ import { QueryClient } from "@tanstack/react-query";
 import { completeProjectDeletion } from "./projectDeletionEvents";
 
 describe("completeProjectDeletion", () => {
+  function deferred(): Readonly<{
+    promise: Promise<void>;
+    resolve(): void;
+  }> {
+    let resolve!: () => void;
+    const promise = new Promise<void>((nextResolve) => {
+      resolve = nextResolve;
+    });
+    return { promise, resolve };
+  }
+
   it("keeps unrelated sidebar survivors when the route stays in place", async () => {
     const closeSidebar = vi.fn();
     const navigateHome = vi.fn(async () => Promise.resolve());
@@ -15,7 +26,7 @@ describe("completeProjectDeletion", () => {
       projectID: "project-1",
       pushDeletedToast: vi.fn(),
       queryClient: new QueryClient(),
-      routeMatchesProject: false,
+      isProjectRouteCurrent: () => false,
     });
 
     expect(closeSidebar).not.toHaveBeenCalled();
@@ -33,7 +44,7 @@ describe("completeProjectDeletion", () => {
       projectID: "project-1",
       pushDeletedToast: vi.fn(),
       queryClient: new QueryClient(),
-      routeMatchesProject: false,
+      isProjectRouteCurrent: () => false,
     });
 
     expect(closeSidebar).toHaveBeenCalledOnce();
@@ -50,8 +61,62 @@ describe("completeProjectDeletion", () => {
       projectID: "project-1",
       pushDeletedToast: vi.fn(),
       queryClient: new QueryClient(),
-      routeMatchesProject: true,
+      isProjectRouteCurrent: () => true,
     });
+
+    expect(closeSidebar).toHaveBeenCalledOnce();
+    expect(navigateHome).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks the route after cleanup before deciding to navigate", async () => {
+    const queryClient = new QueryClient();
+    const cleanup = deferred();
+    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async () => {
+      await cleanup.promise;
+    });
+    const closeSidebar = vi.fn();
+    const navigateHome = vi.fn(async () => Promise.resolve());
+    let routeIsCurrent = true;
+    const completion = completeProjectDeletion({
+      closeSidebar,
+      invalidateSidebar: vi.fn(() => ({ kind: "discarded" as const })),
+      isProjectRouteCurrent: () => routeIsCurrent,
+      navigateHome,
+      projectID: "project-1",
+      pushDeletedToast: vi.fn(),
+      queryClient,
+    });
+
+    routeIsCurrent = false;
+    cleanup.resolve();
+    await completion;
+
+    expect(closeSidebar).not.toHaveBeenCalled();
+    expect(navigateHome).not.toHaveBeenCalled();
+  });
+
+  it("navigates when the route becomes the deleted Project during cleanup", async () => {
+    const queryClient = new QueryClient();
+    const cleanup = deferred();
+    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async () => {
+      await cleanup.promise;
+    });
+    const closeSidebar = vi.fn();
+    const navigateHome = vi.fn(async () => Promise.resolve());
+    let routeIsCurrent = false;
+    const completion = completeProjectDeletion({
+      closeSidebar,
+      invalidateSidebar: vi.fn(() => ({ kind: "discarded" as const })),
+      isProjectRouteCurrent: () => routeIsCurrent,
+      navigateHome,
+      projectID: "project-1",
+      pushDeletedToast: vi.fn(),
+      queryClient,
+    });
+
+    routeIsCurrent = true;
+    cleanup.resolve();
+    await completion;
 
     expect(closeSidebar).toHaveBeenCalledOnce();
     expect(navigateHome).toHaveBeenCalledOnce();

@@ -1,3 +1,4 @@
+import type { AnyRouter } from "@tanstack/react-router";
 import type { NativeBridge, NativeProjectDeleted } from "@app/native-bridge";
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
@@ -45,30 +46,36 @@ export function useProjectDeletedEvents(
 export async function completeProjectDeletion({
   closeSidebar,
   invalidateSidebar,
+  isProjectRouteCurrent,
   navigateHome,
   projectID,
-  routeMatchesProject,
   pushDeletedToast,
   queryClient,
 }: Readonly<{
   closeSidebar: SidebarController["closeSidebar"];
   invalidateSidebar: SidebarController["invalidateSidebar"];
+  isProjectRouteCurrent(): boolean;
   navigateHome: () => Promise<void>;
   projectID: string;
-  routeMatchesProject: boolean;
   pushDeletedToast: () => void;
   queryClient: QueryClient;
 }>): Promise<void> {
   await invalidateProjectDeleteQueries(queryClient, projectID);
   const sidebarResult = invalidateSidebar({ kind: "project", projectID });
   clearLastProjectRoute(projectID);
-  if (routeMatchesProject) {
+  if (isProjectRouteCurrent()) {
     closeSidebar("closed");
     await navigateHome();
   } else if (sidebarResult.kind === "closed") {
     closeSidebar("closed");
   }
   pushDeletedToast();
+}
+
+export function projectRouteIsCurrent(router: AnyRouter, projectID: string): boolean {
+  return router.state.matches.some(
+    (match) => match.routeId === "/projects/$projectId" && match.params.projectId === projectID,
+  );
 }
 
 export async function invalidateProjectDeleteQueries(

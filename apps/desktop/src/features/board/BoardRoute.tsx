@@ -49,6 +49,12 @@ import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
+import {
+  boardTaskDeletionCauseMatches,
+  recordBoardTaskDeletionAttempt,
+  settleBoardTaskDeletionAttempt,
+  type BoardTaskDeletionCause,
+} from "./boardTaskDeletionCause";
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
@@ -166,16 +172,28 @@ function BoardRouteData({
   const boardQuery = useBoard(projectId, workflowId);
   const board = boardQuery.data;
   const selectedWorkflowID = board?.selectedWorkflow?.id;
-  const deletionCauseRef = useRef<string | null>(null);
+  const deletionCauseRef = useRef<BoardTaskDeletionCause | null>(null);
   const handleSelectedTaskDeleted = useBoardSelectedTaskDeletion({
     onNavigationError: reportBoardNavigationError,
-    onSelectedTaskDeletionNavigationFailed: () => {
-      if (deletionCauseRef.current === selectedTaskId) {
-        deletionCauseRef.current = null;
-      }
+    onSelectedTaskDeletionNavigationFailed: (attempt) => {
+      deletionCauseRef.current = settleBoardTaskDeletionAttempt(
+        deletionCauseRef.current,
+        attempt,
+        "failed",
+      );
     },
-    onSelectedTaskDeleted: () => {
-      deletionCauseRef.current = selectedTaskId;
+    onSelectedTaskDeletionNavigationSucceeded: (attempt) => {
+      deletionCauseRef.current = settleBoardTaskDeletionAttempt(
+        deletionCauseRef.current,
+        attempt,
+        "succeeded",
+      );
+    },
+    onSelectedTaskDeleted: (attempt) => {
+      deletionCauseRef.current = recordBoardTaskDeletionAttempt(
+        deletionCauseRef.current,
+        attempt,
+      );
     },
     projectId,
     selectedTaskId,
@@ -232,7 +250,7 @@ function BoardContent({
   board: SelectedWorkflowBoard;
   boardQueryWorkflowID: string | undefined;
   boardRefreshError: Error | null;
-  deletionCauseRef: { current: string | null };
+  deletionCauseRef: { current: BoardTaskDeletionCause | null };
   onBoardRefreshRetry(): void;
   selectedTaskId: string;
 }>) {
@@ -354,7 +372,7 @@ function BoardContent({
     selectorRef.current = next;
     const deletionCause = deletionCauseRef.current;
     deletionCauseRef.current = null;
-    if (deletionCause === previous && next === null) {
+    if (boardTaskDeletionCauseMatches(deletionCause, previous, next)) {
       return;
     }
     if (previous !== null || next === null) {
