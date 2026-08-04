@@ -322,12 +322,14 @@ func workflowTransitionGroupMetadataOnlyChange(current TransitionGroupRecord, ne
 }
 
 func workflowEdgeMetadataOnlyChange(current EdgeRecord, next EdgeRecord) bool {
+	// Parameter declarations may be edited after entry. Resume preflight owns
+	// the materialization check for already-entered Current Nodes; routing and
+	// binding changes remain structural policy changes.
 	return current.ID == next.ID &&
 		current.WorkflowID == next.WorkflowID &&
 		current.TransitionGroupID == next.TransitionGroupID &&
 		current.Key == next.Key &&
 		current.TargetNodeID == next.TargetNodeID &&
-		slices.Equal(current.Parameters, next.Parameters) &&
 		slices.Equal(current.InputBindings, next.InputBindings) &&
 		slices.Equal(current.OutputRequirements, next.OutputRequirements)
 }
