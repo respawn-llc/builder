@@ -36,11 +36,11 @@ describe("SidebarHost navigation controls", () => {
     await user.click(screen.getByRole("button", { name: "Push" }));
     await waitFor(() => expect(screen.getByTestId("sidebar-content-child")).toBeVisible());
     expect(screen.getByRole("button", { name: "Back" })).toBeVisible();
-    expect(screen.getByTestId("app-sidebar-host")).toHaveClass("app-sidebar-destination-push");
+    expect(screen.getByTestId("app-sidebar-destination")).toHaveClass("app-sidebar-destination-push");
 
     await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.getByTestId("sidebar-content-root")).toBeVisible());
-    expect(screen.getByTestId("app-sidebar-host")).toHaveClass("app-sidebar-destination-back");
+    expect(screen.getByTestId("app-sidebar-destination")).toHaveClass("app-sidebar-destination-back");
     expect(mounts).toEqual(["root", "child", "root"]);
   });
 

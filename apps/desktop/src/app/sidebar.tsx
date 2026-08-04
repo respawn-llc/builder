@@ -310,14 +310,10 @@ export function SidebarHost() {
         <div
           className={cx(
             "absolute right-0 bottom-0 left-0 min-h-0",
-            activeDestination.kind === "workflowEditor"
-              ? "top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]"
-              : activeDestination.kind === "taskDetail" || activeDestination.kind === "projectEdit"
-                ? "top-0 overflow-hidden"
-                : "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]",
-            direction === "push" && "app-sidebar-destination-push",
-            direction === "back" && "app-sidebar-destination-back",
+            sidebarDestinationContentClassName(activeDestination.kind),
+            sidebarDestinationMotionClassName(direction),
           )}
+          data-testid="app-sidebar-destination"
         >
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView
@@ -338,6 +334,28 @@ function SidebarInboxNavSlot({ destination }: Readonly<{ destination: SidebarDes
     return null;
   }
   return <SidebarInboxNav destination={destination} />;
+}
+
+function sidebarDestinationContentClassName(kind: SidebarDestination["kind"]): string {
+  switch (kind) {
+    case "workflowEditor":
+      return "top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]";
+    case "taskDetail":
+    case "projectEdit":
+      return "top-0 overflow-hidden";
+    case "custom":
+    case "newTask":
+    case "workflowCreate":
+    case "linkWorkflow":
+    case "workflowInspect":
+      return "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]";
+  }
+}
+
+function sidebarDestinationMotionClassName(direction: "push" | "back" | null): string | null {
+  if (direction === "push") return "app-sidebar-destination-push";
+  if (direction === "back") return "app-sidebar-destination-back";
+  return null;
 }
 
 function SidebarPopOutSlot({

@@ -121,12 +121,14 @@ describe("SidebarProvider", () => {
     act(() => void result.current.sidebar.openSidebar(task("task-a")));
     const stale = result.current.host.actions;
     const firstKey = result.current.host.key;
-    act(() => result.current.host.actions.capture(() => ({
-      kind: "taskDetail",
-      scrollTop: 17,
-      descriptionExpanded: true,
-      selectedTab: "comments",
-    })));
+    act(() => {
+      result.current.host.actions.capture(() => ({
+        kind: "taskDetail",
+        scrollTop: 17,
+        descriptionExpanded: true,
+        selectedTab: "comments",
+      }));
+    });
     act(() => { result.current.sidebar.pushSidebar(task("task-b")); });
     act(() => { result.current.sidebar.backSidebar(); });
 

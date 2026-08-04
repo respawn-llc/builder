@@ -95,7 +95,6 @@ describe("createSidebarHistory", () => {
       })).toBe(true);
       key = current(history).key;
     }
-    const oldAKey = current(history).key;
     key = current(history).key;
     expect(history.push({
       sourceKey: key,
