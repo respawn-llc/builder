@@ -170,7 +170,10 @@ function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) 
     if (isIncomplete || canonicalLanguage === undefined) return () => void (active = false);
     void highlightCode(code, canonicalLanguage)
       .then((tokens) => {
-        if (active) setHighlighted({ language: canonicalLanguage, source: code, tokens });
+        if (active) {
+          setFailure(null);
+          setHighlighted({ language: canonicalLanguage, source: code, tokens });
+        }
       })
       .catch((error: unknown) => {
         if (active) {
