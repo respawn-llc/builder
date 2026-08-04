@@ -796,7 +796,6 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		Kind:           workflow.NodeKindAgent,
 		DisplayName:    "Execute",
 		SubagentRole:   "coder",
-		PromptTemplate: "Do the work.",
 		CompletionMode: string(config.WorkflowCompletionModeStructuredOutput),
 	}); err != nil {
 		t.Fatalf("change latest node completion mode: %v", err)
@@ -1323,12 +1322,12 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 		{
 			ID: implementationID, WorkflowID: created.ID, Key: "implementation",
 			Kind: workflow.NodeKindAgent, DisplayName: "Implementation",
-			SubagentRole: "coder", PromptTemplate: "Implement the task.",
+			SubagentRole: "coder",
 		},
 		{
 			ID: reviewID, WorkflowID: created.ID, Key: "review",
 			Kind: workflow.NodeKindAgent, DisplayName: "Review",
-			SubagentRole: "reviewer", PromptTemplate: "Review the implementation.",
+			SubagentRole: "reviewer",
 		},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
@@ -1412,9 +1411,9 @@ func createCurrentNodeFanoutContinuationWorkflow(
 	}
 	joinID := workflow.NodeID("node-join-" + workflowSuffix)
 	for _, node := range []workflowstore.NodeRecord{
-		{ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent, DisplayName: "Source", SubagentRole: "coder", PromptTemplate: "Source."},
-		{ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent, DisplayName: "Branch A", SubagentRole: "coder", PromptTemplate: "Branch A."},
-		{ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent, DisplayName: "Branch B", SubagentRole: "coder", PromptTemplate: "Branch B."},
+		{ID: sourceID, WorkflowID: created.ID, Key: "source", Kind: workflow.NodeKindAgent, DisplayName: "Source", SubagentRole: "coder"},
+		{ID: branchNodeIDs["branch_a"], WorkflowID: created.ID, Key: "branch_a", Kind: workflow.NodeKindAgent, DisplayName: "Branch A", SubagentRole: "coder"},
+		{ID: branchNodeIDs["branch_b"], WorkflowID: created.ID, Key: "branch_b", Kind: workflow.NodeKindAgent, DisplayName: "Branch B", SubagentRole: "coder"},
 		{ID: joinID, WorkflowID: created.ID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join"},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
@@ -1504,12 +1503,12 @@ func createCurrentNodeTwoStepWorkflow(
 	for _, node := range []workflowstore.NodeRecord{
 		{
 			ID: firstID, WorkflowID: created.ID, Key: "first", Kind: first.kind, DisplayName: "First",
-			SubagentRole: first.role, ScriptPath: first.scriptPath, PromptTemplate: first.prompt,
+			SubagentRole: first.role, ScriptPath: first.scriptPath,
 			CompletionMode: first.completionMode,
 		},
 		{
 			ID: secondID, WorkflowID: created.ID, Key: "second", Kind: second.kind, DisplayName: "Second",
-			SubagentRole: second.role, ScriptPath: second.scriptPath, PromptTemplate: second.prompt,
+			SubagentRole: second.role, ScriptPath: second.scriptPath,
 			CompletionMode: second.completionMode,
 		},
 	} {
@@ -1575,7 +1574,7 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 	nodeID := workflow.NodeID("node-execute-" + created.ID.String())
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
 		ID: nodeID, WorkflowID: created.ID, Key: "execute", Kind: kind, DisplayName: "Execute",
-		SubagentRole: role, PromptTemplate: "Do the work.", ScriptPath: scriptPath,
+		SubagentRole: role, ScriptPath: scriptPath,
 		CompletionMode: completionMode,
 	}); err != nil {
 		t.Fatalf("add executable node: %v", err)

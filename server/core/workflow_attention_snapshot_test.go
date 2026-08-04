@@ -90,13 +90,12 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	terminal := coreWorkflowNodeByKind(t, definition, workflow.NodeKindTerminal)
 	agentID := workflow.NodeID("node-" + uuid.NewString())
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
-		ID:             agentID,
-		WorkflowID:     created.ID,
-		Key:            "agent",
-		Kind:           workflow.NodeKindAgent,
-		DisplayName:    "Agent",
-		SubagentRole:   "default",
-		PromptTemplate: "Do work.",
+		ID:           agentID,
+		WorkflowID:   created.ID,
+		Key:          "agent",
+		Kind:         workflow.NodeKindAgent,
+		DisplayName:  "Agent",
+		SubagentRole: "default",
 	}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}

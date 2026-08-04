@@ -37,6 +37,25 @@ type derivedPriorParameterRequirement struct {
 }
 
 func DeriveWiring(def Definition) DerivedWiring {
+	priorReferencesByEdge := make(map[EdgeID][]PromptPriorParameterReference, len(def.Edges))
+	for _, edge := range def.Edges {
+		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
+		if err != nil {
+			continue
+		}
+		priorReferencesByEdge[edge.ID] = append([]PromptPriorParameterReference(nil), refs.PriorParams...)
+	}
+	return DeriveWiringWithPriorParameterReferences(def, priorReferencesByEdge)
+}
+
+// DeriveWiringWithPriorParameterReferences derives the canonical wiring graph
+// from prompt-owned prior-Parameter references supplied by the caller. The
+// metadata migration boundary uses this entry point with its frozen historical
+// parser; runtime callers use DeriveWiring, which owns live prompt parsing.
+func DeriveWiringWithPriorParameterReferences(
+	def Definition,
+	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
+) DerivedWiring {
 	derived := DerivedWiring{
 		inputBindingsByEdge:              map[EdgeID][]InputBinding{},
 		requiredProvisionFieldsByEdge:    map[EdgeID][]OutputField{},
@@ -90,7 +109,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 			derived.deriveJoinAggregateParameters(node, incomingByNode)
 		}
 	}
-	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode)
+	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode, priorReferencesByEdge)
 	return derived
 }
 
@@ -230,16 +249,13 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 	nodesByID map[NodeID]Node,
 	groupsByID map[TransitionGroupID]TransitionGroup,
 	outgoingByNode map[NodeID][]Edge,
+	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
 ) {
 	startNodeID, hasSingleStart := singleStartNodeID(def.Nodes)
 	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorParameterRequirement, len(nodesByID))
 	for _, edge := range def.Edges {
 		_, targetExists := nodesByID[edge.TargetNodeID]
 		if !targetExists {
-			continue
-		}
-		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
-		if err != nil {
 			continue
 		}
 		consumerGroup, consumerGroupExists := groupsByID[edge.TransitionGroupID]
@@ -262,7 +278,7 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 		if !hasSingleStart {
 			continue
 		}
-		for _, priorParam := range refs.PriorParams {
+		for _, priorParam := range priorReferencesByEdge[edge.ID] {
 			transitionKey := ModelKey(strings.TrimSpace(string(priorParam.TransitionKey)))
 			outputName := strings.TrimSpace(priorParam.ParameterKey)
 			if transitionKey == "" || outputName == "" {

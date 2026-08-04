@@ -197,11 +197,6 @@ export type WorkflowOutputField = Readonly<{
   description: string;
 }>;
 
-export type WorkflowInputField = Readonly<{
-  name: string;
-  description: string;
-}>;
-
 export type WorkflowParameter = Readonly<{
   key: string;
   description: string;
@@ -246,12 +241,9 @@ export type WorkflowNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
-  outputFields: readonly WorkflowOutputField[];
 }>;
 
 export type WorkflowInputBinding = Readonly<{
@@ -355,10 +347,8 @@ export type WorkflowGraphDraftNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
 }>;
 

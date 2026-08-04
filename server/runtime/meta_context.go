@@ -504,7 +504,7 @@ func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode w
 		TaskNumberOfComments:           awareness.CommentCount,
 		TaskUnsatisfiedDependencyCount: awareness.UnsatisfiedDependencyCount,
 		Transitions:                    workflowInstructionTransitions(instructions.Transitions),
-		NodePrompt:                     instructions.NodePrompt,
+		TransitionPrompt:               instructions.TransitionPrompt,
 	}, completionInstructions)
 }
 

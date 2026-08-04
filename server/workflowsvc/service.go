@@ -344,7 +344,7 @@ func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNod
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+		return s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	})
 	if err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
@@ -358,7 +358,7 @@ func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+		return s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	})
 	if err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
@@ -2272,7 +2272,6 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
 				SubagentRole:   node.SubagentRole,
-				PromptTemplate: node.PromptTemplate,
 				CompletionMode: node.CompletionMode,
 				ScriptPath: func() workflow.OptionalScriptPath {
 					if scriptPath, ok := workflow.PresentScriptPath(optionalStringValue(node.ScriptPath)); ok {
@@ -2280,7 +2279,6 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 					}
 					return workflow.AbsentScriptPath()
 				}(),
-				InputFields:        inputFields(node.InputFields),
 				JoinInputProviders: joinInputProviders(node.JoinInputProviders),
 			},
 		)
@@ -2359,7 +2357,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), InputFields: inputFields(node.InputFields), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -2443,14 +2441,6 @@ func workflowGraphSaveBlockers(blockers []workflowstore.WorkflowGraphSaveBlocker
 
 func commentRecord(row workflowstore.CommentRecord) serverapi.WorkflowTaskComment {
 	return serverapi.WorkflowTaskComment{ID: row.ID, TaskID: string(row.TaskID), Body: row.Body, Author: row.Author, AuthorID: row.AuthorID, CreatedAtUnixMs: row.CreatedAt, UpdatedAt: row.UpdatedAt}
-}
-
-func inputFields(in []serverapi.WorkflowInputField) []workflow.InputField {
-	out := make([]workflow.InputField, 0, len(in))
-	for _, field := range in {
-		out = append(out, workflow.InputField{Name: field.Name, Description: field.Description})
-	}
-	return out
 }
 
 func optionalStringValue(value *string) string {

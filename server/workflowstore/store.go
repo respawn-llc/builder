@@ -145,12 +145,9 @@ type NodeRecord struct {
 	GroupID            string
 	GroupKey           string
 	SubagentRole       string
-	PromptTemplate     string
 	CompletionMode     string
 	ScriptPath         string
-	InputFields        []workflow.InputField
 	JoinInputProviders []workflow.JoinInputProvider
-	OutputFields       []workflow.OutputField
 	SortOrder          int64
 }
 
@@ -166,11 +163,8 @@ func workflowNodeFromRecord(node NodeRecord) (workflow.Node, error) {
 		node.Kind,
 		workflow.NodeFields{
 			SubagentRole:       node.SubagentRole,
-			PromptTemplate:     node.PromptTemplate,
 			CompletionMode:     node.CompletionMode,
-			InputFields:        node.InputFields,
 			JoinInputProviders: node.JoinInputProviders,
-			OutputFields:       node.OutputFields,
 			ScriptPath: func() workflow.OptionalScriptPath {
 				if scriptPath, ok := workflow.PresentScriptPath(node.ScriptPath); ok {
 					return scriptPath
@@ -286,7 +280,7 @@ type CurrentNodeStartContext struct {
 	TransitionIDs                  []string
 	TransitionOptions              []TransitionOption
 	HasContinueSessionOutgoingEdge bool
-	PromptTemplate                 string
+	TransitionPrompt               string
 	ParameterValues                map[string]string
 	ExecutionRoot                  *ExecutionRoot
 }
@@ -412,10 +406,10 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	}); err != nil {
 		return WorkflowRecord{}, fmt.Errorf("insert workflow: %w", err)
 	}
-	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: startID, WorkflowID: workflowID, NodeKey: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog", InputFieldsJson: "[]", JoinInputProvidersJson: "[]", OutputFieldsJson: "[]", SortOrder: 0}); err != nil {
+	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: startID, WorkflowID: workflowID, NodeKey: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog", JoinInputProvidersJson: "[]", SortOrder: 0}); err != nil {
 		return WorkflowRecord{}, fmt.Errorf("insert backlog node: %w", err)
 	}
-	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: doneID, WorkflowID: workflowID, NodeKey: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done", InputFieldsJson: "[]", JoinInputProvidersJson: "[]", OutputFieldsJson: "[]", SortOrder: 1000}); err != nil {
+	if err := q.InsertWorkflowNode(ctx, sqlitegen.InsertWorkflowNodeParams{ID: doneID, WorkflowID: workflowID, NodeKey: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done", JoinInputProvidersJson: "[]", SortOrder: 1000}); err != nil {
 		return WorkflowRecord{}, fmt.Errorf("insert done node: %w", err)
 	}
 	return WorkflowRecord{ID: workflowID, Name: name, Description: description, Version: 1, ExecutionTargetPolicy: policy}, nil
@@ -950,16 +944,8 @@ func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, wo
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: workflow.ModelKey(group.GroupKey), DisplayName: group.DisplayName, SortOrder: group.SortOrder})
 	}
 	for _, node := range nodes {
-		inputFields := []workflow.InputField{}
 		joinProviders := []workflow.JoinInputProvider{}
-		outputFields := []workflow.OutputField{}
-		if err := workflow.UnmarshalString(node.InputFieldsJson, &inputFields); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
 		if err := workflow.UnmarshalString(node.JoinInputProvidersJson, &joinProviders); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		if err := workflow.UnmarshalString(node.OutputFieldsJson, &outputFields); err != nil {
 			return workflow.Definition{}, WorkflowRecord{}, err
 		}
 		groupID := ""
@@ -979,12 +965,9 @@ func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, wo
 			DisplayName:        node.DisplayName,
 			GroupID:            groupID,
 			SubagentRole:       node.SubagentRole,
-			PromptTemplate:     node.PromptTemplate,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         scriptPath,
-			InputFields:        inputFields,
 			JoinInputProviders: joinProviders,
-			OutputFields:       outputFields,
 		})
 		if err != nil {
 			return workflow.Definition{}, WorkflowRecord{}, err

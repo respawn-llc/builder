@@ -337,12 +337,9 @@ INSERT INTO workflow_nodes (
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 ) VALUES (
@@ -352,12 +349,9 @@ INSERT INTO workflow_nodes (
     sqlc.arg(kind),
     sqlc.arg(display_name),
     sqlc.arg(subagent_role),
-    sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
-    sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
-    sqlc.arg(output_fields_json),
     sqlc.narg(group_id),
     sqlc.arg(sort_order)
 );
@@ -411,7 +405,7 @@ ON CONFLICT(id) DO UPDATE SET
 WHERE workflow_node_groups.workflow_id = excluded.workflow_id;
 
 -- name: UpsertWorkflowNode :execrows
-INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, script_path, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode, script_path, join_input_providers_json, group_id, sort_order)
 VALUES (
     sqlc.arg(id),
     sqlc.arg(workflow_id),
@@ -419,12 +413,9 @@ VALUES (
     sqlc.arg(kind),
     sqlc.arg(display_name),
     sqlc.arg(subagent_role),
-    sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
-    sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
-    sqlc.arg(output_fields_json),
     sqlc.narg(group_id),
     sqlc.arg(sort_order)
 )
@@ -433,12 +424,9 @@ ON CONFLICT(id) DO UPDATE SET
     kind = excluded.kind,
     display_name = excluded.display_name,
     subagent_role = excluded.subagent_role,
-    prompt_template = excluded.prompt_template,
     completion_mode = excluded.completion_mode,
     script_path = excluded.script_path,
-    input_fields_json = excluded.input_fields_json,
     join_input_providers_json = excluded.join_input_providers_json,
-    output_fields_json = excluded.output_fields_json,
     group_id = excluded.group_id,
     sort_order = excluded.sort_order
 WHERE workflow_nodes.workflow_id = excluded.workflow_id;
@@ -568,12 +556,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -588,12 +573,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -726,12 +708,9 @@ SET
     kind = sqlc.arg(kind),
     display_name = sqlc.arg(display_name),
     subagent_role = sqlc.arg(subagent_role),
-    prompt_template = sqlc.arg(prompt_template),
     completion_mode = sqlc.arg(completion_mode),
     script_path = sqlc.narg(script_path),
-    input_fields_json = sqlc.arg(input_fields_json),
     join_input_providers_json = sqlc.arg(join_input_providers_json),
-    output_fields_json = sqlc.arg(output_fields_json),
     group_id = sqlc.narg(group_id)
 WHERE id = sqlc.arg(id)
   AND workflow_id = sqlc.arg(workflow_id);

@@ -107,11 +107,6 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 		if value, present := workflow.NodeScriptPath(node).Value(); present {
 			scriptPath = &value
 		}
-		inputFields := workflow.NodeInputFields(node)
-		projectedInputs := make([]serverapi.WorkflowInputField, 0, len(inputFields))
-		for _, field := range inputFields {
-			projectedInputs = append(projectedInputs, serverapi.WorkflowInputField{Name: field.Name, Description: field.Description})
-		}
 		joinProviders := workflow.NodeJoinInputProviders(node)
 		projectedJoinProviders := make([]serverapi.WorkflowJoinInputProvider, 0, len(joinProviders))
 		for _, provider := range joinProviders {
@@ -130,12 +125,9 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			GroupID:            identity.GroupID,
 			GroupKey:           groupKeyByID[identity.GroupID],
 			SubagentRole:       workflow.NodeSubagentRole(node),
-			PromptTemplate:     workflow.NodePromptTemplate(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),
 			ScriptPath:         scriptPath,
-			InputFields:        projectedInputs,
 			JoinInputProviders: projectedJoinProviders,
-			OutputFields:       OutputFields(workflow.NodeOutputFields(node)),
 		})
 		nodeKinds[nodeID] = node.Kind()
 	}

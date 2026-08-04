@@ -190,7 +190,7 @@ type WorkflowNodeContextArgs struct {
 	TaskNumberOfComments           int64
 	TaskUnsatisfiedDependencyCount int64
 	Transitions                    []WorkflowTransition
-	NodePrompt                     string
+	TransitionPrompt               string
 }
 
 type WorkflowTaskPromptKind uint8

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
+	"text/template/parse"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -328,23 +330,24 @@ func migrationFrozenPriorValueNamespace(context, kind, raw string) (map[workflow
 }
 
 func migrationPriorParameterRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorTransitionParameterRequirement, error) {
-	definition, err := migrationWorkflowDefinition(graph)
+	definition, priorReferencesByEdge, err := migrationWorkflowDefinition(graph)
 	if err != nil {
 		return nil, err
 	}
-	return workflow.DeriveWiring(definition).PriorParameterRequirementsForNode(workflow.NodeID(currentNodeID)), nil
+	return workflow.DeriveWiringWithPriorParameterReferences(definition, priorReferencesByEdge).
+		PriorParameterRequirementsForNode(workflow.NodeID(currentNodeID)), nil
 }
 
-func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
+func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, map[workflow.EdgeID][]workflow.PromptPriorParameterReference, error) {
 	migrationWorkflowID, err := runtimeids.ParseWorkflowID("00000000-0000-4000-8000-000000000001")
 	if err != nil {
-		return workflow.Definition{}, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
+		return workflow.Definition{}, nil, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
 	}
 	graphByEdgeID := make(map[string]migrationGraphEdge, len(graph))
 	for _, edge := range graph {
 		edgeID := strings.TrimSpace(edge.EdgeID)
 		if edgeID == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge id is blank")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge id is blank")
 		}
 		existing, exists := graphByEdgeID[edgeID]
 		if !exists || edge.SnapshotPriority > existing.SnapshotPriority {
@@ -352,7 +355,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 			continue
 		}
 		if edge.SnapshotPriority == existing.SnapshotPriority && edge != existing {
-			return workflow.Definition{}, fmt.Errorf("workflow graph edge %q has conflicting snapshots", edgeID)
+			return workflow.Definition{}, nil, fmt.Errorf("workflow graph edge %q has conflicting snapshots", edgeID)
 		}
 	}
 	edgeIDs := make([]string, 0, len(graphByEdgeID))
@@ -363,6 +366,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 	nodesByID := make(map[workflow.NodeID]workflow.Node)
 	groupsBySemanticKey := make(map[string]workflow.TransitionGroup)
 	edges := make([]workflow.Edge, 0, len(edgeIDs))
+	priorReferencesByEdge := make(map[workflow.EdgeID][]workflow.PromptPriorParameterReference, len(edgeIDs))
 	for _, selectedEdgeID := range edgeIDs {
 		edge := graphByEdgeID[selectedEdgeID]
 		sourceNodeID := strings.TrimSpace(edge.SourceNodeID)
@@ -374,27 +378,24 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 		transitionKey := strings.TrimSpace(edge.TransitionKey)
 		edgeID := strings.TrimSpace(edge.EdgeID)
 		if sourceNodeID == "" || sourceNodeKey == "" || targetNodeID == "" || targetNodeKey == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete node")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge has an incomplete node")
 		}
 		if transitionKey == "" || edgeID == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete transition")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge has an incomplete transition")
 		}
 		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, sourceNodeID, sourceNodeKey, sourceNodeKind); err != nil {
-			return workflow.Definition{}, err
+			return workflow.Definition{}, nil, err
 		}
 		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, targetNodeID, targetNodeKey, targetNodeKind); err != nil {
-			return workflow.Definition{}, err
+			return workflow.Definition{}, nil, err
 		}
-		refs, err := workflow.ExtractPromptTemplateReferences(edge.PromptTemplate)
+		refs, err := migrationPriorParameterReferences(edge.PromptTemplate)
 		if err != nil {
-			return workflow.Definition{}, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
-		}
-		if len(refs.Invalid) != 0 {
-			return workflow.Definition{}, fmt.Errorf("prompt for edge %s -> %s has invalid reference %q", sourceNodeID, targetNodeID, refs.Invalid[0].Placeholder)
+			return workflow.Definition{}, nil, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
 		}
 		parameters := []workflow.Parameter{}
 		if err := json.Unmarshal([]byte(edge.ParametersJSON), &parameters); err != nil {
-			return workflow.Definition{}, fmt.Errorf("decode parameters for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
+			return workflow.Definition{}, nil, fmt.Errorf("decode parameters for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
 		}
 		groupSemanticKey := sourceNodeID + "\x00" + transitionKey
 		group, exists := groupsBySemanticKey[groupSemanticKey]
@@ -415,6 +416,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 			PromptTemplate:    edge.PromptTemplate,
 			Parameters:        parameters,
 		})
+		priorReferencesByEdge[workflow.EdgeID(edgeID)] = refs
 	}
 	nodeIDs := make([]string, 0, len(nodesByID))
 	for nodeID := range nodesByID {
@@ -435,7 +437,134 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 		Nodes:            nodes,
 		TransitionGroups: groups,
 		Edges:            edges,
-	}, nil
+	}, priorReferencesByEdge, nil
+}
+
+func migrationPriorParameterReferences(prompt string) ([]workflow.PromptPriorParameterReference, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return nil, nil
+	}
+	tmpl, err := template.New("historical workflow prompt").Parse(prompt)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]workflow.PromptPriorParameterReference, 0)
+	for _, parsed := range tmpl.Templates() {
+		if parsed.Tree != nil {
+			if err := walkMigrationPromptNode(parsed.Tree.Root, &refs); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return refs, nil
+}
+
+func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParameterReference) error {
+	switch typed := node.(type) {
+	case nil:
+		return nil
+	case *parse.ListNode:
+		for _, child := range typed.Nodes {
+			if err := walkMigrationPromptNode(child, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.ActionNode:
+		return walkMigrationPromptNode(typed.Pipe, refs)
+	case *parse.IfNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.RangeNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.WithNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.TemplateNode:
+		return walkMigrationPromptNode(typed.Pipe, refs)
+	case *parse.PipeNode:
+		for _, command := range typed.Cmds {
+			if err := walkMigrationPromptNode(command, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.CommandNode:
+		for _, arg := range typed.Args {
+			if err := walkMigrationPromptNode(arg, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.ChainNode:
+		return errors.New("historical chained prompt references are unsupported")
+	case *parse.FieldNode:
+		if err := migrationPromptFieldReference(typed.Ident, refs); err != nil {
+			return err
+		}
+	case *parse.VariableNode:
+		if variableTouchesHistoricalPromptNamespace(typed.Ident) {
+			return errors.New("historical variable prompt references are unsupported")
+		}
+	}
+	return nil
+}
+
+func variableTouchesHistoricalPromptNamespace(ident []string) bool {
+	for _, part := range ident {
+		return part == "$Inputs" || part == "$Params" || part == "Inputs" || part == "Params"
+	}
+	return false
+}
+
+func migrationPromptFieldReference(ident []string, refs *[]workflow.PromptPriorParameterReference) error {
+	if len(ident) == 0 {
+		return errors.New("historical prompt reference is empty")
+	}
+	switch ident[0] {
+	case "TaskId", "TaskShortId", "TaskTitle", "TaskBody", "NodeId", "NodeKey", "NodeDisplayName":
+		if len(ident) != 1 {
+			return fmt.Errorf("historical prompt built-in %q is chained", ident[0])
+		}
+	case "Inputs":
+		if len(ident) != 2 || strings.TrimSpace(ident[1]) == "" {
+			return errors.New("historical .Inputs reference must use .Inputs.<input_name>")
+		}
+	case "Params":
+		switch len(ident) {
+		case 2:
+			if strings.TrimSpace(ident[1]) == "" {
+				return errors.New("historical .Params reference has an empty parameter key")
+			}
+		case 3:
+			if strings.TrimSpace(ident[1]) == "" || strings.TrimSpace(ident[2]) == "" {
+				return errors.New("historical prior .Params reference has an empty key")
+			}
+			*refs = append(*refs, workflow.PromptPriorParameterReference{
+				TransitionKey: workflow.ModelKey(ident[1]),
+				ParameterKey:  ident[2],
+				Placeholder:   "." + strings.Join(ident, "."),
+			})
+		default:
+			return errors.New("historical .Params reference has an unsupported shape")
+		}
+	default:
+		return fmt.Errorf("historical prompt reference .%s is unsupported", strings.Join(ident, "."))
+	}
+	return nil
 }
 
 func addMigrationWorkflowNode(

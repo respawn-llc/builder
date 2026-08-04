@@ -7,7 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"core/server/workflow"
+	"core/shared/runtimeids"
+	"core/shared/toolspec"
+
 	_ "modernc.org/sqlite"
+)
+
+const (
+	historicalVersion58TransitionPrompt = `Review {{.Inputs.summary}}.`
+	version71TransitionPrompt           = `Execute {{.Params.summary}}.`
+	version71TransitionParameters       = `[{"key":"summary","description":"Transition summary."}]`
 )
 
 func TestOpenProjectsMigratesSequentialCurrentNodeValueEnvironment(t *testing.T) {
@@ -58,14 +68,14 @@ INSERT INTO workflow_edges (
     prompt_template, parameters_json, input_bindings_json, output_requirements_json
 ) VALUES
     ('edge-plan-review', 'group-done', 'review', 'node-review', 'new_session',
-     'Review {{.Inputs.summary}}.',
+     ?,
      '[{"key":"summary","description":"Plan summary."}]',
      '[{"name":"summary","source":"transition_output","field":"summary"}]',
      '[]'),
     ('edge-review-audit', 'group-review-audit', 'audit', 'node-audit', 'new_session',
      'Audit {{.Params.review.summary}}.', '[]', '[]', '[]'),
     ('edge-audit-done', 'group-audit-done', 'done', 'node-done', 'new_session',
-     '', '[]', '[]', '[]')`)
+     '', '[]', '[]', '[]')`, historicalVersion58TransitionPrompt)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-value-environment-migration", "link-1", 1, "VAL-1", now, now)
 	execSeed(t, db, "plan and review placements", `
 INSERT INTO task_node_placements (
@@ -185,6 +195,67 @@ WHERE task_id = 'task-value-environment-migration'`).Scan(
 			enteredByEdgeID,
 		)
 	}
+	for _, column := range []string{"prompt_template", "input_fields_json", "output_fields_json"} {
+		if columnExists(t, store.db, "workflow_nodes", column) {
+			t.Fatalf("workflow_nodes.%s remains after migration 72", column)
+		}
+	}
+	var preservedPrompt string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT prompt_template
+FROM workflow_edges
+WHERE id = 'edge-plan-review'`).Scan(&preservedPrompt); err != nil {
+		t.Fatalf("query preserved historical prompt: %v", err)
+	}
+	if preservedPrompt != historicalVersion58TransitionPrompt {
+		t.Fatalf("historical Edge prompt = %q, want byte-for-byte preserved prompt", preservedPrompt)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440001")
+	if err != nil {
+		t.Fatalf("ParseWorkflowID: %v", err)
+	}
+	validation := workflow.ValidateDefinition(workflow.Definition{
+		ID: workflowID,
+		Nodes: []workflow.Node{
+			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
+			workflow.AgentNode{
+				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-agent", Key: "agent", DisplayName: "Agent"},
+				SubagentRole: "coder",
+			},
+			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-done", Key: "done", DisplayName: "Done"}},
+		},
+		TransitionGroups: []workflow.TransitionGroup{
+			{WorkflowID: workflowID, ID: "group-start", SourceNodeID: "node-start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: workflowID, ID: "group-done", SourceNodeID: "node-agent", TransitionID: "done", DisplayName: "Done"},
+		},
+		Edges: []workflow.Edge{
+			{WorkflowID: workflowID, ID: "edge-start", Key: "start", TransitionGroupID: "group-start", TargetNodeID: "node-agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Use {{.Inputs.summary}}."},
+			{WorkflowID: workflowID, ID: "edge-done", Key: "done", TransitionGroupID: "group-done", TargetNodeID: "node-done", ContextMode: workflow.ContextModeNewSession},
+		},
+	}, workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: metadataTestRoleResolver{},
+	})
+	foundInvalidPrompt := false
+	for _, diagnostic := range validation.Errors {
+		if diagnostic.Code == workflow.CodeInvalidTemplatePlaceholder {
+			foundInvalidPrompt = true
+			break
+		}
+	}
+	if !foundInvalidPrompt {
+		t.Fatalf("post-upgrade validation = %+v, want preserved .Inputs prompt rejection", validation.Errors)
+	}
+}
+
+type metadataTestRoleResolver struct{}
+
+func (metadataTestRoleResolver) RoleExists(string) bool {
+	return true
+}
+
+func (metadataTestRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
+	return true
 }
 
 func TestOpenProjectsMigratesPendingApprovalFrozenTargetPriorValues(t *testing.T) {
@@ -369,6 +440,116 @@ WHERE approval.source_task_id = 'task-frozen-prior-parameter-migration'`).Scan(&
 	}
 	if targetPriorValues != `{"transition_parameters":{"audit":{"result":"approved review"},"review":{"summary":"approved plan"}}}` {
 		t.Fatalf("migrated pending approval target prior values = %q, want frozen review and pending audit transition values", targetPriorValues)
+	}
+}
+
+func TestOpenProjectsMigratesVersion71WorkflowNodesAndDiscardsLegacyContracts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 71)
+	if err != nil {
+		t.Fatalf("open version 71 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-version-71-cutover', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-version-71-cutover", now)
+	execSeed(t, db, "legacy Node contracts and active configuration", `
+UPDATE workflow_nodes
+SET subagent_role = 'coder',
+    prompt_template = 'Discard this Node prompt.',
+    input_fields_json = '[{"name":"legacy_input","description":"Discard this input."}]',
+    output_fields_json = '[{"name":"legacy_output","description":"Discard this output."}]',
+    completion_mode = 'tool'
+WHERE id = 'node-agent';
+
+INSERT INTO workflow_nodes (
+    id, workflow_id, node_key, kind, display_name, subagent_role,
+    prompt_template, input_fields_json, output_fields_json,
+    join_input_providers_json, completion_mode, script_path, sort_order
+) VALUES
+    ('node-script-version-71', (SELECT id FROM workflows LIMIT 1),
+     'script', 'script', 'Script', '', 'Discard this Node prompt.', '[]',
+     '[{"name":"legacy_output","description":"Discard this output."}]', '[]', '', 'scripts/run', 10),
+    ('node-join-version-71', (SELECT id FROM workflows LIMIT 1),
+     'join', 'join', 'Join', '', 'Discard this Node prompt.', '[]', '[]',
+     '[{"input_name":"summary","provider_edge_id":"edge-start-1"}]', '', NULL, 11);
+
+UPDATE workflow_edges
+SET prompt_template = ?,
+    parameters_json = ?
+WHERE id = 'edge-start-1';
+
+INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id,
+    title, body, source_url, created_at_unix_ms, updated_at_unix_ms,
+    source_workspace_id, managed_worktree_id
+)
+SELECT
+    'task-version-71-cutover', id, 1, 1, 'V71-1', 'Task', 'Body', '',
+    ?, ?, NULL, NULL
+FROM project_workflow_links
+WHERE id = 'link-1'`, version71TransitionPrompt, version71TransitionParameters, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 71 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated version 71 store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	for _, column := range []string{"prompt_template", "input_fields_json", "output_fields_json"} {
+		if columnExists(t, store.db, "workflow_nodes", column) {
+			t.Fatalf("workflow_nodes.%s remains after migration 72", column)
+		}
+	}
+	var role, completionMode, scriptPath, joinProviders, edgePrompt, edgeParameters string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT subagent_role, completion_mode, COALESCE(script_path, ''), join_input_providers_json
+FROM workflow_nodes
+WHERE id = 'node-agent'`).Scan(&role, &completionMode, &scriptPath, &joinProviders); err != nil {
+		t.Fatalf("query preserved Agent configuration: %v", err)
+	}
+	if role != "coder" || completionMode != "tool" || scriptPath != "" || joinProviders != "[]" {
+		t.Fatalf("preserved Agent configuration = role=%q completion=%q script=%q joins=%q", role, completionMode, scriptPath, joinProviders)
+	}
+	var scriptKind, preservedScriptPath, joinKind, preservedJoinProviders string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT kind, COALESCE(script_path, '')
+FROM workflow_nodes
+WHERE id = 'node-script-version-71'`).Scan(&scriptKind, &preservedScriptPath); err != nil {
+		t.Fatalf("query preserved Script configuration: %v", err)
+	}
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT kind, join_input_providers_json
+FROM workflow_nodes
+WHERE id = 'node-join-version-71'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
+		t.Fatalf("query preserved Join configuration: %v", err)
+	}
+	if scriptKind != "script" || preservedScriptPath != "scripts/run" ||
+		joinKind != "join" || preservedJoinProviders != `[{"input_name":"summary","provider_edge_id":"edge-start-1"}]` {
+		t.Fatalf("preserved Script/Join configuration = script=(%q,%q) join=(%q,%q)",
+			scriptKind, preservedScriptPath, joinKind, preservedJoinProviders)
+	}
+	var foreignKeyViolations int
+	if err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pragma_foreign_key_check`).Scan(&foreignKeyViolations); err != nil {
+		t.Fatalf("foreign-key check: %v", err)
+	}
+	if foreignKeyViolations != 0 {
+		t.Fatalf("foreign-key violations after migration 72 = %d", foreignKeyViolations)
+	}
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT prompt_template, parameters_json
+FROM workflow_edges
+WHERE id = 'edge-start-1'`).Scan(&edgePrompt, &edgeParameters); err != nil {
+		t.Fatalf("query preserved Transition contract: %v", err)
+	}
+	if edgePrompt != version71TransitionPrompt || edgeParameters != version71TransitionParameters {
+		t.Fatalf("preserved Transition contract = prompt=%q parameters=%q", edgePrompt, edgeParameters)
 	}
 }
 

@@ -201,15 +201,15 @@
 - Every Agent Node's effective Assignee, including default and built-in roles, must have `ask_question` enabled. Validation reports every affected Node and does not change role configuration. Workflow Drafts and Backlog Tasks remain allowed. Task Start, Resume, and manual movement to an executable target validate the latest Workflow before target selection, Task movement, Approval, or execution.
 - Each visible executable or terminal Node is also a Kanban column and status. Join Nodes are omitted from boards.
 - Workflows can contain Start, Agent, Script, Join, and Terminal Nodes. Approval is a Transition Branch property.
-- Each Workflow has exactly one Start Node. It is non-executable and has no inputs.
+- Each Workflow has exactly one Start Node. It is non-executable.
 - For Task Start, the Start Node must have exactly one outgoing Transition with exactly one branch that targets an executable Node.
 - Terminal Nodes are strict sinks. Manual reopen or rework is an explicit override, not retained Workflow history.
 - Draft validation reports semantic errors but does not block save/link/default selection.
-- Task creation and execution validation accumulate all safe actionable errors and reject invalid graph/role/input configurations.
+- Task creation and execution validation accumulate all safe actionable errors and reject invalid graph, role, and Parameter configurations.
 - Execution-valid graphs reject detached islands: every node reachable from start, every non-terminal can reach terminal, terminal cannot auto-run.
 - Cycles/self-loops are allowed outside restricted fan-out branch paths.
 - New draft Nodes, Node Groups, Transitions, and Transition Branches receive UUID v4 identifiers. Preview and Save preserve those identifiers unchanged. Product-facing keys remain stable semantic references.
-- `node_key`, `transition_id`, `edge_key`, output field names, and binding names match `^[a-z][a-z0-9_]{0,63}$`.
+- `node_key`, `transition_id`, `edge_key`, Parameter Keys, and binding names match `^[a-z][a-z0-9_]{0,63}$`.
 - Workflow display names are labels, not references, and are trimmed non-empty strings capped at 120 chars.
 
 ## Node Completion
@@ -243,7 +243,7 @@
 - Transition Parameter outputs are strings. Kent converts non-string JSON values to strings before binding them. A later Node never receives a structured Parameter value.
 - Possible Transition Parameters are optional until Kent knows which Transition the agent selected. The selected Transition then determines which Parameters are required.
 - Each required Transition Parameter must become a non-empty string after leading and trailing whitespace is removed.
-- Size limits: output field name `<= 64` chars, output field description `<= 1000`, output value `<= 64 KiB`, commentary `<= 64 KiB`, task comment body `<= 256 KiB`.
+- Size limits: Parameter Key `<= 64` chars, Parameter description `<= 1000`, Parameter value `<= 64 KiB`, commentary `<= 64 KiB`, task comment body `<= 256 KiB`.
 - Completion-contract changes in `structured_output` and `tool` modes can change prompt-cache continuity. `shell_command` and `unstructured_output` preserve the completion contract in appended instructions instead.
 - Kent accepts completion only from the matching Exact Execution Scope or for one unambiguous idle executable Current Node.
 - Completion from a retained Workflow Session may target its interrupted idle Agent Node when the Session is still bound to that Current Node. Completion atomically supersedes the interruption and applies the selected Transition.
@@ -347,12 +347,12 @@
 - `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Agent Node's normalized Assignee identity. Workflow validation rejects statically known source/target identity mismatches, runtime rejects retained-Session mismatches, and a valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
 - `compact_and_continue_session` compacts the reused Session and establishes the target Agent Node's Assignee in a fresh contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
-- Consuming agent nodes own required inputs as named top-level string fields with descriptions.
-- Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
-- Applying a Transition gives each target Current Node every value that it needs. Prompt rendering uses those values and never searches discarded execution history.
-- A Workflow edit that makes an executable current Node require input that was never materialized blocks Start or Resume with a typed validation error; Kent does not reconstruct discarded workflow history.
-- The first executable node reached from `start` cannot declare upstream inputs and should use task fields such as `.TaskTitle` and `.TaskBody`.
-- Kent derives Parameter flow and completion requirements from required inputs, prompt references, Workflow structure, and Join sources.
+- Nodes own no agent input or output contract. Transition Branches exclusively declare the Parameters they provide to their targets.
+- Prompt placeholders validate against the prompt-owning Transition Branch's Parameters through `.Params.<parameter_key>`.
+- Applying a Transition materializes each branch's declared Parameters for its target. Prompt rendering uses those values and never searches discarded execution history.
+- If the latest Workflow definition requires an already-current executable Node to have a Transition-owned Parameter that was not materialized when the Node was entered, that Current Node cannot Resume and reports a typed validation error. Kent does not reconstruct discarded Workflow history, and another selected parallel Current Node remains independently admissible.
+- The Start Node's outgoing Transition cannot declare Parameters and should use task fields such as `.TaskTitle` and `.TaskBody`.
+- Kent derives Parameter flow and completion requirements from Transition Branch declarations, Workflow structure, and Join sources.
 
 ## Parallelism And Joins
 

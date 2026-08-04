@@ -253,6 +253,125 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeControllerResumeContinuesValidSiblingsAfterValidationFailure(t *testing.T) {
+	invalid := currentNodeReferenceForControllerTest(t, "task-resume-validation", "node-invalid")
+	valid := currentNodeReferenceForControllerTest(t, "task-resume-validation", "node-valid")
+	invalidKey, err := invalid.Key()
+	if err != nil {
+		t.Fatalf("invalid reference key: %v", err)
+	}
+	validationError := &workflowstore.CurrentNodeResumeValidationError{
+		Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+			Code:           "workflow.resume.parameter_not_materialized",
+			CurrentNode:    invalid,
+			EnteringEdgeID: "edge-invalid",
+			ParameterKey:   "risk",
+		}},
+	}
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: invalid, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: valid, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		},
+		resumeErrors: map[workflow.CurrentNodeReferenceKey]error{
+			invalidKey: validationError,
+		},
+	}
+	attention := &currentNodeAttentionRecorder{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	resumed, err := controller.ResumeTask(context.Background(), invalid.TaskID)
+	if err == nil {
+		t.Fatal("ResumeTask returned nil error for invalid Current Node")
+	}
+	var gotValidationError *workflowstore.CurrentNodeResumeValidationError
+	if !errors.As(err, &gotValidationError) ||
+		len(gotValidationError.Diagnostics) != 1 ||
+		gotValidationError.Diagnostics[0].Code != validationError.Diagnostics[0].Code ||
+		!gotValidationError.Diagnostics[0].CurrentNode.Equal(invalid) ||
+		gotValidationError.Diagnostics[0].EnteringEdgeID != validationError.Diagnostics[0].EnteringEdgeID ||
+		gotValidationError.Diagnostics[0].ParameterKey != validationError.Diagnostics[0].ParameterKey {
+		t.Fatalf("ResumeTask error = %T %v, want typed diagnostic with exact Current Node, Edge, and Parameter context", err, err)
+	}
+	if len(resumed) != 1 || !resumed[0].Reference.Equal(valid) {
+		t.Fatalf("resumed Current Nodes = %+v, want only valid sibling %v", resumed, valid)
+	}
+	if len(store.resumed) != 1 || !store.resumed[0].Equal(valid) {
+		t.Fatalf("store resume mutations = %+v, want only valid sibling", store.resumed)
+	}
+	resolutions := attention.resolvedInterruptions()
+	if len(resolutions) != 1 || !resolutions[0].CurrentNode.Equal(valid) {
+		t.Fatalf("attention resolutions = %+v, want only valid sibling", resolutions)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 1
+	}, "valid sibling did not start")
+}
+
+func TestCurrentNodeControllerResumeDoesNotPrepareWhenAllNodesFailValidation(t *testing.T) {
+	first := currentNodeReferenceForControllerTest(t, "task-resume-all-invalid", "node-first")
+	second := currentNodeReferenceForControllerTest(t, "task-resume-all-invalid", "node-second")
+	firstKey, err := first.Key()
+	if err != nil {
+		t.Fatalf("first reference key: %v", err)
+	}
+	secondKey, err := second.Key()
+	if err != nil {
+		t.Fatalf("second reference key: %v", err)
+	}
+	firstValidationError := &workflowstore.CurrentNodeResumeValidationError{
+		Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+			Code:           "workflow.resume.parameter_not_materialized",
+			CurrentNode:    first,
+			EnteringEdgeID: "edge-first",
+			ParameterKey:   "risk",
+		}},
+	}
+	secondValidationError := &workflowstore.CurrentNodeResumeValidationError{
+		Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+			Code:           "workflow.resume.parameter_not_materialized",
+			CurrentNode:    second,
+			EnteringEdgeID: "edge-second",
+			ParameterKey:   "risk",
+		}},
+	}
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: first, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: second, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		},
+		resumeErrors: map[workflow.CurrentNodeReferenceKey]error{
+			firstKey:  firstValidationError,
+			secondKey: secondValidationError,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	prepared := false
+	resumed, err := controller.ResumeTaskWithPreparation(context.Background(), first.TaskID, func(context.Context) error {
+		prepared = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("ResumeTask returned nil error when all Current Nodes failed validation")
+	}
+	if len(resumed) != 0 || prepared || len(store.resumed) != 0 || runner.starts() != 0 {
+		t.Fatalf("all-invalid resume = resumed %+v prepared %t mutations %+v starts %d; want no outcomes", resumed, prepared, store.resumed, runner.starts())
+	}
+}
+
 func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSiblings(t *testing.T) {
 	const branchCount = explicitAdmissionConcurrency + 2
 	taskID := workflow.TaskID("task-explicit-admission-bound")

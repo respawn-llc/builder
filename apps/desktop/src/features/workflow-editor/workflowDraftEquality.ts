@@ -27,7 +27,6 @@ function nodesEqual(left: readonly WorkflowNode[], right: readonly WorkflowNode[
 function workflowNodesEqual(a: WorkflowNode, b: WorkflowNode): boolean {
   return (
     workflowNodeMetadataEqual(a, b) &&
-    inputFieldsEqual(a.inputFields, b.inputFields) &&
     joinInputProvidersEqual(a.joinInputProviders, b.joinInputProviders)
   );
 }
@@ -49,7 +48,6 @@ function workflowNodeMetadataValues(node: WorkflowNode): readonly string[] {
     node.groupID,
     node.groupKey,
     node.subagentRole,
-    node.promptTemplate,
     node.completionMode ?? "",
     node.scriptPath ?? "",
   ];
@@ -86,13 +84,6 @@ function edgesEqual(left: readonly WorkflowEdge[], right: readonly WorkflowEdge[
       a.promptTemplate === b.promptTemplate &&
       parametersEqual(a.parameters, b.parameters),
   );
-}
-
-function inputFieldsEqual(
-  left: readonly WorkflowDefinition["nodes"][number]["inputFields"][number][],
-  right: readonly WorkflowDefinition["nodes"][number]["inputFields"][number][],
-): boolean {
-  return sameLengthAndEvery(left, right, (a, b) => a.name === b.name && a.description === b.description);
 }
 
 function parametersEqual(

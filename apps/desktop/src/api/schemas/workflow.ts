@@ -144,10 +144,8 @@ const workflowNodesSchema = z
         group_id: emptyString,
         group_key: emptyString,
         subagent_role: emptyString,
-        prompt_template: emptyString,
         completion_mode: emptyString,
         script_path: z.string().nullable().optional(),
-        input_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
         join_input_providers: z
           .array(
             z
@@ -162,7 +160,6 @@ const workflowNodesSchema = z
           )
           .nullish()
           .transform(emptyArray),
-        output_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
       })
       .transform((value) => ({
         id: value.id,
@@ -173,12 +170,9 @@ const workflowNodesSchema = z
         groupID: value.group_id,
         groupKey: value.group_key,
         subagentRole: value.subagent_role,
-        promptTemplate: value.prompt_template,
         completionMode: value.completion_mode,
         scriptPath: value.script_path ?? null,
-        inputFields: value.input_fields,
         joinInputProviders: value.join_input_providers,
-        outputFields: value.output_fields,
       })),
   )
   .nullish()

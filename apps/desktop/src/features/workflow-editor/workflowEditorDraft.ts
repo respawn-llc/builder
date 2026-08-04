@@ -4,7 +4,6 @@ import type {
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowExecutionTargetPolicy,
-  WorkflowInputField,
   WorkflowNode,
   WorkflowParameter,
 } from "@/api";
@@ -31,7 +30,6 @@ import type {
 } from "./workflowEditorDraftTypes";
 
 export type {
-  DraftInputField,
   DraftWorkflowDefinition,
   DraftWorkflowEdge,
   DraftWorkflowNode,
@@ -70,7 +68,7 @@ export type WorkflowEditorDraftAction =
       type: "editAgentNode";
       nodeID: string;
       patch: Partial<
-        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">
+        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">
       >;
     }>
   | Readonly<{
@@ -78,15 +76,6 @@ export type WorkflowEditorDraftAction =
       nodeID: string;
       patch: Partial<Pick<WorkflowNode, "key" | "name" | "scriptPath">>;
     }>
-  | Readonly<{ type: "addInputField"; nodeID: string }>
-  | Readonly<{
-      type: "updateInputField";
-      nodeID: string;
-      rowID: string;
-      patch: Partial<WorkflowInputField>;
-    }>
-  | Readonly<{ type: "deleteInputField"; nodeID: string; rowID: string }>
-  | Readonly<{ type: "reorderInputField"; nodeID: string; activeRowID: string; overRowID: string }>
   | Readonly<{ type: "assignJoinInputProvider"; nodeID: string; inputName: string; providerEdgeID: string }>
   | Readonly<{ type: "editEdgePrompt"; edgeID: string; promptTemplate: string }>
   | Readonly<{ type: "addEdgeParameter"; edgeID: string }>
@@ -149,10 +138,6 @@ type NodeFieldAction = Extract<
       | "editNodeIdentity"
       | "editAgentNode"
       | "editScriptNode"
-      | "addInputField"
-      | "updateInputField"
-      | "deleteInputField"
-      | "reorderInputField"
       | "assignJoinInputProvider";
   }
 >;
@@ -203,10 +188,6 @@ const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldActi
   "editNodeIdentity",
   "editAgentNode",
   "editScriptNode",
-  "addInputField",
-  "updateInputField",
-  "deleteInputField",
-  "reorderInputField",
   "assignJoinInputProvider",
 ]);
 
@@ -326,35 +307,6 @@ function reduceNodeFieldAction(
           scriptPath: action.patch.scriptPath === undefined ? node.scriptPath : action.patch.scriptPath,
         };
       });
-    case "addInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: [
-          {
-            description: "",
-            name: "",
-            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(":"),
-          },
-          ...node.inputFields,
-        ],
-      }));
-    case "updateInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: node.inputFields.map((field) =>
-          field.rowID === action.rowID ? { ...field, ...action.patch } : field,
-        ),
-      }));
-    case "deleteInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: node.inputFields.filter((field) => field.rowID !== action.rowID),
-      }));
-    case "reorderInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: reorderDraftRows(node.inputFields, action.activeRowID, action.overRowID),
-      }));
     case "assignJoinInputProvider":
       return editDraftNode(state, action.nodeID, false, (node) => ({
         ...node,
@@ -426,10 +378,6 @@ export function draftDefinitionFromSource(source: WorkflowDefinition): DraftWork
     nodes: source.nodes.map((node) => ({
       ...node,
       completionMode: node.completionMode ?? "",
-      inputFields: node.inputFields.map((field, index) => ({
-        ...field,
-        rowID: [node.id, "input", index.toString()].join(":"),
-      })),
     })),
   };
 }
@@ -441,11 +389,7 @@ export function workflowDefinitionFromDraft(draft: DraftWorkflowDefinition): Wor
       ...edge,
       parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
     })),
-    nodes: draft.nodes.map((node) => ({
-      ...node,
-      inputFields: node.inputFields.map(({ name, description }) => ({ name, description })),
-      outputFields: node.outputFields,
-    })),
+    nodes: draft.nodes.map((node) => ({ ...node })),
   };
 }
 
@@ -484,9 +428,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
       name: node.name,
       completionMode: node.completionMode,
       scriptPath: node.scriptPath,
-      inputFields: node.inputFields,
       joinInputProviders: node.joinInputProviders,
-      promptTemplate: node.promptTemplate,
       subagentRole: node.subagentRole,
     })),
     transitionGroups: definition.transitionGroups.map((group) => ({

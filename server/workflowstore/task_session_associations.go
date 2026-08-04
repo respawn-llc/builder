@@ -382,7 +382,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 		TransitionIDs:                  transitionIDs,
 		TransitionOptions:              transitionOptions,
 		HasContinueSessionOutgoingEdge: currentNodeHasContinueSessionOutgoingEdge(definition, workflow.NodeIDOf(node)),
-		PromptTemplate:                 strings.TrimSpace(enteringEdge.PromptTemplate),
+		TransitionPrompt:               strings.TrimSpace(enteringEdge.PromptTemplate),
 		ParameterValues:                values,
 		ExecutionRoot:                  executionRoot,
 	}, nil
@@ -469,12 +469,9 @@ func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
 		DisplayName:        workflow.NodeDisplayName(node),
 		GroupID:            workflow.NodeGroupID(node),
 		SubagentRole:       workflow.NodeSubagentRole(node),
-		PromptTemplate:     workflow.NodePromptTemplate(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
 		ScriptPath:         scriptPath,
-		InputFields:        workflow.NodeInputFields(node),
 		JoinInputProviders: workflow.NodeJoinInputProviders(node),
-		OutputFields:       workflow.NodeOutputFields(node),
 	}, nil
 }
 

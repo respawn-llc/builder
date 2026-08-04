@@ -154,8 +154,8 @@ func parameterWorkflow(t *testing.T) workflow.Definition {
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
 			testStartNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_start", "backlog", "Backlog"),
-			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
-			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder"}),
 			testTerminalNode(testsetup.WorkflowID(t, "workflow_parameters"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{

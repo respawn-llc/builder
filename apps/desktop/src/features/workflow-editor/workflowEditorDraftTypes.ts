@@ -1,20 +1,13 @@
 import type { WorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowParameter } from "@/api";
 
-export type DraftInputField = Readonly<{
-  rowID: string;
-  name: string;
-  description: string;
-}>;
-
 export type DraftWorkflowParameter = WorkflowParameter &
   Readonly<{
     rowID?: string;
   }>;
 
-export type DraftWorkflowNode = Omit<WorkflowNode, "completionMode" | "inputFields"> &
+export type DraftWorkflowNode = Omit<WorkflowNode, "completionMode"> &
   Readonly<{
     completionMode: string;
-    inputFields: readonly DraftInputField[];
   }>;
 
 export type DraftWorkflowEdge = Omit<WorkflowEdge, "parameters"> &

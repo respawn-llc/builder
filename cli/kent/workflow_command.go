@@ -357,7 +357,6 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	key := fs.String("key", "", "stable node key used by transitions and task status")
 	kind := fs.String("kind", "", "node kind: start|agent|script|join|terminal")
 	displayName := fs.String("display-name", "", "name shown in task and workflow views; defaults from --key")
-	prompt := fs.String("prompt", "", "prompt template for an agent node")
 	agent := fs.String("agent", "", "subagent role assigned to an agent node")
 	completionMode := fs.String("completion-mode", "", "agent completion contract: auto|structured_output|tool|shell_command|unstructured_output")
 	scriptPath := fs.String("script-path", "", "server-side executable for a script node")
@@ -383,7 +382,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		req := serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, PromptTemplate: *prompt, CompletionMode: *completionMode, ScriptPath: workflowScriptPathFlagValue(fs, "script-path", *scriptPath)}
+		req := serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, CompletionMode: *completionMode, ScriptPath: workflowScriptPathFlagValue(fs, "script-path", *scriptPath)}
 		resp, err := remote.AddWorkflowNode(ctx, req)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -402,7 +401,6 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	key := fs.String("key", "", "new stable node key")
 	kind := fs.String("kind", "", "node kind: start|agent|script|join|terminal")
 	displayName := fs.String("display-name", "", "new name shown in task and workflow views")
-	prompt := fs.String("prompt", "", "replace the agent prompt template; pass an empty value to clear")
 	agent := fs.String("agent", "", "replace the assigned subagent role; pass an empty value to clear")
 	completionMode := fs.String("completion-mode", "", "replace the agent completion contract: auto|structured_output|tool|shell_command|unstructured_output")
 	scriptPath := fs.String("script-path", "", "replace the server-side executable; pass an empty value to clear")
@@ -437,9 +435,6 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		if strings.TrimSpace(*displayName) != "" {
 			updated.DisplayName = strings.TrimSpace(*displayName)
 		}
-		if fs.Lookup("prompt") != nil && flagExplicit(fs, "prompt") {
-			updated.PromptTemplate = *prompt
-		}
 		if fs.Lookup("agent") != nil && flagExplicit(fs, "agent") {
 			updated.SubagentRole = *agent
 		}
@@ -459,10 +454,8 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			DisplayName:        updated.DisplayName,
 			GroupKey:           updated.GroupKey,
 			SubagentRole:       updated.SubagentRole,
-			PromptTemplate:     updated.PromptTemplate,
 			CompletionMode:     updated.CompletionMode,
 			ScriptPath:         updated.ScriptPath,
-			InputFields:        updated.InputFields,
 			JoinInputProviders: updated.JoinInputProviders,
 		})
 		if err != nil {
@@ -1076,10 +1069,8 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 			GroupID:            node.GroupID,
 			GroupKey:           node.GroupKey,
 			SubagentRole:       node.SubagentRole,
-			PromptTemplate:     node.PromptTemplate,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,
-			InputFields:        node.InputFields,
 			JoinInputProviders: node.JoinInputProviders,
 		})
 	}
@@ -1116,9 +1107,6 @@ func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNo
 			line += "  [" + attrs + "]"
 		}
 		fmt.Fprintln(stdout, line)
-		for _, field := range node.OutputFields {
-			fmt.Fprintf(stdout, "    output `%s` — %s\n", field.Name, field.Description)
-		}
 	}
 }
 

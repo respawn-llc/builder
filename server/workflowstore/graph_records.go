@@ -37,16 +37,8 @@ func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries,
 		groupKeyByID[group.ID] = group.GroupKey
 	}
 	for _, node := range nodes {
-		inputFields := []workflow.InputField{}
-		if err := workflow.UnmarshalString(node.InputFieldsJson, &inputFields); err != nil {
-			return preparedWorkflowGraphSave{}, err
-		}
 		joinProviders := []workflow.JoinInputProvider{}
 		if err := workflow.UnmarshalString(node.JoinInputProvidersJson, &joinProviders); err != nil {
-			return preparedWorkflowGraphSave{}, err
-		}
-		outputFields := []workflow.OutputField{}
-		if err := workflow.UnmarshalString(node.OutputFieldsJson, &outputFields); err != nil {
 			return preparedWorkflowGraphSave{}, err
 		}
 		groupID := ""
@@ -57,7 +49,7 @@ func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries,
 		if node.ScriptPath.Valid {
 			scriptPath = node.ScriptPath.String
 		}
-		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: node.WorkflowID, Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: outputFields, SortOrder: node.SortOrder})
+		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: node.WorkflowID, Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, JoinInputProviders: joinProviders, SortOrder: node.SortOrder})
 	}
 	for _, group := range transitionGroups {
 		prepared.transitionGroups = append(prepared.transitionGroups, TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description, SortOrder: group.SortOrder})

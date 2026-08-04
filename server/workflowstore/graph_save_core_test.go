@@ -332,9 +332,9 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 	reassignedEdgeID := workflow.EdgeID("edge-spare-split-a-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: spareSourceID, WorkflowID: workflowID, Key: "spare_source", Kind: workflow.NodeKindAgent, DisplayName: "Spare Source", SubagentRole: "coder", PromptTemplate: "Route spare work."},
-			NodeRecord{ID: spareBranchAID, WorkflowID: workflowID, Key: "spare_a", Kind: workflow.NodeKindAgent, DisplayName: "Spare A", SubagentRole: "coder", PromptTemplate: "Do spare A."},
-			NodeRecord{ID: spareBranchBID, WorkflowID: workflowID, Key: "spare_b", Kind: workflow.NodeKindAgent, DisplayName: "Spare B", SubagentRole: "coder", PromptTemplate: "Do spare B."},
+			NodeRecord{ID: spareSourceID, WorkflowID: workflowID, Key: "spare_source", Kind: workflow.NodeKindAgent, DisplayName: "Spare Source", SubagentRole: "coder"},
+			NodeRecord{ID: spareBranchAID, WorkflowID: workflowID, Key: "spare_a", Kind: workflow.NodeKindAgent, DisplayName: "Spare A", SubagentRole: "coder"},
+			NodeRecord{ID: spareBranchBID, WorkflowID: workflowID, Key: "spare_b", Kind: workflow.NodeKindAgent, DisplayName: "Spare B", SubagentRole: "coder"},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: spareRouteGroupID, WorkflowID: workflowID, SourceNodeID: planID, TransitionID: "spare", DisplayName: "Spare"},
@@ -385,7 +385,7 @@ func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBloc
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: spareAgentID, WorkflowID: workflowID, Key: "spare_agent", Kind: workflow.NodeKindAgent, DisplayName: "Spare Agent", SubagentRole: "coder", PromptTemplate: "Do spare work."},
+			NodeRecord{ID: spareAgentID, WorkflowID: workflowID, Key: "spare_agent", Kind: workflow.NodeKindAgent, DisplayName: "Spare Agent", SubagentRole: "coder"},
 			NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,

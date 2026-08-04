@@ -157,7 +157,7 @@ function WorkflowDraftNodeDetails({
   if (node.kind === "start" || node.kind === "terminal") {
     return <FixedNodeDraftDetails controller={controller} node={node} validation={validation} />;
   }
-  return <NodeDetails definition={definition} node={{ ...node, outputFields: [] }} validation={validation} />;
+  return <NodeDetails definition={definition} node={node} validation={validation} />;
 }
 
 function EdgeDraftDetails({
