@@ -167,8 +167,12 @@ function BoardRouteData({
   const boardQuery = useBoard(projectId, workflowId);
   const board = boardQuery.data;
   const selectedWorkflowID = board?.selectedWorkflow?.id;
+  const deletionCauseRef = useRef<string | null>(null);
   const handleSelectedTaskDeleted = useBoardSelectedTaskDeletion({
     onNavigationError: reportBoardNavigationError,
+    onSelectedTaskDeleted: () => {
+      deletionCauseRef.current = selectedTaskId;
+    },
     projectId,
     selectedTaskId,
     workflowId,
@@ -208,6 +212,7 @@ function BoardRouteData({
         void boardQuery.refetch().catch(reportBoardLoadError);
       }}
       selectedTaskId={selectedTaskId}
+      deletionCauseRef={deletionCauseRef}
     />
   );
 }
@@ -216,12 +221,14 @@ function BoardContent({
   board,
   boardQueryWorkflowID,
   boardRefreshError,
+  deletionCauseRef,
   onBoardRefreshRetry,
   selectedTaskId,
 }: Readonly<{
   board: SelectedWorkflowBoard;
   boardQueryWorkflowID: string | undefined;
   boardRefreshError: Error | null;
+  deletionCauseRef: { current: string | null };
   onBoardRefreshRetry(): void;
   selectedTaskId: string;
 }>) {
@@ -341,6 +348,11 @@ function BoardContent({
     if (selectorRef.current === next) return;
     const previous = selectorRef.current;
     selectorRef.current = next;
+    const deletionCause = deletionCauseRef.current;
+    deletionCauseRef.current = null;
+    if (deletionCause === previous && next === null) {
+      return;
+    }
     if (previous !== null || next === null) {
       closeSidebar("route_change");
     }
