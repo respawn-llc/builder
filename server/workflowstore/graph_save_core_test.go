@@ -184,7 +184,7 @@ func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
 	}
 }
 
-func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
+func TestWorkflowGraphSaveCommitAllowsActiveWorkStartedDuringPreparation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
 	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
@@ -235,15 +235,12 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
 	}
-	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("save after dynamic policy race = %+v, want active_transition_contract_changed blocker", outcome.result)
-	}
-	if outcome.result.EditPolicyImpact.ActiveCurrentNodeCount != 1 {
-		t.Fatalf("save result policy impact = %+v, want authoritative active Current Node count", outcome.result.EditPolicyImpact)
+	if !outcome.result.Saved || len(outcome.result.Blockers) != 0 {
+		t.Fatalf("save after active work starts = %+v, want committed graph", outcome.result)
 	}
 }
 
-func TestWorkflowGraphSaveAddingTransitionFromActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(runtimeids.WorkflowID, workflow.NodeID, workflow.NodeID, *WorkflowGraphSaveRequest)
@@ -309,14 +306,61 @@ func TestWorkflowGraphSaveAddingTransitionFromActiveSourceIsBlocked(t *testing.T
 			if err != nil {
 				t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 			}
-			if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-				t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+			if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+				t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 			}
 		})
 	}
 }
 
-func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveIncompatibleActiveTransitionFailsCompletionWithoutTaskMutation(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	source := started.Mutation.Created[0].Reference
+
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	for index := range req.TransitionGroups {
+		if req.TransitionGroups[index].SourceNodeID == source.NodeID {
+			req.TransitionGroups[index].TransitionID = "renamed"
+		}
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || len(saved.Blockers) != 0 {
+		t.Fatalf("save = %+v, want committed transition edit", saved)
+	}
+
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "done",
+	}); err == nil {
+		t.Fatal("CompleteCurrentNode with obsolete transition succeeded")
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after rejected completion: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Reference != source {
+		t.Fatalf("current nodes after rejected completion = %+v, want unchanged source", currentNodes)
+	}
+
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "renamed",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode with current transition: %v", err)
+	}
+}
+
+func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -368,12 +412,12 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+		t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 	}
 }
 
-func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveAllowsReassigningExistingTransitionGroupToActiveSource(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	agentID := workflow.NodeID("node-agent-" + workflowID.String())
@@ -417,8 +461,8 @@ func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBloc
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+		t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 	}
 }
 

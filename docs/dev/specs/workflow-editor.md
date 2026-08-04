@@ -91,10 +91,10 @@
 - Draft validation and execution validation remain separate. Blocking draft-validation errors prevent graph-changing saves. Execution-validation errors remain visible but do not prevent a save limited to Workflow details.
 - Draft validation blocks prompts into non-agent targets, duplicate Transition Keys, invalid or duplicate Fan-Out Transition Branch Keys, invalid Parameter Keys or descriptions, invalid previous-Parameter references, and Join aggregate key collisions.
 - Execution validation blocks starting or executing an agent-target transition without a prompt.
-- A save limited to Workflow details, and a no-op save, bypass graph-edit policy and active-work blockers.
-- Graph-changing saves show a preview with draft validation, execution validation, active-Task blockers, destructive or removal impact, and any required confirmation.
+- A save limited to Workflow details, and a no-op save, bypass graph-edit policy.
+- Graph-changing saves show a preview with draft validation, execution validation, destructive or removal impact, and any required confirmation.
 - Destructive graph-save confirmation appears in the editor status area, not in a separate blocking surface.
-- Save recalculates validation and impact together. It rejects a stale Workflow Version, active blockers, an unconfirmed destructive change, or a changed destructive impact; otherwise it applies every change together, increments Workflow Version once, and reports the saved definition and validations to linked Projects.
+- Save recalculates validation and impact together. It rejects a stale Workflow Version, an unconfirmed destructive change, or a changed destructive impact; otherwise it applies every change together, increments Workflow Version once, and reports the saved definition and validations to linked Projects.
 - The editor refuses an incompatible Workflow graph format.
 - Workflow Version advances once for any definition edit, whether it changes only Workflow details, only the graph, or both. No-op saves do not advance it.
 - If the same Workflow changes remotely while its local Workflow Draft is unsaved, the Draft remains and a conflict banner offers **Reload remote** and **Keep editing**. Saving uses the expected Workflow Version and clearly rejects stale saves.
@@ -134,8 +134,7 @@
 - Destructive impact is evaluated at Save, not while making a Draft edit.
 - Save blocks a graph change that removes a Node, Transition, or graph connection required by a Task's Current Nodes, pending approval, live Exact Execution Scope, or unresolved parallel branch.
 - Changing the kind of a current Node is blocked. A Node without current Task references has no completed-work restriction on its kind.
-- Transition display details may change while Tasks exist. Changes to a Transition's completion requirements affect the next Task Start or Resume. A live Exact Execution Scope keeps the requirements it began with until it stops.
-- A destructive change to a Transition's completion requirements is blocked only while a live Exact Execution Scope, pending approval, or unresolved parallel branch depends on that Transition Branch. An interrupted Current Node uses the latest valid requirements on Resume.
+- Transition routing, Parameters, and display details may change while Tasks exist. Pending Approvals and unresolved parallel work keep their captured data. A live Exact Execution Scope keeps its model-visible completion requirements; if an incompatible edit makes its completion invalid, completion fails without Task mutation. Start and Resume use the latest valid requirements.
 - Moving a graph connection to a different Transition is blocked only while current Task state depends on it.
 - Backlog and terminal Tasks do not require confirmation before otherwise unreferenced Nodes or transitions are removed.
 - Manual Task moves are blocked when they would violate a selected prior-Node continuation Context Source. Previous-target continuation uses the context resolved for that transition.
