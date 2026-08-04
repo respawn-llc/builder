@@ -664,9 +664,11 @@
   scope is 18–25 production files / 900–2,000 LoC, 10–16 test files /
   850–1,300 LoC, docs 1 / 40–80, generated 0, and product browser/manual QA
   remains absent.
-  Progress (August 4, 2026): Final automated verification completed:
+  Progress (August 4, 2026): Initial automated verification completed:
   `pnpm install --frozen-lockfile`, full Apps lint (0 errors; 5 existing
   warnings), Apps typecheck, `./scripts/test.sh desktop` (77 files / 355
-  tests), and Desktop build passed. The final production diff is 26 files /
-  1,902 changed lines; the human approved a revised 2,000-line cap for
-  lint-compliant cleanup. Browser/manual QA was not run as explicitly excluded.
+  tests), and Desktop build passed. Browser/manual QA was not run as explicitly
+  excluded. During remediation, the human approved a revised production-scope
+  cap exception to preserve the complete behavior contract; the exact current
+  production measurement and remediation verification remain the final
+  handoff evidence.

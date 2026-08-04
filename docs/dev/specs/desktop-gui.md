@@ -355,6 +355,10 @@
 - Desktop must close the sidebar only when no destination survives after deleted destinations are skipped.
 - Desktop must close the originating Task Detail lifecycle as an ordinary close when the final destination is removed.
 - Desktop must clear an anchored browser Task route when the final destination is removed.
+- Desktop must remove current and inactive sidebar destinations that belong to a deleted Project.
+- Desktop must preserve unrelated sidebar destinations when the browser route remains in place after Project deletion.
+- Desktop must close the complete sidebar stack when Project deletion leaves no sidebar destination.
+- Desktop must close the complete sidebar stack when Project deletion navigates away from the deleted Project's browser route.
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
 - Kent rechecks the limit when related-Task creation is submitted.

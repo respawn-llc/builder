@@ -27,7 +27,11 @@ import {
   sameSidebarDestination,
   deactivateSidebarDestination,
 } from "./sidebarDestinationAdapter";
-import { SidebarHostContext, type SidebarHostState } from "./sidebarHostContext";
+import {
+  SidebarHostContext,
+  type SidebarHostState,
+  type SidebarScopedActions,
+} from "./sidebarHostContext";
 import {
   createSidebarHistory,
   type SidebarHistory,
@@ -232,8 +236,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     const input = sidebarBackInput(history, snapshot, mutationAdmissionRef.current);
     if (input === null) return;
     const retainedState = captureCurrent();
-    if (retainedState === false) return;
-    if (input.history.back({ sourceKey: input.snapshot.key, retainedState })) {
+    const nextState = retainedState === false ? null : retainedState;
+    if (input.history.back({ sourceKey: input.snapshot.key, retainedState: nextState })) {
       clearMutationAdmission(input.history);
       setPhase("open");
       setWidthFor(input.history.snapshot()?.destination ?? null);
@@ -299,71 +303,101 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [activeWidthProfile],
   );
 
-  const hostState = useMemo<SidebarHostState>(() => {
-    const history = currentHistory;
-    const key = historySnapshot?.key ?? null;
-    const current = historySnapshot;
-    const currentAction = (operation: () => void) => {
-      if (history !== null && key !== null && isCurrent(history, key)) operation();
-    };
-    return {
-      mutationAdmitted,
-      direction: current?.direction ?? null,
-      key,
-      snapshot: current?.retainedState ?? null,
-      actions: {
-        admitMutation: () => {
-          if (
-            history === null ||
-            key === null ||
-            !isCurrent(history, key) ||
-            mutationAdmissionRef.current !== null
-          ) {
-            return null;
-          }
-          const admission = { history, key };
-          mutationAdmissionRef.current = admission;
-          setMutationAdmitted(true);
-          return () => {
-            if (
-              mutationAdmissionRef.current === admission &&
-              isCurrent(admission.history, admission.key)
-            ) {
-              mutationAdmissionRef.current = null;
-              setMutationAdmitted(false);
-            }
-          };
-        },
-        capture: (capture) => {
-          if (history === null || key === null || !isCurrent(history, key)) {
-            return () => {
-              return;
-            };
-          }
-          captureRef.current = capture;
-          return () => {
-            if (captureRef.current === capture) captureRef.current = null;
-          };
-        },
-        close: (reason) => { currentAction(() => { closeSidebar(reason); }); },
-        invalidate: () =>
-          { currentAction(() => {
-            if (current !== null) invalidateSidebar({ kind: "task", taskID: taskIDOf(current.destination) });
-          }); },
-        replace: (destination) => { currentAction(() => { replaceSidebar(destination); }); },
-        resolve: (result) => { currentAction(() => { resolveSidebar(result); }); },
+  const scopedHistory = currentHistory;
+  const scopedKey = historySnapshot?.key ?? null;
+  const currentHostAction = useMemo(
+    () => (operation: () => void) => {
+      if (scopedHistory !== null && scopedKey !== null && isCurrent(scopedHistory, scopedKey)) {
+        operation();
+      }
+    },
+    [isCurrent, scopedHistory, scopedKey],
+  );
+  const hostAdmitMutation = useMemo(
+    () => () => {
+      if (
+        scopedHistory === null ||
+        scopedKey === null ||
+        !isCurrent(scopedHistory, scopedKey) ||
+        mutationAdmissionRef.current !== null
+      ) {
+        return null;
+      }
+      const admission = { history: scopedHistory, key: scopedKey };
+      mutationAdmissionRef.current = admission;
+      setMutationAdmitted(true);
+      return () => {
+        if (mutationAdmissionRef.current === admission && isCurrent(admission.history, admission.key)) {
+          mutationAdmissionRef.current = null;
+          setMutationAdmitted(false);
+        }
+      };
+    },
+    [isCurrent, scopedHistory, scopedKey],
+  );
+  const hostCapture = useMemo(
+    () => (stateCapture: SidebarStateCapture) => {
+      if (
+        scopedHistory === null ||
+        scopedKey === null ||
+        !isCurrent(scopedHistory, scopedKey)
+      ) {
+        return () => {
+          return;
+        };
+      }
+      captureRef.current = stateCapture;
+      return () => {
+        if (captureRef.current === stateCapture) captureRef.current = null;
+      };
+    },
+    [isCurrent, scopedHistory, scopedKey],
+  );
+  const hostActions = useMemo<SidebarScopedActions>(
+    () => ({
+      admitMutation: hostAdmitMutation,
+      capture: hostCapture,
+      close: (reason) => {
+        currentHostAction(() => {
+          closeSidebar(reason);
+        });
       },
-    };
-  }, [
-    closeSidebar,
+      invalidate: () => {
+        currentHostAction(() => {
+          if (historySnapshot !== null) {
+            invalidateSidebar({ kind: "task", taskID: taskIDOf(historySnapshot.destination) });
+          }
+        });
+      },
+      replace: (destination) => {
+        currentHostAction(() => {
+          replaceSidebar(destination);
+        });
+      },
+      resolve: (result) => {
+        currentHostAction(() => {
+          resolveSidebar(result);
+        });
+      },
+    }),
+    [
+      closeSidebar,
+      currentHostAction,
+      historySnapshot,
+      hostAdmitMutation,
+      hostCapture,
+      invalidateSidebar,
+      replaceSidebar,
+      resolveSidebar,
+    ],
+  );
+  const hostState = useSidebarHostState({
     currentHistory,
     historySnapshot,
-    invalidateSidebar,
-    isCurrent,
+    hostActions,
     mutationAdmitted,
-    replaceSidebar,
-    resolveSidebar,
-  ]);
+    outgoing,
+  });
 
   const visible = currentHistory === null ? outgoing : readVisible(historySnapshot);
   const activeDestination = visible?.destination ?? null;
@@ -414,6 +448,52 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       <SidebarHostContext.Provider value={hostState}>{children}</SidebarHostContext.Provider>
     </SidebarContext.Provider>
   );
+}
+
+function useSidebarHostState({
+  currentHistory,
+  historySnapshot,
+  hostActions,
+  mutationAdmitted,
+  outgoing,
+}: Readonly<{
+  currentHistory: History | null;
+  historySnapshot: HistorySnapshot | null;
+  hostActions: SidebarHostState["actions"];
+  mutationAdmitted: boolean;
+  outgoing: VisibleSidebar | null;
+}>): SidebarHostState {
+  const visibleOutgoing = currentHistory === null ? outgoing : null;
+  const direction = sidebarHostDirection(currentHistory, historySnapshot);
+  const key = sidebarHostKey(currentHistory, historySnapshot, visibleOutgoing);
+  const snapshot = sidebarHostSnapshot(currentHistory, historySnapshot, visibleOutgoing);
+  return useMemo(
+    () => ({ actions: hostActions, direction, key, mutationAdmitted, snapshot }),
+    [direction, hostActions, key, mutationAdmitted, snapshot],
+  );
+}
+
+function sidebarHostDirection(
+  history: History | null,
+  snapshot: HistorySnapshot | null,
+): "push" | "back" | null {
+  return history === null ? null : snapshot?.direction ?? null;
+}
+
+function sidebarHostKey(
+  history: History | null,
+  snapshot: HistorySnapshot | null,
+  outgoing: VisibleSidebar | null,
+): string | null {
+  return history === null ? outgoing?.key ?? null : snapshot?.key ?? null;
+}
+
+function sidebarHostSnapshot(
+  history: History | null,
+  snapshot: HistorySnapshot | null,
+  outgoing: VisibleSidebar | null,
+): SidebarDestinationSnapshot | null {
+  return history === null ? outgoing?.snapshot ?? null : snapshot?.retainedState ?? null;
 }
 
 function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {

@@ -74,6 +74,60 @@ describe("SidebarProvider", () => {
     });
   });
 
+  it("retains the active key and snapshot while the outgoing destination closes", () => {
+    const { result } = renderHook(
+      () => ({ sidebar: useSidebar(), host: useSidebarHost() }),
+      { wrapper },
+    );
+    act(() => void result.current.sidebar.openSidebar(task("task-1")));
+    act(() => {
+      result.current.host.actions.capture(() => ({
+        kind: "taskDetail",
+        scrollTop: 42,
+        descriptionExpanded: true,
+        selectedTab: "activity",
+      }));
+      result.current.sidebar.pushSidebar(task("task-2"));
+    });
+    act(() => {
+      result.current.host.actions.capture(() => null);
+      result.current.sidebar.backSidebar();
+    });
+    const key = result.current.host.key;
+    const snapshot = result.current.host.snapshot;
+
+    act(() => {
+      result.current.sidebar.closeSidebar();
+    });
+
+    expect(result.current.host.key).toBe(key);
+    expect(result.current.host.snapshot).toEqual(snapshot);
+  });
+
+  it("lets Back discard a destination whose capture is blocked by a pending save", () => {
+    const { result } = renderHook(
+      () => ({ sidebar: useSidebar(), host: useSidebarHost() }),
+      { wrapper },
+    );
+    act(() => void result.current.sidebar.openSidebar(task("task-1")));
+    act(() => {
+      result.current.host.actions.capture(() => ({
+        kind: "taskDetail",
+        scrollTop: 42,
+        descriptionExpanded: true,
+        selectedTab: "activity",
+      }));
+      result.current.sidebar.pushSidebar(task("task-2"));
+    });
+    act(() => {
+      result.current.host.actions.capture(() => null);
+      result.current.sidebar.backSidebar();
+    });
+
+    expect(result.current.sidebar.activeDestination).toEqual(task("task-1"));
+    expect(result.current.host.snapshot).not.toBeNull();
+  });
+
   it("blocks Push when the current capture reports pending save", () => {
     const { result } = renderHook(
       () => ({ sidebar: useSidebar(), host: useSidebarHost() }),

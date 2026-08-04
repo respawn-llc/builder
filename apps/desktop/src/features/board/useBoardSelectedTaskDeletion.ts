@@ -4,12 +4,14 @@ import { useAppNavigation, useSidebar } from "@/app-facade";
 
 export function useBoardSelectedTaskDeletion({
   onNavigationError,
+  onSelectedTaskDeletionNavigationFailed,
   onSelectedTaskDeleted,
   projectId,
   selectedTaskId,
   workflowId,
 }: Readonly<{
   onNavigationError(error: unknown): void;
+  onSelectedTaskDeletionNavigationFailed?(): void;
   onSelectedTaskDeleted?(): void;
   projectId: string;
   selectedTaskId: string;
@@ -20,11 +22,15 @@ export function useBoardSelectedTaskDeletion({
   return useCallback(() => {
     onSelectedTaskDeleted?.();
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
-    void navigation.closeProjectTask(projectId, workflowId).catch(onNavigationError);
+    void navigation.closeProjectTask(projectId, workflowId).catch((error: unknown) => {
+      onSelectedTaskDeletionNavigationFailed?.();
+      onNavigationError(error);
+    });
   }, [
     invalidateSidebar,
     navigation,
     onNavigationError,
+    onSelectedTaskDeletionNavigationFailed,
     onSelectedTaskDeleted,
     projectId,
     selectedTaskId,

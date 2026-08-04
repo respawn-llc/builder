@@ -52,6 +52,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
           invalidateSidebar,
           navigateHome: navigation.openHome,
           projectID,
+          routeMatchesProject: true,
           pushDeletedToast: () => {
             push({
               id: "project-delete-deleted",

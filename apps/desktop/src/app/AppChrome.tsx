@@ -165,6 +165,7 @@ function ProjectDeletionEventHandler() {
           invalidateSidebar,
           navigateHome: routeMatches ? navigation.openHome : noopNavigation,
           projectID: event.projectID,
+          routeMatchesProject: routeMatches,
           pushDeletedToast: () => {
             push({
               id: "project-delete-deleted",

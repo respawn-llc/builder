@@ -169,6 +169,11 @@ function BoardRouteData({
   const deletionCauseRef = useRef<string | null>(null);
   const handleSelectedTaskDeleted = useBoardSelectedTaskDeletion({
     onNavigationError: reportBoardNavigationError,
+    onSelectedTaskDeletionNavigationFailed: () => {
+      if (deletionCauseRef.current === selectedTaskId) {
+        deletionCauseRef.current = null;
+      }
+    },
     onSelectedTaskDeleted: () => {
       deletionCauseRef.current = selectedTaskId;
     },
@@ -371,6 +376,7 @@ function BoardContent({
     board.projectID,
     board.selectedWorkflow.id,
     closeSidebar,
+    deletionCauseRef,
     navigation,
     openSidebar,
     reportNavigationError,

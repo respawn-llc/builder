@@ -47,6 +47,7 @@ export async function completeProjectDeletion({
   invalidateSidebar,
   navigateHome,
   projectID,
+  routeMatchesProject,
   pushDeletedToast,
   queryClient,
 }: Readonly<{
@@ -54,14 +55,19 @@ export async function completeProjectDeletion({
   invalidateSidebar: SidebarController["invalidateSidebar"];
   navigateHome: () => Promise<void>;
   projectID: string;
+  routeMatchesProject: boolean;
   pushDeletedToast: () => void;
   queryClient: QueryClient;
 }>): Promise<void> {
   await invalidateProjectDeleteQueries(queryClient, projectID);
-  invalidateSidebar({ kind: "project", projectID });
+  const sidebarResult = invalidateSidebar({ kind: "project", projectID });
   clearLastProjectRoute(projectID);
-  closeSidebar("closed");
-  await navigateHome();
+  if (routeMatchesProject) {
+    closeSidebar("closed");
+    await navigateHome();
+  } else if (sidebarResult.kind === "closed") {
+    closeSidebar("closed");
+  }
   pushDeletedToast();
 }
 
