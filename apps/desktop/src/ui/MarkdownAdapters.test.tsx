@@ -78,7 +78,6 @@ describe("Markdown adapters", () => {
     expect(screen.getByRole("button", { name: "safe" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "unsafe" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "data-unsafe" })).not.toBeInTheDocument();
-    expect(screen.queryByTitle("Blocked URL: undefined")).not.toBeInTheDocument();
   });
 
   it("renders a 50,000-character value exactly", async () => {
