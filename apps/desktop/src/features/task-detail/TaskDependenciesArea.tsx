@@ -19,6 +19,7 @@ import { ActionableListRow, Button, Island } from "@/ui";
 export function TaskDependenciesArea({
   dependencies,
   disabled,
+  navigationDisabled = false,
   onAdd,
   onRemove,
   onSelectTask,
@@ -26,6 +27,7 @@ export function TaskDependenciesArea({
 }: Readonly<{
   dependencies: TaskDependencies;
   disabled: boolean;
+  navigationDisabled?: boolean | undefined;
   onAdd(direction: TaskDependencyDirection): void;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
@@ -50,6 +52,7 @@ export function TaskDependenciesArea({
       <DependencyDirection
         direction={blockedBy}
         disabled={disabled}
+        navigationDisabled={navigationDisabled}
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
@@ -59,6 +62,7 @@ export function TaskDependenciesArea({
       <DependencyDirection
         direction={blocks}
         disabled={disabled}
+        navigationDisabled={navigationDisabled}
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
@@ -71,6 +75,7 @@ export function TaskDependenciesArea({
 function DependencyDirection({
   direction,
   disabled,
+  navigationDisabled,
   onAdd,
   onRemove,
   onSelectTask,
@@ -78,6 +83,7 @@ function DependencyDirection({
 }: Readonly<{
   direction: TaskDependencyDirectionProjection;
   disabled: boolean;
+  navigationDisabled: boolean;
   onAdd(direction: TaskDependencyDirection): void;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
@@ -100,7 +106,7 @@ function DependencyDirection({
           aria-describedby={limitReached ? unavailableID : undefined}
           aria-label={t("task.dependenciesAdd")}
           data-testid={`dependency-add-${direction.direction}`}
-          disabled={disabled || limitReached}
+          disabled={disabled || navigationDisabled || limitReached}
           onClick={() => {
             onAdd(direction.direction);
           }}
@@ -120,6 +126,7 @@ function DependencyDirection({
           <DependencyRow
             direction={direction.direction}
             disabled={disabled}
+            navigationDisabled={navigationDisabled}
             item={item}
             key={item.taskID}
             onRemove={onRemove}
@@ -135,6 +142,7 @@ function DependencyDirection({
 function DependencyRow({
   direction,
   disabled,
+  navigationDisabled,
   item,
   onRemove,
   onSelectTask,
@@ -142,6 +150,7 @@ function DependencyRow({
 }: Readonly<{
   direction: TaskDependencyDirection;
   disabled: boolean;
+  navigationDisabled: boolean;
   item: TaskDependencyItem;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
@@ -170,7 +179,7 @@ function DependencyRow({
       }
       data-satisfaction={item.satisfaction ?? undefined}
       selectButtonProps={{
-        disabled,
+        disabled: disabled || navigationDisabled,
         onClick: () => {
           onSelectTask(item.taskID);
         },

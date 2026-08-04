@@ -19,7 +19,6 @@ import { useAppNavigation, useNavigationStackState } from "@/app-facade";
 import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
 import { useSidebar } from "@/app-facade";
-import { sidebarDestinationProjectID } from "./sidebarDestinationAdapter";
 import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -154,18 +153,16 @@ function ProjectDeletionEventHandler() {
   const queryClient = useQueryClient();
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
-  const { activeDestination, closeSidebar } = useSidebar();
+  const { closeSidebar, invalidateSidebar } = useSidebar();
   const { push } = useStatusController();
   useProjectDeletedEvents(
     nativeBridge,
     useCallback(
       (event) => {
         const routeMatches = routeReferencesProject(location.pathname, event.projectID);
-        const sidebarMatches =
-          activeDestination !== null &&
-          sidebarDestinationProjectID(activeDestination) === event.projectID;
         void completeProjectDeletion({
-          closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
+          closeSidebar: routeMatches ? closeSidebar : noopCloseSidebar,
+          invalidateSidebar,
           navigateHome: routeMatches ? navigation.openHome : noopNavigation,
           projectID: event.projectID,
           pushDeletedToast: () => {
@@ -178,7 +175,7 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [activeDestination, closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
+      [closeSidebar, invalidateSidebar, location.pathname, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;

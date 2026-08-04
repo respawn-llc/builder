@@ -468,7 +468,7 @@
   Focused provider tests pass 6/6; the provider implementation is 390 lines,
   above the original slice allocation but within the revised cap.
 
-- [ ] **Write synchronous navigation and shell tests, then wire keyed
+- [x] **Write synchronous navigation and shell tests, then wire keyed
   Push/Back, controls, and Pop out.** Prove accepted Push/Back changes the
   current key before returning to the event loop; blocked capture changes
   nothing; X, route close, replacement, and replacing open invalidate old scoped
@@ -485,21 +485,36 @@
   signal/ID/revision/epoch, or generic View Transition change is introduced, no
   stack snapshot crosses the native bridge, and cumulative
   provider/host/shell/motion/Pop out production scope is 300–360 LoC.
+  Progress (August 4, 2026): Added private opaque-key/direction host state,
+  keyed destination remounts, synchronous ABA stale-action coverage, one
+  X/Back leading-controls child, direction-specific CSS motion under the
+  existing reduced-motion media boundary, close-phase outgoing rendering, and
+  scoped native Pop out integration tests. Focused stack, provider, shell, and
+  Pop out tests pass; no View Transition helper or native bridge payload
+  changes were introduced.
 
-- [ ] **Stop and re-estimate after provider/shell replacement.** Remove the
+- [x] **Stop and re-estimate after provider/shell replacement.** Remove the
   invalidated bridge/provider tests and measure the actual cumulative final diff.
   Project Task Detail, creation, invalidation, route, styles/i18n, and docs work
   from the remaining checklist rather than the rejected branch. **Complete when:**
   history+adapter/facade and provider/host/shell remain within a
   cumulative 530–650 production LoC and the full projection remains at or below
-  1,200; otherwise return to Design before feature work.
+  the human-approved 1,800-production-LoC cap; otherwise return to Design before
+  feature work.
   Progress (August 4, 2026): The human revised the production cap from 1,200
   to 1,800 changed lines. The tracked production diff after the history,
   adapter/facade, and provider boundary is 21 files / 1,320 changed lines,
   excluding two untracked shell adapter files; the remaining slices continue
   under the revised cap.
+  Progress (August 4, 2026): After the keyed shell and Pop out slice, the
+  complete tracked production diff is 21 files / 1,440 changed lines. The
+  working tree contains 9 changed test/support files plus one new shell test,
+  one specification document, and no generated or server/worktree changes.
+  The final projection remains below the human-approved 1,800-production-LoC
+  cap, so Task Detail and route/invalidation work continues without reducing
+  the approved behavior.
 
-- [ ] **Write Task Detail retained-state tests, then move capture/restoration
+- [x] **Write Task Detail retained-state tests, then move capture/restoration
   behind the Task adapter.** Cover title/body, new-comment, edited-comment,
   description expansion, selected tab, and scroll; exclude Question responses,
   projections, query pages, mutation/loading state, observers, and
@@ -511,8 +526,14 @@
   focused tests pass with one decoder, no global active-destination
   inspection, no snapshot `kind` string check, and Task Detail/New Task
   production projection remains within 270–330 LoC.
+  Progress (August 4, 2026): Kept retained-state capture and restoration in
+  the Task Detail feature boundary, removed feature-side snapshot-kind
+  narrowing, and covered dirty title/body/comment drafts, fresh server data
+  layering, and selected Activity-tab restoration across dependency Push/Back.
+  The focused sidebar navigation integration tests pass 2/2; no generic list
+  or query-cache ownership changed.
 
-- [ ] **Write scroll/live-resource tests, then restore through the existing Task
+- [x] **Write scroll/live-resource tests, then restore through the existing Task
   list seam.** Capture the current scroll element, apply one saved pixel offset
   after restored rows mount, and accept browser clamping. Exercise Push/Back,
   reconnect, repeated bounded cycles, and more than 50 unique Tasks through
@@ -521,8 +542,15 @@
   bounded snapshots, no restoration-driven pagination or duplicate refresh,
   ordinary inactive query-cache lifecycle unchanged, and
   `VirtualizedInfiniteList` byte-for-byte outside the final diff.
+  Progress (August 4, 2026): Restored one captured pixel offset through the
+  existing Task Detail list scroll-element callback after restored data is
+  ready, with browser clamping and no generic list changes. Integration
+  coverage proves scroll/draft restoration, one rendered live Task surface
+  while traversing, and A→B→A bounded traversal; the synthetic history suite
+  covers the 50-entry bound. Sidebar navigation integration passes 3/3 and
+  `VirtualizedInfiniteList` has no diff from `main`.
 
-- [ ] **Write related traversal tests, then wire Task Push/dedup and Inbox
+- [x] **Write related traversal tests, then wire Task Push/dedup and Inbox
   replace.** Cover new related Task Push, A→B→A return to retained A with later
   entries removed, requested focus applied while A's saved drafts survive,
   silent oldest-non-root eviction at capacity, Back restoration, Inbox
@@ -531,8 +559,13 @@
   available). **Complete when:** focused integration tests pass, browser route
   search remains anchored to the root, and Task/Workflow/Board logic exists only
   in the concrete adapter/feature callers.
+  Progress (August 4, 2026): Related Task selection pushes through the typed
+  sidebar adapter, same-Task traversal returns to the retained earlier entry
+  and truncates the branch, Inbox navigation remains replace-only, and
+  save-pending dependency navigation/Add are separated from Remove. Focused
+  dependency and sidebar integration tests pass.
 
-- [ ] **Write related New Task admission/completion tests, then wire the existing
+- [x] **Write related New Task admission/completion tests, then wire the existing
   atomic mutation.** Delay validation and the close timer. Prove synchronous
   Back/X/route/open changes the history/key before validation returns, so the
   scoped admission action starts no request; admitted
@@ -549,6 +582,10 @@
   every admission/exit/stale path works without a second lifecycle state
   machine; the cumulative Task Detail/New Task production scope remains within
   270–330 LoC.
+  Progress (August 4, 2026): Added one opaque-key scoped mutation admission
+  action, synchronous stale-admission rejection, host X/Back blocking, failure
+  release, and current-only related creation replacement. New Task admission
+  tests pass 3/3 and provider admission tests pass 9/9.
 
 - [ ] **Write Task invalidation and Board typed-selector coordinator tests, then
   centralize the operation.** Cover current, inactive, root, and final Task

@@ -26,7 +26,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const connection = useConnectionSnapshot();
-  const { closeSidebar } = useSidebar();
+  const { closeSidebar, invalidateSidebar } = useSidebar();
   const navigation = useAppNavigation();
   const { push } = useStatusController();
   const queryClient = useQueryClient();
@@ -49,6 +49,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
         close();
         await completeProjectDeletion({
           closeSidebar,
+          invalidateSidebar,
           navigateHome: navigation.openHome,
           projectID,
           pushDeletedToast: () => {
@@ -69,7 +70,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
         });
       }
     },
-    [closeSidebar, mutation, navigation.openHome, projectID, push, queryClient, t],
+    [closeSidebar, invalidateSidebar, mutation, navigation.openHome, projectID, push, queryClient, t],
   );
 
   const deleteDialog = useNativeDialogFallback<ProjectDeleteTarget>({

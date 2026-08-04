@@ -101,6 +101,7 @@ export function NewTaskForm({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
+  onSubmitAdmission?: (() => (() => void) | null) | undefined;
   onSubmitted: (taskID?: string) => void;
   projectID: string;
   workflowID: string;
@@ -141,6 +142,7 @@ export function NewTaskForm({
 function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
+  onSubmitAdmission,
   onSubmitted,
   initialSourceWorkspaceID,
   pendingRelationship,
@@ -149,6 +151,7 @@ function NewTaskFormContent({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
+  onSubmitAdmission?: (() => (() => void) | null) | undefined;
   onSubmitted: (taskID?: string) => void;
   projectID: string;
   workflowID: string;
@@ -206,6 +209,10 @@ function NewTaskFormContent({
     if (!canSubmit) {
       return;
     }
+    const releaseAdmission = onSubmitAdmission?.() ?? null;
+    if (onSubmitAdmission !== undefined && releaseAdmission === null) {
+      return;
+    }
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
@@ -226,6 +233,7 @@ function NewTaskFormContent({
       });
       onSubmitted(createdTaskID);
     } catch {
+      releaseAdmission?.();
       // The mutation state renders the persistent failure without clearing form input.
     }
   }

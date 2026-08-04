@@ -54,6 +54,7 @@ type PendingSidebar = Readonly<{
 type VisibleSidebar = Readonly<{
   destination: SidebarDestination;
   snapshot: SidebarDestinationSnapshot | null;
+  key: string;
 }>;
 type CompletedSidebarResult = Exclude<SidebarResult, SidebarCanceledResult>;
 
@@ -68,9 +69,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   ]);
   const pendingRef = useRef<PendingSidebar | null>(null);
   const currentHistoryRef = useRef<History | null>(null);
+  const mutationAdmissionRef = useRef<Readonly<{ history: History; key: string }> | null>(null);
   const captureRef = useRef<SidebarStateCapture | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingHistoryRef = useRef<History | null>(null);
+  const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
   currentHistoryRef.current = currentHistory;
 
@@ -115,6 +118,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     );
   }, []);
 
+  const clearMutationAdmission = useCallback((history?: History) => {
+    const admission = mutationAdmissionRef.current;
+    if (admission === null || (history !== undefined && admission.history !== history)) return;
+    mutationAdmissionRef.current = null;
+    setMutationAdmitted(false);
+  }, []);
+
   const settleAndClose = useCallback(
     (history: History, result: SidebarResult, visible: VisibleSidebar | null = null) => {
       if (pendingRef.current?.history !== history) return;
@@ -122,6 +132,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const current = visible ?? readVisible(history.snapshot());
       pendingRef.current = null;
       captureRef.current = null;
+      clearMutationAdmission(history);
       history.destroy();
       closingHistoryRef.current = history;
       setCurrentHistory(null);
@@ -137,7 +148,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         setPhase("open");
       }, sidebarExitAnimationMs);
     },
-    [clearCloseTimeout],
+    [clearCloseTimeout, clearMutationAdmission],
   );
 
   const closeSidebar = useCallback(
@@ -156,6 +167,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (previous !== undefined && previous !== null) {
         pendingRef.current = null;
         captureRef.current = null;
+        clearMutationAdmission();
         previous.history.destroy();
         previous.resolve({ status: "canceled", reason: "replaced" });
       }
@@ -172,7 +184,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       setWidthFor(destination);
       return promise;
     },
-    [clearCloseTimeout, setWidthFor],
+    [clearCloseTimeout, clearMutationAdmission, setWidthFor],
   );
 
   const captureCurrent = useCallback((): SidebarDestinationSnapshot | null | false => {
@@ -200,24 +212,27 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
           sameDestination: (candidate) => sameSidebarDestination(candidate, destination),
         })
       ) {
+        clearMutationAdmission(history);
         setPhase("open");
         setWidthFor(history.snapshot()?.destination ?? destination);
       }
     },
-    [captureCurrent, setWidthFor],
+    [captureCurrent, clearMutationAdmission, setWidthFor],
   );
 
   const backSidebar = useCallback(() => {
     const history = currentHistoryRef.current;
+    if (history !== null && mutationAdmissionRef.current?.history === history) return;
     const snapshot = history?.snapshot() ?? null;
     if (history === null || history === undefined || snapshot === null || !snapshot.canGoBack) return;
     const retainedState = captureCurrent();
     if (retainedState === false) return;
     if (history.back({ sourceKey: snapshot.key, retainedState })) {
+      clearMutationAdmission(history);
       setPhase("open");
       setWidthFor(history.snapshot()?.destination ?? null);
     }
-  }, [captureCurrent, setWidthFor]);
+  }, [captureCurrent, clearMutationAdmission, setWidthFor]);
 
   const replaceSidebar = useCallback(
     (destination: SidebarDestination) => {
@@ -228,11 +243,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       captureRef.current = null;
       if (history.replace({ sourceKey: snapshot.key, destination, retainedState: null })) {
+        clearMutationAdmission(history);
         setPhase("open");
         setWidthFor(destination);
       }
     },
-    [setWidthFor],
+    [clearMutationAdmission, setWidthFor],
   );
 
   const resolveSidebar = useCallback(
@@ -255,10 +271,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         settleAndClose(history, { status: "canceled", reason: "closed" }, visible);
         return { kind: "closed" };
       }
-      if (result.currentRemoved) setWidthFor(history.snapshot()?.destination ?? null);
+      if (result.currentRemoved) {
+        clearMutationAdmission(history);
+        setWidthFor(history.snapshot()?.destination ?? null);
+      }
       return { kind: "discarded" };
     },
-    [setWidthFor, settleAndClose],
+    [clearMutationAdmission, setWidthFor, settleAndClose],
   );
 
   const resizeSidebar = useCallback(
@@ -282,8 +301,33 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (history !== null && key !== null && isCurrent(history, key)) operation();
     };
     return {
+      mutationAdmitted,
+      direction: current?.direction ?? null,
+      key,
       snapshot: current?.retainedState ?? null,
       actions: {
+        admitMutation: () => {
+          if (
+            history === null ||
+            key === null ||
+            !isCurrent(history, key) ||
+            mutationAdmissionRef.current !== null
+          ) {
+            return null;
+          }
+          const admission = { history, key };
+          mutationAdmissionRef.current = admission;
+          setMutationAdmitted(true);
+          return () => {
+            if (
+              mutationAdmissionRef.current === admission &&
+              isCurrent(admission.history, admission.key)
+            ) {
+              mutationAdmissionRef.current = null;
+              setMutationAdmitted(false);
+            }
+          };
+        },
         capture: (capture) => {
           if (history === null || key === null || !isCurrent(history, key)) return () => {};
           captureRef.current = capture;
@@ -306,6 +350,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     historySnapshot,
     invalidateSidebar,
     isCurrent,
+    mutationAdmitted,
     replaceSidebar,
     resolveSidebar,
   ]);
@@ -364,7 +409,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {
   return snapshot === null
     ? null
-    : { destination: snapshot.destination, snapshot: snapshot.retainedState };
+    : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key };
 }
 
 function taskIDOf(destination: SidebarDestination): string {

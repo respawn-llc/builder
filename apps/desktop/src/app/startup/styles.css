@@ -376,22 +376,8 @@
   }
 }
 
-@keyframes sidebar-destination-push-old {
-  to {
-    opacity: 0;
-    transform: translateX(-10%);
-  }
-}
-
 @keyframes sidebar-destination-push-new {
   from {
-    opacity: 0;
-    transform: translateX(10%);
-  }
-}
-
-@keyframes sidebar-destination-back-old {
-  to {
     opacity: 0;
     transform: translateX(10%);
   }
@@ -677,19 +663,11 @@
     animation: route-fade-scale var(--motion-fast) both;
   }
 
-  .view-transition-sidebar-push::view-transition-old(sidebar-destination) {
-    animation: sidebar-destination-push-old var(--motion-fast) both;
-  }
-
-  .view-transition-sidebar-push::view-transition-new(sidebar-destination) {
+  .app-sidebar-destination-push {
     animation: sidebar-destination-push-new var(--motion-fast) both;
   }
 
-  .view-transition-sidebar-back::view-transition-old(sidebar-destination) {
-    animation: sidebar-destination-back-old var(--motion-fast) both;
-  }
-
-  .view-transition-sidebar-back::view-transition-new(sidebar-destination) {
+  .app-sidebar-destination-back {
     animation: sidebar-destination-back-new var(--motion-fast) both;
   }
 }

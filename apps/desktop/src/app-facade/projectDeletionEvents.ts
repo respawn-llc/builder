@@ -44,18 +44,21 @@ export function useProjectDeletedEvents(
 
 export async function completeProjectDeletion({
   closeSidebar,
+  invalidateSidebar,
   navigateHome,
   projectID,
   pushDeletedToast,
   queryClient,
 }: Readonly<{
   closeSidebar: SidebarController["closeSidebar"];
+  invalidateSidebar: SidebarController["invalidateSidebar"];
   navigateHome: () => Promise<void>;
   projectID: string;
   pushDeletedToast: () => void;
   queryClient: QueryClient;
 }>): Promise<void> {
   await invalidateProjectDeleteQueries(queryClient, projectID);
+  invalidateSidebar({ kind: "project", projectID });
   clearLastProjectRoute(projectID);
   closeSidebar("closed");
   await navigateHome();

@@ -9,6 +9,7 @@ import type {
 } from "@/app-facade";
 
 export type SidebarScopedActions = Readonly<{
+  admitMutation(): (() => void) | null;
   capture(capture: SidebarStateCapture): () => void;
   close(reason?: SidebarCancelReason): void;
   invalidate(): void;
@@ -18,6 +19,9 @@ export type SidebarScopedActions = Readonly<{
 
 export type SidebarHostState = Readonly<{
   actions: SidebarScopedActions;
+  mutationAdmitted: boolean;
+  direction: "push" | "back" | null;
+  key: string | null;
   snapshot: SidebarDestinationSnapshot | null;
 }>;
 

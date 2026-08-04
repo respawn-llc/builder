@@ -33,12 +33,6 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
-function taskDetailSidebarSnapshot(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): SidebarTaskDetailSnapshot | undefined {
-  return snapshot?.kind === "taskDetail" ? snapshot : undefined;
-}
-
 function relatedNewTaskDestination(
   detail: TaskDetail,
   direction: "blocked-by" | "blocks",
@@ -289,7 +283,7 @@ export function TaskDetailContent({
     openSidebar,
   } = useSidebar();
   const serverDraft = taskDraft(detail);
-  const restoredSnapshot = taskDetailSidebarSnapshot(sidebarSnapshot);
+  const restoredSnapshot = sidebarSnapshot;
   const scrollElementRef = useRef<HTMLDivElement | null>(null);
   const {
     draft,
@@ -380,7 +374,8 @@ export function TaskDetailContent({
       comments={comments}
       detail={detail}
       disabled={connection.phase !== "connected"}
-      dependencyDisabled={connection.phase !== "connected" || savePending}
+      dependencyDisabled={connection.phase !== "connected"}
+      dependencyNavigationDisabled={connection.phase !== "connected" || savePending}
       draft={draft}
       descriptionPresentation={descriptionPresentation}
       editingComment={editingComment}
@@ -404,6 +399,8 @@ export function TaskDetailContent({
       onSaveDraft={saveDraft}
       openLink={openLink}
       questionSelections={questionSelections}
+      restoredDataReady={restoredDataReady}
+      restoredScrollTop={restoredSnapshot?.scrollTop}
       selectedTab={selectedTab}
       setTab={setSelectedTab}
       updateError={update.error}

@@ -14,6 +14,15 @@ function task(taskID: string) {
   return taskDetailSidebarDestination(taskID, "project-1");
 }
 
+function newTask() {
+  return {
+    boardQueryWorkflowID: undefined,
+    kind: "newTask" as const,
+    projectID: "project-1",
+    workflowID: "workflow-1",
+  };
+}
+
 describe("SidebarProvider", () => {
   it("keeps one lifecycle promise until the replacing destination closes", async () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
@@ -91,6 +100,51 @@ describe("SidebarProvider", () => {
     expect(result.current.sidebar.activeDestination).toEqual(task("task-2"));
   });
 
+  it("remounts same-destination replacements with a fresh private activation key", () => {
+    const { result } = renderHook(
+      () => ({ sidebar: useSidebar(), host: useSidebarHost() }),
+      { wrapper },
+    );
+    act(() => void result.current.sidebar.openSidebar(task("task-1")));
+    const firstKey = result.current.host.key;
+
+    act(() => void result.current.sidebar.openSidebar(task("task-1")));
+
+    expect(result.current.host.key).not.toBe(firstKey);
+  });
+
+  it("rejects an old A action after an A-to-B-to-A activation", () => {
+    const { result } = renderHook(
+      () => ({ sidebar: useSidebar(), host: useSidebarHost() }),
+      { wrapper },
+    );
+    act(() => void result.current.sidebar.openSidebar(task("task-a")));
+    const stale = result.current.host.actions;
+    const firstKey = result.current.host.key;
+    act(() => result.current.host.actions.capture(() => ({
+      kind: "taskDetail",
+      scrollTop: 17,
+      descriptionExpanded: true,
+      selectedTab: "comments",
+    })));
+    act(() => result.current.sidebar.pushSidebar(task("task-b")));
+    act(() => result.current.sidebar.backSidebar());
+
+    const returned = {
+      activeDestination: result.current.sidebar.activeDestination,
+      hostKey: result.current.host.key,
+      snapshot: result.current.host.snapshot,
+    };
+    expect(returned.activeDestination).toEqual(task("task-a"));
+    expect(returned.hostKey).not.toBe(firstKey);
+    act(() => stale.replace(task("stale")));
+    expect({
+      activeDestination: result.current.sidebar.activeDestination,
+      hostKey: result.current.host.key,
+      snapshot: result.current.host.snapshot,
+    }).toEqual(returned);
+  });
+
   it("invalidates current and inactive typed Task destinations", () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
     act(() => void result.current.openSidebar(task("task-1")));
@@ -102,5 +156,28 @@ describe("SidebarProvider", () => {
     expect(result.current.invalidateSidebar({ kind: "task", taskID: "task-2" })).toEqual({
       kind: "closed",
     });
+  });
+
+  it("admits one current New Task mutation and makes stale release inert", () => {
+    const { result } = renderHook(
+      () => ({ sidebar: useSidebar(), host: useSidebarHost() }),
+      { wrapper },
+    );
+    act(() => void result.current.sidebar.openSidebar(task("task-1")));
+    act(() => result.current.sidebar.pushSidebar(newTask()));
+    let release: (() => void) | null = null;
+    act(() => {
+      release = result.current.host.actions.admitMutation();
+    });
+
+    expect(release).not.toBeNull();
+    expect(result.current.host.mutationAdmitted).toBe(true);
+    act(() => result.current.sidebar.backSidebar());
+    expect(result.current.sidebar.activeDestination).toEqual(newTask());
+
+    act(() => void result.current.sidebar.openSidebar(task("task-2")));
+    act(() => release?.());
+    expect(result.current.sidebar.activeDestination).toEqual(task("task-2"));
+    expect(result.current.host.mutationAdmitted).toBe(false);
   });
 });

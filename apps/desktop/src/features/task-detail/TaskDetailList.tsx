@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ActivityItem, AttentionItem, TaskComment, TaskDetail, TaskDependencyDirection } from "@/api";
@@ -45,6 +45,7 @@ export function TaskDetailList({
   detail,
   disabled,
   dependencyDisabled,
+  dependencyNavigationDisabled,
   draft,
   descriptionPresentation,
   editingComment,
@@ -62,6 +63,8 @@ export function TaskDetailList({
   onSaveDraft,
   openLink,
   questionSelections,
+  restoredDataReady,
+  restoredScrollTop,
   selectedTab,
   setTab,
   updateError,
@@ -74,6 +77,7 @@ export function TaskDetailList({
   detail: TaskDetail;
   disabled: boolean;
   dependencyDisabled: boolean;
+  dependencyNavigationDisabled: boolean;
   draft: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -91,6 +95,8 @@ export function TaskDetailList({
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  restoredDataReady: boolean;
+  restoredScrollTop?: number | undefined;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -154,6 +160,28 @@ export function TaskDetailList({
     return keys.size === 0 ? undefined : keys;
   }, [attention.isPending, initialFocus]);
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
+  const scrollElementRef = useRef<HTMLDivElement | null>(null);
+  const restoredScrollTopRef = useRef<number | null>(null);
+  const handleScrollElementChange = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollElementRef.current = element;
+      onScrollElementChange(element);
+    },
+    [onScrollElementChange],
+  );
+  useLayoutEffect(() => {
+    const element = scrollElementRef.current;
+    if (
+      !restoredDataReady ||
+      restoredScrollTop === undefined ||
+      element === null ||
+      restoredScrollTopRef.current === restoredScrollTop
+    ) {
+      return;
+    }
+    element.scrollTop = Math.max(0, restoredScrollTop);
+    restoredScrollTopRef.current = restoredScrollTop;
+  }, [listItems.length, restoredDataReady, restoredScrollTop]);
 
   return (
     <VirtualizedInfiniteList
@@ -172,7 +200,7 @@ export function TaskDetailList({
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
-      onScrollElementChange={onScrollElementChange}
+      onScrollElementChange={handleScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
       rowSpacing="compact"
@@ -187,6 +215,7 @@ export function TaskDetailList({
           detail={detail}
           disabled={disabled}
           dependencyDisabled={dependencyDisabled}
+          dependencyNavigationDisabled={dependencyNavigationDisabled}
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
@@ -229,6 +258,7 @@ type TaskDetailListRowProps = Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   dependencyDisabled: boolean;
+  dependencyNavigationDisabled: boolean;
   draft: TaskDraft;
   draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
@@ -344,6 +374,7 @@ function BodyRow({
 function DependenciesRow({
   detail,
   dependencyDisabled,
+  dependencyNavigationDisabled,
   onAddDependency,
   onRemoveDependency,
   onSelectDependencyTask,
@@ -352,6 +383,7 @@ function DependenciesRow({
     <TaskDependenciesArea
       dependencies={detail.dependencies}
       disabled={dependencyDisabled}
+      navigationDisabled={dependencyNavigationDisabled}
       onAdd={onAddDependency}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}

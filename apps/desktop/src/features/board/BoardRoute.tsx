@@ -1,5 +1,5 @@
 import type { DragEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -16,6 +16,7 @@ import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
+import { taskDetailSidebarDestination } from "@/app/sidebarDestinationAdapter";
 import {
   TaskInitiatingActionDialogs,
   startTaskInitiatingAction,
@@ -109,6 +110,15 @@ function BoardRouteWithLabels({
     onBackgroundError(error: unknown): void;
   }>) {
   const filter = useProjectLabelFilter();
+  const { closeSidebar } = useSidebar();
+  const previousRouteRef = useRef<Readonly<{ projectId: string; workflowId: string | undefined }> | null>(null);
+  useLayoutEffect(() => {
+    const previous = previousRouteRef.current;
+    if (previous !== null && (previous.projectId !== projectId || previous.workflowId !== workflowId)) {
+      closeSidebar("route_change");
+    }
+    previousRouteRef.current = { projectId, workflowId };
+  }, [closeSidebar, projectId, workflowId]);
   return (
     <BoardFilterGenerationProvider
       desiredLabelFilter={filter.state.filter}
@@ -232,7 +242,7 @@ function BoardContent({
     stopDragAutoScroll();
     setActiveDrag(null);
   }, [stopDragAutoScroll]);
-  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
+  const { activeDestination, closeSidebar, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
@@ -325,30 +335,26 @@ function BoardContent({
     [reportActionError, t],
   );
 
-  useEffect(() => {
-    if (selectedTaskId.length === 0) {
-      return;
+  const selectorRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const next = selectedTaskId.length === 0 ? null : selectedTaskId;
+    if (selectorRef.current === next) return;
+    const previous = selectorRef.current;
+    selectorRef.current = next;
+    if (previous !== null || next === null) {
+      closeSidebar("route_change");
     }
-    let active = true;
-    void openSidebar({
-      kind: "taskDetail",
-      mode: "overlay",
-      onMutated: undefined,
-      projectID: board.projectID,
-      taskID: selectedTaskId,
-    }).then((result) => {
-      if (active && taskDetailRouteShouldClose(result)) {
-        void navigation
-          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
-          .catch(reportNavigationError);
-      }
-    });
-    return () => {
-      active = false;
-    };
+    if (next !== null) {
+      void openSidebar(taskDetailSidebarDestination(next, board.projectID, { mode: "overlay" })).then((result) => {
+        if (taskDetailRouteShouldClose(result)) {
+          void navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id).catch(reportNavigationError);
+        }
+      });
+    }
   }, [
     board.projectID,
     board.selectedWorkflow.id,
+    closeSidebar,
     navigation,
     openSidebar,
     reportNavigationError,

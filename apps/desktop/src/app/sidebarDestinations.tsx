@@ -26,6 +26,7 @@ export function SidebarDestinationView({
         boardQueryWorkflowID={destination.boardQueryWorkflowID}
         className="w-full"
         initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
+        onSubmitAdmission={actions.admitMutation}
         onSubmitted={(taskID) => {
           if (destination.pendingRelationship !== undefined && taskID !== undefined) {
             actions.replace(
@@ -47,7 +48,7 @@ export function SidebarDestinationView({
       <TaskDetailSurface
         enabled
         initialFocus={destination.initialFocus}
-        sidebarSnapshot={snapshot?.kind === "taskDetail" ? snapshot : undefined}
+        sidebarSnapshot={snapshot ?? undefined}
         onCaptureSidebarState={actions.capture}
         onMissingTask={() => {
           actions.invalidate();
