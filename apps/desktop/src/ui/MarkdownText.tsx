@@ -144,7 +144,7 @@ function MarkdownTaskListCheckbox({ checked, type }: ComponentProps<"input"> & E
       }}
       {...(taskListItem?.taskListItemToggleLabel === undefined
         ? {}
-        : { "aria-label": taskListItem.taskListItemToggleLabel(checkedValue) })}
+        : { "aria-label": taskListItem.taskListItemToggleLabel(checkedFromSource) })}
     />
   );
 }
@@ -164,7 +164,6 @@ function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) 
   const [failure, setFailure] = useState<{
     language: BundledLanguage;
     source: string;
-    error: unknown;
   } | null>(null);
   useEffect(() => {
     let active = true;
@@ -174,7 +173,10 @@ function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) 
         if (active) setHighlighted({ language: canonicalLanguage, source: code, tokens });
       })
       .catch((error: unknown) => {
-        if (active) setFailure({ language: canonicalLanguage, source: code, error });
+        if (active) {
+          setFailure({ language: canonicalLanguage, source: code });
+          reportError(error);
+        }
       });
     return () => void (active = false);
   }, [canonicalLanguage, code, isIncomplete]);
@@ -185,7 +187,7 @@ function HighlightedCode({ code, language, isIncomplete }: CustomRendererProps) 
     currentFailure.language === canonicalLanguage &&
     currentFailure.source === code
   )
-    throw currentFailure.error;
+    return <PlainCode code={code} />;
   const current = highlighted;
   const tokens =
     current !== null && current.language === canonicalLanguage && current.source === code

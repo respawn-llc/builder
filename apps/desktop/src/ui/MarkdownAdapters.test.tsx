@@ -162,6 +162,7 @@ describe("TaskBodyMarkdown", () => {
       "<https://example.com> [label][ref]\n\n[ref]: https://example.com",
       "https://example.com label",
     ],
+    ["literal angle punctuation", "love <3 this\n\nresult <- value", "love <3 this result <- value"],
     ["image alt text", "![image alt](image.png)", "image alt"],
     ["code payloads", "inline `x`\n\n```javascript\nconst x = 1;\n```", "inline x const x = 1;"],
   ])("projects %s to readable plain text", (_name, value, expected) => {

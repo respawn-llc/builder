@@ -148,7 +148,7 @@ describe("questionPresentation", () => {
     });
   });
 
-  it("activates plain option text but not Streamdown link descendants", async () => {
+  it("activates an option but not Streamdown link descendants", async () => {
     const attention = ordinaryAttention(["ordinary option", "[safe](https://example.com)"], 0);
     const presentation = questionPresentation(attention, undefined, false);
     const user = userEvent.setup();
@@ -160,12 +160,12 @@ describe("questionPresentation", () => {
       recordingQuestionAnswerMutation([]),
     );
 
-    const radios = screen.getAllByRole("radio");
-    await user.click(screen.getByText("ordinary option"));
-    expect(radios[0]).toBeChecked();
+    const plainOption = screen.getByRole("radio", { name: "ordinary option" });
+    await user.click(plainOption);
+    expect(plainOption).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: "safe" }));
-    expect(radios[1]).not.toBeChecked();
+    expect(screen.getAllByRole("radio")[1]).not.toBeChecked();
   });
 
   it.each([0, 3, 1.5, -1])(

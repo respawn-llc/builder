@@ -136,6 +136,7 @@ function ordinaryHtmlStart(value: string, start: number): { index: number; state
   const closing = value.charAt(start + 1) === "/";
   let index = start + (closing ? 2 : 1);
   const nameStart = index;
+  if (!isTagNameStartChar(value.charAt(index))) return;
   while (isNameChar(value.charAt(index))) index += 1;
   if (index === nameStart) return;
   return {
@@ -235,4 +236,8 @@ function isNameChar(value: string): boolean {
   return (
     (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || value === "-"
   );
+}
+function isTagNameStartChar(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
