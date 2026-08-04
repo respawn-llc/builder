@@ -504,13 +504,25 @@ func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParame
 			}
 		}
 	case *parse.CommandNode:
+		if len(typed.Args) > 0 {
+			if ident, ok := typed.Args[0].(*parse.IdentifierNode); ok &&
+				ident.Ident == "index" &&
+				indexCommandTouchesHistoricalPromptNamespace(typed.Args[1:]) {
+				return errors.New("historical dynamic prompt reference lookup is unsupported")
+			}
+		}
 		for _, arg := range typed.Args {
 			if err := walkMigrationPromptNode(arg, refs); err != nil {
 				return err
 			}
 		}
 	case *parse.ChainNode:
-		return errors.New("historical chained prompt references are unsupported")
+		if err := walkMigrationPromptNode(typed.Node, refs); err != nil {
+			return err
+		}
+		if len(typed.Field) > 0 && historicalPromptNamespace(typed.Field[0]) {
+			return errors.New("historical chained prompt references are unsupported")
+		}
 	case *parse.FieldNode:
 		if err := migrationPromptFieldReference(typed.Ident, refs); err != nil {
 			return err
@@ -525,7 +537,46 @@ func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParame
 
 func variableTouchesHistoricalPromptNamespace(ident []string) bool {
 	for _, part := range ident {
-		return part == "$Inputs" || part == "$Params" || part == "Inputs" || part == "Params"
+		if historicalPromptNamespace(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func historicalPromptNamespace(value string) bool {
+	return value == "Inputs" || value == "Params" || value == "$Inputs" || value == "$Params"
+}
+
+func indexCommandTouchesHistoricalPromptNamespace(args []parse.Node) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if _, ok := args[0].(*parse.DotNode); ok {
+		return true
+	}
+	for _, arg := range args {
+		switch typed := arg.(type) {
+		case *parse.FieldNode:
+			if len(typed.Ident) > 0 && historicalPromptNamespace(typed.Ident[0]) {
+				return true
+			}
+		case *parse.ChainNode:
+			if len(typed.Field) > 0 && historicalPromptNamespace(typed.Field[0]) {
+				return true
+			}
+			if indexCommandTouchesHistoricalPromptNamespace([]parse.Node{typed.Node}) {
+				return true
+			}
+		case *parse.VariableNode:
+			if variableTouchesHistoricalPromptNamespace(typed.Ident) {
+				return true
+			}
+		case *parse.StringNode:
+			if historicalPromptNamespace(typed.Text) {
+				return true
+			}
+		}
 	}
 	return false
 }

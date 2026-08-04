@@ -38,6 +38,9 @@ func TestMigrationPriorParameterReferencesRejectUnsupportedHistoricalPromptShape
 		"{{.Params.review.summary.extra}}",
 		"{{.Nodes.review.summary}}",
 		`{{index .Params "summary"}}`,
+		`{{index . "Params"}}`,
+		`{{index . "Inputs"}}`,
+		`{{$v := .}}{{$v.Params}}`,
 		"{{.TaskTitle.more}}",
 	} {
 		t.Run(prompt, func(t *testing.T) {

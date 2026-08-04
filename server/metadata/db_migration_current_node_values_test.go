@@ -16,7 +16,7 @@ import (
 
 const (
 	historicalVersion58TransitionPrompt = `Review {{.Inputs.summary}}.`
-	version71TransitionPrompt           = `Execute {{.Params.summary}}.`
+	version71TransitionPrompt           = `Execute {{.TaskTitle}}.`
 	version71TransitionParameters       = `[{"key":"summary","description":"Transition summary."}]`
 )
 
@@ -215,7 +215,8 @@ WHERE id = 'edge-plan-review'`).Scan(&preservedPrompt); err != nil {
 		t.Fatalf("ParseWorkflowID: %v", err)
 	}
 	validation := workflow.ValidateDefinition(workflow.Definition{
-		ID: workflowID,
+		ID:          workflowID,
+		DisplayName: "Migrated Workflow",
 		Nodes: []workflow.Node{
 			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
 			workflow.AgentNode{
@@ -479,8 +480,45 @@ INSERT INTO workflow_nodes (
 
 UPDATE workflow_edges
 SET prompt_template = ?,
-    parameters_json = ?
+    parameters_json = '[]'
 WHERE id = 'edge-start-1';
+
+UPDATE workflow_transition_groups
+SET transition_id = 'fanout',
+    display_name = 'Fanout'
+WHERE id = 'group-done';
+
+UPDATE workflow_edges
+SET edge_key = 'to_script',
+    target_node_id = 'node-script-version-71',
+    prompt_template = '',
+    parameters_json = '[{"key":"summary","description":"Transition summary."}]'
+WHERE id = 'edge-done-1';
+
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode,
+    prompt_template, parameters_json, input_bindings_json, output_requirements_json
+) VALUES
+    ('edge-agent-join-1', 'group-done', 'to_join', 'node-join-version-71', 'new_session',
+     '', '[]', '[]', '[]');
+
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES
+    ('group-script-join-1', 'node-script-version-71', 'join_script', 'Join'),
+    ('group-join-done-1', 'node-join-version-71', 'done', 'Done');
+
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode,
+    prompt_template, parameters_json, input_bindings_json, output_requirements_json
+) VALUES
+    ('edge-script-join-1', 'group-script-join-1', 'script_join', 'node-join-version-71', 'new_session',
+     '', '[]', '[]', '[]'),
+    ('edge-join-done-1', 'group-join-done-1', 'done', 'node-done', 'new_session',
+     '', '[]', '[]', '[]');
+
+UPDATE workflow_nodes
+SET join_input_providers_json = '[{"input_name":"summary","provider_edge_id":"edge-agent-join-1"}]'
+WHERE id = 'node-join-version-71';
 
 INSERT INTO tasks (
     id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id,
@@ -491,7 +529,7 @@ SELECT
     'task-version-71-cutover', id, 1, 1, 'V71-1', 'Task', 'Body', '',
     ?, ?, NULL, NULL
 FROM project_workflow_links
-WHERE id = 'link-1'`, version71TransitionPrompt, version71TransitionParameters, now, now)
+WHERE id = 'link-1'`, version71TransitionPrompt, now, now)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 71 db: %v", err)
 	}
@@ -531,7 +569,7 @@ WHERE id = 'node-join-version-71'`).Scan(&joinKind, &preservedJoinProviders); er
 		t.Fatalf("query preserved Join configuration: %v", err)
 	}
 	if scriptKind != "script" || preservedScriptPath != "scripts/run" ||
-		joinKind != "join" || preservedJoinProviders != `[{"input_name":"summary","provider_edge_id":"edge-start-1"}]` {
+		joinKind != "join" || preservedJoinProviders != `[{"input_name":"summary","provider_edge_id":"edge-agent-join-1"}]` {
 		t.Fatalf("preserved Script/Join configuration = script=(%q,%q) join=(%q,%q)",
 			scriptKind, preservedScriptPath, joinKind, preservedJoinProviders)
 	}
@@ -542,14 +580,55 @@ WHERE id = 'node-join-version-71'`).Scan(&joinKind, &preservedJoinProviders); er
 	if foreignKeyViolations != 0 {
 		t.Fatalf("foreign-key violations after migration 72 = %d", foreignKeyViolations)
 	}
+	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440001")
+	if err != nil {
+		t.Fatalf("ParseWorkflowID: %v", err)
+	}
+	validation := workflow.ValidateDefinition(workflow.Definition{
+		ID:          workflowID,
+		DisplayName: "Migrated Workflow",
+		Nodes: []workflow.Node{
+			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "backlog", DisplayName: "Backlog"}},
+			workflow.AgentNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-agent", Key: "agent", DisplayName: "Agent"}, SubagentRole: "coder", CompletionMode: "tool"},
+			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-script-version-71", Key: "script", DisplayName: "Script"}, ScriptPath: workflow.MustPresentScriptPath("scripts/run")},
+			workflow.JoinNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-join-version-71", Key: "join", DisplayName: "Join"}, JoinInputProviders: []workflow.JoinInputProvider{{InputName: "summary", ProviderEdgeID: "edge-agent-join-1"}}},
+			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-done", Key: "done", DisplayName: "Done"}},
+		},
+		TransitionGroups: []workflow.TransitionGroup{
+			{WorkflowID: workflowID, ID: "group-start", SourceNodeID: "node-start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: workflowID, ID: "group-done", SourceNodeID: "node-agent", TransitionID: "fanout", DisplayName: "Fanout"},
+			{WorkflowID: workflowID, ID: "group-script-join-1", SourceNodeID: "node-script-version-71", TransitionID: "join_script", DisplayName: "Join"},
+			{WorkflowID: workflowID, ID: "group-join-done-1", SourceNodeID: "node-join-version-71", TransitionID: "done", DisplayName: "Done"},
+		},
+		Edges: []workflow.Edge{
+			{WorkflowID: workflowID, ID: "edge-start-1", Key: "start", TransitionGroupID: "group-start", TargetNodeID: "node-agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: version71TransitionPrompt},
+			{WorkflowID: workflowID, ID: "edge-done-1", Key: "to_script", TransitionGroupID: "group-done", TargetNodeID: "node-script-version-71", ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "summary", Description: "Transition summary."}}},
+			{WorkflowID: workflowID, ID: "edge-agent-join-1", Key: "to_join", TransitionGroupID: "group-done", TargetNodeID: "node-join-version-71", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: workflowID, ID: "edge-script-join-1", Key: "script_join", TransitionGroupID: "group-script-join-1", TargetNodeID: "node-join-version-71", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: workflowID, ID: "edge-join-done-1", Key: "done", TransitionGroupID: "group-join-done-1", TargetNodeID: "node-done", ContextMode: workflow.ContextModeNewSession},
+		},
+	}, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: metadataTestRoleResolver{}})
+	if len(validation.Errors) != 0 {
+		t.Fatalf("migrated Workflow validation = %+v", validation.Errors)
+	}
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT prompt_template, parameters_json
 FROM workflow_edges
 WHERE id = 'edge-start-1'`).Scan(&edgePrompt, &edgeParameters); err != nil {
 		t.Fatalf("query preserved Transition contract: %v", err)
 	}
-	if edgePrompt != version71TransitionPrompt || edgeParameters != version71TransitionParameters {
+	if edgePrompt != version71TransitionPrompt || edgeParameters != "[]" {
 		t.Fatalf("preserved Transition contract = prompt=%q parameters=%q", edgePrompt, edgeParameters)
+	}
+	var laterParameters string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT parameters_json
+FROM workflow_edges
+WHERE id = 'edge-done-1'`).Scan(&laterParameters); err != nil {
+		t.Fatalf("query later Transition Parameters: %v", err)
+	}
+	if laterParameters != version71TransitionParameters {
+		t.Fatalf("preserved later Transition Parameters = %q", laterParameters)
 	}
 }
 
