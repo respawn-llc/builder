@@ -22,8 +22,8 @@ function current<T, R>(history: ReturnType<typeof createSidebarHistory<T, R>>) {
 
 function walkBack<T, R>(
   history: ReturnType<typeof createSidebarHistory<T, R>>,
-): Array<SidebarHistorySnapshot<T, R>> {
-  const result: Array<SidebarHistorySnapshot<T, R>> = [current(history)];
+): SidebarHistorySnapshot<T, R>[] {
+  const result: SidebarHistorySnapshot<T, R>[] = [current(history)];
   while (result[0]?.canGoBack === true) {
     const sourceKey = result[0].key;
     expect(history.back({ sourceKey, retainedState: null })).toBe(true);

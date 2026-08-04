@@ -38,11 +38,11 @@ export type SidebarHistory<T, R> = Readonly<{
   destroy(): void;
 }>;
 
-type Entry<T, R> = {
+interface Entry<T, R> {
   destination: T;
   retainedState: R | null;
   location: HistoryLocation;
-};
+}
 
 export function createSidebarHistory<T, R>(
   root: T,
@@ -87,7 +87,7 @@ export function createSidebarHistory<T, R>(
             canGoBack: currentIndex > 0,
             direction,
           };
-    listeners.forEach((listener) => listener());
+    listeners.forEach((listener) => { listener(); });
   };
   const rebase = (): void => {
     entries = entries.map((entry, index) => ({

@@ -25,12 +25,12 @@ describe("NewTaskForm sidebar admission", () => {
 
     expect(onAdmission).toHaveBeenCalledTimes(1);
     await waitFor(() =>
-      expect(services.transport.calls.filter((call) => call.method === "workflow.task.create")).toHaveLength(1),
+      { expect(services.transport.calls.filter((call) => call.method === "workflow.task.create")).toHaveLength(1); },
     );
     expect(onSubmitted).not.toHaveBeenCalled();
 
     created.resolve({ task: { id: "task-created" } });
-    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith("task-created"));
+    await waitFor(() => { expect(onSubmitted).toHaveBeenCalledWith("task-created"); });
     expect(release).not.toHaveBeenCalled();
   });
 
@@ -50,11 +50,11 @@ describe("NewTaskForm sidebar admission", () => {
     await user.type(screen.getByLabelText("Title"), "Failed Task");
     await user.click(screen.getByRole("button", { name: "Create task" }));
     await waitFor(() =>
-      expect(services.transport.calls.filter((call) => call.method === "workflow.task.create")).toHaveLength(1),
+      { expect(services.transport.calls.filter((call) => call.method === "workflow.task.create")).toHaveLength(1); },
     );
     failed.reject(new Error("create failed"));
 
-    await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    await waitFor(() => { expect(release).toHaveBeenCalledTimes(1); });
     expect(screen.getByLabelText("Title")).toHaveValue("Failed Task");
   });
 

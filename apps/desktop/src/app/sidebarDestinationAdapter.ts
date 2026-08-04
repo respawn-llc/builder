@@ -64,7 +64,8 @@ export function deactivateSidebarDestination(destination: SidebarDestination): S
   if (destination.kind !== "taskDetail" || destination.initialFocus === undefined) {
     return destination;
   }
-  const { initialFocus: _initialFocus, ...withoutFocus } = destination;
+  const { initialFocus, ...withoutFocus } = destination;
+  void initialFocus;
   return withoutFocus;
 }
 

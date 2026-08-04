@@ -30,21 +30,21 @@ describe("SidebarProvider", () => {
     act(() => {
       lifecycle = result.current.openSidebar(task("task-1"));
     });
-    act(() => result.current.replaceSidebar(task("task-2")));
+    act(() => { result.current.replaceSidebar(task("task-2")); });
 
     expect(result.current.activeDestination).toEqual(task("task-2"));
-    act(() => result.current.closeSidebar());
+    act(() => { result.current.closeSidebar(); });
     await expect(lifecycle).resolves.toEqual({ status: "canceled", reason: "closed" });
   });
 
   it("pushes and backs through the minimal facade without exposing stack entries or keys", () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
     act(() => void result.current.openSidebar(task("task-1")));
-    act(() => result.current.pushSidebar(task("task-2")));
+    act(() => { result.current.pushSidebar(task("task-2")); });
 
     expect(result.current.activeDestination).toEqual(task("task-2"));
     expect(result.current.canGoBack).toBe(true);
-    act(() => result.current.backSidebar());
+    act(() => { result.current.backSidebar(); });
     expect(result.current.activeDestination).toEqual(task("task-1"));
     expect(result.current.canGoBack).toBe(false);
   });
@@ -64,7 +64,7 @@ describe("SidebarProvider", () => {
       }));
       result.current.sidebar.pushSidebar(task("task-2"));
     });
-    act(() => result.current.sidebar.backSidebar());
+    act(() => { result.current.sidebar.backSidebar(); });
 
     expect(result.current.host.snapshot).toEqual({
       kind: "taskDetail",
@@ -95,7 +95,7 @@ describe("SidebarProvider", () => {
     act(() => void result.current.sidebar.openSidebar(task("task-1")));
     const stale = result.current.host.actions;
     act(() => void result.current.sidebar.openSidebar(task("task-2")));
-    act(() => stale.replace(task("stale")));
+    act(() => { stale.replace(task("stale")); });
 
     expect(result.current.sidebar.activeDestination).toEqual(task("task-2"));
   });
@@ -127,8 +127,8 @@ describe("SidebarProvider", () => {
       descriptionExpanded: true,
       selectedTab: "comments",
     })));
-    act(() => result.current.sidebar.pushSidebar(task("task-b")));
-    act(() => result.current.sidebar.backSidebar());
+    act(() => { result.current.sidebar.pushSidebar(task("task-b")); });
+    act(() => { result.current.sidebar.backSidebar(); });
 
     const returned = {
       activeDestination: result.current.sidebar.activeDestination,
@@ -137,7 +137,7 @@ describe("SidebarProvider", () => {
     };
     expect(returned.activeDestination).toEqual(task("task-a"));
     expect(returned.hostKey).not.toBe(firstKey);
-    act(() => stale.replace(task("stale")));
+    act(() => { stale.replace(task("stale")); });
     expect({
       activeDestination: result.current.sidebar.activeDestination,
       hostKey: result.current.host.key,
@@ -148,7 +148,7 @@ describe("SidebarProvider", () => {
   it("invalidates current and inactive typed Task destinations", () => {
     const { result } = renderHook(() => useSidebar(), { wrapper });
     act(() => void result.current.openSidebar(task("task-1")));
-    act(() => result.current.pushSidebar(task("task-2")));
+    act(() => { result.current.pushSidebar(task("task-2")); });
     expect(result.current.invalidateSidebar({ kind: "task", taskID: "task-1" })).toEqual({
       kind: "discarded",
     });
@@ -164,7 +164,7 @@ describe("SidebarProvider", () => {
       { wrapper },
     );
     act(() => void result.current.sidebar.openSidebar(task("task-1")));
-    act(() => result.current.sidebar.pushSidebar(newTask()));
+    act(() => { result.current.sidebar.pushSidebar(newTask()); });
     let release: (() => void) | null = null;
     act(() => {
       release = result.current.host.actions.admitMutation();
@@ -172,7 +172,7 @@ describe("SidebarProvider", () => {
 
     expect(release).not.toBeNull();
     expect(result.current.host.mutationAdmitted).toBe(true);
-    act(() => result.current.sidebar.backSidebar());
+    act(() => { result.current.sidebar.backSidebar(); });
     expect(result.current.sidebar.activeDestination).toEqual(newTask());
 
     act(() => void result.current.sidebar.openSidebar(task("task-2")));

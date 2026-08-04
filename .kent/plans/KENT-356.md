@@ -613,7 +613,7 @@
   ID/token, pathname/search parsing, token cleanup, error swallowing, text
   parsing, or absence sentinel.
 
-- [ ] **Write Project invalidation and notification-origin tests, then finish
+- [x] **Write Project invalidation and notification-origin tests, then finish
   scope/spec cleanup.** Exercise current/inactive Project entries, unrelated
   survivors when the route stays put, ordinary full close when deletion
   navigates away, and asynchronous cleanup that re-reads current history instead
@@ -628,6 +628,14 @@
   review, typecheck, architecture lint, 90-row ID/status audit, and scope-diff
   checks pass; route/invalidation/notification production scope is 90–130 LoC
   and styles/i18n is 40–60 LoC.
+  Progress (August 4, 2026): Project deletion now invalidates typed complete
+  sidebar history after asynchronous query cleanup; AppChrome no longer
+  inspects destination shape, and ProjectDeleteButton uses the same operation.
+  Board selector ownership is typed and synchronous for workflow and Task
+  search transitions, with deletion-cause preservation. Notification Task
+  openings populate immutable Project membership or resolve it through the
+  Task API. Focused route/sidebar/deletion-adjacent tests and typecheck pass;
+  no server, wire, or generic-list changes are present.
 
 - [ ] **Run the final product-boundary matrix and automated verification.** Add
   only missing coverage for whole-stack X/route/reconnect, same-Task truncation,

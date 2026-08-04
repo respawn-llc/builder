@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +24,6 @@ import {
 } from "@/app-facade";
 import {
   sidebarDestinationMatches,
-  sidebarDestinationProjectID,
   sameSidebarDestination,
   deactivateSidebarDestination,
 } from "./sidebarDestinationAdapter";
@@ -75,10 +75,16 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closingHistoryRef = useRef<History | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
-  currentHistoryRef.current = currentHistory;
+  useLayoutEffect(() => {
+    currentHistoryRef.current = currentHistory;
+  }, [currentHistory]);
 
   const subscribe = useCallback(
-    (listener: () => void) => currentHistory?.subscribe(listener) ?? (() => {}),
+    (listener: () => void) =>
+      currentHistory?.subscribe(listener) ??
+      (() => {
+        return;
+      }),
     [currentHistory],
   );
   const getSnapshot = useCallback(
@@ -160,11 +166,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   );
 
   const openSidebar = useCallback(
-    (destination: SidebarDestination): Promise<SidebarResult> => {
+    async (destination: SidebarDestination): Promise<SidebarResult> => {
       clearCloseTimeout();
       closingHistoryRef.current = null;
       const previous = pendingRef.current;
-      if (previous !== undefined && previous !== null) {
+      if (previous !== null) {
         pendingRef.current = null;
         captureRef.current = null;
         clearMutationAdmission();
@@ -200,7 +206,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     (destination: SidebarDestination) => {
       const history = currentHistoryRef.current;
       const snapshot = history?.snapshot() ?? null;
-      if (history === null || history === undefined || snapshot === null) return;
+      if (history === null || snapshot === null) return;
       const retainedState = captureCurrent();
       if (retainedState === false) return;
       if (
@@ -222,15 +228,15 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
   const backSidebar = useCallback(() => {
     const history = currentHistoryRef.current;
-    if (history !== null && mutationAdmissionRef.current?.history === history) return;
     const snapshot = history?.snapshot() ?? null;
-    if (history === null || history === undefined || snapshot === null || !snapshot.canGoBack) return;
+    const input = sidebarBackInput(history, snapshot, mutationAdmissionRef.current);
+    if (input === null) return;
     const retainedState = captureCurrent();
     if (retainedState === false) return;
-    if (history.back({ sourceKey: snapshot.key, retainedState })) {
-      clearMutationAdmission(history);
+    if (input.history.back({ sourceKey: input.snapshot.key, retainedState })) {
+      clearMutationAdmission(input.history);
       setPhase("open");
-      setWidthFor(history.snapshot()?.destination ?? null);
+      setWidthFor(input.history.snapshot()?.destination ?? null);
     }
   }, [captureCurrent, clearMutationAdmission, setWidthFor]);
 
@@ -238,7 +244,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     (destination: SidebarDestination) => {
       const history = currentHistoryRef.current;
       const snapshot = history?.snapshot() ?? null;
-      if (history === null || history === undefined || snapshot === null) {
+      if (history === null || snapshot === null) {
         throw new Error("Sidebar replacement requires an active destination.");
       }
       captureRef.current = null;
@@ -329,19 +335,23 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
           };
         },
         capture: (capture) => {
-          if (history === null || key === null || !isCurrent(history, key)) return () => {};
+          if (history === null || key === null || !isCurrent(history, key)) {
+            return () => {
+              return;
+            };
+          }
           captureRef.current = capture;
           return () => {
             if (captureRef.current === capture) captureRef.current = null;
           };
         },
-        close: (reason) => currentAction(() => closeSidebar(reason)),
+        close: (reason) => { currentAction(() => { closeSidebar(reason); }); },
         invalidate: () =>
-          currentAction(() => {
+          { currentAction(() => {
             if (current !== null) invalidateSidebar({ kind: "task", taskID: taskIDOf(current.destination) });
-          }),
-        replace: (destination) => currentAction(() => replaceSidebar(destination)),
-        resolve: (result) => currentAction(() => resolveSidebar(result)),
+          }); },
+        replace: (destination) => { currentAction(() => { replaceSidebar(destination); }); },
+        resolve: (result) => { currentAction(() => { resolveSidebar(result); }); },
       },
     };
   }, [
@@ -410,6 +420,17 @@ function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {
   return snapshot === null
     ? null
     : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key };
+}
+
+function sidebarBackInput(
+  history: History | null,
+  snapshot: HistorySnapshot | null,
+  admission: Readonly<{ history: History; key: string }> | null,
+): Readonly<{ history: History; snapshot: HistorySnapshot }> | null {
+  if (history === null || snapshot === null || !snapshot.canGoBack || admission?.history === history) {
+    return null;
+  }
+  return { history, snapshot };
 }
 
 function taskIDOf(destination: SidebarDestination): string {

@@ -5,7 +5,7 @@ import { TaskDetailSurface } from "@/features/task-detail";
 import { NewTaskForm } from "@/features/tasks";
 import { WorkflowEditorRoute, WorkflowInspectorSidebar } from "@/features/workflow-editor";
 import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
-import { useAppNavigation, useSidebar } from "@/app-facade";
+import { useAppNavigation } from "@/app-facade";
 import type { SidebarController, SidebarDestination } from "@/app-facade";
 import { taskDetailSidebarDestination } from "./sidebarDestinationAdapter";
 import { useSidebarHost } from "./sidebarHostContext";

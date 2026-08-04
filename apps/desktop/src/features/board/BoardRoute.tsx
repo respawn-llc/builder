@@ -16,7 +16,6 @@ import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
-import { taskDetailSidebarDestination } from "@/app/sidebarDestinationAdapter";
 import {
   TaskInitiatingActionDialogs,
   startTaskInitiatingAction,
@@ -357,7 +356,12 @@ function BoardContent({
       closeSidebar("route_change");
     }
     if (next !== null) {
-      void openSidebar(taskDetailSidebarDestination(next, board.projectID, { mode: "overlay" })).then((result) => {
+      void openSidebar({
+        kind: "taskDetail",
+        mode: "overlay",
+        projectID: board.projectID,
+        taskID: next,
+      }).then((result) => {
         if (taskDetailRouteShouldClose(result)) {
           void navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id).catch(reportNavigationError);
         }

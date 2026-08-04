@@ -1,7 +1,7 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo } from "react";
 import { z } from "zod";
 
 import { createBrowserNativeBridge } from "@app/native-bridge";
@@ -36,11 +36,11 @@ describe("SidebarHost navigation controls", () => {
     await user.click(screen.getByRole("button", { name: "Push" }));
     await waitFor(() => expect(screen.getByTestId("sidebar-content-child")).toBeVisible());
     expect(screen.getByRole("button", { name: "Back" })).toBeVisible();
-    expect(screen.getByTestId("app-sidebar-host").querySelector(".app-sidebar-destination-push")).not.toBeNull();
+    expect(screen.getByTestId("app-sidebar-host")).toHaveClass("app-sidebar-destination-push");
 
     await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.getByTestId("sidebar-content-root")).toBeVisible());
-    expect(screen.getByTestId("app-sidebar-host").querySelector(".app-sidebar-destination-back")).not.toBeNull();
+    expect(screen.getByTestId("app-sidebar-host")).toHaveClass("app-sidebar-destination-back");
     expect(mounts).toEqual(["root", "child", "root"]);
   });
 
@@ -63,12 +63,12 @@ describe("SidebarHost navigation controls", () => {
   });
 
   it("uses the scoped Pop out completion for the current activation only", async () => {
-    const nativeWindow = deferred<void>();
+    const nativeWindow = deferred<undefined>();
     const browserBridge = createBrowserNativeBridge();
     const nativeBridge = {
       ...browserBridge,
       capabilities: { ...browserBridge.capabilities, dialogWindows: true },
-      dialogs: { openWindow: () => nativeWindow.promise },
+      dialogs: { openWindow: async () => nativeWindow.promise },
     };
     const services = createTestServices(taskRoutes(), nativeBridge);
     const router = createRouter({
@@ -93,7 +93,7 @@ describe("SidebarHost navigation controls", () => {
     await user.click(screen.getByRole("button", { name: "Open in new window" }));
     await user.click(screen.getByRole("button", { name: "Push task-b" }));
     await act(async () => {
-      nativeWindow.resolve();
+      nativeWindow.resolve(undefined);
       await nativeWindow.promise;
     });
 
@@ -102,12 +102,12 @@ describe("SidebarHost navigation controls", () => {
   });
 
   it("rejects an old Pop out completion after A-to-B-to-A", async () => {
-    const nativeWindow = deferred<void>();
+    const nativeWindow = deferred<undefined>();
     const browserBridge = createBrowserNativeBridge();
     const nativeBridge = {
       ...browserBridge,
       capabilities: { ...browserBridge.capabilities, dialogWindows: true },
-      dialogs: { openWindow: () => nativeWindow.promise },
+      dialogs: { openWindow: async () => nativeWindow.promise },
     };
     const services = createTestServices(taskRoutes(), nativeBridge);
     const router = createRouter({
@@ -133,7 +133,7 @@ describe("SidebarHost navigation controls", () => {
     await user.click(screen.getByRole("button", { name: "Push task-b" }));
     await user.click(screen.getByRole("button", { name: "Back" }));
     await act(async () => {
-      nativeWindow.resolve();
+      nativeWindow.resolve(undefined);
       await nativeWindow.promise;
     });
 
@@ -158,7 +158,7 @@ function ShellScenario({ mounts }: Readonly<{ mounts: string[] }>) {
 
   return (
     <>
-      <button onClick={() => sidebar.pushSidebar(destinations.child)} type="button">
+      <button onClick={() => { sidebar.pushSidebar(destinations.child); }} type="button">
         Push
       </button>
       <SidebarHost />
