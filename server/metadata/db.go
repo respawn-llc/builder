@@ -26,9 +26,7 @@ var metadataMigrationDebugLogs = false
 var metadataMigrationLogWriter io.Writer = os.Stderr
 
 const (
-	workflowIdentityMigrationVersion         int64 = 62
-	workflowSessionAgentRoleMigrationVersion int64 = 63
-	workflowIdentityViewName                       = "project_default_workflow_identity"
+	workflowIdentityViewName = "project_default_workflow_identity"
 )
 
 func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, error) {
@@ -114,7 +112,8 @@ func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, p
 	if err != nil {
 		return fmt.Errorf("read metadata migration version: %w", err)
 	}
-	if version < workflowIdentityMigrationVersion || version > workflowSessionAgentRoleMigrationVersion {
+	if version < metadatamigrations.WorkflowIdentityMigrationVersion ||
+		version > metadatamigrations.WorkflowSessionAgentRoleMigrationVersion {
 		return nil
 	}
 	definitions, err := sqlitegen.New(db).ListMetadataSchemaDefinitions(ctx)
@@ -131,7 +130,7 @@ func repairWorkflowIdentityMigrationCollision(ctx context.Context, db *sql.DB, p
 	if err != nil {
 		return fmt.Errorf("create metadata migration version store: %w", err)
 	}
-	for collidedVersion := workflowSessionAgentRoleMigrationVersion; collidedVersion >= workflowIdentityMigrationVersion; collidedVersion-- {
+	for collidedVersion := metadatamigrations.WorkflowSessionAgentRoleMigrationVersion; collidedVersion >= metadatamigrations.WorkflowIdentityMigrationVersion; collidedVersion-- {
 		if err := versionStore.Delete(ctx, db, collidedVersion); err != nil {
 			return fmt.Errorf("repair metadata migration version %d: %w", collidedVersion, err)
 		}

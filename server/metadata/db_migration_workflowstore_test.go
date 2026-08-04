@@ -17,6 +17,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const version71CutoverPrompt = `Execute {{.TaskTitle}}.`
+
 func TestVersion71CutoverLoadsAndStartsThroughWorkflowStore(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -75,7 +77,7 @@ INSERT INTO workflow_edges (
     prompt_template, parameters_json, input_bindings_json, output_requirements_json
 ) VALUES
     ('edge-start', 'group-start', 'start', 'node-agent', 'new_session',
-     'Execute {{.TaskTitle}}.', '[]', '[]', '[]'),
+     '', '[]', '[]', '[]'),
     ('edge-agent-script', 'group-agent', 'to_script', 'node-script', 'new_session',
      '', '[{"key":"summary","description":"Summary."}]', '[]', '[]'),
     ('edge-agent-branch', 'group-agent', 'to_branch', 'node-branch', 'new_session',
@@ -100,6 +102,12 @@ WHERE id = 'project-workflow-store-cutover'`,
 		workflowID,
 	); err != nil {
 		t.Fatalf("seed version 71 workflow: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE workflow_edges
+SET prompt_template = ?
+WHERE id = 'edge-start'`, version71CutoverPrompt); err != nil {
+		t.Fatalf("seed version 71 Transition Prompt: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 71 database: %v", err)
@@ -198,7 +206,7 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	if err != nil {
 		t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
 	}
-	if startContext.TransitionPrompt != "Execute {{.TaskTitle}}." {
+	if startContext.TransitionPrompt != version71CutoverPrompt {
 		t.Fatalf("start Transition Prompt = %q, want migrated prompt", startContext.TransitionPrompt)
 	}
 	completed, err := store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
