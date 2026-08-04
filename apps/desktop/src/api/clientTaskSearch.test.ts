@@ -1,7 +1,13 @@
 import { FakeRpcTransport } from "@/test-support/api";
 
 import { ApiClient } from "./client";
-import { decodeTaskSearchError, RpcError, TaskSearchError, type TaskSearchInput } from "./index";
+import {
+  ContractError,
+  decodeTaskSearchError,
+  RpcError,
+  TaskSearchError,
+  type TaskSearchInput,
+} from "./index";
 
 const literalResponse = {
   mode: "literal",
@@ -202,9 +208,7 @@ describe("ApiClient task search", () => {
       new FakeRpcTransport([{ method: "workflow.task.search", result: response }]),
     );
 
-    await expect(client.searchTasks(literalInput)).rejects.toThrow(
-      "workflow.task.search response did not match GUI contract.",
-    );
+    await expect(client.searchTasks(literalInput)).rejects.toBeInstanceOf(ContractError);
   });
 
   it("surfaces normalized-too-short as a typed error and omits absent request fields", async () => {

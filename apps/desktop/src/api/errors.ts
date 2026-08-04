@@ -336,10 +336,21 @@ export class TransportError extends Error {
   }
 }
 
+export type ContractIssueDiagnostic = Readonly<{
+  code: string;
+  path: readonly string[];
+}>;
+
 export class ContractError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly diagnostics: readonly ContractIssueDiagnostic[];
+  readonly totalDiagnosticCount: number;
+
+  constructor(message: string, diagnostics: readonly ContractIssueDiagnostic[] = []) {
+    const retainedDiagnostics = diagnostics.slice(0, 8);
+    super(contractErrorMessage(message, retainedDiagnostics, diagnostics.length));
     this.name = "ContractError";
+    this.diagnostics = retainedDiagnostics;
+    this.totalDiagnosticCount = diagnostics.length;
   }
 }
 
@@ -389,4 +400,20 @@ export function errorMessage(error: unknown): string {
 function normalizeMessage(message: string): string {
   const trimmed = message.trim();
   return trimmed.length > 0 ? trimmed : "Unknown error";
+}
+
+function contractErrorMessage(
+  message: string,
+  diagnostics: readonly ContractIssueDiagnostic[],
+  totalDiagnosticCount: number,
+): string {
+  if (diagnostics.length === 0) {
+    return message;
+  }
+  const retained = diagnostics
+    .map((diagnostic) => `${diagnostic.path.join(".") || "<root>"} (${diagnostic.code})`)
+    .join(", ");
+  const omittedCount = totalDiagnosticCount - diagnostics.length;
+  const omitted = omittedCount > 0 ? `, +${omittedCount.toString()} more` : "";
+  return `${message} ${retained}${omitted}`;
 }
