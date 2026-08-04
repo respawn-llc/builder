@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+
+	testharness "core/internal/testharness/testsetup"
+
+	"github.com/tursodatabase/libsql-client-go/sqliteparser"
 )
 
 type currentNodePersistenceFindingKind string
@@ -55,6 +59,7 @@ type persistenceIndex struct {
 }
 
 type persistenceTrigger struct {
+	operation           string
 	referencedRelations map[string]struct{}
 }
 
@@ -142,7 +147,15 @@ ORDER BY name`)
 			_ = triggerRows.Close()
 			return persistenceSchemaModel{}, fmt.Errorf("parse trigger on %s: %w", tableName, err)
 		}
-		relation.triggers = append(relation.triggers, persistenceTrigger{referencedRelations: references})
+		operation, err := sqliteTriggerOperation(source)
+		if err != nil {
+			_ = triggerRows.Close()
+			return persistenceSchemaModel{}, fmt.Errorf("parse trigger operation on %s: %w", tableName, err)
+		}
+		relation.triggers = append(relation.triggers, persistenceTrigger{
+			operation:           operation,
+			referencedRelations: references,
+		})
 	}
 	if err := triggerRows.Close(); err != nil {
 		return persistenceSchemaModel{}, err
@@ -367,15 +380,14 @@ func analyzeCurrentNodePersistence(model persistenceSchemaModel) persistenceAnal
 		if sessions == nil || taskOwner == nil || len(taskOwner.localColumns) != 1 || sessions.columns[taskOwner.localColumns[0]].notNull {
 			analysis.findings = append(analysis.findings, malformedPersistenceFinding(sessionForeignKey.targetTable, "Sessions must own an optional direct Task relation"))
 		}
-		associationCandidates := relationsWithForeignTargets(model, sessionForeignKey.targetTable, "workflow_nodes")
-		filtered := associationCandidates[:0]
-		for _, candidate := range associationCandidates {
-			if foreignKeyTo(model.relations[candidate], "tasks") == nil {
-				filtered = append(filtered, candidate)
-			}
-		}
-		if len(filtered) != 1 || len(primaryColumns(model.relations[filtered[0]])) != 0 {
-			analysis.findings = append(analysis.findings, malformedPersistenceFinding(sessionForeignKey.targetTable, "one natural Session-to-Workflow-Node association is required"))
+		associationName, associationFindings := retainedSessionNodeProvenanceRelation(
+			model,
+			sessionForeignKey.targetTable,
+			currentName,
+		)
+		analysis.findings = append(analysis.findings, associationFindings...)
+		if associationName != "" && len(associationFindings) == 0 {
+			analysis.authorityRelations[associationName] = struct{}{}
 		}
 	}
 
@@ -394,6 +406,113 @@ func analyzeCurrentNodePersistence(model persistenceSchemaModel) persistenceAnal
 	}
 	sortPersistenceFindings(analysis.findings)
 	return analysis
+}
+
+func retainedSessionNodeProvenanceRelation(
+	model persistenceSchemaModel,
+	sessionsName string,
+	currentName string,
+) (string, []currentNodePersistenceFinding) {
+	var candidates []string
+	for name, relation := range model.relations {
+		_, hasNodeIdentity := relation.columns["node_id"]
+		if name == currentName ||
+			foreignKeyTo(relation, sessionsName) == nil ||
+			foreignKeyTo(relation, "tasks") != nil ||
+			(!hasNodeIdentity && len(primaryColumns(relation)) != 0) {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	sort.Strings(candidates)
+	if len(candidates) != 1 {
+		return "", []currentNodePersistenceFinding{malformedPersistenceFinding(
+			sessionsName,
+			fmt.Sprintf("retained Session-node provenance relation count = %d, relations = %v", len(candidates), candidates),
+		)}
+	}
+
+	const (
+		nodeColumn   = "node_id"
+		branchColumn = "transition_branch_key"
+	)
+	name := candidates[0]
+	relation := model.relations[name]
+	sessionForeignKey := foreignKeyTo(relation, sessionsName)
+	node, hasNode := relation.columns[nodeColumn]
+	branch, hasBranch := relation.columns[branchColumn]
+	var findings []currentNodePersistenceFinding
+	sessionColumn := ""
+	if sessionForeignKey != nil && len(sessionForeignKey.localColumns) == 1 {
+		sessionColumn = sessionForeignKey.localColumns[0]
+	}
+	if sessionForeignKey == nil ||
+		sessionColumn == "" ||
+		!relation.columns[sessionColumn].notNull {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must have one direct non-null Session owner"))
+	}
+	if !hasNode || !node.notNull {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must store one non-null node identity"))
+	}
+	if foreignKeyTo(relation, "workflow_nodes") != nil {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must not own Workflow Node lifetime"))
+	}
+	primary := primaryColumns(relation)
+	if len(primary) != 0 &&
+		!reflect.DeepEqual(primary, []string{sessionColumn, nodeColumn}) &&
+		!reflect.DeepEqual(primary, []string{sessionColumn, nodeColumn, branchColumn}) {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must not use a surrogate primary key"))
+	}
+	if !hasBranch || branch.notNull ||
+		sessionColumn == "" ||
+		!hasUniquePartialIndex(relation, []string{sessionColumn, nodeColumn}) ||
+		!hasUniquePartialIndex(relation, []string{sessionColumn, nodeColumn, branchColumn}) {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must enforce serial and branch natural uniqueness"))
+	}
+	for _, operation := range []string{"insert", "update"} {
+		if !hasOwnerValidationTrigger(relation, operation, sessionsName) {
+			findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance writes must validate Workflow Node and Task ownership"))
+			break
+		}
+	}
+	return name, findings
+}
+
+func hasOwnerValidationTrigger(relation *persistenceRelation, operation string, sessionsName string) bool {
+	for _, trigger := range relation.triggers {
+		if trigger.operation != operation {
+			continue
+		}
+		references := trigger.referencedRelations
+		if _, hasSessions := references[sessionsName]; !hasSessions {
+			continue
+		}
+		if _, hasNodes := references["workflow_nodes"]; !hasNodes {
+			continue
+		}
+		if _, hasTasks := references["task_records"]; hasTasks {
+			return true
+		}
+	}
+	return false
+}
+
+func sqliteTriggerOperation(source string) (string, error) {
+	tokens, err := testharness.SQLiteTokens(source)
+	if err != nil {
+		return "", err
+	}
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserINSERT_:
+			return "insert", nil
+		case sqliteparser.SQLiteParserUPDATE_:
+			return "update", nil
+		case sqliteparser.SQLiteParserDELETE_:
+			return "delete", nil
+		}
+	}
+	return "", fmt.Errorf("trigger write operation is missing")
 }
 
 func relationsWithForeignTargets(model persistenceSchemaModel, targets ...string) []string {

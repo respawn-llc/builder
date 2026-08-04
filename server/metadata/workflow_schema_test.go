@@ -315,6 +315,25 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 			t.Fatalf("expected session association index %s", index)
 		}
 	}
+	for _, assertion := range []struct {
+		table string
+		want  int
+	}{
+		{table: "session_workflow_node_associations", want: 0},
+		{table: "task_current_nodes", want: 1},
+	} {
+		var nodeForeignKeyCount int
+		if err := store.db.QueryRow(`
+SELECT COUNT(*)
+FROM pragma_foreign_key_list(?)
+WHERE "from" = 'node_id'
+  AND "table" = 'workflow_nodes'`, assertion.table).Scan(&nodeForeignKeyCount); err != nil {
+			t.Fatalf("inspect %s.node_id foreign key: %v", assertion.table, err)
+		}
+		if nodeForeignKeyCount != assertion.want {
+			t.Fatalf("%s.node_id workflow_nodes foreign keys = %d, want %d", assertion.table, nodeForeignKeyCount, assertion.want)
+		}
+	}
 
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms

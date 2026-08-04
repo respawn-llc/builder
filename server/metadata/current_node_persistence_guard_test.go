@@ -121,6 +121,62 @@ func TestCurrentNodePersistenceGuardRejectsDuplicateAuthorityFixtures(t *testing
 		assertPersistenceFinding(t, analyzeAuthorityWriterCalls(calls), findingForeignAggregateWriter)
 	})
 }
+
+func TestCurrentNodePersistenceGuardRejectsInvalidSessionProvenanceFixtures(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*persistenceRelation)
+	}{
+		{
+			name: "missing node identity",
+			mutate: func(relation *persistenceRelation) {
+				delete(relation.columns, "node_id")
+			},
+		},
+		{
+			name: "missing owner validation",
+			mutate: func(relation *persistenceRelation) {
+				relation.triggers = nil
+			},
+		},
+		{
+			name: "surrogate primary key",
+			mutate: func(relation *persistenceRelation) {
+				relation.columns["id"] = persistenceColumn{name: "id", primary: 1}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := baselinePersistenceFixture()
+			test.mutate(model.relations["session_node_association"])
+			assertPersistenceFinding(
+				t,
+				analyzeCurrentNodePersistence(model).findings,
+				findingMalformedCurrentStateGraph,
+			)
+		})
+	}
+}
+
+func TestCurrentNodePersistenceGuardAcceptsNaturalSessionProvenancePrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	model := baselinePersistenceFixture()
+	association := model.relations["session_node_association"]
+	sessionColumn := association.columns["session_id"]
+	sessionColumn.primary = 1
+	association.columns["session_id"] = sessionColumn
+	nodeColumn := association.columns["node_id"]
+	nodeColumn.primary = 2
+	association.columns["node_id"] = nodeColumn
+
+	if findings := analyzeCurrentNodePersistence(model).findings; len(findings) != 0 {
+		t.Fatalf("natural Session-node provenance identity was rejected:\n%s", formatPersistenceFindings(findings))
+	}
+}
+
 func formatPersistenceFindings(findings []currentNodePersistenceFinding) string {
 	lines := make([]string, 0, len(findings))
 	for _, finding := range findings {
@@ -230,13 +286,36 @@ func baselinePersistenceFixture() persistenceSchemaModel {
 	model.relations["session_node_association"] = &persistenceRelation{
 		name: "session_node_association",
 		columns: map[string]persistenceColumn{
-			"session_id": {name: "session_id"},
-			"node_id":    {name: "node_id"},
-			"branch_key": {name: "branch_key"},
+			"session_id":            {name: "session_id", notNull: true},
+			"node_id":               {name: "node_id", notNull: true},
+			"transition_branch_key": {name: "transition_branch_key"},
 		},
-		foreignKeys: []persistenceForeignKey{
-			{targetTable: "sessions", localColumns: []string{"session_id"}, targetColumns: []string{"id"}},
-			{targetTable: "workflow_nodes", localColumns: []string{"node_id"}, targetColumns: []string{"id"}},
+		foreignKeys: []persistenceForeignKey{{
+			targetTable:   "sessions",
+			localColumns:  []string{"session_id"},
+			targetColumns: []string{"id"},
+		}},
+		indexes: []persistenceIndex{
+			{unique: true, partial: true, columns: []string{"session_id", "node_id"}},
+			{unique: true, partial: true, columns: []string{"session_id", "node_id", "transition_branch_key"}},
+		},
+		triggers: []persistenceTrigger{
+			{
+				operation: "insert",
+				referencedRelations: map[string]struct{}{
+					"sessions":       {},
+					"task_records":   {},
+					"workflow_nodes": {},
+				},
+			},
+			{
+				operation: "update",
+				referencedRelations: map[string]struct{}{
+					"sessions":       {},
+					"task_records":   {},
+					"workflow_nodes": {},
+				},
+			},
 		},
 	}
 	return model

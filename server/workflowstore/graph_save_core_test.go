@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
@@ -577,6 +578,136 @@ func TestWorkflowGraphSaveCommitIgnoresUnrelatedTaskMetadataDuringPreparation(t 
 	}
 	if !outcome.result.Saved || outcome.result.Version != record.Version+1 || len(outcome.result.Blockers) != 0 {
 		t.Fatalf("save after unrelated task metadata = %+v, want committed graph", outcome.result)
+	}
+}
+
+func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	agentID := workflow.NodeID("node-agent-" + workflowID.String())
+	reviewID := workflow.NodeID("node-review-" + workflowID.String())
+	reviewDoneGroupID := workflow.TransitionGroupID("group-review-done-" + workflowID.String())
+	reviewDoneEdgeID := workflow.EdgeID("edge-review-done-" + workflowID.String())
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.Nodes = append(req.Nodes, NodeRecord{
+			ID: reviewID, WorkflowID: workflowID, Key: "review", Kind: workflow.NodeKindAgent,
+			DisplayName: "Review", SubagentRole: "reviewer",
+		})
+		for index := range req.Edges {
+			if req.Edges[index].ID == workflow.EdgeID("edge-done-"+workflowID.String()) {
+				req.Edges[index].TargetNodeID = reviewID
+				req.Edges[index].PromptTemplate = "Review the work."
+			}
+		}
+		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+			ID: reviewDoneGroupID, WorkflowID: workflowID, SourceNodeID: reviewID,
+			TransitionID: "finish", DisplayName: "Done",
+		})
+		req.Edges = append(req.Edges, EdgeRecord{
+			ID: reviewDoneEdgeID, WorkflowID: workflowID, TransitionGroupID: reviewDoneGroupID,
+			Key: "finish", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession,
+		})
+	})
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	agentReference := started.Mutation.Created[0].Reference
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
+	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  agentReference,
+		AssociatedAt: associatedAt,
+	}); err != nil {
+		t.Fatalf("AssociateTaskSession: %v", err)
+	}
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       agentReference,
+		TransitionID: "done",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("agent completion mutation = %+v, want one review Current Node", completed.Mutation)
+	}
+	reviewReference := completed.Mutation.Created[0].Reference
+	if reviewReference.NodeID != reviewID {
+		t.Fatalf("agent completion target = %v, want review Node %q", reviewReference, reviewID)
+	}
+	completed, err = store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       reviewReference,
+		TransitionID: "finish",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("review completion mutation = %+v, want one terminal Current Node", completed.Mutation)
+	}
+	terminalReference := completed.Mutation.Created[0].Reference
+
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, agentID)
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, workflow.EdgeID("edge-done-"+workflowID.String()))
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, workflow.TransitionGroupID("group-done-"+workflowID.String()))
+	for index := range req.Edges {
+		if req.Edges[index].ID == workflow.EdgeID("edge-start-"+workflowID.String()) {
+			req.Edges[index].TargetNodeID = reviewID
+			req.Edges[index].PromptTemplate = "Review the work."
+		}
+	}
+
+	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, confirmWorkflowGraphSaveRequest(req, preview.Impact))
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved {
+		t.Fatalf("graph save = %+v, want completed Session node removal to succeed", saved)
+	}
+	savedDefinition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after graph save: %v", err)
+	}
+	for _, node := range savedDefinition.Nodes {
+		if workflow.NodeIDOf(node) == agentID {
+			t.Fatalf("saved graph retained removed Node %q", agentID)
+		}
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(terminalReference) {
+		t.Fatalf("Current Nodes after graph save = %+v, want terminal %v", currentNodes, terminalReference)
+	}
+	taskOwner, err := store.TaskIDForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if taskOwner == nil || *taskOwner != task.ID {
+		t.Fatalf("retained Session owner = %v, want Task %q", taskOwner, task.ID)
+	}
+	association, err := store.LatestTaskSessionForNode(ctx, agentReference)
+	if err != nil {
+		t.Fatalf("LatestTaskSessionForNode after node removal: %v", err)
+	}
+	if association.SessionID != sessionID ||
+		!association.CurrentNode.Equal(agentReference) ||
+		!association.AssociatedAt.Equal(associatedAt) {
+		t.Fatalf("historical association = %+v, want Session %q and removed Node %q", association, sessionID, agentID)
 	}
 }
 
