@@ -49,7 +49,8 @@ const richComponents = {
   input: MarkdownTaskListCheckbox,
   li: MarkdownTaskListItem,
   p: "div",
-} satisfies Pick<Components, "input" | "li" | "p">;
+  span: MarkdownSpan,
+} satisfies Pick<Components, "input" | "li" | "p" | "span">;
 
 export function StaticMarkdown({
   disabled = false,
@@ -74,6 +75,13 @@ export function StreamingMarkdown({ value }: StreamingMarkdownProps) {
 
 export function TaskBodyMarkdown({ value }: TaskBodyMarkdownProps) {
   return <span className="markdown-plain-text">{projectMarkdownText(value)}</span>;
+}
+
+// Streamdown's built-in hardening can receive a blocked link after URL removal;
+// do not expose the resulting incomplete `undefined` diagnostic in the rendered title.
+function MarkdownSpan({ title, ...props }: ComponentProps<"span"> & ExtraProps) {
+  const visibleTitle = title === "Blocked URL: undefined" ? undefined : title;
+  return <span {...props} {...(visibleTitle === undefined ? {} : { title: visibleTitle })} />;
 }
 
 function MarkdownCore({

@@ -67,13 +67,18 @@ describe("Markdown adapters", () => {
   it("uses Streamdown's default sanitized HTML and link behavior", async () => {
     render(
       <StaticMarkdown
-        value={"before <span>inner</span> [safe](https://example.com) [unsafe](javascript:alert(1))"}
+        value={
+          'before <span title="valid title">inner</span> [safe](https://example.com) [unsafe](javascript:alert(1)) [data-unsafe](data:text/html,blocked)'
+        }
       />,
     );
 
     expect(await screen.findByText("inner")).toBeInTheDocument();
+    expect(screen.getByTitle("valid title")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "safe" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "unsafe" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "data-unsafe" })).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Blocked URL: undefined")).not.toBeInTheDocument();
   });
 
   it("renders a 50,000-character value exactly", async () => {
