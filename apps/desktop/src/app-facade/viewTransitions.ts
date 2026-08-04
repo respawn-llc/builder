@@ -1,4 +1,4 @@
-export type ViewTransitionScope = "route" | "board-card";
+export type ViewTransitionScope = "route" | "board-card" | "sidebar-push" | "sidebar-back";
 
 export type ViewTransitionOptions = Readonly<{
   scope: ViewTransitionScope;

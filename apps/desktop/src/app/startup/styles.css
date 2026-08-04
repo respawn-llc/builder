@@ -376,6 +376,34 @@
   }
 }
 
+@keyframes sidebar-destination-push-old {
+  to {
+    opacity: 0;
+    transform: translateX(-10%);
+  }
+}
+
+@keyframes sidebar-destination-push-new {
+  from {
+    opacity: 0;
+    transform: translateX(10%);
+  }
+}
+
+@keyframes sidebar-destination-back-old {
+  to {
+    opacity: 0;
+    transform: translateX(10%);
+  }
+}
+
+@keyframes sidebar-destination-back-new {
+  from {
+    opacity: 0;
+    transform: translateX(-10%);
+  }
+}
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -647,5 +675,21 @@
 
   .view-transition-route::view-transition-new(root) {
     animation: route-fade-scale var(--motion-fast) both;
+  }
+
+  .view-transition-sidebar-push::view-transition-old(sidebar-destination) {
+    animation: sidebar-destination-push-old var(--motion-fast) both;
+  }
+
+  .view-transition-sidebar-push::view-transition-new(sidebar-destination) {
+    animation: sidebar-destination-push-new var(--motion-fast) both;
+  }
+
+  .view-transition-sidebar-back::view-transition-old(sidebar-destination) {
+    animation: sidebar-destination-back-old var(--motion-fast) both;
+  }
+
+  .view-transition-sidebar-back::view-transition-new(sidebar-destination) {
+    animation: sidebar-destination-back-new var(--motion-fast) both;
   }
 }

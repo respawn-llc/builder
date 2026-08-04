@@ -1,9 +1,9 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type TaskDetail, type TaskLabelAssignment } from "@/api";
+import { errorMessage, rpcErrorCodes, RpcError, type TaskDetail, type TaskLabelAssignment } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
-import type { TaskDetailInitialFocus } from "@/app-facade";
+import type { SidebarTaskDetailSnapshot, TaskDetailInitialFocus } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
@@ -15,9 +15,18 @@ export type TaskDetailSurfaceProps = Readonly<{
   enabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
+  sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
+  onMissingTask?: (() => void) | undefined;
 }>;
 
-export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: TaskDetailSurfaceProps) {
+export function TaskDetailSurface({
+  taskId,
+  enabled,
+  initialFocus,
+  onMutated,
+  sidebarSnapshot,
+  onMissingTask,
+}: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const reportLabelError = useCallback(
@@ -37,6 +46,12 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
   const openLink = useOpenExternalLink();
+  const missingTask = detail.isError && isWorkflowTaskNotFound(detail.error);
+  useEffect(() => {
+    if (missingTask) {
+      onMissingTask?.();
+    }
+  }, [missingTask, onMissingTask]);
 
   if (detail.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
@@ -55,6 +70,13 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
           initialFocus={initialFocus}
           onMutated={onMutated}
           openLink={openLink}
+          restoredDataReady={
+            !detail.isFetching &&
+            !attention.isFetching &&
+            !activity.isFetching &&
+            !comments.isFetching
+          }
+          sidebarSnapshot={sidebarSnapshot}
         />
       </TaskDetailAssignmentScope>
     </ProjectLabelsProvider>
@@ -77,6 +99,10 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
       <div className="min-h-0">{content}</div>
     </div>
   );
+}
+
+function isWorkflowTaskNotFound(error: unknown): boolean {
+  return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
 }
 
 function TaskDetailAssignmentScope({

@@ -19,7 +19,7 @@ type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>
  */
 export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDetailDestination }>) {
   const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
+  const { replaceSidebar } = useSidebar();
   const attention = useSidebarGlobalAttentionPages();
   // Remembers the open task's last position so Next still works after it is
   // resolved and drops out of the live inbox; updated only while it is present.
@@ -48,7 +48,7 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     if (taskID === null) {
       return;
     }
-    void openSidebar({
+    replaceSidebar({
       ...destination,
       initialFocus: taskDetailInitialFocusFromAttentionItem(
         attentionItems.find((candidate) => candidate.taskID === taskID),

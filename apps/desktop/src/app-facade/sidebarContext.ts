@@ -108,15 +108,50 @@ export type SidebarDestination =
       content: ReactNode;
     }>;
 
+export type SidebarEntryToken = Readonly<{
+  lifecycleID: string;
+  entryID: string;
+}>;
+
+export type SidebarTaskDetailSnapshot = Readonly<{
+  kind: "taskDetail";
+  scrollTop: number;
+  descriptionExpanded: boolean;
+  selectedTab: "comments" | "activity";
+  titleBodyDraft?: Readonly<{ title: string; body: string }> | undefined;
+  newCommentDraft?: string | undefined;
+  editedCommentDraft?: Readonly<{ commentID: string; body: string }> | undefined;
+}>;
+
+export type SidebarDestinationSnapshot = SidebarTaskDetailSnapshot;
+export type SidebarStateCapture = () => SidebarDestinationSnapshot | null;
+
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
+  activeSnapshot: SidebarDestinationSnapshot | null;
+  activeToken: SidebarEntryToken | null;
+  backSidebar(): void;
+  canGoBack: boolean;
   closeSidebar(reason?: SidebarCancelReason): void;
+  closeSidebarIfCurrent(token: SidebarEntryToken, reason?: SidebarCancelReason): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
+  pushSidebar(destination: SidebarDestination): void;
+  preserveSidebarOnNextRouteChange(): void;
+  consumeSidebarRouteChangePreservation(): boolean;
+  registerSidebarStateCapture(token: SidebarEntryToken, capture: SidebarStateCapture): () => void;
+  removeSidebarEntry(token: SidebarEntryToken): void;
   replaceSidebar(destination: SidebarDestination): void;
+  replaceSidebarIfCurrent(token: SidebarEntryToken, destination: SidebarDestination): void;
   phase: SidebarPhase;
   resolveSidebar(result: Exclude<SidebarResult, SidebarCanceledResult>): void;
+  resolveSidebarIfCurrent(
+    token: SidebarEntryToken,
+    result: Exclude<SidebarResult, SidebarCanceledResult>,
+  ): void;
   resizeSidebar(width: ResolvedSidebarWidth): void;
   sidebarWidthPx: number;
+  stackDestinations: readonly SidebarDestination[];
+  stackEntryTokens: readonly SidebarEntryToken[];
 }>;
 
 export const SidebarContext = createContext<SidebarController | null>(null);

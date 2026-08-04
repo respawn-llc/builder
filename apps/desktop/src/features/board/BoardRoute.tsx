@@ -48,6 +48,7 @@ import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
+import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
@@ -141,8 +142,6 @@ function BoardRouteData({
   }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
-  const navigation = useAppNavigation();
-  const { activeDestination, closeSidebar } = useSidebar();
   const reportBoardNavigationError = useCallback(
     (error: unknown) => {
       push({
@@ -158,23 +157,12 @@ function BoardRouteData({
   const boardQuery = useBoard(projectId, workflowId);
   const board = boardQuery.data;
   const selectedWorkflowID = board?.selectedWorkflow?.id;
-  const handleSelectedTaskDeleted = useCallback(() => {
-    // The task detail sidebar is opened independently of the route, so closing
-    // the route task alone would leave it mounted and refetching the now-deleted
-    // task into an error state. Close it too when it targets the deleted task.
-    if (activeDestination?.kind === "taskDetail" && activeDestination.taskID === selectedTaskId) {
-      closeSidebar();
-    }
-    void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
-  }, [
-    activeDestination,
-    closeSidebar,
-    navigation,
+  const handleSelectedTaskDeleted = useBoardSelectedTaskDeletion({
+    onNavigationError: reportBoardNavigationError,
     projectId,
-    reportBoardNavigationError,
     selectedTaskId,
     workflowId,
-  ]);
+  });
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
     onSelectedTaskDeleted: handleSelectedTaskDeleted,

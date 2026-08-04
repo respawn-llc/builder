@@ -44,6 +44,7 @@ export function TaskDetailList({
   comments,
   detail,
   disabled,
+  dependencyDisabled,
   draft,
   descriptionPresentation,
   editingComment,
@@ -65,12 +66,16 @@ export function TaskDetailList({
   setTab,
   updateError,
   updatePending,
+  initialScrollOffset,
+  initialScrollOffsetRequestKey,
+  onScrollElementChange,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   disabled: boolean;
+  dependencyDisabled: boolean;
   draft: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -92,6 +97,9 @@ export function TaskDetailList({
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
   updatePending: boolean;
+  initialScrollOffset?: number | undefined;
+  initialScrollOffsetRequestKey?: string | undefined;
+  onScrollElementChange: (element: HTMLDivElement | null) => void;
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
@@ -162,12 +170,15 @@ export function TaskDetailList({
       initialScrollRequestKey={
         initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
+      initialScrollOffset={initialScrollOffset}
+      initialScrollOffsetRequestKey={initialScrollOffsetRequestKey}
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
+      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
       rowSpacing="compact"
@@ -181,6 +192,7 @@ export function TaskDetailList({
           draftDirty={draftDirty}
           detail={detail}
           disabled={disabled}
+          dependencyDisabled={dependencyDisabled}
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
@@ -222,6 +234,7 @@ type TaskDetailListRowProps = Readonly<{
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
+  dependencyDisabled: boolean;
   draft: TaskDraft;
   draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
@@ -336,7 +349,7 @@ function BodyRow({
 
 function DependenciesRow({
   detail,
-  disabled,
+  dependencyDisabled,
   onAddDependency,
   onRemoveDependency,
   onSelectDependencyTask,
@@ -344,7 +357,7 @@ function DependenciesRow({
   return (
     <TaskDependenciesArea
       dependencies={detail.dependencies}
-      disabled={disabled}
+      disabled={dependencyDisabled}
       onAdd={onAddDependency}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}

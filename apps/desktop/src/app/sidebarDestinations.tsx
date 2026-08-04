@@ -5,26 +5,48 @@ import { TaskDetailSurface } from "@/features/task-detail";
 import { NewTaskForm } from "@/features/tasks";
 import { WorkflowEditorRoute, WorkflowInspectorSidebar } from "@/features/workflow-editor";
 import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
-import { useAppNavigation } from "@/app-facade";
+import { useAppNavigation, useSidebar } from "@/app-facade";
 import type { SidebarController, SidebarDestination } from "@/app-facade";
 
 export function SidebarDestinationView({
+  activeSnapshot,
   closeSidebar,
   destination,
   resolveSidebar,
 }: Readonly<{
+  activeSnapshot: SidebarController["activeSnapshot"];
   closeSidebar: SidebarController["closeSidebar"];
   destination: SidebarDestination;
   resolveSidebar: SidebarController["resolveSidebar"];
 }>): ReactElement {
+  const {
+    activeToken,
+    removeSidebarEntry,
+    replaceSidebarIfCurrent,
+    resolveSidebarIfCurrent,
+  } = useSidebar();
   if (destination.kind === "newTask") {
+    const formToken = activeToken;
     return (
       <NewTaskForm
         boardQueryWorkflowID={destination.boardQueryWorkflowID}
         className="w-full"
         initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
-        onSubmitted={() => {
-          resolveSidebar({ destination: "newTask", status: "submitted" });
+        onSubmitted={(taskID) => {
+          if (destination.pendingRelationship !== undefined && taskID !== undefined && formToken !== null) {
+            replaceSidebarIfCurrent(formToken, {
+              kind: "taskDetail",
+              taskID,
+              ...(destination.mode === undefined ? {} : { mode: destination.mode }),
+            });
+            return;
+          }
+          if (formToken !== null) {
+            resolveSidebarIfCurrent(formToken, {
+              destination: "newTask",
+              status: "submitted",
+            });
+          }
         }}
         projectID={destination.projectID}
         pendingRelationship={destination.pendingRelationship}
@@ -38,6 +60,12 @@ export function SidebarDestinationView({
       <TaskDetailSurface
         enabled
         initialFocus={destination.initialFocus}
+        sidebarSnapshot={activeSnapshot?.kind === "taskDetail" ? activeSnapshot : undefined}
+        onMissingTask={() => {
+          if (activeToken !== null) {
+            removeSidebarEntry(activeToken);
+          }
+        }}
         onMutated={destination.onMutated}
         taskId={destination.taskID}
       />

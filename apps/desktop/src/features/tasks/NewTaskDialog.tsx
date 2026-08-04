@@ -101,7 +101,7 @@ export function NewTaskForm({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitted: () => void;
+  onSubmitted: (taskID?: string) => void;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -149,7 +149,7 @@ function NewTaskFormContent({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitted: () => void;
+  onSubmitted: (taskID?: string) => void;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -209,7 +209,7 @@ function NewTaskFormContent({
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
-      await createTask.mutateAsync({
+      const createdTaskID = await createTask.mutateAsync({
         projectID,
         workflowID,
         title: values.title,
@@ -224,7 +224,7 @@ function NewTaskFormContent({
                 newTaskRole: pendingRelationship.newTaskRole,
               },
       });
-      onSubmitted();
+      onSubmitted(createdTaskID);
     } catch {
       // The mutation state renders the persistent failure without clearing form input.
     }
