@@ -205,6 +205,7 @@ describe("TaskBodyMarkdown", () => {
     ["escaped", String.raw`\<span>literal\</span>`, "<span>literal</span>"],
     ["entity-encoded", "&lt;span&gt;literal&lt;/span&gt;", "<span>literal</span>"],
     ["unterminated ordinary tag", "use <value before saving", "use <value before saving"],
+    ["invalid declaration", "if a <! b > c", "if a <! b > c"],
   ])("does not classify %s tag-shaped text as HTML", (_name, value, expected) => {
     render(<TaskBodyMarkdown value={value} />);
 

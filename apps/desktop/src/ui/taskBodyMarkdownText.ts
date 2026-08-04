@@ -120,7 +120,16 @@ function specialHtmlStart(value: string, start: number): { index: number; state:
   if (value.charAt(start + 2) === "-" && value.charAt(start + 3) === "-")
     return { index: start + 4, state: { kind: "comment" } };
   if (cdataStart(value, start)) return { index: start + 9, state: { kind: "cdata" } };
+  if (!doctypeStart(value, start)) return;
   return { index: start + 2, state: { kind: "declaration" } };
+}
+function doctypeStart(value: string, start: number): boolean {
+  const keyword = "DOCTYPE";
+  for (let offset = 0; offset < keyword.length; offset += 1) {
+    if (value.charAt(start + 2 + offset).toUpperCase() !== keyword.charAt(offset)) return false;
+  }
+  const boundary = value.charAt(start + 2 + keyword.length);
+  return boundary === ">" || whitespace.has(boundary);
 }
 function cdataStart(value: string, start: number): boolean {
   return (
