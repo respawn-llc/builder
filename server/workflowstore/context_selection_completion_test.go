@@ -120,13 +120,12 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 		plan := nodeByKey(t, def, "plan")
 		audit := nodeByKey(t, def, "audit")
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID:             alternateID,
-			WorkflowID:     workflowID,
-			Key:            "alternate",
-			Kind:           workflow.NodeKindAgent,
-			DisplayName:    "Alternate",
-			SubagentRole:   "coder",
-			PromptTemplate: "Alternate.",
+			ID:           alternateID,
+			WorkflowID:   workflowID,
+			Key:          "alternate",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Alternate",
+			SubagentRole: "coder",
 		})
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{

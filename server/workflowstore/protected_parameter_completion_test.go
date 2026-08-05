@@ -254,9 +254,7 @@ func TestAutomaticCompletionMaterializesSelectionFromScriptSource(t *testing.T) 
 		review := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(nodeByKey(t, def, "review")))
 		review.Kind = workflow.NodeKindScript
 		review.SubagentRole = ""
-		review.PromptTemplate = ""
 		review.ScriptPath = "scripts/review"
-		review.InputFields = nil
 		workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-review-"+workflowID.String())).PromptTemplate = ""
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode

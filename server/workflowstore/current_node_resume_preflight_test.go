@@ -115,6 +115,7 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 		request.Edges[index].Parameters = append(request.Edges[index].Parameters, workflow.Parameter{
 			Key:         "risk",
 			Description: "New risk.",
+			Purpose:     workflow.ParameterPurposeOrdinary,
 		})
 	}
 	if !foundEdge {
@@ -165,14 +166,15 @@ func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, current_input_values_json, prior_node_values_json,
-    scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id
-) VALUES (?, ?, '{"joined":"existing"}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?)`,
+    scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id,
+    effective_assignee, assignee_origin
+) VALUES (?, ?, '{"joined":"existing"}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?, 'default', 'configured_fallback')`,
 		task.ID, synthID, "edge-join-synth-"+workflowID.String()); err != nil {
 		t.Fatalf("seed Join Current Node: %v", err)
 	}
 	parameters, err := marshalJSONArray([]workflow.Parameter{
-		{Key: "joined", Description: "Joined branch summary."},
-		{Key: "risk", Description: "New derived requirement."},
+		{Key: "joined", Description: "Joined branch summary.", Purpose: workflow.ParameterPurposeOrdinary},
+		{Key: "risk", Description: "New derived requirement.", Purpose: workflow.ParameterPurposeOrdinary},
 	})
 	if err != nil {
 		t.Fatalf("marshal edited Join Parameters: %v", err)

@@ -1,3 +1,9 @@
 {
+<<<<<<< HEAD
   "version": "92"
+||||||| parent of 2788994e6 (fix: integrate target selection after main rebase)
+  "version": "90"
+=======
+  "version": "91"
+>>>>>>> 2788994e6 (fix: integrate target selection after main rebase)
 }

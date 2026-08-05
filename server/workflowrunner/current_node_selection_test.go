@@ -217,8 +217,8 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 	firstID := workflow.NodeID("node-first-" + created.ID.String())
 	secondID := workflow.NodeID("node-second-" + created.ID.String())
 	for _, node := range []workflowstore.NodeRecord{
-		{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder", PromptTemplate: "First."},
-		{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder", PromptTemplate: "Second."},
+		{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder"},
+		{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder"},
 	} {
 		if _, err := store.AddNode(ctx, node); err != nil {
 			t.Fatalf("AddNode: %v", err)
