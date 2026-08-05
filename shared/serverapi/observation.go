@@ -71,6 +71,52 @@ func (q ObservationQuestion) Validate() error {
 	if (q.Ask == nil) == (q.Approval == nil) {
 		return errors.New("observation question must contain one ask or approval")
 	}
+	if q.Ask != nil {
+		return validateObservationAsk(*q.Ask)
+	}
+	return validateObservationApproval(*q.Approval)
+}
+
+func validateObservationAsk(ask clientui.PendingAsk) error {
+	if strings.TrimSpace(ask.AskID) == "" {
+		return errors.New("observation ask id is required")
+	}
+	if err := validateRequiredSessionID(ask.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(ask.Question) == "" {
+		return errors.New("observation ask question is required")
+	}
+	if ask.RecommendedOptionIndex != nil &&
+		(*ask.RecommendedOptionIndex <= 0 || *ask.RecommendedOptionIndex > len(ask.Suggestions)) {
+		return errors.New("observation ask recommendation is invalid")
+	}
+	return nil
+}
+
+func validateObservationApproval(approval clientui.PendingApproval) error {
+	if strings.TrimSpace(approval.ApprovalID) == "" {
+		return errors.New("observation approval id is required")
+	}
+	if err := validateRequiredSessionID(approval.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(approval.Question) == "" {
+		return errors.New("observation approval question is required")
+	}
+	if len(approval.Options) == 0 {
+		return errors.New("observation approval options are required")
+	}
+	for _, option := range approval.Options {
+		if strings.TrimSpace(option.Label) == "" {
+			return errors.New("observation approval option label is required")
+		}
+		switch option.Decision {
+		case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
+		default:
+			return errors.New("observation approval option decision is invalid")
+		}
+	}
 	return nil
 }
 

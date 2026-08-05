@@ -9,6 +9,7 @@ import (
 
 	"core/cli/app"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -34,23 +35,19 @@ func TestRunWatchMalformedSessionStillUsesWatchRoute(t *testing.T) {
 }
 
 func TestRunWatchStreamFailureDoesNotUseInterruptExitCode(t *testing.T) {
-	original := runLiveWatchApp
-	t.Cleanup(func() { runLiveWatchApp = original })
-	runLiveWatchApp = func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+	run := func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
 		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)
 	}
-	if code := runLiveWatchSubcommand([]string{runtimeids.NewSessionID().String()}); code != 1 {
+	if code := runLiveWatchSubcommandWithRunner([]string{runtimeids.NewSessionID().String()}, run); code != 1 {
 		t.Fatalf("runLiveWatchSubcommand stream failure exit code = %d, want 1", code)
 	}
 }
 
 func TestRunWatchCallerCancellationKeepsInterruptExitCode(t *testing.T) {
-	original := runLiveWatchApp
-	t.Cleanup(func() { runLiveWatchApp = original })
-	runLiveWatchApp = func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+	run := func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
 		return serverapi.RuntimeLiveWatchResponse{}, context.Canceled
 	}
-	if code := runLiveWatchSubcommand([]string{runtimeids.NewSessionID().String()}); code != 130 {
+	if code := runLiveWatchSubcommandWithRunner([]string{runtimeids.NewSessionID().String()}, run); code != 130 {
 		t.Fatalf("runLiveWatchSubcommand cancellation exit code = %d, want 130", code)
 	}
 }
@@ -103,8 +100,9 @@ func TestTaskObservationUsesSessionTargetsForParallelQuestions(t *testing.T) {
 		t.Fatalf("writeTaskObservation exit code = %d", code)
 	}
 	text := output.String()
-	if !strings.Contains(text, "kent question answer --session session-1") ||
-		!strings.Contains(text, "kent question answer --session session-2") {
+	firstHint := commandString([]string{config.Command, "question", "answer", "--session", firstSession})
+	secondHint := commandString([]string{config.Command, "question", "answer", "--session", secondSession})
+	if !strings.Contains(text, firstHint) || !strings.Contains(text, secondHint) {
 		t.Fatalf("parallel task observation output = %q", text)
 	}
 }

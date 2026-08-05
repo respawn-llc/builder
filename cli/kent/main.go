@@ -51,7 +51,6 @@ var runPromptApp = app.RunPrompt
 var runLiveSteerApp = app.RunLiveSteer
 var runLiveStopApp = app.RunLiveStop
 var runLiveWaitApp = app.RunLiveWait
-var runLiveWatchApp = app.RunLiveWatch
 
 func main() {
 	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
@@ -603,6 +602,12 @@ func runLiveWaitSubcommand(args []string) int {
 }
 
 func runLiveWatchSubcommand(args []string) int {
+	return runLiveWatchSubcommandWithRunner(args, app.RunLiveWatch)
+}
+
+type liveWatchRunner func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error)
+
+func runLiveWatchSubcommandWithRunner(args []string, run liveWatchRunner) int {
 	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
 		config.Command+" run watch [--persistence-root <root>] <session-id>",
 		"Watch the next active run outcome.",
@@ -626,7 +631,7 @@ func runLiveWatchSubcommand(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	response, err := runLiveWatchApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	response, err := run(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, context.Canceled) {

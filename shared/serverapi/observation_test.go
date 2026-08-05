@@ -37,6 +37,24 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 		{
 			TaskID: "task-1", TaskShortID: "KNT-42",
 			Outcomes: []WorkflowTaskObservationOutcome{{
+				Kind: WorkflowTaskObservationQuestion,
+				Question: &ObservationQuestion{Ask: &clientui.PendingAsk{
+					AskID: "ask-1", SessionID: "session-1",
+				}},
+			}},
+		},
+		{
+			TaskID: "task-1", TaskShortID: "KNT-42",
+			Outcomes: []WorkflowTaskObservationOutcome{{
+				Kind: WorkflowTaskObservationQuestion,
+				Question: &ObservationQuestion{Approval: &clientui.PendingApproval{
+					SessionID: "session-1", Question: "Allow?",
+				}},
+			}},
+		},
+		{
+			TaskID: "task-1", TaskShortID: "KNT-42",
+			Outcomes: []WorkflowTaskObservationOutcome{{
 				Kind:    WorkflowTaskObservationDone,
 				Failure: &RuntimeLiveWatchFailure{Reason: "invalid"},
 			}},

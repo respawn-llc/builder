@@ -59,6 +59,9 @@ func (r ApprovalAnswerRequest) Validate() error {
 	if strings.TrimSpace(r.ApprovalID) == "" {
 		return errors.New("approval_id is required")
 	}
+	if r.Commentary != nil && strings.TrimSpace(*r.Commentary) == "" {
+		return errors.New("commentary must be non-blank when present")
+	}
 	if strings.TrimSpace(r.ErrorMessage) == "" {
 		switch r.Decision {
 		case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
