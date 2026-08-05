@@ -26,6 +26,8 @@ type TranscriptCommittedRowFact struct {
 	Visibility transcript.EntryVisibility
 	Integrity  transcript.RowIntegrity
 	Kind       TranscriptCommittedRowFactKind
+	Locator    transcript.CommittedRowLocator
+	Provenance *TranscriptCommittedRowProvenance
 	User       *TranscriptUserRowFact
 	Assistant  *TranscriptAssistantRowFact
 	Tool       *TranscriptToolRowFact
@@ -90,7 +92,13 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 	var facts []TranscriptCommittedRowFact
 	switch evt.Kind {
 	case EventConversationUpdated, EventAssistantMessage:
-		facts = transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
+		facts = transcriptCommittedRowFactsFromMessage(
+			evt.Message,
+			evt.AssistantTranscriptStreamID,
+			nil,
+			nil,
+			transcriptMessageProjectionContext{Provenance: evt.CommittedProvenance},
+		)
 	case EventUserMessageFlushed:
 		if strings.TrimSpace(evt.UserMessage) == "" {
 			return nil
@@ -123,16 +131,21 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		}
 		return nil
 	case EventInFlightClearFailed:
-		if strings.TrimSpace(evt.Error) == "" {
-			return nil
-		}
-		facts = []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", transcript.NoticeSeverityError, evt.Error)}
+		return nil
 	case EventBackgroundUpdated:
 		return nil
 	default:
 		return nil
 	}
-	return transcriptCommittedRowFactsForStep(evt.StepID, facts)
+	for index := range facts {
+		if evt.CommittedProvenance != nil {
+			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
+		} else if facts[index].Provenance == nil {
+			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
+		}
+	}
+	facts = transcriptCommittedRowFactsForStep(evt.StepID, facts)
+	return locateTranscriptCommittedRowFacts(facts)
 }
 
 func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
@@ -149,6 +162,28 @@ func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommitt
 	return facts
 }
 
+func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
+	ordinals := make(map[int64]int64, len(facts))
+	for index := range facts {
+		provenance := facts[index].Provenance
+		if provenance == nil {
+			return facts
+		}
+		ordinal := ordinals[provenance.EventSequence] + 1
+		if provenance.ProjectedOrdinal != nil {
+			ordinal = *provenance.ProjectedOrdinal
+		}
+		ordinals[provenance.EventSequence] = ordinal
+		facts[index].Locator = transcript.CommittedRowLocator{
+			EventSequence: provenance.EventSequence,
+			RowOrdinal:    ordinal,
+		}
+		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		facts[index].Provenance.ProjectedOrdinal = nil
+	}
+	return facts
+}
+
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
@@ -161,7 +196,7 @@ func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []Transcript
 			facts = append(facts, fact)
 		}
 	}
-	return facts
+	return locateTranscriptCommittedRowFacts(facts)
 }
 
 func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
@@ -180,7 +215,37 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 	}
 }
 
-func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
+type transcriptMessageProjectionContext struct {
+	Provenance           *TranscriptCommittedRowProvenance
+	CompletionProvenance map[string]*TranscriptCommittedRowProvenance
+}
+
+func transcriptCommittedRowFactsFromMessage(
+	msg llm.Message,
+	streamID *uuid.UUID,
+	completions map[string]tools.Result,
+	materializedToolCalls map[string]struct{},
+	contexts ...transcriptMessageProjectionContext,
+) []TranscriptCommittedRowFact {
+	facts := transcriptCommittedRowFactsFromMessageUnlocated(msg, streamID, completions, materializedToolCalls)
+	var provenance *TranscriptCommittedRowProvenance
+	var completionProvenance map[string]*TranscriptCommittedRowProvenance
+	if len(contexts) > 0 {
+		provenance = contexts[0].Provenance
+		completionProvenance = contexts[0].CompletionProvenance
+	}
+	for index := range facts {
+		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		if facts[index].Tool != nil && completionProvenance != nil {
+			if owner := completionProvenance[facts[index].Tool.ToolCallID]; owner != nil {
+				facts[index].Provenance = cloneTranscriptCommittedRowProvenance(owner)
+			}
+		}
+	}
+	return facts
+}
+
+func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
 	switch msg.Role {
 	case llm.RoleUser:
 		if msg.MessageType != nil &&
@@ -247,6 +312,14 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 }
 
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	fact, ok := transcriptCommittedRowFactFromChatEntryUnlocated(entry)
+	if ok {
+		fact.Provenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+	}
+	return fact, ok
+}
+
+func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
@@ -322,6 +395,14 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 }
 
 func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	fact, ok := transcriptNoticeRowFactFromChatEntryUnlocated(entry)
+	if ok {
+		fact.Provenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+	}
+	return fact, ok
+}
+
+func transcriptNoticeRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false

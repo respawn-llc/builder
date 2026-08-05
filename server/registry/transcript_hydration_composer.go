@@ -15,7 +15,10 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 	entry *authorityRuntimeEntry,
 	snapshot runtime.TranscriptHydrationSnapshot,
 ) (clientui.TranscriptHydration, error) {
-	hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
+	hydration, err := runtimeview.TranscriptHydrationFromSnapshotChecked(snapshot)
+	if err != nil {
+		return clientui.TranscriptHydration{}, fmt.Errorf("project transcript hydration: %w", err)
+	}
 	readModel, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID, nil)
 	if err != nil {
 		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript runtime read model: %w", err)

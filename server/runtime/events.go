@@ -103,6 +103,7 @@ type Event struct {
 	CommittedEntryCount          int
 	CommittedEntryStart          int
 	CommittedEntryStartSet       bool
+	CommittedProvenance          *TranscriptCommittedRowProvenance
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase

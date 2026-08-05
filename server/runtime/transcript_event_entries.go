@@ -104,10 +104,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 	case EventCompactionFailed:
 		return nil
 	case EventInFlightClearFailed:
-		if strings.TrimSpace(evt.Error) == "" {
-			return nil
-		}
-		entries = []ChatEntry{{Role: "error", Text: fmt.Sprintf("Run cleanup warning: %s", evt.Error)}}
+		return nil
 	case EventCacheWarning:
 		if evt.CacheWarning == nil {
 			return nil

@@ -13,6 +13,7 @@
 - Transcript delivery does not promise lossless continuity across subscription establishment, disconnection, process failure, or recovery. When a client detects discontinuity, it reopens the subscription and refreshes authoritative Session state instead of remaining silently stale.
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; it never becomes an absent or stale target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
+- A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
 - The server owns exact Session-resource admission, Runtime Command ordering, and dormant Goal commands. Transport keeps request identity and idempotency only; it never owns ordering, queueing, execution lifecycle, reconciliation, or persistence disposition.
 
 ## Skills And Generated Assets

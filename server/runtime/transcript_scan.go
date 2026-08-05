@@ -58,7 +58,7 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string, owners ...map[string]*TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
@@ -68,6 +68,14 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
+		if seq > 0 {
+			entry.CommittedProvenance = &TranscriptCommittedRowProvenance{EventSequence: seq}
+		}
+		if len(owners) > 0 && entry.ToolCallID != "" {
+			if owner := owners[0][entry.ToolCallID]; owner != nil {
+				entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(owner)
+			}
+		}
 		s.appendEntry(entry)
 	}
 }

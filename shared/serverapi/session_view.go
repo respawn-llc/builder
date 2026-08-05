@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 )
 
 // ErrLimitNegative is returned when a request supplies a negative limit.
@@ -28,6 +29,10 @@ type SessionTranscriptPageRequest struct {
 
 type SessionTranscriptPageResponse struct {
 	Transcript clientui.TranscriptPage `json:"transcript"`
+}
+
+func (r SessionTranscriptPageResponse) Validate() error {
+	return invariant.ValidateTranscriptPage(r.Transcript)
 }
 
 type SessionLatestCommittedAssistantFinalAnswerRequest struct {

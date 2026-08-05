@@ -553,6 +553,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		StepID:                     registryTestStepID,
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
+		CommittedProvenance:        &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
 	})
 	message := nextTranscriptMessage(t, sub)
 	if message.Kind() != clientui.TranscriptMessageCommittedRow {

@@ -258,16 +258,16 @@ func (s *transcriptRuntimeState) ValidateMessage(stepID string, msg llm.Message)
 	return s.chatProjection().validateMessage(stepID, msg)
 }
 
-func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message) error {
-	return s.chatProjection().appendMessage(stepID, msg)
+func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message, provenances ...*TranscriptCommittedRowProvenance) error {
+	return s.chatProjection().appendMessage(stepID, msg, provenances...)
 }
 
-func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry, afterToolCallID *string) {
-	s.chatProjection().appendLocalEntryRecord(entry, afterToolCallID)
+func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry, afterToolCallID *string, provenances ...*TranscriptCommittedRowProvenance) {
+	s.chatProjection().appendLocalEntryRecord(entry, afterToolCallID, provenances...)
 }
 
-func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) {
-	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text}, nil)
+func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility, provenances ...*TranscriptCommittedRowProvenance) {
+	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text}, nil, provenances...)
 }
 
 func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
@@ -278,7 +278,7 @@ func (s *transcriptRuntimeState) RecordAssistantStreamFinalization(committedEntr
 	s.chatProjection().recordAssistantStreamFinalization(committedEntryStart, streamID)
 }
 
-func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion) {
+func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToolCompletion, provenance *TranscriptCommittedRowProvenance) {
 	s.chatProjection().recordToolCompletionWithProviderItems(tools.Result{
 		CallID:        completion.CallID,
 		Name:          toolspec.ID(completion.Name),
@@ -287,11 +287,11 @@ func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToo
 		Summary:       completion.Summary,
 		CondensedText: completion.CondensedText,
 		Presentation:  completion.Presentation,
-	}, completion.ProviderItems)
+	}, completion.ProviderItems, provenance)
 }
 
-func (s *transcriptRuntimeState) RestoreToolCompletionRecord(record session.ToolCompletionRecord) error {
-	return s.chatProjection().restoreToolCompletionRecord(record)
+func (s *transcriptRuntimeState) RestoreToolCompletionRecord(record session.ToolCompletionRecord, provenances ...*TranscriptCommittedRowProvenance) error {
+	return s.chatProjection().restoreToolCompletionRecord(record, provenances...)
 }
 
 func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(
@@ -323,7 +323,7 @@ func (s *transcriptRuntimeState) ClearStreamingError() {
 	s.chatProjection().clearStreamingError()
 }
 
-func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, record session.CacheWarningRecord, mode config.CacheWarningMode) {
+func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, record session.CacheWarningRecord, mode config.CacheWarningMode, provenance ...*TranscriptCommittedRowProvenance) {
 	warning := cacheWarningFromSessionRecord(record)
-	state.AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), cacheWarningEntryVisibility(mode))
+	state.AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), cacheWarningEntryVisibility(mode), provenance...)
 }

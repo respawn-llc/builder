@@ -269,6 +269,7 @@ func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing
 		Visibility: clientui.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowUser,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepID(t), Text: "valid"},
 	}
 	if err := validateCommittedRow(valid); err != nil {
@@ -287,6 +288,113 @@ func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing
 		if !errors.As(err, &violation) {
 			t.Fatalf("broker validation error = %T, want transcript contract violation", err)
 		}
+	}
+}
+
+func TestTranscriptSubscriptionContractValidatesLiveLocatorProgression(t *testing.T) {
+	restore := withTranscriptContractViolationPanic(false)
+	defer restore()
+
+	tests := []struct {
+		name        string
+		hydrated    []transcript.CommittedRowLocator
+		live        []transcript.CommittedRowLocator
+		wantFailure bool
+	}{
+		{
+			name: "empty hydration starts at first live event",
+			live: []transcript.CommittedRowLocator{{EventSequence: 5, RowOrdinal: 1}},
+		},
+		{
+			name:     "hydrated watermark accepts newer event",
+			hydrated: []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live:     []transcript.CommittedRowLocator{{EventSequence: 11, RowOrdinal: 1}},
+		},
+		{
+			name:     "same event continues contiguously",
+			hydrated: []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live: []transcript.CommittedRowLocator{
+				{EventSequence: 11, RowOrdinal: 1},
+				{EventSequence: 11, RowOrdinal: 2},
+				{EventSequence: 12, RowOrdinal: 1},
+			},
+		},
+		{
+			name:        "duplicate ordinal fails",
+			hydrated:    []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live:        []transcript.CommittedRowLocator{{EventSequence: 11, RowOrdinal: 1}, {EventSequence: 11, RowOrdinal: 1}},
+			wantFailure: true,
+		},
+		{
+			name:        "regressed event fails",
+			hydrated:    []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live:        []transcript.CommittedRowLocator{{EventSequence: 11, RowOrdinal: 1}, {EventSequence: 10, RowOrdinal: 1}},
+			wantFailure: true,
+		},
+		{
+			name:        "skipped ordinal fails",
+			hydrated:    []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live:        []transcript.CommittedRowLocator{{EventSequence: 11, RowOrdinal: 1}, {EventSequence: 11, RowOrdinal: 3}},
+			wantFailure: true,
+		},
+		{
+			name:        "first live row must be newer than hydration",
+			hydrated:    []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			live:        []transcript.CommittedRowLocator{{EventSequence: 10, RowOrdinal: 1}},
+			wantFailure: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hydration := transcriptBrokerHydrationWithLocators(t, test.hydrated)
+			broker := newTranscriptSubscriptionBroker()
+			sub, err := broker.Subscribe(hydration)
+			if err != nil {
+				t.Fatalf("subscribe with test broker: %v", err)
+			}
+			defer func() { _ = sub.Close() }()
+			_ = nextTranscriptMessage(t, sub)
+			for _, locator := range test.live {
+				broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptBrokerCommittedRow(t, locator))})
+			}
+			if !test.wantFailure {
+				for range test.live {
+					if _, err := nextTranscriptMessageTimeout(sub, time.Second); err != nil {
+						t.Fatalf("valid live locator was rejected: %v", err)
+					}
+				}
+				return
+			}
+			for range test.live[:len(test.live)-1] {
+				if _, err := nextTranscriptMessageTimeout(sub, time.Second); err != nil {
+					t.Fatalf("valid prefix before invalid locator was rejected: %v", err)
+				}
+			}
+			if _, err := sub.Next(context.Background()); err == nil {
+				t.Fatal("invalid live locator progression was delivered")
+			}
+		})
+	}
+}
+
+func transcriptBrokerHydrationWithLocators(t *testing.T, locators []transcript.CommittedRowLocator) clientui.TranscriptEvent {
+	t.Helper()
+	hydration := transcriptBrokerHydration(t).Payload().(clientui.TranscriptHydration)
+	for _, locator := range locators {
+		hydration.CommittedRows = append(hydration.CommittedRows, transcriptBrokerCommittedRow(t, locator))
+	}
+	return clientui.NewTranscriptEvent(hydration)
+}
+
+func transcriptBrokerCommittedRow(t *testing.T, locator transcript.CommittedRowLocator) clientui.TranscriptCommittedRow {
+	t.Helper()
+	return clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowUser,
+		Locator:    locator,
+		User:       &clientui.TranscriptUserRow{StepID: mustRegistryStepID(t), Text: "row"},
 	}
 }
 
