@@ -401,7 +401,7 @@
 - Each Transition Branch supports `new_session`, `continue_session`, or `compact_and_continue_session`.
 - Workflow-created Session copies preserve delegation ancestry and do not reset delegation depth.
 - Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
-- `immediate_source` uses the Session bound to the source current Node.
+- `immediate_source` uses the Session bound to the source Current Node during normal completion. During Manual Move, it uses that Session when the source is Current, otherwise the latest retained unscoped Session associated with the selected Transition's source Node.
 - `node:<node_key>` selects the latest retained Session associated with the guaranteed-prior agent Node.
 - `previous_target` selects the latest retained Session associated with the target agent Node and fails when none exists.
 - `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session.

@@ -28,21 +28,33 @@ func resolveTransitionTargetSession(
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
 	switch contextSource.Kind {
 	case workflow.ContextSourceImmediateSource:
-		if source == nil ||
-			source.SessionID == nil ||
-			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
-			sourceNode.Kind() != workflow.NodeKindAgent ||
-			(manualMoveContext && source.Reference.IsBranchScoped()) {
-			if manualMoveContext {
+		if source != nil &&
+			source.SessionID != nil &&
+			source.Reference.NodeID == workflow.NodeIDOf(sourceNode) &&
+			sourceNode.Kind() == workflow.NodeKindAgent &&
+			(!manualMoveContext || !source.Reference.IsBranchScoped()) {
+			sessionID := *source.SessionID
+			return &sessionID, nil
+		}
+		if manualMoveContext {
+			if sourceNode.Kind() != workflow.NodeKindAgent {
 				return nil, ErrManualMoveTransitionNotUsable
 			}
-			return nil, fmt.Errorf(
-				"current node completion cannot continue the immediate source session for node %q",
-				workflow.NodeIDOf(sourceNode),
-			)
+			sourceReference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(sourceNode), nil)
+			if err != nil {
+				return nil, err
+			}
+			association, err := latestTaskSessionForNode(ctx, q, sourceReference)
+			if err != nil {
+				return nil, err
+			}
+			sessionID := association.SessionID
+			return &sessionID, nil
 		}
-		sessionID := *source.SessionID
-		return &sessionID, nil
+		return nil, fmt.Errorf(
+			"current node completion cannot continue the immediate source session for node %q",
+			workflow.NodeIDOf(sourceNode),
+		)
 	case workflow.ContextSourceSelectedNode:
 		selected, err := currentNodeDefinitionNodeByKey(definition, contextSource.NodeKey)
 		if err != nil {
