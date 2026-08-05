@@ -469,7 +469,7 @@ func (s *Store) currentNodeTransitionParameters(
 				target,
 				&currentSource,
 				transitionBranchKeyForCurrentNode(currentSource.Reference),
-				true,
+				false,
 				true,
 				transitionContractContextResolutionDeferred,
 			)
