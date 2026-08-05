@@ -8,15 +8,15 @@ import (
 
 func TestMigrationAgentExecutionSelectionUsesCanonicalSessionPolicy(t *testing.T) {
 	tests := []struct {
-		name             string
-		mode             workflow.ContextMode
-		source           workflow.ContextSourceKind
-		targetResolved   bool
-		targetBound      bool
-		fallbackRole     string
-		sessionRole      string
-		wantRole         string
-		wantOrigin       workflow.AssigneeOrigin
+		name           string
+		mode           workflow.ContextMode
+		source         workflow.ContextSourceKind
+		targetResolved bool
+		targetBound    bool
+		fallbackRole   string
+		sessionRole    string
+		wantRole       string
+		wantOrigin     workflow.AssigneeOrigin
 	}{
 		{
 			name:         "new session uses node fallback",
@@ -38,24 +38,24 @@ func TestMigrationAgentExecutionSelectionUsesCanonicalSessionPolicy(t *testing.T
 			wantOrigin:     workflow.AssigneeOriginConfiguredFallback,
 		},
 		{
-			name:         "immediate continuation requires target fallback",
-			mode:         workflow.ContextModeContinueSession,
-			source:       workflow.ContextSourceImmediateSource,
+			name:           "immediate continuation requires target fallback",
+			mode:           workflow.ContextModeContinueSession,
+			source:         workflow.ContextSourceImmediateSource,
 			targetResolved: true,
-			fallbackRole: "fallback",
-			sessionRole:  "retained",
-			wantRole:     "fallback",
-			wantOrigin:   workflow.AssigneeOriginConfiguredFallback,
+			fallbackRole:   "fallback",
+			sessionRole:    "retained",
+			wantRole:       "fallback",
+			wantOrigin:     workflow.AssigneeOriginConfiguredFallback,
 		},
 		{
-			name:         "previous target preserves session role",
-			mode:         workflow.ContextModeContinueSession,
-			source:       workflow.ContextSourcePreviousTarget,
+			name:           "previous target preserves session role",
+			mode:           workflow.ContextModeContinueSession,
+			source:         workflow.ContextSourcePreviousTarget,
 			targetResolved: true,
-			fallbackRole: "fallback",
-			sessionRole:  "retained",
-			wantRole:     "retained",
-			wantOrigin:   workflow.AssigneeOriginRetainedSession,
+			fallbackRole:   "fallback",
+			sessionRole:    "retained",
+			wantRole:       "retained",
+			wantOrigin:     workflow.AssigneeOriginRetainedSession,
 		},
 		{
 			name:         "previous target or new without session uses fallback",
@@ -87,13 +87,13 @@ func TestMigrationAgentExecutionSelectionUsesCanonicalSessionPolicy(t *testing.T
 			wantOrigin:   workflow.AssigneeOriginRetainedSession,
 		},
 		{
-			name:         "missing retained role uses default",
-			mode:         workflow.ContextModeContinueSession,
-			source:       workflow.ContextSourcePreviousTarget,
+			name:           "missing retained role uses default",
+			mode:           workflow.ContextModeContinueSession,
+			source:         workflow.ContextSourcePreviousTarget,
 			targetResolved: true,
-			fallbackRole: "fallback",
-			wantRole:     workflow.DefaultAgentRole,
-			wantOrigin:   workflow.AssigneeOriginRetainedSession,
+			fallbackRole:   "fallback",
+			wantRole:       workflow.DefaultAgentRole,
+			wantOrigin:     workflow.AssigneeOriginRetainedSession,
 		},
 		{
 			name:           "unavailable retained role is preserved",
@@ -128,9 +128,9 @@ func TestMigrationAgentExecutionSelectionUsesCanonicalSessionPolicy(t *testing.T
 
 func TestMigrationAgentExecutionSelectionRejectsMalformedRows(t *testing.T) {
 	tests := []struct {
-		name string
-		mode workflow.ContextMode
-		source workflow.ContextSource
+		name     string
+		mode     workflow.ContextMode
+		source   workflow.ContextSource
 		fallback string
 	}{
 		{name: "missing fallback", mode: workflow.ContextModeNewSession, source: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}},
