@@ -13,6 +13,7 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.PromptTemplate = "Audit {{.Params.role}}."
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
 			Purpose: workflow.ParameterPurposeTargetAssignee,
@@ -50,6 +51,9 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 		completed.Mutation.Created[0].AgentExecutionSelection.Assignee != "reviewer" ||
 		completed.Mutation.Created[0].AgentExecutionSelection.Origin != workflow.AssigneeOriginTransitionSelected {
 		t.Fatalf("materialized target = %+v, want selected reviewer", completed.Mutation.Created)
+	}
+	if completed.Mutation.Created[0].CurrentInputValues["role"] != "reviewer" {
+		t.Fatalf("materialized target current inputs = %+v, want exposed selector role", completed.Mutation.Created[0].CurrentInputValues)
 	}
 }
 
@@ -174,6 +178,9 @@ func TestAutomaticCompletionMaterializesFiniteThinkingSelection(t *testing.T) {
 	selection := completed.Mutation.Created[0].AgentExecutionSelection
 	if selection == nil || selection.Thinking == nil || string(*selection.Thinking) != "high" {
 		t.Fatalf("materialized target selection = %+v, want high thinking", selection)
+	}
+	if completed.Mutation.Created[0].CurrentInputValues["effort"] != "high" {
+		t.Fatalf("materialized target current inputs = %+v, want exposed thinking selector", completed.Mutation.Created[0].CurrentInputValues)
 	}
 }
 

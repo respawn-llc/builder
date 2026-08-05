@@ -508,7 +508,7 @@ func materializeTransitionTargetCurrentNode(
 		return workflow.CurrentNode{}, err
 	}
 	sourceTransitionKey := workflow.ModelKey(transitionGroup.TransitionID)
-	wiring := workflow.DeriveWiring(definition)
+	wiring := workflow.DeriveWiringWithCatalog(definition, request.Catalog)
 	currentInputValues := make(map[string]string)
 	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
 		providerNode, err := transitionTargetInputProviderNodeKey(definition, wiring, source, binding.Field)
@@ -688,7 +688,7 @@ func materializeCompletionTargetCurrentNode(
 	commentary string,
 	transitionBranchKey *workflow.TransitionBranchKey,
 ) (workflow.CurrentNode, error) {
-	wiring := workflow.DeriveWiring(definition)
+	wiring := workflow.DeriveWiringWithCatalog(definition, catalog)
 	sourceKey := workflow.NodeKey(source)
 	var sourceTransitionKey workflow.ModelKey
 	for _, group := range definition.TransitionGroups {
