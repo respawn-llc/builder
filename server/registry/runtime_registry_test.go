@@ -593,6 +593,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		StepID:                     registryTestStepID,
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
+		CommittedProvenance:        &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
 	})
 	message := nextTranscriptMessage(t, sub)
 	if message.Kind() != clientui.TranscriptMessageCommittedRow {
@@ -661,8 +662,21 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		Kind:   runtime.EventReasoningDelta,
 		StepID: registryTestStepID,
 		ReasoningDelta: &llm.ReasoningSummaryDelta{
-			Key:  "planning",
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{
+				OutputIndex: func() *int64 { value := int64(0); return &value }(),
+				PartIndex:   func() *int64 { value := int64(0); return &value }(),
+			},
+			ItemIdentity: func() *llm.ReasoningItemIdentity {
+				part := int64(0)
+				return &llm.ReasoningItemIdentity{ItemID: "planning", PartIndex: &part}
+			}(),
 			Text: "Planning the next action",
+		},
+		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+			Provider: func() *llm.ReasoningItemIdentity {
+				part := int64(0)
+				return &llm.ReasoningItemIdentity{ItemID: "planning", PartIndex: &part}
+			}(),
 		},
 	}); err != nil {
 		t.Fatalf("publish active reasoning: %v", err)
@@ -703,10 +717,10 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 			payload.ActiveStep,
 		)
 	}
-	if payload.ActiveReasoning != nil {
+	if payload.ActiveThinkingStatus != nil || len(payload.ActiveReasoningTraces) != 0 {
 		t.Fatalf(
-			"hydrated active reasoning = %+v, want none after canonical runtime became idle",
-			payload.ActiveReasoning,
+			"hydrated active reasoning = status %+v traces %+v, want none after canonical runtime became idle",
+			payload.ActiveThinkingStatus, payload.ActiveReasoningTraces,
 		)
 	}
 	if payload.ActiveReviewer != nil {
