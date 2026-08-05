@@ -1,10 +1,8 @@
-export type SidebarRouteKind = "board" | "workflowEditor" | "other";
-type SimpleTransition = "none" | "pathname" | "boardWorkflow" | "workflowEditorProject";
 type SidebarRouteSearch = Readonly<Partial<Record<"projectId" | "taskId" | "workflowId", string>>>;
 
 export type SidebarRouteLocation = Readonly<{
   pathname: string;
-  routeKind: SidebarRouteKind;
+  routeKind: "board" | "workflowEditor" | "other";
   projectID: string | undefined;
   taskID: string | undefined;
   workflowID: string | undefined;
@@ -26,8 +24,7 @@ export function sidebarRouteLocationFromMatches(
   return {
     pathname,
     projectID: workflowEditorSearch?.projectId,
-    routeKind:
-      boardSearch === undefined ? (workflowEditorSearch === undefined ? "other" : "workflowEditor") : "board",
+    routeKind: boardSearch ? "board" : workflowEditorSearch ? "workflowEditor" : "other",
     taskID: boardSearch?.taskId,
     workflowID: boardSearch?.workflowId,
   };
@@ -40,16 +37,12 @@ export function classifySidebarRouteTransition(
   if (previous.pathname !== next.pathname) return { kind: "pathname" };
   if (previous.routeKind === "board" && next.routeKind === "board") {
     if (previous.workflowID !== next.workflowID) return { kind: "boardWorkflow" };
-    if (previous.taskID !== next.taskID) {
-      return { from: previous.taskID, kind: "boardTask", to: next.taskID };
-    }
+    return previous.taskID === next.taskID
+      ? { kind: "none" }
+      : { from: previous.taskID, kind: "boardTask", to: next.taskID };
   }
-  if (
-    previous.routeKind === "workflowEditor" &&
-    next.routeKind === "workflowEditor" &&
-    previous.projectID !== next.projectID
-  ) {
-    return { kind: "workflowEditorProject" };
+  if (previous.routeKind === "workflowEditor" && next.routeKind === "workflowEditor") {
+    return previous.projectID === next.projectID ? { kind: "none" } : { kind: "workflowEditorProject" };
   }
   return { kind: "none" };
 }
