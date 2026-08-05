@@ -116,6 +116,52 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	}
 }
 
+func TestServiceUpdateWorkflowEdgeBlocksParameterEditForActiveCurrentNode(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	if len(started.CurrentNodes) != 1 {
+		t.Fatalf("started Current Nodes = %+v, want one active Current Node", started.CurrentNodes)
+	}
+
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	edge := workflowServiceEdgeByID(t, definition.Definition, "edge-start-"+workflowID.String())
+	_, err = service.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{
+		WorkflowID:        workflowID,
+		EdgeID:            edge.ID,
+		TransitionGroupID: edge.TransitionGroupID,
+		Key:               edge.Key,
+		TargetNodeID:      edge.TargetNodeID,
+		ContextMode:       edge.ContextMode,
+		ContextSource:     edge.ContextSource,
+		RequiresApproval:  edge.RequiresApproval,
+		PromptTemplate:    edge.PromptTemplate,
+		Parameters: []serverapi.WorkflowParameter{{
+			Key:         "risk",
+			Description: "New risk.",
+		}},
+	})
+	var policyErr workflowstore.WorkflowGraphEditPolicyError
+	if err == nil || !errors.As(err, &policyErr) {
+		t.Fatalf("UpdateWorkflowEdge error = %v, want workflow graph edit policy error", err)
+	}
+	hasParameterBlocker := false
+	for _, blocker := range policyErr.Blockers {
+		if blocker.Code == "active_transition_parameter_changed" {
+			hasParameterBlocker = true
+			break
+		}
+	}
+	if !hasParameterBlocker {
+		t.Fatalf("UpdateWorkflowEdge blockers = %+v, want active-transition-parameter blocker", policyErr.Blockers)
+	}
+}
+
 func TestServiceValidateWorkflowScriptPathReportsMissingPath(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceWorkflowWithScriptNode(t, ctx, service, "node-script", "scripts/run")

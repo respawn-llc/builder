@@ -41,6 +41,28 @@ type WorkflowGraphEditPolicyError struct {
 	Blockers []WorkflowGraphEditPolicyBlocker
 }
 
+func workflowGraphEditPolicyDefinitions(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	proposedGraph preparedWorkflowGraphSave,
+) (workflow.Definition, workflow.Definition, error) {
+	currentDefinition, _, err := workflowDefinitionFromQueries(ctx, q, workflowID)
+	if err != nil {
+		return workflow.Definition{}, workflow.Definition{}, err
+	}
+	proposedDefinition, err := workflowDefinitionFromPreparedGraph(
+		proposedGraph,
+		workflowID,
+		currentDefinition.DisplayName,
+		currentDefinition.ExecutionTargetPolicy,
+	)
+	if err != nil {
+		return workflow.Definition{}, workflow.Definition{}, err
+	}
+	return currentDefinition, proposedDefinition, nil
+}
+
 func (e WorkflowGraphEditPolicyError) Error() string {
 	if len(e.Blockers) == 0 {
 		return "workflow graph edit blocked"
@@ -52,8 +74,15 @@ func (e WorkflowGraphEditPolicyError) Error() string {
 	return strings.Join(messages, "; ")
 }
 
-func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) error {
-	result, err := workflowGraphEditPolicy(ctx, q, workflowID, prepared)
+func enforceWorkflowGraphEditPolicy(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	prepared preparedWorkflowGraphSave,
+) error {
+	result, err := workflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, prepared)
 	if err != nil {
 		return err
 	}
@@ -63,12 +92,26 @@ func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, w
 	return nil
 }
 
-func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) (WorkflowGraphEditPolicyResult, error) {
+func workflowGraphEditPolicy(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	prepared preparedWorkflowGraphSave,
+) (WorkflowGraphEditPolicyResult, error) {
 	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, nil, describeWorkflowGraphSave(currentGraph, prepared))
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(
+		ctx,
+		q,
+		workflowID,
+		currentDefinition,
+		proposedDefinition,
+		describeWorkflowGraphSave(currentGraph, prepared),
+	)
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
@@ -234,8 +277,15 @@ func workflowGraphEdgeIDsSlice(edges []EdgeRecord) []workflow.EdgeID {
 	return ids
 }
 
-func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, definition *workflow.Definition, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
-	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, workflowID, definition, structural)
+func evaluateWorkflowGraphSaveDynamicImpact(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	structural workflowGraphSaveStructuralDescriptor,
+) (workflowGraphSaveDynamicImpact, error) {
+	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, workflowID, currentDefinition, proposedDefinition, structural)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
@@ -248,7 +298,14 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 	return evaluation, nil
 }
 
-func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, definition *workflow.Definition, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+func evaluateWorkflowGraphSaveDynamicDecision(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	structural workflowGraphSaveStructuralDescriptor,
+) (workflowGraphSaveDynamicImpact, error) {
 	impact := WorkflowGraphSaveImpact{
 		RemovedNodeCount:            int64(len(structural.Removed.nodes)),
 		RemovedTransitionGroupCount: int64(len(structural.Removed.transitionGroups)),
@@ -278,6 +335,8 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		StartNodeChangeCount:    structural.EditPolicy.StartNodeChangeCount,
 		LastTerminalChangeCount: structural.EditPolicy.LastTerminalChangeCount,
 	}
+	currentWiring := workflow.DeriveWiring(currentDefinition)
+	proposedWiring := workflow.DeriveWiring(proposedDefinition)
 	for _, nodeID := range structural.EditPolicy.NodeKindChanges {
 		refCount, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
@@ -306,10 +365,10 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		}
 	}
 	for _, edgeID := range structural.EditPolicy.ParameterChanges {
-		dependencies := []workflow.EdgeID{edgeID}
-		if definition != nil {
-			dependencies = workflow.ParameterDependencyEdgesForEdge(*definition, edgeID)
-		}
+		dependencies := appendUniqueWorkflowEdgeIDs(
+			currentWiring.ParameterDependencyEdgesForEdge(edgeID),
+			proposedWiring.ParameterDependencyEdgesForEdge(edgeID),
+		)
 		var blockedRefCount int64
 		for _, dependency := range dependencies {
 			impact, err := q.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
@@ -391,6 +450,18 @@ func workflowGraphEdgesByTransitionGroupID(edges []EdgeRecord) map[workflow.Tran
 		out[edge.TransitionGroupID] = append(out[edge.TransitionGroupID], edge)
 	}
 	return out
+}
+
+func appendUniqueWorkflowEdgeIDs(existing []workflow.EdgeID, additions ...[]workflow.EdgeID) []workflow.EdgeID {
+	for _, group := range additions {
+		for _, edgeID := range group {
+			if slices.Contains(existing, edgeID) {
+				continue
+			}
+			existing = append(existing, edgeID)
+		}
+	}
+	return existing
 }
 
 func workflowGraphEditPolicyBlockers(impact WorkflowGraphEditPolicyImpact) []WorkflowGraphEditPolicyBlocker {

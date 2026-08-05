@@ -157,14 +157,14 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		Structural:      structural,
 		Definition:      def,
 	}
-	_, record, err := workflowDefinitionFromQueries(ctx, q, workflowID)
+	currentDefinition, record, err := workflowDefinitionFromQueries(ctx, q, workflowID)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
 	plan.Record = record
 	var evaluation workflowGraphSaveDynamicImpact
 	if (graphChanged || metadataChanged) && current.Version == req.ExpectedVersion {
-		evaluation, err = evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, &def, structural)
+		evaluation, err = evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, currentDefinition, def, structural)
 		if err != nil {
 			return WorkflowGraphSavePlan{}, err
 		}
@@ -246,7 +246,11 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan.workflowGraphSaveResult(false), nil
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, &plan.Definition, plan.Structural)
+	currentDefinition, _, err := workflowDefinitionFromQueries(ctx, q, plan.WorkflowID)
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, currentDefinition, plan.Definition, plan.Structural)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
@@ -450,8 +454,6 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		prepared.nodeGroups[i] = group
 	}
 
-	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: executionTargetPolicy}
-	groupNodeIDs := map[string][]workflow.NodeID{}
 	for i, node := range prepared.nodes {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, node.WorkflowID, "node", string(node.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
@@ -473,24 +475,12 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		}
 		node.CompletionMode = nodeCompletionMode(node)
 		prepared.nodes[i] = node
-		if node.GroupID != "" {
-			groupNodeIDs[node.GroupID] = append(groupNodeIDs[node.GroupID], node.ID)
-		}
-		workflowNode, err := workflowNodeFromRecord(node)
-		if err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		def.Nodes = append(def.Nodes, workflowNode)
-	}
-	for _, group := range prepared.nodeGroups {
-		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: group.Key, DisplayName: group.DisplayName, MemberNodeIDs: groupNodeIDs[group.ID]})
 	}
 	for i, group := range prepared.transitionGroups {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "transition group", string(group.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		prepared.transitionGroups[i] = group
-		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: group.WorkflowID, ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for i, edge := range prepared.edges {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, edge.WorkflowID, "edge", string(edge.ID)); err != nil {
@@ -498,7 +488,10 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		}
 		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
 		prepared.edges[i] = edge
-		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: edge.WorkflowID, ID: edge.ID, Key: edge.Key, TransitionGroupID: edge.TransitionGroupID, TargetNodeID: edge.TargetNodeID, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
+	}
+	def, err := workflowDefinitionFromPreparedGraph(prepared, workflowID, displayName, executionTargetPolicy)
+	if err != nil {
+		return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 	}
 	return prepared, def, nil
 }

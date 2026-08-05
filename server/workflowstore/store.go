@@ -107,7 +107,11 @@ func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID runtim
 	if err != nil {
 		return 0, err
 	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, next); err != nil {
+	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, next)
+	if err != nil {
+		return 0, err
+	}
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, next); err != nil {
 		return 0, err
 	}
 	if err := apply(ctx, q, tx); err != nil {
@@ -829,7 +833,12 @@ func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
 	if err != nil {
 		return err
 	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphNode(currentGraph, nodeID)); err != nil {
+	nextGraph := withoutWorkflowGraphNode(currentGraph, nodeID)
+	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, nextGraph)
+	if err != nil {
+		return err
+	}
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, nextGraph); err != nil {
 		return err
 	}
 	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
@@ -869,7 +878,12 @@ func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
 	if err != nil {
 		return err
 	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphEdge(currentGraph, edgeID)); err != nil {
+	nextGraph := withoutWorkflowGraphEdge(currentGraph, edgeID)
+	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, nextGraph)
+	if err != nil {
+		return err
+	}
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, nextGraph); err != nil {
 		return err
 	}
 	refs, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
@@ -912,22 +926,6 @@ func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, wo
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	nodes, err := q.ListWorkflowNodes(ctx, workflowID)
-	if err != nil {
-		return workflow.Definition{}, WorkflowRecord{}, err
-	}
-	nodeGroups, err := q.ListWorkflowNodeGroups(ctx, workflowID)
-	if err != nil {
-		return workflow.Definition{}, WorkflowRecord{}, err
-	}
-	groups, err := q.ListWorkflowTransitionGroups(ctx, workflowID)
-	if err != nil {
-		return workflow.Definition{}, WorkflowRecord{}, err
-	}
-	edges, err := q.ListWorkflowEdges(ctx, workflowID)
-	if err != nil {
-		return workflow.Definition{}, WorkflowRecord{}, err
-	}
 	record := workflowRecordFromRow(workflowRecordRow{
 		ID:                       row.ID,
 		Name:                     row.Name,
@@ -938,64 +936,20 @@ func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, wo
 		CreatedAtUnixMs:          row.CreatedAtUnixMs,
 		UpdatedAtUnixMs:          row.UpdatedAtUnixMs,
 	})
-	def := workflow.Definition{ID: row.ID, DisplayName: row.Name, ExecutionTargetPolicy: record.ExecutionTargetPolicy}
-	groupMemberIDs := map[string][]workflow.NodeID{}
-	for _, group := range nodeGroups {
-		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: workflow.ModelKey(group.GroupKey), DisplayName: group.DisplayName, SortOrder: group.SortOrder})
+	prepared, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
+	if err != nil {
+		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	for _, node := range nodes {
-		joinProviders := []workflow.JoinInputProvider{}
-		if err := workflow.UnmarshalString(node.JoinInputProvidersJson, &joinProviders); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		groupID := ""
-		if node.GroupID.Valid {
-			groupID = node.GroupID.String
-			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
-		}
-		scriptPath := ""
-		if node.ScriptPath.Valid {
-			scriptPath = node.ScriptPath.String
-		}
-		workflowNode, err := workflowNodeFromRecord(NodeRecord{
-			ID:                 workflow.NodeID(node.ID),
-			WorkflowID:         node.WorkflowID,
-			Key:                workflow.ModelKey(node.NodeKey),
-			Kind:               workflow.NodeKind(node.Kind),
-			DisplayName:        node.DisplayName,
-			GroupID:            groupID,
-			SubagentRole:       node.SubagentRole,
-			CompletionMode:     node.CompletionMode,
-			ScriptPath:         scriptPath,
-			JoinInputProviders: joinProviders,
-		})
-		if err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		def.Nodes = append(def.Nodes, workflowNode)
+	definition, err := workflowDefinitionFromPreparedGraph(
+		prepared,
+		workflowID,
+		row.Name,
+		record.ExecutionTargetPolicy,
+	)
+	if err != nil {
+		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	for index := range def.NodeGroups {
-		def.NodeGroups[index].MemberNodeIDs = groupMemberIDs[def.NodeGroups[index].ID]
-	}
-	for _, group := range groups {
-		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: group.WorkflowID, ID: workflow.TransitionGroupID(group.ID), SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
-	}
-	for _, edge := range edges {
-		inputs := []workflow.InputBinding{}
-		parameters := []workflow.Parameter{}
-		requirements := []workflow.OutputRequirement{}
-		if err := workflow.UnmarshalString(edge.ParametersJson, &parameters); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		if err := workflow.UnmarshalString(edge.InputBindingsJson, &inputs); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		if err := workflow.UnmarshalString(edge.OutputRequirementsJson, &requirements); err != nil {
-			return workflow.Definition{}, WorkflowRecord{}, err
-		}
-		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: edge.WorkflowID, ID: workflow.EdgeID(edge.ID), Key: workflow.ModelKey(edge.EdgeKey), TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval != 0, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSourceKind), NodeKey: workflow.ModelKey(edge.ContextSourceNodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: inputs, OutputRequirements: requirements})
-	}
-	return def, record, nil
+	return definition, record, nil
 }
 
 type workflowRecordRow struct {

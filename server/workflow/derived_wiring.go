@@ -15,46 +15,10 @@ type DerivedWiring struct {
 	possibleProvisionFieldsByNode    map[NodeID][]OutputField
 	requiredProviderFieldsByJoinEdge map[EdgeID][]OutputField
 	joinOutputFieldsByNode           map[NodeID][]OutputField
+	parameterDependencyEdgesByEdge   map[EdgeID][]EdgeID
 	currentNodeInputBindingsByEdge   map[EdgeID][]InputBinding
 	currentNodeOutputFieldsByGroup   map[TransitionGroupID][]OutputField
 	priorParameterRequirementsByNode map[NodeID][]PriorTransitionParameterRequirement
-}
-
-// ParameterDependencyEdgesForEdge returns entering Edges whose materialized
-// values depend on an Edge's Parameters, including Join-derived outgoing Edges.
-func ParameterDependencyEdgesForEdge(def Definition, edgeID EdgeID) []EdgeID {
-	seen := map[EdgeID]struct{}{edgeID: {}}
-	edges := []EdgeID{edgeID}
-	for _, node := range def.Nodes {
-		join, ok := node.(JoinNode)
-		if !ok {
-			continue
-		}
-		provider := false
-		for _, input := range join.JoinInputProviders {
-			if input.ProviderEdgeID == edgeID {
-				provider = true
-				break
-			}
-		}
-		if !provider {
-			continue
-		}
-		for _, group := range def.TransitionGroups {
-			if group.SourceNodeID != join.ID {
-				continue
-			}
-			for _, edge := range def.Edges {
-				if edge.TransitionGroupID == group.ID {
-					if _, exists := seen[edge.ID]; !exists {
-						seen[edge.ID] = struct{}{}
-						edges = append(edges, edge.ID)
-					}
-				}
-			}
-		}
-	}
-	return edges
 }
 
 type PriorTransitionParameterRequirement struct {
@@ -100,6 +64,7 @@ func DeriveWiringWithPriorParameterReferences(
 		possibleProvisionFieldsByNode:    map[NodeID][]OutputField{},
 		requiredProviderFieldsByJoinEdge: map[EdgeID][]OutputField{},
 		joinOutputFieldsByNode:           map[NodeID][]OutputField{},
+		parameterDependencyEdgesByEdge:   map[EdgeID][]EdgeID{},
 		currentNodeInputBindingsByEdge:   map[EdgeID][]InputBinding{},
 		currentNodeOutputFieldsByGroup:   map[TransitionGroupID][]OutputField{},
 		priorParameterRequirementsByNode: map[NodeID][]PriorTransitionParameterRequirement{},
@@ -123,6 +88,7 @@ func DeriveWiringWithPriorParameterReferences(
 		if group, ok := groupsByID[edge.TransitionGroupID]; ok {
 			outgoingByNode[group.SourceNodeID] = append(outgoingByNode[group.SourceNodeID], edge)
 		}
+		derived.parameterDependencyEdgesByEdge[edge.ID] = []EdgeID{edge.ID}
 	}
 	for _, edge := range def.Edges {
 		group, groupExists := groupsByID[edge.TransitionGroupID]
@@ -146,6 +112,7 @@ func DeriveWiringWithPriorParameterReferences(
 			derived.deriveJoinAggregateParameters(node, incomingByNode)
 		}
 	}
+	derived.deriveParameterDependencies(incomingByNode, outgoingByNode)
 	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode, priorReferencesByEdge)
 	return derived
 }
@@ -184,6 +151,13 @@ func (w DerivedWiring) CurrentNodeOutputFieldsForTransitionGroup(groupID Transit
 
 func (w DerivedWiring) PriorParameterRequirementsForNode(nodeID NodeID) []PriorTransitionParameterRequirement {
 	return append([]PriorTransitionParameterRequirement(nil), w.priorParameterRequirementsByNode[nodeID]...)
+}
+
+// ParameterDependencyEdgesForEdge returns entering Edges whose materialized
+// values depend on an Edge's Parameters. The dependency map is derived from
+// the same Join aggregate fields used by CurrentNodeInputBindingsForEdge.
+func (w DerivedWiring) ParameterDependencyEdgesForEdge(edgeID EdgeID) []EdgeID {
+	return append([]EdgeID(nil), w.parameterDependencyEdgesByEdge[edgeID]...)
 }
 
 func (w DerivedWiring) TransitionOutputFieldsForEdge(edge Edge, source Node) []OutputField {
@@ -279,6 +253,35 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 		}
 	}
 	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
+}
+
+func (w *DerivedWiring) deriveParameterDependencies(
+	incomingByNode map[NodeID][]Edge,
+	outgoingByNode map[NodeID][]Edge,
+) {
+	for joinID := range w.joinOutputFieldsByNode {
+		for _, provider := range incomingByNode[joinID] {
+			if len(w.requiredProviderFieldsByJoinEdge[provider.ID]) == 0 {
+				continue
+			}
+			for _, outgoing := range outgoingByNode[joinID] {
+				w.parameterDependencyEdgesByEdge[provider.ID] = appendUniqueEdgeIDs(
+					w.parameterDependencyEdgesByEdge[provider.ID],
+					[]EdgeID{outgoing.ID},
+				)
+			}
+		}
+	}
+}
+
+func appendUniqueEdgeIDs(existing []EdgeID, additions []EdgeID) []EdgeID {
+	for _, addition := range additions {
+		if slices.Contains(existing, addition) {
+			continue
+		}
+		existing = append(existing, addition)
+	}
+	return existing
 }
 
 func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(

@@ -8,6 +8,69 @@ import (
 	"core/shared/runtimeids"
 )
 
+func workflowDefinitionFromPreparedGraph(
+	prepared preparedWorkflowGraphSave,
+	workflowID runtimeids.WorkflowID,
+	displayName string,
+	executionTargetPolicy workflow.ExecutionTargetPolicy,
+) (workflow.Definition, error) {
+	definition := workflow.Definition{
+		ID:                    workflowID,
+		DisplayName:           displayName,
+		ExecutionTargetPolicy: executionTargetPolicy,
+	}
+	groupMemberIDs := map[string][]workflow.NodeID{}
+	for _, group := range prepared.nodeGroups {
+		definition.NodeGroups = append(definition.NodeGroups, workflow.NodeGroup{
+			WorkflowID:    group.WorkflowID,
+			ID:            group.ID,
+			Key:           group.Key,
+			DisplayName:   group.DisplayName,
+			MemberNodeIDs: groupMemberIDs[group.ID],
+		})
+	}
+	for _, node := range prepared.nodes {
+		if node.GroupID != "" {
+			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], node.ID)
+		}
+		workflowNode, err := workflowNodeFromRecord(node)
+		if err != nil {
+			return workflow.Definition{}, err
+		}
+		definition.Nodes = append(definition.Nodes, workflowNode)
+	}
+	for index := range definition.NodeGroups {
+		definition.NodeGroups[index].MemberNodeIDs = groupMemberIDs[definition.NodeGroups[index].ID]
+	}
+	for _, group := range prepared.transitionGroups {
+		definition.TransitionGroups = append(definition.TransitionGroups, workflow.TransitionGroup{
+			WorkflowID:   group.WorkflowID,
+			ID:           group.ID,
+			SourceNodeID: group.SourceNodeID,
+			TransitionID: group.TransitionID,
+			DisplayName:  group.DisplayName,
+			Description:  group.Description,
+		})
+	}
+	for _, edge := range prepared.edges {
+		definition.Edges = append(definition.Edges, workflow.Edge{
+			WorkflowID:         edge.WorkflowID,
+			ID:                 edge.ID,
+			Key:                edge.Key,
+			TransitionGroupID:  edge.TransitionGroupID,
+			TargetNodeID:       edge.TargetNodeID,
+			ContextMode:        edge.ContextMode,
+			ContextSource:      workflow.CanonicalContextSource(edge.ContextSource),
+			RequiresApproval:   edge.RequiresApproval,
+			PromptTemplate:     edge.PromptTemplate,
+			Parameters:         edge.Parameters,
+			InputBindings:      edge.InputBindings,
+			OutputRequirements: edge.OutputRequirements,
+		})
+	}
+	return definition, nil
+}
+
 func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (preparedWorkflowGraphSave, error) {
 	nodeGroups, err := q.ListWorkflowNodeGroups(ctx, workflowID)
 	if err != nil {
