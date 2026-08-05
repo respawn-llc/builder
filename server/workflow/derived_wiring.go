@@ -265,7 +265,7 @@ func (w *DerivedWiring) deriveParameterDependencies(
 				continue
 			}
 			for _, outgoing := range outgoingByNode[joinID] {
-				w.parameterDependencyEdgesByEdge[provider.ID] = appendUniqueEdgeIDs(
+				w.parameterDependencyEdgesByEdge[provider.ID] = AppendUniqueEdgeIDs(
 					w.parameterDependencyEdgesByEdge[provider.ID],
 					[]EdgeID{outgoing.ID},
 				)
@@ -274,12 +274,16 @@ func (w *DerivedWiring) deriveParameterDependencies(
 	}
 }
 
-func appendUniqueEdgeIDs(existing []EdgeID, additions []EdgeID) []EdgeID {
-	for _, addition := range additions {
-		if slices.Contains(existing, addition) {
-			continue
+// AppendUniqueEdgeIDs returns existing Edge IDs followed by additions that are
+// not already present, preserving first-seen order.
+func AppendUniqueEdgeIDs(existing []EdgeID, additions ...[]EdgeID) []EdgeID {
+	for _, group := range additions {
+		for _, addition := range group {
+			if slices.Contains(existing, addition) {
+				continue
+			}
+			existing = append(existing, addition)
 		}
-		existing = append(existing, addition)
 	}
 	return existing
 }

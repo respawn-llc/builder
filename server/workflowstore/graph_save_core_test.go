@@ -981,7 +981,7 @@ func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 	f := newGraphSaveFixture(t, createFanoutJoinWorkflow)
 	groupID := "group-parallel-" + f.workflowID.String()
 	req := f.request(f.record.Version, false, f.def)
-	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: groupID, WorkflowID: f.workflowID, Key: "parallel", DisplayName: "Parallel"})
+	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: groupID, WorkflowID: f.workflowID, Key: "parallel", DisplayName: "Parallel", SortOrder: 37})
 	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-a-"+f.workflowID.String()), groupID)
 	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-b-"+f.workflowID.String()), groupID)
 	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-join-"+f.workflowID.String()), groupID)
@@ -996,6 +996,9 @@ func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 	}
 	if len(savedDef.NodeGroups) != 1 || len(savedDef.NodeGroups[0].MemberNodeIDs) != 3 {
 		t.Fatalf("saved node groups = %+v, want one group with three members", savedDef.NodeGroups)
+	}
+	if savedDef.NodeGroups[0].SortOrder != 37 {
+		t.Fatalf("saved node group sort order = %d, want 37", savedDef.NodeGroups[0].SortOrder)
 	}
 	if workflow.NodeGroupID(nodeByID(t, savedDef, workflow.NodeID("node-join-"+f.workflowID.String()))) != groupID {
 		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, workflow.NodeID("node-join-"+f.workflowID.String())))

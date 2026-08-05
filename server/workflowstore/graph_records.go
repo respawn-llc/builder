@@ -26,6 +26,7 @@ func workflowDefinitionFromPreparedGraph(
 			ID:            group.ID,
 			Key:           group.Key,
 			DisplayName:   group.DisplayName,
+			SortOrder:     group.SortOrder,
 			MemberNodeIDs: groupMemberIDs[group.ID],
 		})
 	}

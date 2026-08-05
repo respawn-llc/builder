@@ -365,7 +365,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(
 		}
 	}
 	for _, edgeID := range structural.EditPolicy.ParameterChanges {
-		dependencies := appendUniqueWorkflowEdgeIDs(
+		dependencies := workflow.AppendUniqueEdgeIDs(
 			currentWiring.ParameterDependencyEdgesForEdge(edgeID),
 			proposedWiring.ParameterDependencyEdgesForEdge(edgeID),
 		)
@@ -450,18 +450,6 @@ func workflowGraphEdgesByTransitionGroupID(edges []EdgeRecord) map[workflow.Tran
 		out[edge.TransitionGroupID] = append(out[edge.TransitionGroupID], edge)
 	}
 	return out
-}
-
-func appendUniqueWorkflowEdgeIDs(existing []workflow.EdgeID, additions ...[]workflow.EdgeID) []workflow.EdgeID {
-	for _, group := range additions {
-		for _, edgeID := range group {
-			if slices.Contains(existing, edgeID) {
-				continue
-			}
-			existing = append(existing, edgeID)
-		}
-	}
-	return existing
 }
 
 func workflowGraphEditPolicyBlockers(impact WorkflowGraphEditPolicyImpact) []WorkflowGraphEditPolicyBlocker {
