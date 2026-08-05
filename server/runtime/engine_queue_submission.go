@@ -85,7 +85,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return err
 			}
 			consumedQueueItemIDs = flushResult.queueItemIDs
-			if !flushResult.continueCombinedFlush {
+			if flushResult.disposition == userInjectionFlushStopped {
 				return nil
 			}
 			if flushResult.flushed == 0 {

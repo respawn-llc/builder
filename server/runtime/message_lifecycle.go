@@ -447,7 +447,7 @@ func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessa
 
 func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	result, err := m.CommitPendingUserInjections(stepID, selection)
-	if err != nil || !result.continueCombinedFlush {
+	if err != nil || result.disposition != userInjectionFlushContinue {
 		return result, err
 	}
 	if m.background != nil {
@@ -480,7 +480,7 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 
 func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserMessage) (userInjectionCommitResult, error) {
 	e := m.engine
-	result := userInjectionCommitResult{continueCombinedFlush: true}
+	result := userInjectionCommitResult{disposition: userInjectionFlushContinue}
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
 	pending = e.dropStoppedLiveRunQueueItems(pending)
@@ -526,7 +526,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			}
 			e.outputMutationMu.Unlock()
 			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
-			result.continueCombinedFlush = false
+			result.disposition = userInjectionFlushStopped
 			return result, nil
 		}
 		if result.queueItemIDs == nil {

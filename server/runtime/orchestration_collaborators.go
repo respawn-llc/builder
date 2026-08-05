@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 
 	"core/server/llm"
 	"core/server/session"
@@ -87,14 +86,23 @@ type allPendingUserInjectionSelection struct{}
 
 func (allPendingUserInjectionSelection) userInjectionSelection() {}
 
+type userInjectionFlushDisposition uint8
+
+const (
+	userInjectionFlushContinue userInjectionFlushDisposition = iota
+	userInjectionFlushStopped
+)
+
 type userInjectionCommitResult struct {
-	flushed               int
-	receipt               session.CommitReceipt
-	queueItemIDs          map[string]struct{}
-	continueCombinedFlush bool
+	flushed      int
+	receipt      session.CommitReceipt
+	queueItemIDs map[string]struct{}
+	disposition  userInjectionFlushDisposition
 }
 
-var errQueuedUserFlushStopped = errors.New("queued user flush stopped")
+type queuedUserFlushStoppedError struct{}
+
+func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
 
 func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
 	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
