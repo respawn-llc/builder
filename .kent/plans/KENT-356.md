@@ -727,15 +727,21 @@
   selector coordinator reports selected-Task deletion start/outcome through
   the provider's typed pending operation; the provider preserves an unrelated
   survivor only for a matching completed deletion transition and closes
-  ordinary or failed route changes. Regression coverage uses real router
-  transitions for every route case, including delayed success/failure after
-  selector absence, the AppChrome Home View Transition path, and the
-  deletion-survivor exception.
+  ordinary or failed route changes. Pathname closure is subscribed at the
+  provider's router lifecycle boundary before route loading; the structured
+  observer remains responsible for search transitions. Regression coverage
+  uses real router transitions for every route case, including delayed
+  success/failure after selector absence, the AppChrome Home View Transition
+  path, and the deletion-survivor exception.
+  Progress (August 5, 2026): QA reproduced a live sidebar after top-level Home
+  navigation. Restored the provider-owned `onBeforeLoad` pathname close
+  subscription and retained structured search-transition reconciliation.
+  Full Desktop verification passed again: 82 files / 377 tests.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,668 additions plus 330
-  deletions: **1,998 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,670 additions plus 330
+  deletions: **2,000 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -745,4 +751,4 @@
   reconciliation: Apps lint (0 errors; 4 existing warnings), Apps typecheck,
   Desktop build, and `./scripts/test.sh desktop` (82 files / 377 tests) all
   passed. The final non-test Desktop diff is 1,668 additions plus 330
-  deletions, totaling 1,998 changed lines.
+  deletions, totaling 2,000 changed lines.
