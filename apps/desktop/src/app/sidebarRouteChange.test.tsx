@@ -22,34 +22,39 @@ describe("SidebarRouteChangeCloser", () => {
     routeState.pathname = "/projects/project-1";
   });
 
-  it("closes the complete sidebar when the browser pathname changes", async () => {
-    const services = createTestServices([]);
-    const view = render(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <SidebarRouteChangeCloser />
-          <SidebarHost />
-          <OpenSidebar />
-        </SidebarProvider>
-      </TestAppProviders>,
-    );
+  it.each(["/", "/projects/project-2"])(
+    "closes the complete sidebar when the browser pathname changes to %s",
+    async (nextPathname) => {
+      const services = createTestServices([]);
+      const view = render(
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <SidebarRouteChangeCloser />
+            <SidebarHost />
+            <OpenSidebar />
+          </SidebarProvider>
+        </TestAppProviders>,
+      );
 
-    await waitFor(() => expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"));
-    routeState.pathname = "/";
-    view.rerender(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <SidebarRouteChangeCloser />
-          <SidebarHost />
-          <OpenSidebar />
-        </SidebarProvider>
-      </TestAppProviders>,
-    );
+      await waitFor(() =>
+        expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+      );
+      routeState.pathname = nextPathname;
+      view.rerender(
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <SidebarRouteChangeCloser />
+            <SidebarHost />
+            <OpenSidebar />
+          </SidebarProvider>
+        </TestAppProviders>,
+      );
 
-    await waitFor(() =>
-      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
-    );
-  });
+      await waitFor(() =>
+        expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
+      );
+    },
+  );
 });
 
 function OpenSidebar() {

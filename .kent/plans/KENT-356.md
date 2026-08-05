@@ -727,3 +727,15 @@
   verification passed with frozen Apps install, full Apps lint (0 errors; 4
   existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
   374 tests), and `./scripts/build.sh desktop`.
+  Progress (August 5, 2026): Compliance remediation removed the Board
+  `projectId` pathname comparison and retained only its typed `workflowId`
+  search-transition comparison. Project-to-Project and Project-to-Home
+  pathname coverage remains at the shell closer, so pathname close ownership
+  has one writer.
+  Verification after this compliance round: frozen install, Apps lint (0
+  errors; 4 existing warnings), Apps typecheck, and Desktop build passed.
+  Focused route/sidebar, Board Manual Move, and Task Detail data tests passed
+  (8/8). Two full Desktop-suite attempts each had one different 5-second
+  timeout under concurrent load (sidebar navigation once, Manual Move once);
+  the implicated tests pass in the focused rerun, so no product failure was
+  reproduced.

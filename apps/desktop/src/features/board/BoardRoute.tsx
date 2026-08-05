@@ -109,14 +109,13 @@ function BoardRouteWithLabels({
   }>) {
   const filter = useProjectLabelFilter();
   const { closeSidebar } = useSidebar();
-  const previousRouteRef = useRef<Readonly<{ projectId: string; workflowId: string | undefined }> | null>(null);
+  const previousWorkflowIDRef = useRef<string | undefined>(workflowId);
   useLayoutEffect(() => {
-    const previous = previousRouteRef.current;
-    if (previous !== null && (previous.projectId !== projectId || previous.workflowId !== workflowId)) {
+    if (previousWorkflowIDRef.current !== workflowId) {
       closeSidebar("route_change");
     }
-    previousRouteRef.current = { projectId, workflowId };
-  }, [closeSidebar, projectId, workflowId]);
+    previousWorkflowIDRef.current = workflowId;
+  }, [closeSidebar, workflowId]);
   return (
     <BoardFilterGenerationProvider
       desiredLabelFilter={filter.state.filter}
