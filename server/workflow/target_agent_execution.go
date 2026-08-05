@@ -27,16 +27,17 @@ func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 		selection := request.RetainedSession.Clone()
 		selection.Origin = AssigneeOriginRetainedSession
 		role := TargetAgentRole{Identity: selection.Assignee}
-		roleResolved := false
+		var resolvedRole *TargetAgentRole
 		if request.Catalog != nil {
 			if resolved, ok := request.Catalog.ResolveConfiguredRole(selection.Assignee); ok {
 				role = resolved
-				roleResolved = true
+				resolvedRole = &resolved
 			}
 		}
-		if CanonicalThinkingSelection(request.Edge.ThinkingSelection) == ThinkingSelectionPreviousNode {
+		thinkingSelection := CanonicalThinkingSelection(request.Edge.ThinkingSelection)
+		if thinkingSelection == ThinkingSelectionPreviousNode || resolvedRole != nil {
 			thinking, err := PlanTargetAgentThinkingSelection(TargetAgentThinkingSelectionRequest{
-				OverrideEnabled:     true,
+				OverrideEnabled:     thinkingSelection == ThinkingSelectionPreviousNode,
 				TargetRole:          role,
 				EligibleRoles:       []TargetAgentRole{role},
 				SubmittedValue:      request.SubmittedThinking,
@@ -45,22 +46,9 @@ func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 			if err != nil {
 				return AgentExecutionSelection{}, err
 			}
-			selection.Thinking = nil
-			if strings.TrimSpace(thinking.Value) != "" {
-				value, err := NewThinkingValue(thinking.Value)
-				if err != nil {
-					return AgentExecutionSelection{}, err
-				}
-				selection.Thinking = &value
-			}
-		} else if roleResolved {
-			selection.Thinking = nil
-			if configured := strings.TrimSpace(role.ConfiguredThinking); configured != "" {
-				value, err := NewThinkingValue(configured)
-				if err != nil {
-					return AgentExecutionSelection{}, err
-				}
-				selection.Thinking = &value
+			selection.Thinking, err = materializeThinkingValue(thinking.Value)
+			if err != nil {
+				return AgentExecutionSelection{}, err
 			}
 		}
 		if err := selection.Validate(); err != nil {
@@ -94,17 +82,24 @@ func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 		return AgentExecutionSelection{}, err
 	}
 
-	var thinking *ThinkingValue
-	if strings.TrimSpace(thinkingSelection.Value) != "" {
-		value, err := NewThinkingValue(thinkingSelection.Value)
-		if err != nil {
-			return AgentExecutionSelection{}, err
-		}
-		thinking = &value
+	thinking, err := materializeThinkingValue(thinkingSelection.Value)
+	if err != nil {
+		return AgentExecutionSelection{}, err
 	}
 	origin := AssigneeOriginConfiguredFallback
 	if assigneeSelection == AssigneeSelectionPreviousNode {
 		origin = AssigneeOriginTransitionSelected
 	}
 	return NewAgentExecutionSelection(roleSelection.Role.Identity, thinking, origin)
+}
+
+func materializeThinkingValue(raw string) (*ThinkingValue, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	value, err := NewThinkingValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
