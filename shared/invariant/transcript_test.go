@@ -18,6 +18,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 	}
 	streamID := runtimeids.NewAssistantStreamID()
 	rollbackTargetID := rollbacktarget.EncodeUserMessageSeq(12)
+	noticeText := "notice"
 	validRows := []clientui.TranscriptCommittedRow{
 		{
 			Visibility: clientui.EntryVisibilityOngoing,
@@ -27,7 +28,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 		{
 			Visibility: clientui.EntryVisibilityOngoingCollapsed,
 			Kind:       clientui.TranscriptRowAssistant,
-			Assistant:  &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", StreamID: &streamID},
+			Assistant:  &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", StreamID: &streamID, Phase: transcript.AssistantPhaseFinal},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
@@ -50,7 +51,11 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 		{
 			Visibility: clientui.EntryVisibilityHidden,
 			Kind:       clientui.TranscriptRowNotice,
-			Notice:     &clientui.TranscriptNoticeRow{},
+			Notice: &clientui.TranscriptNoticeRow{
+				Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+				Severity:   clientui.TranscriptNoticeInfo,
+				LegacyText: &noticeText,
+			},
 		},
 	}
 	for _, row := range validRows {
@@ -103,6 +108,11 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 func TestValidateTranscriptPage(t *testing.T) {
 	olderCursor := int64(10)
 	newerCursor := int64(20)
+	stepID, err := runtimeids.ParseStepID(uuid.NewString())
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
+	noticeText := "notice"
 	validPage := clientui.TranscriptPage{
 		SessionID:    uuid.NewString(),
 		OlderCursor:  &olderCursor,
@@ -114,8 +124,13 @@ func TestValidateTranscriptPage(t *testing.T) {
 			CandidatePageEndByte: 15,
 		},
 		Entries: []clientui.TranscriptCommittedRow{
-			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "valid"}},
-			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{}},
+			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{StepID: stepID, Text: "valid"}},
+			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+				StepID:     &stepID,
+				Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+				Severity:   clientui.TranscriptNoticeInfo,
+				LegacyText: &noticeText,
+			}},
 			{
 				Visibility: clientui.EntryVisibilityDetail,
 				Integrity:  transcript.RowIntegrityRecoverableMalformed,
