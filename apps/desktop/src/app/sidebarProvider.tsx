@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useMatch, useRouter } from "@tanstack/react-router";
+import { useRouter } from "@tanstack/react-router";
 
 import {
   SidebarContext,
@@ -47,7 +47,8 @@ import {
 } from "./sidebarStack";
 import {
   classifySidebarRouteTransition,
-  type SidebarRouteKind,
+  sidebarRouteLocationFromMatches,
+  type SidebarRouteTransition,
 } from "./sidebarRouteTransition";
 
 const sidebarExitAnimationMs = 140;
@@ -77,26 +78,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingHistoryRef = useRef<History | null>(null);
   const router = useRouter();
-  const boardMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
-  const workflowEditorMatch = useMatch({
-    from: "/workflows/$workflowId/editor",
-    shouldThrow: false,
-  });
-  const location = useMemo(() => {
-    const routeKind: SidebarRouteKind =
-      boardMatch === undefined
-        ? workflowEditorMatch === undefined
-          ? "other"
-          : "workflowEditor"
-        : "board";
-    return {
-      projectID: workflowEditorMatch?.search.projectId,
-      routeKind,
-      taskID: boardMatch?.search.taskId,
-      workflowID: boardMatch?.search.workflowId,
-    };
-  }, [boardMatch, workflowEditorMatch]);
-  const previousLocationRef = useRef(location);
+  const previousLocationRef = useRef(
+    sidebarRouteLocationFromMatches(
+      router.state.location.pathname,
+      router.state.matches,
+    ),
+  );
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
@@ -190,7 +177,54 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [settleAndClose],
   );
 
-  useLayoutEffect(() => router.subscribe("onBeforeLoad", ({ pathChanged }) => { if (pathChanged) closeSidebar("route_change"); }), [closeSidebar, router]);
+  const reconcileRouteTransition = useCallback(
+    (transition: SidebarRouteTransition) => {
+      const deletionOperation = taskDeletionRef.current;
+      const deletionActivationIsCurrent =
+        deletionOperation !== null &&
+        (deletionOperation.activation === null
+          ? currentHistoryRef.current === null && pendingRef.current === null
+          : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
+      const deletedTaskRouteCleared =
+        transition.kind === "boardTask" &&
+        transition.to === undefined &&
+        deletionOperation !== null &&
+        deletionOperation.taskID === transition.from;
+      if (deletedTaskRouteCleared) {
+        if (!deletionActivationIsCurrent) {
+          taskDeletionRef.current = null;
+        } else if (deletionOperation.state === "completed") {
+          taskDeletionRef.current = null;
+          return;
+        } else if (deletionOperation.state === "pending") {
+          taskDeletionRef.current = {
+            ...deletionOperation,
+            state: "deferred",
+          };
+          return;
+        }
+      }
+      if (transition.kind !== "none") {
+        taskDeletionRef.current = null;
+        closeSidebar("route_change");
+      }
+    },
+    [closeSidebar, isCurrent],
+  );
+
+  useLayoutEffect(
+    () =>
+      router.subscribe("onBeforeLoad", ({ toLocation }) => {
+        const nextLocation = sidebarRouteLocationFromMatches(
+          toLocation.pathname,
+          router.matchRoutes(toLocation.pathname, toLocation.search),
+        );
+        const transition = classifySidebarRouteTransition(previousLocationRef.current, nextLocation);
+        previousLocationRef.current = nextLocation;
+        reconcileRouteTransition(transition);
+      }),
+    [reconcileRouteTransition, router],
+  );
 
   const recordTaskDeletion = useCallback((taskID: string) => {
     const history = currentHistoryRef.current;
@@ -228,37 +262,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     },
     [closeSidebar, isCurrent],
   );
-
-  useLayoutEffect(() => {
-    const previousLocation = previousLocationRef.current;
-    previousLocationRef.current = location;
-    const transition = classifySidebarRouteTransition(previousLocation, location);
-    const deletionOperation = taskDeletionRef.current;
-    const deletionActivationIsCurrent = deletionOperation !== null && (deletionOperation.activation === null ? currentHistoryRef.current === null && pendingRef.current === null : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
-    const deletedTaskRouteCleared =
-      transition.kind === "boardTask" &&
-      transition.to === undefined &&
-      deletionOperation !== null &&
-      deletionOperation.taskID === transition.from;
-    if (deletedTaskRouteCleared) {
-      if (!deletionActivationIsCurrent) {
-        taskDeletionRef.current = null;
-      } else if (deletionOperation.state === "completed") {
-        taskDeletionRef.current = null;
-        return;
-      } else if (deletionOperation.state === "pending") {
-        taskDeletionRef.current = {
-          ...deletionOperation,
-          state: "deferred",
-        };
-        return;
-      }
-    }
-    if (transition.kind !== "none") {
-      taskDeletionRef.current = null;
-      closeSidebar("route_change");
-    }
-  }, [closeSidebar, isCurrent, location]);
 
   const openSidebar = useCallback(
     async (destination: SidebarDestination): Promise<SidebarResult> => {
