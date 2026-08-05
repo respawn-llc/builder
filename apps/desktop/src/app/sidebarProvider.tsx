@@ -56,21 +56,11 @@ type SidebarWidths = readonly SidebarWidthEntry[];
 const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing: null };
 type History = SidebarHistory<SidebarDestination, SidebarDestinationSnapshot>;
 type HistorySnapshot = SidebarHistorySnapshot<SidebarDestination, SidebarDestinationSnapshot>;
-type PendingSidebar = Readonly<{
-  history: History;
-  resolve: (result: SidebarResult) => void;
-}>;
-type VisibleSidebar = Readonly<{
-  destination: SidebarDestination;
-  snapshot: SidebarDestinationSnapshot | null;
-  key: string;
-}>;
+type PendingSidebar = Readonly<{ history: History; resolve: (result: SidebarResult) => void }>;
+type VisibleSidebar = Readonly<{ destination: SidebarDestination; snapshot: SidebarDestinationSnapshot | null; key: string }>;
 type CompletedSidebarResult = Exclude<SidebarResult, SidebarCanceledResult>;
-type TaskDeletionOperation = Readonly<{
-  taskID: string;
-  outcome: "pending" | SidebarTaskDeletionOutcome;
-  selectorTransition: "awaiting" | "deferred";
-}>;
+type SidebarActivation = Readonly<{ history: History; key: string }>;
+type TaskDeletionOperation = Readonly<{ activation: SidebarActivation | null; taskID: string; state: "pending" | "deferred" | "completed" }>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [currentHistory, setCurrentHistory] = useState<History | null>(null);
@@ -203,9 +193,10 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   );
 
   const recordTaskDeletion = useCallback((taskID: string) => {
+    const history = currentHistoryRef.current;
     taskDeletionRef.current = {
-      outcome: "pending",
-      selectorTransition: "awaiting",
+      activation: history === null ? null : sidebarActivation(history),
+      state: "pending",
       taskID,
     };
   }, []);
@@ -215,23 +206,27 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const operation = taskDeletionRef.current;
       if (operation?.taskID !== taskID) return;
       if (outcome === "failed") {
+        const shouldCloseCurrentSurvivor =
+          operation.state === "deferred" &&
+          operation.activation !== null &&
+          isCurrent(operation.activation.history, operation.activation.key);
         taskDeletionRef.current = null;
-        if (operation.selectorTransition === "deferred") {
+        if (shouldCloseCurrentSurvivor) {
           closeSidebar("route_change");
         }
         return;
       }
-      if (operation.selectorTransition === "deferred") {
+      if (operation.state === "deferred") {
         taskDeletionRef.current = null;
       } else {
         taskDeletionRef.current = {
-          outcome,
-          selectorTransition: operation.selectorTransition,
+          activation: operation.activation,
+          state: "completed",
           taskID,
         };
       }
     },
-    [closeSidebar],
+    [closeSidebar, isCurrent],
   );
 
   useLayoutEffect(() => {
@@ -239,20 +234,26 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     previousLocationRef.current = location;
     const transition = classifySidebarRouteTransition(previousLocation, location);
     const deletionOperation = taskDeletionRef.current;
+    const deletionActivationIsCurrent =
+      deletionOperation !== null &&
+      (deletionOperation.activation === null
+        ? currentHistoryRef.current === null && pendingRef.current === null
+        : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
     const deletedTaskRouteCleared =
       transition.kind === "boardTask" &&
       transition.to === undefined &&
       deletionOperation !== null &&
       deletionOperation.taskID === transition.from;
     if (deletedTaskRouteCleared) {
-      if (deletionOperation.outcome === "completed") {
+      if (!deletionActivationIsCurrent) {
+        taskDeletionRef.current = null;
+      } else if (deletionOperation.state === "completed") {
         taskDeletionRef.current = null;
         return;
-      }
-      if (deletionOperation.outcome === "pending") {
+      } else if (deletionOperation.state === "pending") {
         taskDeletionRef.current = {
           ...deletionOperation,
-          selectorTransition: "deferred",
+          state: "deferred",
         };
         return;
       }
@@ -261,7 +262,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       taskDeletionRef.current = null;
       closeSidebar("route_change");
     }
-  }, [closeSidebar, location]);
+  }, [closeSidebar, isCurrent, location]);
 
   const openSidebar = useCallback(
     async (destination: SidebarDestination): Promise<SidebarResult> => {
@@ -326,14 +327,20 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const backSidebar = useCallback(() => {
     const history = currentHistoryRef.current;
     const snapshot = history?.snapshot() ?? null;
-    const input = sidebarBackInput(history, snapshot, mutationAdmissionRef.current);
-    if (input === null) return;
+    if (
+      history === null ||
+      snapshot === null ||
+      !snapshot.canGoBack ||
+      mutationAdmissionRef.current?.history === history
+    ) {
+      return;
+    }
     const retainedState = captureCurrent();
     const nextState = retainedState === false ? null : retainedState;
-    if (input.history.back({ sourceKey: input.snapshot.key, retainedState: nextState })) {
-      clearMutationAdmission(input.history);
+    if (history.back({ sourceKey: snapshot.key, retainedState: nextState })) {
+      clearMutationAdmission(history);
       setPhase("open");
-      setWidthFor(input.history.snapshot()?.destination ?? null);
+      setWidthFor(history.snapshot()?.destination ?? null);
     }
   }, [captureCurrent, clearMutationAdmission, setWidthFor]);
 
@@ -370,6 +377,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const visible = readVisible(history.snapshot());
       const result = history.remove((destination) => sidebarDestinationMatches(destination, target));
       if (result.removedCount === 0) return { kind: "absent" };
+      const deletionOperation = taskDeletionRef.current;
+      if (deletionOperation?.activation?.history === history) {
+        taskDeletionRef.current = {
+          ...deletionOperation,
+          activation: sidebarActivation(history),
+        };
+      }
       if (result.empty) {
         settleAndClose(history, { status: "canceled", reason: "closed" }, visible);
         return { kind: "closed" };
@@ -593,22 +607,7 @@ function sidebarHostSnapshot(
   return history === null ? outgoing?.snapshot ?? null : snapshot?.retainedState ?? null;
 }
 
-function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {
-  return snapshot === null
-    ? null
-    : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key };
-}
-
-function sidebarBackInput(
-  history: History | null,
-  snapshot: HistorySnapshot | null,
-  admission: Readonly<{ history: History; key: string }> | null,
-): Readonly<{ history: History; snapshot: HistorySnapshot }> | null {
-  if (history === null || snapshot === null || !snapshot.canGoBack || admission?.history === history) {
-    return null;
-  }
-  return { history, snapshot };
-}
+function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null { return snapshot === null ? null : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key }; }
 
 function taskIDOf(destination: SidebarDestination): string {
   if (destination.kind !== "taskDetail") {
@@ -616,6 +615,8 @@ function taskIDOf(destination: SidebarDestination): string {
   }
   return destination.taskID;
 }
+
+function sidebarActivation(history: History): SidebarActivation | null { const key = history.snapshot()?.key; return key === undefined ? null : { history, key }; }
 
 function defaultSidebarWidth(destination: SidebarDestination | null = null): number {
   const preference = sidebarSizePreference(destination);

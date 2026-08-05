@@ -12,7 +12,7 @@ import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
-import type { SidebarTaskDeletionOutcome } from "@/app-facade";
+import type { SidebarDestination, SidebarTaskDeletionOutcome } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
@@ -306,6 +306,56 @@ describe("Sidebar route transition ownership", () => {
     );
   });
 
+  it("does not close a replacement activation after a stale deletion failure", async () => {
+    const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
+    let harness: TaskDeletionHarness | undefined;
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
+          <DeletionHarness onReady={(value) => { harness = value; }} />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?taskId=task-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: "task-1", workflowID: undefined });
+    });
+    await waitFor(() => {
+      expect(harness).toBeDefined();
+    });
+    const deletionHarness = requireDeletionHarness(harness);
+    deletionHarness.recordTaskDeletion("task-1");
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: {},
+        to: "/projects/$projectId",
+      });
+    });
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: undefined });
+    });
+    await act(async () => {
+      deletionHarness.replaceSidebar({
+        content: <div />,
+        kind: "custom",
+        title: "Replacement",
+      });
+    });
+    await act(async () => {
+      deletionHarness.settleTaskDeletion("task-1", "failed");
+    });
+
+    expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+  });
+
   it("closes the sidebar through the AppChrome Home navigation", async () => {
     const services = createTestServices([]);
     const router = createTestRouter(
@@ -420,16 +470,17 @@ function BoardSelectorObserver({
 
 type TaskDeletionHarness = Readonly<{
   recordTaskDeletion(taskID: string): void;
+  replaceSidebar(destination: SidebarDestination): void;
   settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
 }>;
 
 function DeletionHarness({
   onReady,
 }: Readonly<{ onReady(harness: TaskDeletionHarness): void }>) {
-  const { recordTaskDeletion, settleTaskDeletion } = useSidebar();
+  const { recordTaskDeletion, replaceSidebar, settleTaskDeletion } = useSidebar();
   useEffect(() => {
-    onReady({ recordTaskDeletion, settleTaskDeletion });
-  }, [onReady, recordTaskDeletion, settleTaskDeletion]);
+    onReady({ recordTaskDeletion, replaceSidebar, settleTaskDeletion });
+  }, [onReady, recordTaskDeletion, replaceSidebar, settleTaskDeletion]);
   return null;
 }
 
