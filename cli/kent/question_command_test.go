@@ -594,6 +594,20 @@ func TestTaskQuestionCandidatesPreserveRecommendationAbsence(t *testing.T) {
 	}
 }
 
+func TestTaskQuestionCandidatesIgnoreWorkflowTransitionApprovals(t *testing.T) {
+	approvalID := "transition-1"
+	candidates, err := taskQuestionCandidates([]serverapi.WorkflowAttentionItem{{
+		Kind:       "approval",
+		ApprovalID: &approvalID,
+	}})
+	if err != nil {
+		t.Fatalf("task question candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("transition approval candidates = %+v, want none", candidates)
+	}
+}
+
 func TestQuestionByTaskResolvesProjectScopedShortID(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	remote := &stubQuestionTaskRemote{

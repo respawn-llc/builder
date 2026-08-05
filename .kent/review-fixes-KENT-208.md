@@ -9,3 +9,11 @@
 - [x] Surface wake publication failures through owning operation boundaries.
 - [x] Revert unauthorized TUI specification behavior change.
 - [x] Reduce final production diff to the amended 1,650-line ceiling and verify.
+
+## Third-round review
+
+- [x] Preserve committed Current Node completion results and continue successor starts when wake publication returns an error.
+- [x] Roll back Registry pending-prompt and Attention projections when Exact-Scope Task wake publication fails.
+- [x] Exclude Workflow Transition Approvals from `kent question --task` while retaining live access Questions.
+- [x] Represent Run terminal reason presence without an empty-string field sentinel.
+- [x] Add owner-boundary coverage for committed completion errors, aggregate interruption wakes, publication identity/errors, and transition-approval filtering.

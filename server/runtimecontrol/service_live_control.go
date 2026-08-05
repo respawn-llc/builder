@@ -279,7 +279,7 @@ type liveRunTerminal struct {
 	noFinal       bool
 	noFinalReason runtime.LiveRunNoFinalAnswerReason
 	status        runtime.RunStatus
-	reason        string
+	reason        *string
 	diagnostic    *string
 }
 
@@ -298,14 +298,18 @@ func classifyLiveRun(result runtime.LiveRunResult, err error) liveRunTerminal {
 		terminal.err = result.Error
 	}
 	if terminal.err != nil {
-		terminal.reason = strings.TrimSpace(terminal.err.Error())
+		reason := strings.TrimSpace(terminal.err.Error())
+		if reason == "" {
+			reason = strings.TrimSpace(string(result.Status))
+		}
+		if reason == "" {
+			reason = "execution error"
+		}
+		terminal.reason = &reason
 	}
-	if result.Error != nil && (terminal.err == nil || result.Error.Error() != terminal.reason) {
+	if result.Error != nil && (terminal.reason == nil || result.Error.Error() != *terminal.reason) {
 		value := result.Error.Error()
 		terminal.diagnostic = &value
-	}
-	if terminal.reason == "" {
-		terminal.reason = string(result.Status)
 	}
 	return terminal
 }
@@ -327,7 +331,10 @@ func liveWatchResult(id runtimeids.SessionID, name string, result runtime.LiveRu
 	}
 	if terminal.err != nil {
 		kind := serverapi.RuntimeLiveWatchExecutionError
-		reason := terminal.reason
+		reason := "execution error"
+		if terminal.reason != nil {
+			reason = *terminal.reason
+		}
 		if terminal.status == runtime.RunStatusInterrupted {
 			kind = serverapi.RuntimeLiveWatchInterrupted
 		}

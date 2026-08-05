@@ -723,11 +723,36 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
 		if err := r.publishTaskQuestionWaitingForScope(scope, snapshot); err != nil {
+			r.rollbackPromptScope(scope, snapshot.Request.ID)
 			return err
 		}
 		r.publishCurrentRuntimeActivity(id)
 	}
 	return nil
+}
+
+func (r *RuntimeRegistry) rollbackPromptScope(scope sessionruntime.ExecutionScope, requestID string) {
+	if r == nil {
+		return
+	}
+	resource, ok := scope.Resource()
+	if !ok {
+		return
+	}
+	id := resource.SessionID().String()
+	var snapshot PendingPromptSnapshot
+	resolved := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
+		var ok bool
+		snapshot, ok = r.pendingPrompts.Complete(id, resource, scope.ID(), requestID)
+		return ok
+	})
+	if !resolved {
+		return
+	}
+	if entry := r.authorityEntryByRef(resource); entry != nil {
+		r.publishPromptResolution(entry, id, snapshot)
+	}
+	_ = r.publishCurrentRuntimeActivity(id)
 }
 
 func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) error {

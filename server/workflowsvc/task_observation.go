@@ -97,8 +97,7 @@ func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if req.Mode == serverapi.WorkflowTaskObservationWatch {
 		approvalCache := make(map[string][]clientui.PendingApproval)
 		for _, item := range attention.Items {
-			if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) &&
-				item.Kind != "approval" {
+			if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) {
 				continue
 			}
 			outcome, ok, err := s.taskQuestion(ctx, item, nodeKeys, approvalCache)
@@ -127,9 +126,6 @@ func (s *Service) taskQuestion(
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
 	questionID := item.QuestionID
-	if questionID == nil {
-		questionID = item.ApprovalID
-	}
 	if questionID == nil || strings.TrimSpace(*questionID) == "" {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
@@ -138,9 +134,6 @@ func (s *Service) taskQuestion(
 	questionKind := serverapi.WorkflowAttentionQuestionKindOrdinary
 	if item.Question != nil {
 		questionKind = item.Question.Kind
-	}
-	if item.Kind == "approval" {
-		questionKind = serverapi.WorkflowAttentionQuestionKindApproval
 	}
 	switch questionKind {
 	case serverapi.WorkflowAttentionQuestionKindOrdinary:

@@ -473,11 +473,7 @@ func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQues
 func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowCommandRemote, items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
 	questions := make([]serverapi.WorkflowAttentionItem, 0, len(items))
 	for _, item := range items {
-		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) && item.Kind != "approval" {
-			continue
-		}
-		if item.Kind == "approval" {
-			questions = append(questions, item)
+		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) {
 			continue
 		}
 		if item.Question == nil {
@@ -499,9 +495,6 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 	approvalCache := make(map[runtimeids.SessionID][]clientui.PendingApproval)
 	for _, item := range questions {
 		questionID := item.QuestionID
-		if questionID == nil {
-			questionID = item.ApprovalID
-		}
 		if item.SessionID == nil || questionID == nil {
 			return nil, fmt.Errorf("pending question %q has incomplete identity", item.ID)
 		}
@@ -525,7 +518,7 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 			return nil, fmt.Errorf("pending questions for session %s disagree on the session name", sessionID)
 		}
 		question := questionCommandPendingQuestion{AskID: *questionID}
-		if item.Kind != "approval" && item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
+		if item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
 			if item.Message == nil {
 				return nil, fmt.Errorf("pending question %q has no content", item.ID)
 			}

@@ -375,9 +375,6 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				OutputValues: req.OutputValues,
 				Commentary:   req.Commentary,
 			})
-			if completionErr != nil {
-				return completionErr
-			}
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 			if intentErr != nil {
 				return intentErr
@@ -387,14 +384,16 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			c.completed[req.ScopeID] = struct{}{}
 			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
-			return nil
+			return completionErr
 		}); err != nil {
-			return err
+			exactErr := err
+			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+			return errors.Join(exactErr, resolveErr)
 		}
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return completed, err
 	}
 	return completed, nil
 }
@@ -419,31 +418,28 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		completed, err := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		completed, completionErr := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: transitionID,
 			OutputValues: outputValues,
 			Commentary:   commentary,
 		})
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
+		if intentErr != nil {
+			return completed, errors.Join(completionErr, intentErr)
 		}
-		intents, err := currentNodeAutomaticIntents(completed.AutomaticIntents)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
-		}
-		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
+		if startErr != nil {
+			return completed, errors.Join(completionErr, startErr)
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, start := range starts {
 			if err := c.queueAutomaticStartLocked(start); err != nil {
-				return workflowstore.CurrentNodeCompletionResult{}, err
+				return completed, errors.Join(err, completionErr)
 			}
 		}
-		return completed, nil
+		return completed, completionErr
 	})
 }
 

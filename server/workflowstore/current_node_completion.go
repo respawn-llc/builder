@@ -198,12 +198,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		var publicationErr error
 		if len(result.Mutation.Removed) > 0 {
-			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-				return CurrentNodeCompletionResult{}, err
-			}
+			publicationErr = s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 		}
-		return result, nil
+		return result, publicationErr
 	}
 	target := targets[0]
 	if target.Node.Kind() == workflow.NodeKindJoin {
@@ -226,12 +225,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		var publicationErr error
 		if len(result.Mutation.Removed) > 0 {
-			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-				return CurrentNodeCompletionResult{}, err
-			}
+			publicationErr = s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 		}
-		return result, nil
+		return result, publicationErr
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
 		ctx,
@@ -297,9 +295,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := tx.Commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
 	result := CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: []workflow.CurrentNodeReference{prepared.Source},
@@ -314,7 +309,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
-	return result, nil
+	return result, s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 }
 
 func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (CurrentNodeCompletionRequest, error) {
