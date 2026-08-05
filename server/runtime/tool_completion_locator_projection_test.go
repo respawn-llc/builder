@@ -66,6 +66,19 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 			t.Fatalf("materialize tool mirror %s: %v", result.CallID, err)
 		}
 	}
+	liveToolRows := make(map[string]int, len(results))
+	for _, event := range events {
+		for _, fact := range TranscriptCommittedRowFactsFromEvent(event) {
+			if fact.Tool != nil {
+				liveToolRows[fact.Tool.ToolCallID]++
+			}
+		}
+	}
+	for _, result := range results {
+		if got, want := liveToolRows[result.CallID], 1; got != want {
+			t.Fatalf("live tool row count for %s = %d, want %d", result.CallID, got, want)
+		}
+	}
 
 	page := mustEngineNewestSegmentPage(t, engine)
 	pageFacts := TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)

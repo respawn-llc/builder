@@ -362,7 +362,9 @@ func (e *Engine) appendMessageRaw(
 		*provenanceDestination = cloneTranscriptCommittedRowProvenance(provenance)
 	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
+	if eventPolicy != steeringMessageEventNone &&
+		currentCommittedCount > previousCommittedCount &&
+		e.shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{
 			Kind:                       EventConversationUpdated,
 			StepID:                     stepID,
@@ -423,6 +425,21 @@ func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) error {
 
 func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 	return len(VisibleChatEntriesFromMessage(msg)) > 0
+}
+
+func (e *Engine) shouldEmitCommittedMessageEvent(msg llm.Message) bool {
+	if !shouldEmitCommittedMessageEvent(msg) {
+		return false
+	}
+	if msg.Role != llm.RoleTool {
+		return true
+	}
+	callID, present := textutil.OptionalTrimmed(msg.ToolCallID)
+	if !present {
+		return true
+	}
+	_, completed := e.transcriptRuntimeState().ToolCompletionSnapshot(callID)
+	return !completed
 }
 
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
