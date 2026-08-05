@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/prompts"
@@ -11,7 +12,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type defaultStepExecutor struct {
@@ -80,6 +80,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 
+		var reasoningSteerErr error
 		resp, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
@@ -97,14 +98,19 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
 			},
 			func(delta llm.ReasoningSummaryDelta) {
-				_ = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				if reasoningSteerErr == nil {
+					reasoningSteerErr = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				}
 			},
 			func() {
-				_ = e.steer(stepID, steerClearStreamingStateIntent())
+				_ = e.resetReasoningAndClearStreamingState(stepID)
 			},
 		)
 		if err != nil {
 			return stepLoopResult{}, err
+		}
+		if reasoningSteerErr != nil {
+			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
 		if _, err := e.recordLastUsage(resp.Usage); err != nil {
 			return stepLoopResult{}, err
@@ -126,6 +132,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
+		}
+		if err := s.resolveReasoningDisposition(stepID, prepared.next, prepared.response.Reasoning); err != nil {
+			return stepLoopResult{}, err
 		}
 		switch prepared.next {
 		case completedResponseNextExternalWorkflowTerminal:
@@ -162,15 +171,6 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		assistantEventEmitted := resolution.committedAssistantEventPublished
 
 		if !noopFinalAnswer {
-			for _, entry := range resp.Reasoning {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-					Visibility: transcript.EntryVisibilityDetail,
-					Role:       string(transcript.EntryRoleReasoning),
-					Text:       entry.Text,
-				})); err != nil {
-					return stepLoopResult{}, err
-				}
-			}
 			if phaseTurn.MissingAssistantPhase {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(missingAssistantPhaseWarning)}})); err != nil {
 					return stepLoopResult{}, err
@@ -328,6 +328,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
+				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
+				if startErr != nil {
+					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
+				}
 				if !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
@@ -347,15 +351,18 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				} else {
 					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
+				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
+				if err != nil {
+					return stepLoopResult{}, errors.Join(err, terminalizationErr)
+				}
+				if terminalizationErr != nil {
+					return stepLoopResult{}, terminalizationErr
+				}
 			}
 			if !assistantEventEmitted {
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 			}
 			if reviewerCompletion != nil {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: reviewerStatusEntryRole(*reviewerCompletion), Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
-					return stepLoopResult{}, err
-				}
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
 			}
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
@@ -382,6 +389,18 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 	}
 }
 
+func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
+	if s == nil || s.engine == nil {
+		return errors.New("Reviewer lifecycle terminalizer requires an engine")
+	}
+	err := s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:     EventReviewerCompleted,
+		StepID:   stepID,
+		Reviewer: status,
+	}))
+	return err
+}
+
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
 	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
@@ -401,7 +420,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	} else if completed {
 		return preparedCompletedResponse{
 			next:       completedResponseNextExternalWorkflowTerminal,
-			resolution: completedResponseDiscardInstruction(),
+			resolution: completedResponseAbortInstruction(),
 			response:   resp,
 			assistant:  resp.Assistant,
 		}, nil
@@ -426,7 +445,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if rejection := classifyCompletedResponsePreflightRejection(e.currentNodeExecutionActive(), localToolCalls, hostedToolExecutions); rejection != nil {
 		return preparedCompletedResponse{
 			next:                 completedResponseNextWorkflowPreflightRejected,
-			resolution:           completedResponseDiscardInstruction(),
+			resolution:           completedResponseAbortInstruction(),
 			response:             resp,
 			phaseTurn:            phaseTurn,
 			assistant:            assistantMsg,
@@ -455,7 +474,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		if terminal {
 			return preparedCompletedResponse{
 				next:              completedResponseNextFinalAnswerToolsTerminal,
-				resolution:        completedResponseDiscardInstruction(),
+				resolution:        completedResponseAbortInstruction(),
 				response:          resp,
 				phaseTurn:         phaseTurn,
 				assistant:         assistantMsg,
@@ -520,7 +539,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 	return preparedCompletedResponse{
 		next:                         completedResponseNextAccepted,
-		resolution:                   completedResponseDiscardInstruction(),
+		resolution:                   completedResponseAbortInstruction(),
 		resolutionOutcome:            assistantCommitResult.resolution,
 		resolutionResolved:           true,
 		response:                     resp,
@@ -647,7 +666,7 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 	if err != nil || !completed {
 		return false, err
 	}
-	if err := s.engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
+	if err := s.engine.resetReasoningAndClearStreamingState(stepID); err != nil {
 		return false, err
 	}
 	return true, nil

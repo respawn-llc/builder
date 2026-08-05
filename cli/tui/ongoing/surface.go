@@ -557,7 +557,7 @@ func committedRowLines(
 	linkPresentation transcriptrender.MarkdownLinkPresentation,
 ) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
-	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
+	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice, clientui.TranscriptRowReviewerFeedback, clientui.TranscriptRowReviewerError:
 		rendered := transcriptrender.RenderCommittedRowWithLinkPresentation(
 			row,
 			width,

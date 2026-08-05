@@ -24,6 +24,26 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 }
 
+func TestTranscriptCommittedRowValidateStructureOwnsPayloadDiscriminator(t *testing.T) {
+	row := TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityDetail,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       TranscriptRowReasoningTrace,
+		ReasoningTrace: &TranscriptReasoningTraceRow{
+			StepID:      transcriptTestStepID(t),
+			CompactText: "Planning",
+			Text:        "Planning\nDetails",
+		},
+	}
+	if err := row.ValidateStructure(); err != nil {
+		t.Fatalf("validate committed reasoning row structure: %v", err)
+	}
+	row.ReasoningTrace = nil
+	if err := row.ValidateStructure(); err == nil {
+		t.Fatal("accepted committed reasoning row without its payload")
+	}
+}
+
 func TestTranscriptCommittedRowRejectsImplicitVisibilityAndMismatchedPayload(t *testing.T) {
 	base := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoing,

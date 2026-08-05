@@ -554,16 +554,22 @@ func (fakeReasoningStreamClient) Generate(_ context.Context, _ llm.Request) (llm
 
 func (fakeReasoningStreamClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
 	if callbacks.OnReasoningSummaryDelta != nil {
-		callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{Key: "rs_1:summary:0", Role: "reasoning", Text: "Plan"})
-		callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{Key: "rs_1:summary:0", Role: "reasoning", Text: "Plan summary"})
+		outputIndex, partIndex := int64(0), int64(0)
+		coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
+		callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{SourceCoordinate: coordinate, Role: "reasoning", Text: "Plan"})
+		callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{SourceCoordinate: coordinate, Role: "reasoning", Text: "Plan summary"})
 	}
 	if callbacks.OnAssistantDelta != nil {
 		callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "done", Phase: llm.MessagePhaseFinal})
 	}
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
-		Reasoning: []llm.ReasoningEntry{{Role: textutil.Value("reasoning"), Text: "Plan summary"}},
-		Usage:     llm.Usage{WindowTokens: 200000},
+		Reasoning: []llm.ReasoningEntry{{
+			Role:             textutil.Value("reasoning"),
+			Text:             "Plan summary",
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: func() *int64 { value := int64(0); return &value }(), PartIndex: func() *int64 { value := int64(0); return &value }()},
+		}},
+		Usage: llm.Usage{WindowTokens: 200000},
 	}, nil
 }
 

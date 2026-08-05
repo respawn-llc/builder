@@ -513,7 +513,7 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 			t.Fatalf("hydrate transcript: %v", err)
 		}
 		for _, row := range hydration.CommittedRows {
-			if row.Notice != nil && row.Notice.DiagnosticCode == "reasoning" {
+			if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil {
 				if row.Visibility != transcript.EntryVisibilityDetail ||
 					row.Integrity != transcript.RowIntegrityValid {
 					t.Fatalf("hydrated reasoning row = %+v, want valid detail-only row", row)

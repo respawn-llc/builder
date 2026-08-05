@@ -13,6 +13,7 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type defaultMessageLifecycle struct {
@@ -117,6 +118,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return err
 			}
 		case session.LocalEntryRecord:
+			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
+				continue
+			}
 			entry, err := storedLocalEntryFromSessionRecord(payload)
 			if err != nil {
 				return fmt.Errorf("restore session local entry record: %w", err)
@@ -130,6 +134,22 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore session local entry provenance: %w", provenanceErr)
 			}
 			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID, &provenance)
+		case session.ReviewerFeedbackRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer feedback provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(
+				reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
+			)
+		case session.ReviewerErrorRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer error provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(
+				reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
+			)
 		case session.CacheWarningRecord:
 			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 			if provenanceErr != nil {

@@ -201,10 +201,17 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		ActiveReasoning: &runtime.TranscriptReasoningState{
-			StepID: transcriptProjectionStepID, Key: "plan", Text: "inspect",
-			CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
+		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
+			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
+		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{{
+			StepID: transcriptProjectionStepID,
+			Identity: runtime.TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+				id := runtimeids.NewReasoningTraceID()
+				return &id
+			}()},
+			Text: "inspect",
+		}},
 		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
 		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), ClientRequestID: clientRequestID.String(), Text: "queued"}},
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
@@ -213,8 +220,9 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
 		GoalSuspended:    true,
 	})
-	if hydration.ActiveReasoning == nil || hydration.ActiveReasoning.Text != "inspect" {
-		t.Fatalf("reasoning = %+v", hydration.ActiveReasoning)
+	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||
+		len(hydration.ActiveReasoningTraces) != 1 || hydration.ActiveReasoningTraces[0].Text != "inspect" {
+		t.Fatalf("reasoning = status %+v traces %+v", hydration.ActiveThinkingStatus, hydration.ActiveReasoningTraces)
 	}
 	if len(hydration.InFlightTools) != 1 || hydration.InFlightTools[0].ToolCallID != "call-1" {
 		t.Fatalf("tools = %+v", hydration.InFlightTools)
@@ -231,6 +239,53 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		*hydration.ContextUsage.CacheHitPercent != 25 || hydration.GoalStatus == nil ||
 		hydration.GoalStatus.Goal == nil || !hydration.GoalStatus.Goal.Suspended {
 		t.Fatalf("usage/goal = usage %+v goal %+v", hydration.ContextUsage, hydration.GoalStatus)
+	}
+}
+
+func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing.T) {
+	firstIndex, secondIndex := int64(0), int64(1)
+	firstID := runtimeids.NewReasoningTraceID()
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
+			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
+			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
+		},
+	})
+	if len(hydration.ActiveReasoningTraces) != 2 || hydration.ActiveReasoningTraces[0].Identity.Kent == nil ||
+		hydration.ActiveReasoningTraces[1].Identity.Provider == nil {
+		t.Fatalf("hydrated reasoning order = %+v", hydration.ActiveReasoningTraces)
+	}
+	output := int64(0)
+	live := append(
+		TranscriptMessagesFromRuntimeEvent(runtime.Event{
+			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			ReasoningDelta: &llm.ReasoningSummaryDelta{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &firstIndex},
+				Text:             "first",
+			},
+			ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{Kent: &firstID},
+		}),
+		TranscriptMessagesFromRuntimeEvent(runtime.Event{
+			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			ReasoningDelta: &llm.ReasoningSummaryDelta{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &secondIndex},
+				Text:             "second",
+			},
+			ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+				Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex},
+			},
+		})...,
+	)
+	if len(live) != 2 {
+		t.Fatalf("live reasoning messages = %+v", live)
+	}
+	for index, event := range live {
+		update := transcriptPayload[clientui.TranscriptReasoningTraceUpdate](t, event)
+		hydrated := hydration.ActiveReasoningTraces[index]
+		if update.Identity.String() != hydrated.Identity.String() ||
+			update.Text != hydrated.Text {
+			t.Fatalf("live/hydration reasoning mismatch at %d: live=%+v hydration=%+v", index, update, hydrated)
+		}
 	}
 }
 
@@ -273,6 +328,37 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
+	}
+}
+
+func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) {
+	part := int64(0)
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:   runtime.EventLocalEntryAdded,
+		StepID: transcriptProjectionStepID,
+		LocalEntry: &runtime.ChatEntry{
+			Visibility: transcript.EntryVisibilityDetail,
+			Role:       string(transcript.EntryRoleReasoning),
+			Text:       "**Planning\nDetails**",
+		},
+		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+			Provider: &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part},
+		},
+		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
+	})
+	if len(messages) != 1 {
+		t.Fatalf("reasoning messages = %+v, want one committed row", messages)
+	}
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if row.Kind != clientui.TranscriptRowReasoningTrace ||
+		row.ReasoningTrace == nil ||
+		row.ReasoningTrace.Text != "Planning\nDetails" ||
+		row.ReasoningTrace.CompactText != "Planning" ||
+		row.ReasoningTrace.ProvisionalIdentity == nil {
+		t.Fatalf("projected reasoning row = %+v", row)
+	}
+	if err := row.Validate(); err != nil {
+		t.Fatalf("projected reasoning row failed validation: %v", err)
 	}
 }
 
@@ -424,19 +510,13 @@ func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 		t.Fatalf("project page: %v", err)
 	}
 
-	if len(page.Entries) != 2 {
+	if len(page.Entries) != 1 {
 		t.Fatalf("page entries = %+v", page.Entries)
 	}
 	if page.Entries[0].Kind != clientui.TranscriptRowNotice || page.Entries[0].Notice == nil {
-		t.Fatalf("reviewer row = %+v, want notice", page.Entries[0])
+		t.Fatalf("background row = %+v, want notice", page.Entries[0])
 	}
-	if got := page.Entries[0].Notice.MessageType; got == nil || *got != clientui.TranscriptMessageReviewerFeedback {
-		t.Fatalf("reviewer message type = %v, want reviewer feedback", got)
-	}
-	if page.Entries[1].Kind != clientui.TranscriptRowNotice || page.Entries[1].Notice == nil {
-		t.Fatalf("background row = %+v, want notice", page.Entries[1])
-	}
-	if background := page.Entries[1].Notice.Background; background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
+	if background := page.Entries[0].Notice.Background; background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
 		t.Fatalf("background notice = %+v, want exit code %d", background, exitCode)
 	}
 }

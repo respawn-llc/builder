@@ -16,6 +16,8 @@ import (
 const (
 	backgroundedShellStatus = "backgrounded"
 	BackgroundedShellSuffix = "· " + backgroundedShellStatus
+	reviewerFeedbackGlyph   = "§"
+	reviewerErrorGlyph      = "!"
 )
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
@@ -87,6 +89,18 @@ func renderCommittedRow(
 				linkPresentation,
 			),
 		}
+	case clientui.TranscriptRowReasoningTrace:
+		if row.ReasoningTrace == nil || (mode != ModeDetailCollapsed && mode != ModeDetailExpanded) {
+			return Row{Group: clientui.TranscriptRowReasoningTrace}
+		}
+		text := row.ReasoningTrace.CompactText
+		if mode == ModeDetailExpanded {
+			text = row.ReasoningTrace.Text
+		}
+		return Row{
+			Group: clientui.TranscriptRowReasoningTrace,
+			Lines: renderTextBlock(StyleRoleNoticeForegroundFaint, text, width, mode),
+		}
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
@@ -118,6 +132,20 @@ func renderCommittedRow(
 			Group: group,
 			Lines: renderTextBlockWithOptions(role, text, "", width, mode, meta, options),
 		}
+	case clientui.TranscriptRowReviewerFeedback:
+		if row.ReviewerFeedback == nil {
+			panic(fmt.Sprintf("render reviewer feedback row missing payload at locator %+v", row.Locator))
+		}
+		text := fmt.Sprintf("%d suggestions", row.ReviewerFeedback.SuggestionCount)
+		if mode == ModeOngoing || mode == ModeOngoingFull || mode == ModeDetailExpanded {
+			text = strings.Join(row.ReviewerFeedback.Suggestions, "\n\n")
+		}
+		return Row{Group: row.Kind, Lines: renderMarkdownTextBlock(StyleRoleNoticeReviewer, text, width, mode, toolMeta{}, textBlockOptions{}, linkPresentation)}
+	case clientui.TranscriptRowReviewerError:
+		if row.ReviewerError == nil {
+			panic(fmt.Sprintf("render reviewer error row missing payload at locator %+v", row.Locator))
+		}
+		return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, row.ReviewerError.Detail, width, mode)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
@@ -633,7 +661,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 		return "⇄"
 	}
 	if meta.IsError && role != StyleRoleToolShell {
-		return "!"
+		return reviewerErrorGlyph
 	}
 	symbol := "•"
 	switch role {
@@ -651,11 +679,11 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
 	case StyleRoleNoticeReviewer:
-		symbol = "§"
+		symbol = reviewerFeedbackGlyph
 	case StyleRoleWarning:
 		symbol = "⚠"
 	case StyleRoleError, StyleRoleToolError:
-		symbol = "!"
+		symbol = reviewerErrorGlyph
 	}
 	return symbol
 }
@@ -686,9 +714,6 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	}
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
-	}
-	if isReasoningNotice(row) {
-		text = stripReasoningBoldDelimiters(text)
 	}
 	return noticeStyleRoleForMode(row, mode), text
 }
@@ -750,9 +775,6 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	}
 	if row.Severity == clientui.TranscriptNoticeWarning || row.Reason == clientui.TranscriptNoticeCacheWarning {
 		return StyleRoleWarning
-	}
-	if isReasoningNotice(row) {
-		return StyleRoleNoticeForegroundFaint
 	}
 	if isReviewerNotice(row) {
 		return StyleRoleNoticeReviewer
@@ -817,12 +839,6 @@ func isReviewerNotice(row *clientui.TranscriptNoticeRow) bool {
 			noticeDiagnosticHasReviewerRole(row))
 }
 
-func isReasoningNotice(row *clientui.TranscriptNoticeRow) bool {
-	return row != nil &&
-		row.Diagnostic != nil &&
-		transcript.EntryRole(row.Diagnostic.Code) == transcript.EntryRoleReasoning
-}
-
 func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.MessageType == nil {
 		return false
@@ -841,14 +857,6 @@ func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 	default:
 		return false
 	}
-}
-
-func stripReasoningBoldDelimiters(text string) string {
-	// Codex/GPT reasoning traces are provider-formatted plaintext, not Markdown.
-	// Remove only their outer `**` delimiters; interior asterisks are literal.
-	// Do not remove or change this behavior without explicit user approval.
-	text = strings.TrimPrefix(text, "**")
-	return strings.TrimSuffix(text, "**")
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {

@@ -78,7 +78,8 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 	active := hydration.RuntimeReadModelUpdate.Activity.ActiveStep
 	if active == nil {
 		hydration.ActiveAssistant = nil
-		hydration.ActiveReasoning = nil
+		hydration.ActiveThinkingStatus = nil
+		hydration.ActiveReasoningTraces = nil
 		hydration.ActiveStep = nil
 		hydration.ActiveReviewer = nil
 		hydration.ActiveCompaction = nil
@@ -88,8 +89,17 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 	if hydration.ActiveAssistant != nil && hydration.ActiveAssistant.StepID != active.StepID {
 		hydration.ActiveAssistant = nil
 	}
-	if hydration.ActiveReasoning != nil && hydration.ActiveReasoning.StepID != active.StepID {
-		hydration.ActiveReasoning = nil
+	if hydration.ActiveThinkingStatus != nil && hydration.ActiveThinkingStatus.StepID != active.StepID {
+		hydration.ActiveThinkingStatus = nil
+	}
+	if len(hydration.ActiveReasoningTraces) > 0 {
+		traces := hydration.ActiveReasoningTraces[:0]
+		for _, trace := range hydration.ActiveReasoningTraces {
+			if trace.StepID == active.StepID {
+				traces = append(traces, trace)
+			}
+		}
+		hydration.ActiveReasoningTraces = traces
 	}
 	if hydration.ActiveStep != nil &&
 		(hydration.ActiveStep.RunID != active.RunID ||

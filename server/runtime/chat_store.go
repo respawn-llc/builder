@@ -4,6 +4,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -38,6 +39,18 @@ type ChatEntry struct {
 	BackgroundExitCode   *int
 	ToolCall             *transcript.ToolCallMeta
 	CommittedProvenance  *TranscriptCommittedRowProvenance
+	ReviewerFeedback     *ReviewerFeedbackChatEntry
+	ReviewerError        *ReviewerErrorChatEntry
+}
+
+type ReviewerFeedbackChatEntry struct {
+	ID          runtimeids.ReviewerFeedbackID
+	Suggestions []string
+}
+
+type ReviewerErrorChatEntry struct {
+	ID     runtimeids.ReviewerErrorID
+	Detail string
 }
 
 type ChatSnapshot struct {
@@ -492,12 +505,21 @@ func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *string, provenances ...*TranscriptCommittedRowProvenance) {
-	if strings.TrimSpace(entry.Text) == "" {
+	if strings.TrimSpace(entry.Text) == "" && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
 		return
 	}
 	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	if entry.ReviewerFeedback != nil {
+		feedback := *entry.ReviewerFeedback
+		feedback.Suggestions = append([]string(nil), entry.ReviewerFeedback.Suggestions...)
+		entry.ReviewerFeedback = &feedback
+	}
+	if entry.ReviewerError != nil {
+		reviewerError := *entry.ReviewerError
+		entry.ReviewerError = &reviewerError
+	}
 	if afterToolCallID != nil {
 		callID := strings.TrimSpace(*afterToolCallID)
 		if callID == "" {
@@ -517,6 +539,7 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *str
 			}
 			return cloneTranscriptCommittedRowProvenance(provenances[0])
 		}(),
+		Projected: entry.ReviewerFeedback != nil || entry.ReviewerError != nil,
 	})
 	s.transcriptEntryCount++
 }
@@ -916,6 +939,10 @@ func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected 
 		return
 	}
 	if projected {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
+	} else if strings.TrimSpace(entry.Role) == string(transcript.EntryRoleReasoning) {
 		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
 			s.rows = append(s.rows, fact)
 		}
