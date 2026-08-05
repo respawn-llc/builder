@@ -77,6 +77,27 @@ func TestChatStoreDeliverySnapshotKeepsTypedReviewerFactsProjected(t *testing.T)
 	}
 }
 
+func TestReopenedEngineHydratesTypedReviewerFacts(t *testing.T) {
+	store := mustCreateTestSession(t)
+	stepID := "11111111-1111-4111-8111-111111111111"
+	if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerFeedbackRecord{
+		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"reopened"},
+		Visibility: session.EntryVisibilityOngoingCollapsed,
+	}); err != nil {
+		t.Fatalf("append feedback: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "reopened error",
+	}); err != nil {
+		t.Fatalf("append error: %v", err)
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
+	if len(rows) != 2 || rows[0].ReviewerFeedback == nil || rows[1].ReviewerError == nil {
+		t.Fatalf("reopened typed Reviewer rows = %+v", rows)
+	}
+}
+
 func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 	cases := []struct {
 		name   string
