@@ -71,6 +71,137 @@ func joinedAssistantDeltas(deltas []AssistantDelta) string {
 	return text.String()
 }
 
+func TestGenerateStream_RejectsMalformedReasoningCoordinates(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "negative output index",
+			event: `{"type":"response.reasoning_summary_text.delta","output_index":-1,"summary_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+		{
+			name:  "missing output index",
+			event: `{"type":"response.reasoning_summary_text.delta","summary_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+		{
+			name:  "missing summary index",
+			event: `{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newOpenAIStreamTestTransport(t,
+				test.event,
+				`{"type":"response.completed","response":{"output":[]}}`,
+				`[DONE]`,
+			)
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("malformed reasoning coordinate was accepted")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider error code = %q, want provider contract", providerErr.Code)
+			}
+		})
+	}
+}
+
+func TestGenerateStream_RejectsConflictingReasoningIdentities(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []string
+	}{
+		{
+			name: "one identity aliases two coordinates",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"first"}`,
+				`{"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"item_id":"reason_1","delta":"second"}`,
+			},
+		},
+		{
+			name: "one coordinate receives two identities",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"first"}`,
+				`{"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":0,"item_id":"reason_2","text":"second"}`,
+			},
+		},
+		{
+			name: "completed identity conflicts with streamed identity",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"streamed"}`,
+				`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"reason_2","summary":[{"type":"summary_text","text":"completed"}]}]}}`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := append([]string(nil), test.events...)
+			if test.name != "completed identity conflicts with streamed identity" {
+				events = append(events, `{"type":"response.completed","response":{"output":[]}}`)
+			}
+			events = append(events, `[DONE]`)
+			transport := newOpenAIStreamTestTransport(t, events...)
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("conflicting reasoning identity was accepted")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider error code = %q, want provider contract", providerErr.Code)
+			}
+		})
+	}
+}
+
+func TestGenerateStreamPreservesDistinctReasoningTracesWithSameText(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"same"}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"item_id":"reason_2","delta":"same"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.Reasoning) != 2 {
+		t.Fatalf("reasoning traces = %+v, want two distinct traces", resp.Reasoning)
+	}
+	for index, entry := range resp.Reasoning {
+		if entry.Text != "same" || entry.SourceCoordinate == nil ||
+			entry.SourceCoordinate.OutputIndex == nil ||
+			*entry.SourceCoordinate.OutputIndex != int64(index) {
+			t.Fatalf("reasoning trace %d = %+v, want coordinate output=%d", index, entry, index)
+		}
+	}
+}
+
+func TestGenerateStreamCompletedReasoningTextOverridesStreamedPartial(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"streamed partial"}`,
+		`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"reason_1","summary":[{"type":"summary_text","text":"completed final"}]}]}}`,
+		`[DONE]`,
+	)
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.Reasoning) != 1 {
+		t.Fatalf("reasoning traces = %+v, want one trace", resp.Reasoning)
+	}
+	if resp.Reasoning[0].Text != "completed final" {
+		t.Fatalf("reasoning text = %q, want completed final", resp.Reasoning[0].Text)
+	}
+}
+
 func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testing.T) {
 	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
 		`event: response.completed`,
@@ -340,7 +471,10 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if len(resp.ReasoningItems) != 1 || resp.ReasoningItems[0].ID != "rs_1" || resp.ReasoningItems[0].EncryptedContent != "enc_1" {
 		t.Fatalf("unexpected reasoning items: %+v", resp.ReasoningItems)
 	}
-	if len(reasoning) != 1 || reasoning[0].Key == "" || reasoning[0].Role != "reasoning" || reasoning[0].Text != "Plan" {
+	if len(reasoning) != 1 || reasoning[0].SourceCoordinate == nil ||
+		reasoning[0].SourceCoordinate.OutputIndex == nil ||
+		reasoning[0].SourceCoordinate.PartIndex == nil ||
+		reasoning[0].Role != "reasoning" || reasoning[0].Text != "Plan" {
 		t.Fatalf("unexpected reasoning delta callbacks: %+v", reasoning)
 	}
 }

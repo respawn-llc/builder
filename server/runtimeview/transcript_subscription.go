@@ -33,7 +33,8 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 		CommittedRows:   rows,
 		ActiveAssistant: transcriptAssistantStream(runtimeSnapshot),
 	}
-	hydration.ActiveReasoning = transcriptReasoningStateFromRuntime(runtimeSnapshot.ActiveReasoning)
+	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)
+	hydration.ActiveReasoningTraces = transcriptReasoningTracesFromRuntime(runtimeSnapshot.ActiveReasoningTraces)
 	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
 	hydration.QueuedMessages = transcriptQueuedMessagesFromRuntime(runtimeSnapshot.QueuedMessages)
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
@@ -43,19 +44,32 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	return hydration, nil
 }
 
-func transcriptReasoningStateFromRuntime(state *runtime.TranscriptReasoningState) *clientui.TranscriptReasoningUpdate {
+func transcriptThinkingStatusFromRuntime(state *runtime.TranscriptThinkingStatusState) *clientui.TranscriptThinkingStatusUpdate {
 	if state == nil {
 		return nil
 	}
-	update := &clientui.TranscriptReasoningUpdate{
-		StepID: mustTranscriptStepID(state.StepID, "hydrated reasoning"),
-		Key:    strings.TrimSpace(state.Key),
+	return &clientui.TranscriptThinkingStatusUpdate{
+		StepID: mustTranscriptStepID(state.StepID, "hydrated thinking status"),
 		Text:   state.Text,
 	}
-	if state.CurrentStatus != nil {
-		update.CurrentStatus = &clientui.ReasoningStatus{Text: state.CurrentStatus.Text}
+}
+
+func transcriptReasoningTracesFromRuntime(states []runtime.TranscriptReasoningTraceState) []clientui.TranscriptReasoningTraceUpdate {
+	if len(states) == 0 {
+		return nil
 	}
-	return update
+	out := make([]clientui.TranscriptReasoningTraceUpdate, 0, len(states))
+	for index, state := range states {
+		presentation := runtime.ProjectReasoningTrace(state.Text)
+		identity := transcriptReasoningTraceIdentityProjection(&state.Identity, fmt.Sprintf("hydrated reasoning trace %d", index))
+		out = append(out, clientui.TranscriptReasoningTraceUpdate{
+			StepID:      mustTranscriptStepID(state.StepID, fmt.Sprintf("hydrated reasoning trace %d", index)),
+			Identity:    identity,
+			CompactText: presentation.CompactText,
+			Text:        presentation.Text,
+		})
+	}
+	return out
 }
 
 func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) []clientui.TranscriptQueuedMessageState {
@@ -181,17 +195,37 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		if evt.ReasoningDelta == nil {
 			return nil
 		}
-		update := clientui.TranscriptReasoningUpdate{
-			StepID: mustTranscriptStepID(evt.StepID, "reasoning update"),
-			Key:    strings.TrimSpace(evt.ReasoningDelta.Key),
-			Text:   evt.ReasoningDelta.Text,
+		presentation := runtime.ProjectReasoningTrace(evt.ReasoningDelta.Text)
+		if evt.ReasoningTraceIdentity == nil && strings.TrimSpace(evt.ReasoningDelta.Text) == "" {
+			if evt.ReasoningDelta.CurrentStatus != nil {
+				status := clientui.TranscriptThinkingStatusUpdate{
+					StepID: mustTranscriptStepID(evt.StepID, "thinking status update"),
+					Text:   evt.ReasoningDelta.CurrentStatus.Text,
+				}
+				return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}
+			}
+			return nil
+		}
+		traceIdentity := transcriptReasoningTraceIdentityProjection(evt.ReasoningTraceIdentity, "reasoning delta")
+		update := clientui.TranscriptReasoningTraceUpdate{
+			StepID:      mustTranscriptStepID(evt.StepID, "reasoning trace update"),
+			Identity:    traceIdentity,
+			CompactText: presentation.CompactText,
+			Text:        presentation.Text,
 		}
 		if evt.ReasoningDelta.CurrentStatus != nil {
-			update.CurrentStatus = &clientui.ReasoningStatus{Text: evt.ReasoningDelta.CurrentStatus.Text}
+			status := clientui.TranscriptThinkingStatusUpdate{
+				StepID: mustTranscriptStepID(evt.StepID, "thinking status update"),
+				Text:   evt.ReasoningDelta.CurrentStatus.Text,
+			}
+			return []clientui.TranscriptEvent{
+				clientui.NewTranscriptEvent(status),
+				clientui.NewTranscriptEvent(update),
+			}
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(update)}
 	case runtime.EventReasoningDeltaReset:
-		reset := clientui.TranscriptReasoningReset{StepID: mustTranscriptStepID(evt.StepID, "reasoning reset")}
+		reset := clientui.TranscriptReasoningTraceReset{StepID: mustTranscriptStepID(evt.StepID, "reasoning trace reset")}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(reset)}
 	case runtime.EventToolCallStarted:
 		return transcriptToolStartMessages(runtime.TranscriptToolStartFactsFromEvent(evt))
@@ -675,6 +709,17 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 			CondensedText: optionalNonBlankString(fact.Tool.CondensedText),
 			Presentation:  cloneToolCallMeta(fact.Tool.Presentation),
 		}
+	case runtime.TranscriptCommittedRowFactReasoningTrace:
+		if fact.ReasoningTrace == nil {
+			panic("runtime transcript reasoning trace row fact is missing its reasoning trace payload")
+		}
+		row.Kind = clientui.TranscriptRowReasoningTrace
+		row.ReasoningTrace = &clientui.TranscriptReasoningTraceRow{
+			StepID:              mustTranscriptStepID(fact.StepID, "committed reasoning trace row"),
+			CompactText:         fact.ReasoningTrace.CompactText,
+			Text:                fact.ReasoningTrace.Text,
+			ProvisionalIdentity: transcriptReasoningTraceIdentityFromRuntime(fact.ReasoningTrace.ProvisionalIdentity),
+		}
 	case runtime.TranscriptCommittedRowFactNotice:
 		row.Kind = clientui.TranscriptRowNotice
 		row.Notice = transcriptNoticeFromFact(fact.StepID, fact.Notice)
@@ -682,6 +727,33 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		panic(fmt.Sprintf("runtime transcript row fact has unknown kind %q", fact.Kind))
 	}
 	return row
+}
+
+func transcriptReasoningTraceIdentityFromRuntime(identity *runtime.TranscriptReasoningTraceIdentity) *clientui.TranscriptReasoningTraceIdentity {
+	if identity == nil {
+		return nil
+	}
+	projected := transcriptReasoningTraceIdentityProjection(identity, "runtime reasoning trace identity")
+	return &projected
+}
+
+func transcriptReasoningTraceIdentityProjection(identity *runtime.TranscriptReasoningTraceIdentity, context string) clientui.TranscriptReasoningTraceIdentity {
+	if identity == nil {
+		panic(fmt.Sprintf("%s has no public identity", context))
+	}
+	projected := clientui.TranscriptReasoningTraceIdentity{}
+	switch {
+	case identity.Provider != nil:
+		projected.Provider = &clientui.TranscriptProviderReasoningTraceIdentity{
+			ItemID:       identity.Provider.ItemID,
+			SummaryIndex: textutil.Pointer(identity.Provider.PartIndex),
+		}
+	case identity.Kent != nil:
+		projected.Kent = identity.Kent
+	default:
+		panic(fmt.Sprintf("%s has no public identity", context))
+	}
+	return projected
 }
 
 func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFact) *clientui.TranscriptNoticeRow {

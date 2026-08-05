@@ -5,37 +5,33 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
-func TestReasoningTraceRemainsPlaintextFaintAndIsNotExpandable(t *testing.T) {
-	const source = "**Preparing to investigate issue**"
-	const expected = "Preparing to investigate issue"
+func TestReasoningTraceRendersProjectedPlaintextFaintInDetailOnly(t *testing.T) {
+	stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
 	row := clientui.TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
-		Kind:       clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Reason:   clientui.TranscriptNoticeRuntimeDiagnostic,
-			Severity: clientui.TranscriptNoticeInfo,
-			Diagnostic: &clientui.TranscriptDiagnostic{
-				Code:   clientui.TranscriptDiagnosticCode(transcript.EntryRoleReasoning),
-				Detail: source,
-			},
+		Kind:       clientui.TranscriptRowReasoningTrace,
+		ReasoningTrace: &clientui.TranscriptReasoningTraceRow{
+			StepID:      stepID,
+			CompactText: "Preparing to investigate issue",
+			Text:        "Preparing to investigate issue\nDetails",
 		},
 	}
-	if noticeUsesMarkdown(row.Notice) {
-		t.Fatal("reasoning trace unexpectedly uses Markdown rendering")
+	if rendered := RenderCommittedRow(row, 80, "dark", ModeOngoing); len(rendered.Lines) != 0 {
+		t.Fatalf("reasoning trace rendered in ongoing mode: %+v", rendered)
 	}
-	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailExpanded); got != expected {
-		t.Fatalf("reasoning text = %q, want %q", got, expected)
+	rendered := RenderCommittedRow(row, 80, "dark", ModeDetailExpanded)
+	if len(rendered.Lines) == 0 {
+		t.Fatal("reasoning trace omitted in detail mode")
 	}
-
-	presentation := RenderDetailPresentation(row, 80, "dark")
-	if presentation.Expandable {
-		t.Fatal("reasoning trace is expandable without additional content")
-	}
-	for _, span := range presentation.Collapsed[0].Spans {
+	for _, span := range rendered.Lines[0].Spans {
 		if strings.TrimSpace(span.Text) == "" {
 			continue
 		}
@@ -44,12 +40,5 @@ func TestReasoningTraceRemainsPlaintextFaintAndIsNotExpandable(t *testing.T) {
 		}
 		return
 	}
-	t.Fatalf("reasoning trace has no content span: %+v", presentation.Collapsed[0])
-}
-
-func TestReasoningTracePreservesInteriorAsterisks(t *testing.T) {
-	const source = "2 ** 3"
-	if got := stripReasoningBoldDelimiters(source); got != source {
-		t.Fatalf("reasoning text = %q, want interior asterisks preserved as %q", got, source)
-	}
+	t.Fatalf("reasoning trace has no content span: %+v", rendered.Lines[0])
 }

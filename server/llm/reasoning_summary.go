@@ -14,17 +14,28 @@ func normalizeReasoningEntries(entries []ReasoningEntry) []ReasoningEntry {
 		if !present || summary == "" {
 			continue
 		}
-		out = append(out, ReasoningEntry{Role: textutil.Value(role), Text: summary})
+		out = append(out, ReasoningEntry{
+			Role:             textutil.Value(role),
+			Text:             summary,
+			SourceCoordinate: CloneReasoningSourceCoordinate(entry.SourceCoordinate),
+			ItemIdentity:     CloneReasoningItemIdentity(entry.ItemIdentity),
+		})
 	}
 	return out
 }
 
-func reasoningSummaryDeltaFromText(key, role, text string) ReasoningSummaryDelta {
+func reasoningSummaryDeltaFromText(
+	coordinate *ReasoningSourceCoordinate,
+	itemIdentity *ReasoningItemIdentity,
+	role,
+	text string,
+) ReasoningSummaryDelta {
 	return ReasoningSummaryDelta{
-		Key:           key,
-		Role:          role,
-		Text:          text,
-		CurrentStatus: currentReasoningStatus(text),
+		SourceCoordinate: CloneReasoningSourceCoordinate(coordinate),
+		ItemIdentity:     CloneReasoningItemIdentity(itemIdentity),
+		Role:             role,
+		Text:             text,
+		CurrentStatus:    currentReasoningStatus(text),
 	}
 }
 

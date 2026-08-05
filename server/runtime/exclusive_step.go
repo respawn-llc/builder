@@ -176,6 +176,9 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
+	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
+		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
+	}
 	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
 		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
 	}
@@ -186,7 +189,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	status := statusFromRunError(err)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
 	if status != RunStatusCompleted {
-		_ = s.engine.steer(stepID, steerClearStreamingStateIntent())
+		if cleanupErr := s.engine.resetReasoningAndClearStreamingState(stepID); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("reset failed-step streaming state: %w", cleanupErr))
+		}
 	}
 	s.beginTerminalPublication()
 	if options.EmitRunState {

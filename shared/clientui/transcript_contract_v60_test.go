@@ -81,7 +81,7 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		{owner: TranscriptNoticeRow{}, field: "Worktree"},
 		{owner: TranscriptPrompt{}, field: "RecommendedOptionIndex"},
 		{owner: TranscriptHydration{}, field: "ActiveAssistant"},
-		{owner: TranscriptHydration{}, field: "ActiveReasoning"},
+		{owner: TranscriptHydration{}, field: "ActiveThinkingStatus"},
 		{owner: TranscriptHydration{}, field: "ActiveStep"},
 		{owner: TranscriptHydration{}, field: "ActiveReviewer"},
 		{owner: TranscriptHydration{}, field: "ActiveCompaction"},

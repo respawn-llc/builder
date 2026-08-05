@@ -27,9 +27,9 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
 		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
-	case clientui.TranscriptMessageReasoningUpdate:
-		m.applyTranscriptReasoningUpdate(message.Payload().(clientui.TranscriptReasoningUpdate))
-	case clientui.TranscriptMessageReasoningReset:
+	case clientui.TranscriptMessageThinkingStatusUpdate:
+		m.applyTranscriptThinkingStatusUpdate(message.Payload().(clientui.TranscriptThinkingStatusUpdate))
+	case clientui.TranscriptMessageReasoningTraceReset:
 		// A reset replaces the live reasoning body. The typed status remains
 		// current until another status arrives or the owning step finishes.
 	case clientui.TranscriptMessageUserMessageFlushed:
@@ -82,8 +82,8 @@ func (m *uiModel) applyTranscriptHydration(
 	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))
 
 	m.reasoningStatusHeader = ""
-	if hydration.ActiveReasoning != nil {
-		m.applyTranscriptReasoningUpdate(*hydration.ActiveReasoning)
+	if hydration.ActiveThinkingStatus != nil {
+		m.applyTranscriptThinkingStatusUpdate(*hydration.ActiveThinkingStatus)
 	}
 	m.setCompacting(false)
 	if hydration.ActiveCompaction != nil {
@@ -192,10 +192,8 @@ func (m *uiModel) applyTranscriptCompactionStatus(status clientui.TranscriptComp
 	}
 }
 
-func (m *uiModel) applyTranscriptReasoningUpdate(update clientui.TranscriptReasoningUpdate) {
-	if update.CurrentStatus != nil {
-		m.reasoningStatusHeader = strings.TrimSpace(update.CurrentStatus.Text)
-	}
+func (m *uiModel) applyTranscriptThinkingStatusUpdate(update clientui.TranscriptThinkingStatusUpdate) {
+	m.reasoningStatusHeader = strings.TrimSpace(update.Text)
 }
 
 func (m *uiModel) applyTranscriptSessionStatus(status clientui.TranscriptSessionStatus) {

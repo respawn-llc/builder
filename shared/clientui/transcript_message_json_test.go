@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
@@ -159,8 +160,17 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptCommittedRow{Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: TranscriptRowAssistant, Assistant: &TranscriptAssistantRow{StepID: stepID, Text: "done", Phase: transcript.AssistantPhaseFinal}}),
 		NewTranscriptEvent(TranscriptAssistantDelta{StepID: stepID, StreamID: streamID, Delta: "hello", Phase: transcript.AssistantPhaseFinal}),
 		NewTranscriptEvent(TranscriptAssistantStreamAbort{StepID: stepID, StreamID: streamID, Reason: AssistantStreamAbortSuperseded}),
-		NewTranscriptEvent(TranscriptReasoningUpdate{StepID: stepID, Key: "reasoning"}),
-		NewTranscriptEvent(TranscriptReasoningReset{StepID: stepID}),
+		NewTranscriptEvent(TranscriptThinkingStatusUpdate{StepID: stepID, Text: "Thinking"}),
+		NewTranscriptEvent(TranscriptReasoningTraceUpdate{
+			StepID: stepID,
+			Identity: TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+				id := runtimeids.NewReasoningTraceID()
+				return &id
+			}()},
+			CompactText: "reasoning",
+			Text:        "reasoning",
+		}),
+		NewTranscriptEvent(TranscriptReasoningTraceReset{StepID: stepID}),
 		NewTranscriptEvent(TranscriptToolStart{StepID: stepID, ToolCallID: "call-1", ToolName: "shell"}),
 		NewTranscriptEvent(TranscriptToolAbort{StepID: stepID, ToolCallID: "call-1", Reason: ToolAbortCanceled}),
 		NewTranscriptEvent(TranscriptUserMessageFlushed{StepID: stepID}),
