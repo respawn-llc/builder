@@ -3,6 +3,7 @@ package app
 import (
 	"hash/fnv"
 	"slices"
+	"testing"
 
 	"core/cli/tui"
 	"core/shared/clientui"
@@ -57,4 +58,17 @@ func detailTestLocator(value string) transcript.CommittedRowLocator {
 
 func detailTestRowsEqual(left, right []clientui.TranscriptCommittedRow) bool {
 	return slices.EqualFunc(left, right, tui.TranscriptCommittedRowEqual)
+}
+
+func TestDetailTranscriptRowEqualityIncludesLocator(t *testing.T) {
+	left := detailTestUserRow("same content")
+	right := left
+	right.Locator.RowOrdinal++
+
+	if !tui.TranscriptCommittedRowEqual(left, left) {
+		t.Fatal("a transcript row was not equal to itself")
+	}
+	if tui.TranscriptCommittedRowEqual(left, right) {
+		t.Fatalf("rows with different locators were treated as equal: left=%+v right=%+v", left.Locator, right.Locator)
+	}
 }
