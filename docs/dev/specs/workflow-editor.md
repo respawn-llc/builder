@@ -110,7 +110,6 @@
 - Draft validation and execution validation remain separate. Blocking draft-validation errors prevent graph-changing saves. Execution-validation errors remain visible but do not prevent a save limited to Workflow details.
 - Draft validation blocks prompts into non-agent targets, duplicate Transition Keys, invalid or duplicate Fan-Out Transition Branch Keys, invalid Parameter Keys or descriptions, invalid previous-Parameter references, and Join aggregate key collisions.
 - Execution validation blocks starting or executing an agent-target transition without a prompt.
-- Legacy Node-owned prompt and contract data round-trips unchanged as inert compatibility data. It neither validates nor controls execution. A runnable definition must author Transition Prompts and Parameters.
 - A save limited to Workflow details, and a no-op save, bypass graph-edit policy.
 - Graph-changing saves show a preview with draft validation, execution validation, destructive or removal impact, and any required confirmation.
 - Destructive graph-save confirmation appears in the editor status area, not in a separate blocking surface.
