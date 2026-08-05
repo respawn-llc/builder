@@ -232,6 +232,47 @@ func TestWorkflowGraphSaveBlocksParameterEditForUnresolvedParallelBranch(t *test
 	}
 }
 
+func TestWorkflowGraphSaveBlocksJoinProviderParameterEditForReadyDownstream(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil || len(split.Mutation.Created) != 2 {
+		t.Fatalf("CompleteCurrentNode split = %+v, %v; want two parallel branches", split, err)
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       split.Mutation.Created[0].Reference,
+		TransitionID: "join_a",
+		OutputValues: map[string]string{"joined": "joined value"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode first join arrival: %v", err)
+	}
+	joined, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       split.Mutation.Created[1].Reference,
+		TransitionID: "join_b",
+		OutputValues: map[string]string{},
+	})
+	if err != nil || len(joined.AutomaticIntents) != 1 {
+		t.Fatalf("CompleteCurrentNode second join arrival = %+v, %v; want synth intent", joined, err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	providerEdge := edgeByKey(t, definition, "join_a").ID
+
+	saved := saveWorkflowParameterEdit(t, ctx, store, workflowID, providerEdge)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "active_transition_parameter_changed") == 0 {
+		t.Fatalf("Join provider parameter edit = %+v, want active-transition-parameter blocker", saved)
+	}
+}
+
 func saveWorkflowParameterEdit(
 	t *testing.T,
 	ctx context.Context,

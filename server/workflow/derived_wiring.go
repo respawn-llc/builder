@@ -20,6 +20,43 @@ type DerivedWiring struct {
 	priorParameterRequirementsByNode map[NodeID][]PriorTransitionParameterRequirement
 }
 
+// ParameterDependencyEdgesForEdge returns entering Edges whose materialized
+// values depend on an Edge's Parameters, including Join-derived outgoing Edges.
+func ParameterDependencyEdgesForEdge(def Definition, edgeID EdgeID) []EdgeID {
+	seen := map[EdgeID]struct{}{edgeID: {}}
+	edges := []EdgeID{edgeID}
+	for _, node := range def.Nodes {
+		join, ok := node.(JoinNode)
+		if !ok {
+			continue
+		}
+		provider := false
+		for _, input := range join.JoinInputProviders {
+			if input.ProviderEdgeID == edgeID {
+				provider = true
+				break
+			}
+		}
+		if !provider {
+			continue
+		}
+		for _, group := range def.TransitionGroups {
+			if group.SourceNodeID != join.ID {
+				continue
+			}
+			for _, edge := range def.Edges {
+				if edge.TransitionGroupID == group.ID {
+					if _, exists := seen[edge.ID]; !exists {
+						seen[edge.ID] = struct{}{}
+						edges = append(edges, edge.ID)
+					}
+				}
+			}
+		}
+	}
+	return edges
+}
+
 type PriorTransitionParameterRequirement struct {
 	ProviderNode  ModelKey
 	TransitionKey ModelKey

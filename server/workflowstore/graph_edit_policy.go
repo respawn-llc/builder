@@ -68,7 +68,7 @@ func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflow
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, describeWorkflowGraphSave(currentGraph, prepared))
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, nil, describeWorkflowGraphSave(currentGraph, prepared))
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
@@ -234,8 +234,8 @@ func workflowGraphEdgeIDsSlice(edges []EdgeRecord) []workflow.EdgeID {
 	return ids
 }
 
-func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
-	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, workflowID, structural)
+func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, definition *workflow.Definition, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, workflowID, definition, structural)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
@@ -248,7 +248,7 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 	return evaluation, nil
 }
 
-func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, definition *workflow.Definition, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
 	impact := WorkflowGraphSaveImpact{
 		RemovedNodeCount:            int64(len(structural.Removed.nodes)),
 		RemovedTransitionGroupCount: int64(len(structural.Removed.transitionGroups)),
@@ -306,16 +306,23 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		}
 	}
 	for _, edgeID := range structural.EditPolicy.ParameterChanges {
-		impact, err := q.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
-			WorkflowID: workflowID,
-			EdgeID:     sql.NullString{String: string(edgeID), Valid: true},
-		})
-		if err != nil {
-			return workflowGraphSaveDynamicImpact{}, err
+		dependencies := []workflow.EdgeID{edgeID}
+		if definition != nil {
+			dependencies = workflow.ParameterDependencyEdgesForEdge(*definition, edgeID)
 		}
-		blockedRefCount := impact.ActiveCurrentNodeCount +
-			impact.UnresolvedParallelBranchCount +
-			impact.PendingApprovalCount
+		var blockedRefCount int64
+		for _, dependency := range dependencies {
+			impact, err := q.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
+				WorkflowID: workflowID,
+				EdgeID:     sql.NullString{String: string(dependency), Valid: true},
+			})
+			if err != nil {
+				return workflowGraphSaveDynamicImpact{}, err
+			}
+			blockedRefCount += impact.ActiveCurrentNodeCount +
+				impact.UnresolvedParallelBranchCount +
+				impact.PendingApprovalCount
+		}
 		if blockedRefCount > 0 {
 			editPolicyImpact.ParameterContractChangeCount++
 			editPolicyImpact.ParameterContractChangeRefCount += blockedRefCount
