@@ -40,7 +40,6 @@ import { SidebarHostContext, type SidebarHostState, type SidebarScopedActions } 
 import { createSidebarHistory, type SidebarHistory, type SidebarHistorySnapshot } from "./sidebarStack";
 import {
   classifySidebarRouteTransition,
-  sidebarRouteSearchFromQuery,
   sidebarRouteLocationFromMatches,
   type SidebarRouteTransition,
 } from "./sidebarRouteTransition";
@@ -89,7 +88,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     sidebarRouteLocationFromMatches(
       router.state.location.pathname,
       router.state.matches,
-      sidebarRouteSearchFromQuery(router.history.location.search),
     ),
   );
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
@@ -212,8 +210,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         const parsedLocation = router.parseLocation(location);
         const nextLocation = sidebarRouteLocationFromMatches(
           parsedLocation.pathname,
-          router.matchRoutes(parsedLocation.pathname),
-          sidebarRouteSearchFromQuery(parsedLocation.searchStr),
+          router.matchRoutes(parsedLocation.pathname, parsedLocation.search),
         );
         const transition = classifySidebarRouteTransition(previousLocationRef.current, nextLocation);
         previousLocationRef.current = nextLocation;

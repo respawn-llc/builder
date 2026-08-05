@@ -798,10 +798,20 @@
   Home/View Transition ordering, browser Back, search-only changes, Board
   workflow/task changes, Workflow Editor project changes, and deletion
   survivors.
+  Progress (August 5, 2026): Compliance review correctly rejected the
+  temporary raw-query adapter. The root cause was type erasure in
+  `createNativeDialogRoutes(rootRoute: AnyRootRoute)`, which made the
+  registered router expose `ParsedLocation<any>`. The route factory now
+  preserves its concrete root-route generic. The history owner consequently
+  passes TanStack's structured `parseLocation(...).search` directly into
+  `matchRoutes(pathname, search)`, receiving validated route matches and
+  projecting only the typed Board/Workflow search fields. The raw query
+  parser and duplicate query authority are removed; pathname, validated
+  search, deletion reconciliation, and closure remain one dispatch.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,668 additions plus 332
+  `origin/main...HEAD`, including styles, is now 1,667 additions plus 333
   deletions: **2,000 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
@@ -830,3 +840,11 @@
   tests, Apps lint completed with 0 errors and 4 existing warnings, Apps
   typecheck passed, `./scripts/build.sh desktop` passed, and `git diff
   --check` passed. Browser/manual QA remains excluded.
+  Progress (August 5, 2026): After removing the non-compliant query adapter
+  and restoring concrete router typing, the production scope is 1,667
+  additions plus 333 deletions, totaling 2,000 changed lines. Focused route
+  coverage remains 12/12 and typecheck/lint pass for the remediation. Final
+  full verification also passed: `./scripts/test.sh desktop` completed with
+  82 test files and 377 tests, Apps lint completed with 0 errors and 4
+  existing warnings, Apps typecheck passed, `./scripts/build.sh desktop`
+  passed, and `git diff --check` passed. Browser/manual QA remains excluded.
