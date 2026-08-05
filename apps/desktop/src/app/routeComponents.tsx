@@ -1,5 +1,5 @@
 import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
@@ -13,7 +13,6 @@ import {
   readLastProjectRoute,
   writeBrowserStorage,
   writeLastProjectRoute,
-  useSidebar,
 } from "@/app-facade";
 import { RouteTransitionFrame } from "./RouteTransitionFrame";
 import { shouldSkipNativeDialogStartupGate } from "./routes";
@@ -128,15 +127,6 @@ export function WorkflowEditorShellRoute() {
   const { t } = useTranslation();
   const params = workflowEditorRouteApi.useParams();
   const search = workflowEditorRouteApi.useSearch();
-  const { closeSidebar } = useSidebar();
-  const previousProjectIDRef = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    const previousProjectID = previousProjectIDRef.current;
-    if (previousProjectID !== null && previousProjectID !== search.projectId) {
-      closeSidebar("route_change");
-    }
-    previousProjectIDRef.current = search.projectId;
-  }, [closeSidebar, search.projectId]);
   useWindowChromeTitle(null);
   return (
     <Suspense

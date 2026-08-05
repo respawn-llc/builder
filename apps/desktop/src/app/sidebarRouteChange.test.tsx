@@ -14,7 +14,6 @@ import { appI18n } from "@/i18n";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
 import { SidebarHost } from "./sidebar";
-import { classifySidebarRouteTransition } from "./sidebarRouteTransition";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebar } from "@/app-facade";
 
@@ -104,25 +103,91 @@ describe("Sidebar route transition ownership", () => {
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
 
-  it("classifies only pathname changes as external sidebar transitions", () => {
-    expect(
-      classifySidebarRouteTransition(
-        { pathname: "/projects/project-1", searchStr: "" },
-        { pathname: "/", searchStr: "" },
-      ),
-    ).toBe("pathname");
-    expect(
-      classifySidebarRouteTransition(
-        { pathname: "/projects/project-1", searchStr: "" },
-        { pathname: "/projects/project-1", searchStr: "filter=next" },
-      ),
-    ).toBe("search");
-    expect(
-      classifySidebarRouteTransition(
-        { pathname: "/projects/project-1", searchStr: "" },
-        { pathname: "/projects/project-1", searchStr: "" },
-      ),
-    ).toBe("none");
+  it("closes for a Board workflow search transition", async () => {
+    const services = createTestServices([]);
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?workflowId=workflow-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: { workflowId: "workflow-2" },
+        to: "/projects/$projectId",
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
+    );
+  });
+
+  it("closes for a Workflow Editor project search transition", async () => {
+    const services = createTestServices([]);
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/workflows/workflow-1/editor?projectId=project-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+    await act(async () => {
+      await router.navigate({
+        params: { workflowId: "workflow-1" },
+        search: { projectId: "project-2" },
+        to: "/workflows/$workflowId/editor",
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
+    );
+  });
+
+  it("preserves an unrelated sidebar after a deleted Board task route clears", async () => {
+    const services = createTestServices([]);
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+          <MarkTaskDeleted />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?taskId=task-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Mark task deleted" }));
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: {},
+        to: "/projects/$projectId",
+      });
+    });
+
+    expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
 
   it("closes the sidebar through the AppChrome Home navigation", async () => {
@@ -188,9 +253,16 @@ function createTestRouter(
     validateSearch: (search: Record<string, unknown>) =>
       z.object({ filter: z.string().optional() }).parse(search),
   });
+  const workflowEditorRoute = createRoute({
+    component: () => null,
+    getParentRoute: () => rootRoute,
+    path: "/workflows/$workflowId/editor",
+    validateSearch: (search: Record<string, unknown>) =>
+      z.object({ projectId: z.string().optional() }).parse(search),
+  });
   return createRouter({
     history: createMemoryHistory({ initialEntries: [...initialEntries] }),
-    routeTree: rootRoute.addChildren([homeRoute, projectRoute]),
+    routeTree: rootRoute.addChildren([homeRoute, projectRoute, workflowEditorRoute]),
   });
 }
 
@@ -204,4 +276,13 @@ function OpenSidebar() {
     });
   }, [openSidebar]);
   return null;
+}
+
+function MarkTaskDeleted() {
+  const { recordTaskDeletion } = useSidebar();
+  return (
+    <button onClick={() => { recordTaskDeletion("task-1"); }} type="button">
+      Mark task deleted
+    </button>
+  );
 }

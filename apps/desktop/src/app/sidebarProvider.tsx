@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useRouterState } from "@tanstack/react-router";
+import { useMatch, useRouterState } from "@tanstack/react-router";
 
 import {
   SidebarContext,
@@ -22,6 +22,12 @@ import {
   type SidebarPhase,
   type SidebarResult,
   type SidebarStateCapture,
+  initialSidebarWidthForViewport,
+  sidebarSizePreference,
+  sidebarWidthProfile,
+  sidebarWidthProfileEquals,
+  type ResolvedSidebarWidth,
+  type SidebarWidthProfile,
 } from "@/app-facade";
 import {
   sidebarDestinationMatches,
@@ -38,14 +44,10 @@ import {
   type SidebarHistory,
   type SidebarHistorySnapshot,
 } from "./sidebarStack";
-import { classifySidebarRouteTransition } from "./sidebarRouteTransition";
 import {
-  sidebarSizePreference,
-  sidebarWidthProfile,
-  sidebarWidthProfileEquals,
-  type SidebarWidthProfile,
-} from "@/app-facade";
-import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "@/app-facade";
+  classifySidebarRouteTransition,
+  type SidebarRouteKind,
+} from "./sidebarRouteTransition";
 
 const sidebarExitAnimationMs = 140;
 type SidebarWidthEntry = Readonly<{ profile: SidebarWidthProfile; widthPx: number }>;
@@ -79,8 +81,29 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const captureRef = useRef<SidebarStateCapture | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingHistoryRef = useRef<History | null>(null);
-  const location = useRouterState({ select: (state) => state.location });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const boardMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
+  const workflowEditorMatch = useMatch({
+    from: "/workflows/$workflowId/editor",
+    shouldThrow: false,
+  });
+  const location = useMemo(() => {
+    const routeKind: SidebarRouteKind =
+      boardMatch === undefined
+        ? workflowEditorMatch === undefined
+          ? "other"
+          : "workflowEditor"
+        : "board";
+    return {
+      pathname,
+      projectID: workflowEditorMatch?.search.projectId,
+      routeKind,
+      taskID: boardMatch?.search.taskId,
+      workflowID: boardMatch?.search.workflowId,
+    };
+  }, [boardMatch, pathname, workflowEditorMatch]);
   const previousLocationRef = useRef(location);
+  const deletedTaskRouteRef = useRef<string | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
   useLayoutEffect(() => {
@@ -173,10 +196,26 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [settleAndClose],
   );
 
+  const recordTaskDeletion = useCallback((taskID: string) => {
+    deletedTaskRouteRef.current = taskID;
+  }, []);
+
+  const clearTaskDeletion = useCallback(() => {
+    deletedTaskRouteRef.current = null;
+  }, []);
+
   useLayoutEffect(() => {
-    const transition = classifySidebarRouteTransition(previousLocationRef.current, location);
+    const previousLocation = previousLocationRef.current;
     previousLocationRef.current = location;
-    if (transition === "pathname") closeSidebar("route_change");
+    const transition = classifySidebarRouteTransition(previousLocation, location);
+    const preserveUnrelatedTaskSidebar =
+      transition.kind === "boardTask" &&
+      transition.to === undefined &&
+      deletedTaskRouteRef.current === transition.from;
+    deletedTaskRouteRef.current = null;
+    if (transition.kind !== "none" && !preserveUnrelatedTaskSidebar) {
+      closeSidebar("route_change");
+    }
   }, [closeSidebar, location]);
 
   const openSidebar = useCallback(
@@ -419,6 +458,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       canGoBack: historySnapshot?.canGoBack ?? false,
       closeSidebar,
       invalidateSidebar,
+      clearTaskDeletion,
+      recordTaskDeletion,
       openSidebar,
       pushSidebar,
       replaceSidebar,
@@ -433,6 +474,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       closeSidebar,
       historySnapshot?.canGoBack,
       invalidateSidebar,
+      clearTaskDeletion,
+      recordTaskDeletion,
       openSidebar,
       phase,
       pushSidebar,

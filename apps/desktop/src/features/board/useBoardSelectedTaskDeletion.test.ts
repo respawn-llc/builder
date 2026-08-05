@@ -6,9 +6,10 @@ const navigation = vi.hoisted(() => ({
   closeProjectTask: vi.fn(),
 }));
 const sidebar = vi.hoisted(() => ({
-  closeSidebar: vi.fn(),
   invalidateSidebar: vi.fn(),
   openSidebar: vi.fn(),
+  clearTaskDeletion: vi.fn(),
+  recordTaskDeletion: vi.fn(),
 }));
 
 vi.mock("@/app-facade", async () => {
@@ -41,7 +42,6 @@ describe("useBoardSelectedTaskDeletion", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    sidebar.closeSidebar.mockClear();
     await act(async () => {
       result.current.request();
       await Promise.resolve();
@@ -50,7 +50,7 @@ describe("useBoardSelectedTaskDeletion", () => {
 
     await waitFor(() => {
       expect(onNavigationError).toHaveBeenCalledWith(error);
-      expect(sidebar.closeSidebar).toHaveBeenCalledWith("route_change");
+      expect(sidebar.clearTaskDeletion).toHaveBeenCalled();
     });
   });
 
@@ -70,7 +70,6 @@ describe("useBoardSelectedTaskDeletion", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    sidebar.closeSidebar.mockClear();
     await act(async () => {
       result.current.request();
       await Promise.resolve();
@@ -78,13 +77,12 @@ describe("useBoardSelectedTaskDeletion", () => {
     rerender({ selectedTaskId: undefined });
 
     expect(navigation.closeProjectTask).toHaveBeenCalledWith("project-1", "workflow-1");
-    expect(sidebar.closeSidebar).not.toHaveBeenCalled();
     if (resolveNavigation === undefined) {
       throw new Error("Navigation resolver is unavailable.");
     }
     resolveNavigation({ status: "completed" });
     await waitFor(() => {
-      expect(sidebar.closeSidebar).not.toHaveBeenCalled();
+      expect(sidebar.recordTaskDeletion).toHaveBeenCalledWith("task-1");
     });
     expect(sidebar.invalidateSidebar).toHaveBeenCalledWith({ kind: "task", taskID: "task-1" });
   });

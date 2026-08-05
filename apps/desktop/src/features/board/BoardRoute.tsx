@@ -1,5 +1,5 @@
 import type { DragEvent } from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -108,14 +108,6 @@ function BoardRouteWithLabels({
     onBackgroundError(error: unknown): void;
   }>) {
   const filter = useProjectLabelFilter();
-  const { closeSidebar } = useSidebar();
-  const previousWorkflowIDRef = useRef<string | undefined>(workflowId);
-  useLayoutEffect(() => {
-    if (previousWorkflowIDRef.current !== workflowId) {
-      closeSidebar("route_change");
-    }
-    previousWorkflowIDRef.current = workflowId;
-  }, [closeSidebar, workflowId]);
   return (
     <BoardFilterGenerationProvider
       desiredLabelFilter={filter.state.filter}

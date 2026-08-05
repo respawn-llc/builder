@@ -137,6 +137,8 @@ export type SidebarController = Readonly<{
   canGoBack: boolean;
   closeSidebar(reason?: SidebarCancelReason): void;
   invalidateSidebar(target: SidebarInvalidationTarget): SidebarInvalidationResult;
+  clearTaskDeletion(): void;
+  recordTaskDeletion(taskID: string): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   pushSidebar(destination: SidebarDestination): void;
   replaceSidebar(destination: SidebarDestination): void;

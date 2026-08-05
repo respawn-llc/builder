@@ -336,26 +336,24 @@
   selector as a fresh root; transition to absence stops after close. Therefore
   `/projects/P?taskId=A` with unrelated sidebar B followed by `taskId=C` always
   removes B and ends with exactly C open, regardless of React effect order.
-  Selected-Task deletion records
-  `{ kind: "selectedTaskDeleted", fromTaskID, toTaskID: undefined }` before
-  invalidating A and clearing `taskId`; the exact resulting search transition
-  consumes that cause, preserves unrelated sidebar survivors, and opens no
-  replacement. Navigation failure clears the cause and surfaces the existing
-  error. An ordinary browser/search transition has no deletion cause and follows
-  the close-then-optional-open sequence even when A is already absent. The
-  coordinator retains only the previously committed typed selector and an
-  in-flight deletion cause; both are Board-local route intent, not a sidebar
-  entry/lifecycle ID or token.
-- Split route-change ownership at the existing typed boundary. The shell closer
-  handles pathname changes. `BoardRoute` owns its typed `workflowId`/`taskId`
-  search changes: Workflow changes close, while the one Task selector
-  coordinator owns initial opening, ordinary close-then-optional-open, and the
-  explicit deletion cause above. `WorkflowEditorShellRoute` owns the only other
-  main-window validated search value, typed `projectId`, and closes the sidebar
-  whenever it changes. Home, Workflow Library, and standalone Task routes have
-  no search contract; native-dialog routes are separate windows. This covers
-  every current main-window search-bearing route without pathname/search-string
-  parsing, independent open/close effects, or a pending route-expectation flag.
+  Selected-Task deletion reports the deleted Task fact to `SidebarProvider`
+  before invalidating A and clearing `taskId`; the provider consumes that fact
+  on the exact search transition, preserves unrelated sidebar survivors, and
+  opens no replacement. Navigation failure clears the provider's fact and
+  surfaces the existing error. The Board coordinator retains only the
+  previously selected Task for opening; ordinary browser/search transitions
+  follow the central close-then-optional-open contract.
+- `SidebarProvider` owns one typed route-transition contract for all
+  main-window navigation. It closes on pathname changes, Board `workflowId` or
+  ordinary `taskId` changes, and Workflow Editor `projectId` changes. The
+  Board selector coordinator owns only selected-Task opening and its typed
+  deletion lifecycle; it reports the deleted Task fact to `SidebarProvider`,
+  which consumes it to preserve an unrelated survivor when the deleted
+  selector clears. Board and Workflow Editor routes contain no route-close
+  effects. Home, Workflow Library, and standalone Task routes have no search
+  contract; native-dialog routes are separate windows. This covers every
+  current main-window search-bearing route without pathname/search-string
+  parsing, independent close writers, or route-expectation tokens.
 - Project deletion calls the typed invalidation operation after its existing
   asynchronous cleanup completes, so membership is read from current history at
   operation time. `AppChrome` does not inspect destination shapes, cache data,
@@ -712,69 +710,27 @@
   `./scripts/test.sh desktop` (83 files / 373 tests), and
   `./scripts/build.sh desktop`. Browser/manual QA remains excluded.
 
-- [x] **Close the complete sidebar on external browser pathname changes.**
-  Route-local sidebar Push/Back remains independent of browser history, while
-  the shell route-change owner now always submits the typed `route_change`
-  close command on a pathname transition. The command is intentionally
-  unconditional so a transient destination projection cannot leave the
-  current history reachable; the provider remains the authority and no-ops
-  when no history is active. Added a public shell regression covering an open
-  sidebar changing from a Project pathname to Home. Search-only Project and
-  Workflow Editor transitions remain owned by their existing typed route
-  owners.
-  Progress (August 5, 2026): The stale-sidebar QA finding is remediated in the
-  current round; focused route-change and sidebar navigation tests pass. Final
-  verification passed with frozen Apps install, full Apps lint (0 errors; 4
-  existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
-  374 tests), and `./scripts/build.sh desktop`.
-  Progress (August 5, 2026): Compliance remediation removed the Board
-  `projectId` pathname comparison and retained only its typed `workflowId`
-  search-transition comparison. Project-to-Project and Project-to-Home
-  pathname coverage remains at the shell closer, so pathname close ownership
-  has one writer.
-  Verification after this compliance round: frozen install, Apps lint (0
-  errors; 4 existing warnings), Apps typecheck, and Desktop build passed.
-  Focused route/sidebar, Board Manual Move, and Task Detail data tests passed
-  (8/8). Two full Desktop-suite attempts each had one different 5-second
-  timeout under concurrent load (sidebar navigation once, Manual Move once);
-  the implicated tests pass in the focused rerun, so no product failure was
-  reproduced.
-  Final current-head rerun completed after unrelated workspace load subsided:
-  `./scripts/test.sh desktop` passed with 84 files / 375 tests.
-
-- [x] **Bind route-close ownership to one router transition contract.**
-  `SidebarProvider` is the sole route-transition owner. Its typed
-  `sidebarRouteTransition` contract classifies canonical router locations as
-  `pathname`, `search`, or `none`; only a pathname change closes the complete
-  sidebar, while same-path search-only changes stay with typed Board/Workflow
-  owners. Normal links, browser history, and View Transition updates all arrive
-  through that one router store,
-  while sidebar-local Push/Back never change the router pathname and therefore
-  never invoke route closure. The former shell observer and direct
-  history/lifecycle subscriptions are deleted, so route closure has no parallel
-  writer.
-  Regression coverage uses the real `RouterProvider` and router history for
-  Project-to-Home, Project-to-Project, browser Back, search-only transitions,
-  sidebar-local navigation, and the actual AppChrome Home-link flow, including
-  the browser View Transition update path.
-  Progress (August 5, 2026): Fresh QA repeatedly exposed that render,
-  history, and lifecycle observer seams were not durable. Returned ownership
-  to `SidebarProvider`, added the typed pathname/search/none contract, and adapted
-  provider tests to the real router context instead of adding a test-only
-  production seam. Final verification passed: Apps lint (0 errors; 4 existing
-  warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files / 378
-  tests), and Desktop build.
+- [x] **Close the complete sidebar from one router transition owner.**
+  `SidebarProvider` now consumes one structured router-location contract for
+  normal links, browser history, View Transition updates, Board workflow/task
+  search changes, and Workflow Editor project changes. Sidebar-local Push/Back
+  never changes the router location and remains independent. The Board
+  selector coordinator reports selected-Task deletion through the provider's
+  typed deletion lifecycle; the provider preserves an unrelated survivor only
+  for that deletion transition and closes ordinary route changes. Regression
+  coverage uses real router transitions for every route case, including the
+  AppChrome Home View Transition path and the deletion-survivor exception.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,673 additions plus 320
-  deletions: **1,993 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,612 additions plus 329
+  deletions: **1,941 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
   seam, and consolidates generic currentness/rebase logic. Approved behavior,
   ownership, and guarantees are unchanged.
-  Progress (August 5, 2026): Re-measured after the cap remediation and reran
-  current-head verification: frozen Apps install, Apps lint (0 errors; 4
-  existing warnings), Apps typecheck, Desktop build, and
-  `./scripts/test.sh desktop` (84 files / 378 tests) all passed.
+  Progress (August 5, 2026): Re-measured after full route-owner centralization:
+  frozen Apps install, Apps lint (0 errors; 4 existing warnings), Apps
+  typecheck, Desktop build, and `./scripts/test.sh desktop` (84 files / 377
+  tests) all passed.

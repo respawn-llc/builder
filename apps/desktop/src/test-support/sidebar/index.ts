@@ -17,6 +17,12 @@ export function createTestSidebarController(
     invalidateSidebar() {
       return { kind: "absent" };
     },
+    clearTaskDeletion() {
+      return;
+    },
+    recordTaskDeletion() {
+      return;
+    },
     async openSidebar(destination) {
       onOpen(destination);
       return { status: "canceled", reason: "closed" };
