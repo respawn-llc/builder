@@ -135,10 +135,11 @@ func PlanTransitionParameterContract(request TransitionParameterContractRequest)
 	return plan.Contract, nil
 }
 
-func planTransitionParameterContract(request TransitionParameterContractRequest) (TransitionParameterContract, error) {
+// PlanTransitionProtectedParameterConsumption derives the protected-parameter
+// consumption policy without validating the Edge's ordinary parameter shape.
+func PlanTransitionProtectedParameterConsumption(request TransitionParameterContractRequest) ProtectedParameterConsumption {
 	roles := transitionThinkingRoles(request)
-	thinking := UnionTargetAgentThinkingCapabilities(roles)
-	consumption := ResolveProtectedParameterConsumption(ProtectedParameterConsumptionRequest{
+	return ResolveProtectedParameterConsumption(ProtectedParameterConsumptionRequest{
 		Edge:                  request.Edge,
 		SourceKind:            request.SourceKind,
 		TargetKind:            request.TargetKind,
@@ -146,8 +147,13 @@ func planTransitionParameterContract(request TransitionParameterContractRequest)
 		TargetSessionResolved: request.TargetSessionResolved,
 		TargetSessionPolicy:   request.TargetSessionPolicy,
 		ExplicitCallableRoles: explicitCallableRoleCount(request.Catalog),
-		Thinking:              thinking,
+		Thinking:              UnionTargetAgentThinkingCapabilities(roles),
 	})
+}
+
+func planTransitionParameterContract(request TransitionParameterContractRequest) (TransitionParameterContract, error) {
+	thinking := UnionTargetAgentThinkingCapabilities(transitionThinkingRoles(request))
+	consumption := PlanTransitionProtectedParameterConsumption(request)
 	planned := TransitionParameterContract{
 		Consumption: consumption,
 		Thinking:    thinking,

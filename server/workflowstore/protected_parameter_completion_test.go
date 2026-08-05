@@ -60,17 +60,26 @@ func TestAutomaticCompletionMaterializesSoleRoleWithoutProtectedValue(t *testing
 			"coder": {Identity: "coder", QuestionsEnabled: true},
 		},
 		selectable: []workflow.TargetAgentRole{
-			{Identity: "reviewer", ExplicitAgentCallable: true},
+			{
+				Identity:              "reviewer",
+				ExplicitAgentCallable: true,
+				Thinking: workflow.ThinkingCapability{
+					ReasoningCapable: true,
+					Finite:           true,
+					Levels:           []string{"high"},
+				},
+			},
 		},
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
-		edge.Parameters = []workflow.Parameter{{
-			Key:     "role",
-			Purpose: workflow.ParameterPurposeTargetAssignee,
-		}}
+		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{
+			{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee},
+			{Key: "effort", Purpose: workflow.ParameterPurposeTargetThinking},
+		}
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -90,9 +99,29 @@ func TestAutomaticCompletionMaterializesSoleRoleWithoutProtectedValue(t *testing
 	if err != nil {
 		t.Fatalf("complete audit: %v", err)
 	}
-	selection := completed.Mutation.Created[0].AgentExecutionSelection
-	if selection == nil || selection.Assignee != "reviewer" || selection.Origin != workflow.AssigneeOriginTransitionSelected {
-		t.Fatalf("materialized target selection = %+v, want sole explicit role", selection)
+	target := completed.Mutation.Created[0]
+	if err := store.InterruptCurrentNode(
+		ctx,
+		target.Reference,
+		workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		workflow.CurrentNodeInterruptionDetail{Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt)},
+	); err != nil {
+		t.Fatalf("interrupt target with hidden selectors: %v", err)
+	}
+	classifications, err := store.PreflightTaskResume(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("preflight resume with hidden selectors: %v", err)
+	}
+	if len(classifications) != 1 || len(classifications[0].Diagnostics) != 0 {
+		t.Fatalf("hidden selector resume classifications = %+v, want one resumable Current Node", classifications)
+	}
+	selection := target.AgentExecutionSelection
+	if selection == nil ||
+		selection.Assignee != "reviewer" ||
+		selection.Origin != workflow.AssigneeOriginTransitionSelected ||
+		selection.Thinking == nil ||
+		string(*selection.Thinking) != "high" {
+		t.Fatalf("materialized target selection = %+v, want sole explicit role and finite thinking", selection)
 	}
 }
 
