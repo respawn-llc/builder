@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, useLayoutEffect, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
@@ -417,16 +417,18 @@ describe("Sidebar route transition ownership", () => {
 
   it("closes before and after the Home route mounts during View Transition navigation", async () => {
     const services = createTestServices([]);
-    const routeStates: (string | null)[] = [];
+    const routeStates: RouteMountSnapshot[] = [];
     const router = createTestRouter(
       <TestAppProviders services={services}>
         <AppChrome>
-          <OpenSidebar />
+          <OpenSidebarStack />
+          <Outlet />
         </AppChrome>
       </TestAppProviders>,
       ["/projects/project-1"],
       {
         home: () => <RouteMountProbe onMount={(state) => routeStates.push(state)} />,
+        outletInsideChildren: true,
       },
     );
     render(<RouterProvider router={router} />);
@@ -434,6 +436,8 @@ describe("Sidebar route transition ownership", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
+    const backLabel = appI18n.t.bind(appI18n)("app.back");
+    await waitFor(() => expect(screen.getByRole("button", { name: backLabel })).toBeVisible());
     const nativeStartViewTransitionDescriptor = Object.getOwnPropertyDescriptor(
       document,
       "startViewTransition",
@@ -456,7 +460,7 @@ describe("Sidebar route transition ownership", () => {
       await waitFor(() => {
         expect(routeStates).toHaveLength(1);
       });
-      expect(routeStates).toEqual(["closing"]);
+      expect(routeStates).toEqual([{ canGoBack: false, phase: "closing" }]);
       await waitFor(() => {
         expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
       });
@@ -472,12 +476,16 @@ describe("Sidebar route transition ownership", () => {
 
 type RouteLifecycle = Readonly<{
   home?: () => ReactElement;
+  outletInsideChildren?: boolean;
 }>;
 
-function RouteMountProbe({ onMount }: Readonly<{ onMount(state: string | null): void }>) {
+type RouteMountSnapshot = Readonly<{ canGoBack: boolean; phase: string }>;
+
+function RouteMountProbe({ onMount }: Readonly<{ onMount(state: RouteMountSnapshot): void }>) {
+  const { canGoBack, phase } = useSidebar();
   useLayoutEffect(() => {
-    onMount(screen.queryByTestId("app-sidebar-host")?.getAttribute("data-state") ?? null);
-  }, [onMount]);
+    onMount({ canGoBack, phase });
+  }, [canGoBack, onMount, phase]);
   return null;
 }
 
@@ -488,10 +496,7 @@ function createTestRouter(
 ) {
   const rootRoute = createRootRoute({
     component: () => (
-      <>
-        {children}
-        <Outlet />
-      </>
+      lifecycle.outletInsideChildren ? children : <>{children}<Outlet /></>
     ),
   });
   const homeRoute = createRoute({
@@ -534,6 +539,28 @@ function OpenSidebar() {
       title: "Task",
     });
   }, [openSidebar]);
+  return null;
+}
+
+function OpenSidebarStack() {
+  const { activeDestination, openSidebar, pushSidebar } = useSidebar();
+  const pushedRef = useRef(false);
+  useEffect(() => {
+    void openSidebar({
+      content: <div>Task 1</div>,
+      kind: "custom",
+      title: "Task 1",
+    });
+  }, [openSidebar]);
+  useEffect(() => {
+    if (activeDestination === null || pushedRef.current) return;
+    pushedRef.current = true;
+    pushSidebar({
+      content: <div>Task 2</div>,
+      kind: "custom",
+      title: "Task 2",
+    });
+  }, [activeDestination, pushSidebar]);
   return null;
 }
 

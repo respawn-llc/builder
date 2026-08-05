@@ -772,8 +772,11 @@
   transitions now derive current history, outgoing animation content, and
   phase from that single authority; route closure performs one lifecycle
   transition. Push, Back, replacement, and invalidation no longer write phase
-  independently. The combined product guard retains both destination-mount
-  closing and eventual complete-sidebar removal assertions.
+  independently. Strengthened the combined product guard to build a two-entry
+  stack, then observe the public `canGoBack` contract at Home-route mount:
+  it must already be false while phase is closing, followed by complete
+  sidebar removal. This fails the prior phase-only flush because the old
+  current stack would still report Back available.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
