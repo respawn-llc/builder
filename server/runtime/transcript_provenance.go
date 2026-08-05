@@ -13,6 +13,22 @@ type TranscriptCommittedRowProvenance struct {
 	ProjectedOrdinal *int64
 }
 
+func transcriptCommittedProvenanceBefore(
+	left *TranscriptCommittedRowProvenance,
+	right *TranscriptCommittedRowProvenance,
+) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.EventSequence != right.EventSequence {
+		return left.EventSequence < right.EventSequence
+	}
+	if left.ProjectedOrdinal != nil && right.ProjectedOrdinal != nil {
+		return *left.ProjectedOrdinal < *right.ProjectedOrdinal
+	}
+	return false
+}
+
 func transcriptProvenanceFromRecord(record session.EventRecord) (TranscriptCommittedRowProvenance, error) {
 	if record.Seq() <= 0 {
 		return TranscriptCommittedRowProvenance{}, fmt.Errorf("committed transcript provenance has invalid event sequence %d", record.Seq())

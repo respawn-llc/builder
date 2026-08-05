@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/server/llm"
@@ -258,6 +259,34 @@ func (s *streamingTranscriptScan) closeTurn() {
 	if len(localEntryProvenance) != len(localEntries) {
 		panic(fmt.Sprintf("persisted transcript local-entry provenance count mismatch: local_entry_count=%d provenance_count=%d", len(localEntries), len(localEntryProvenance)))
 	}
+	orderedMaterialized := make([]struct {
+		message    llm.Message
+		provenance *TranscriptCommittedRowProvenance
+		stepID     string
+	}, len(materialized))
+	for index := range materialized {
+		provenance := materializedProvenance[index]
+		if callID, present := textutil.OptionalTrimmed(materialized[index].ToolCallID); present {
+			if owner := s.completionProvenance[callID]; owner != nil {
+				provenance = owner
+			}
+		}
+		orderedMaterialized[index] = struct {
+			message    llm.Message
+			provenance *TranscriptCommittedRowProvenance
+			stepID     string
+		}{
+			message:    materialized[index],
+			provenance: provenance,
+			stepID:     materializedSteps[index],
+		}
+	}
+	sort.SliceStable(orderedMaterialized, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			orderedMaterialized[left].provenance,
+			orderedMaterialized[right].provenance,
+		)
+	})
 	for _, rm := range materialized {
 		if callID, present := textutil.OptionalTrimmed(rm.ToolCallID); present {
 			s.materialized[callID] = struct{}{}
@@ -271,9 +300,9 @@ func (s *streamingTranscriptScan) closeTurn() {
 		}
 		s.appendLocalEntry(entry, localEntrySteps[index], localEntryProvenance[index])
 	}
-	for index, rm := range materialized {
-		s.applyMessage(rm, materializedProvenance[index], materializedSteps[index])
-		callID, _ := textutil.OptionalTrimmed(rm.ToolCallID)
+	for _, materializedEntry := range orderedMaterialized {
+		s.applyMessage(materializedEntry.message, materializedEntry.provenance, materializedEntry.stepID)
+		callID, _ := textutil.OptionalTrimmed(materializedEntry.message.ToolCallID)
 		for localIndex, entry := range localEntries {
 			if entry.AfterToolCallID == nil || strings.TrimSpace(*entry.AfterToolCallID) != callID {
 				continue

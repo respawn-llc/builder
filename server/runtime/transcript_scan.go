@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"core/server/llm"
@@ -62,7 +63,9 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 	if s == nil {
 		return
 	}
-	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+	entries := visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
+	for index := range entries {
+		entry := &entries[index]
 		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
@@ -76,6 +79,14 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 				entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(owner)
 			}
 		}
+	}
+	sort.SliceStable(entries, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			entries[left].CommittedProvenance,
+			entries[right].CommittedProvenance,
+		)
+	})
+	for _, entry := range entries {
 		s.appendEntry(entry)
 	}
 }
