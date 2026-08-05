@@ -742,21 +742,21 @@
   Final current-head rerun completed after unrelated workspace load subsided:
   `./scripts/test.sh desktop` passed with 84 files / 375 tests.
 
-- [x] **Bind shell route-close ownership to router history transitions.**
-  The previous render-observer closer could miss the live browser transition
-  even though the URL changed. The shell now subscribes directly to the
-  TanStack history owner, compares only pathname, and closes the complete
-  sidebar synchronously on a changed pathname. Same-path search changes remain
-  available to the typed Board/Workflow route owners, and sidebar-local
-  Push/Back still produce no browser-history event. Regression coverage
-  publishes Project-to-Home and Project-to-Project history transitions and
-  proves a search-only transition leaves the sidebar open.
-  Progress (August 5, 2026): Reproduced the QA reappearance boundary in the
-  shell test seam, replaced the render-only observation with the history
-  subscription, and verified focused route/sidebar behavior. Current-head
-  verification passed: frozen Apps install, Apps lint (0 errors; 4 existing
-  warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files / 376
-  tests), and `./scripts/build.sh desktop`.
+- [x] **Bind shell route-close ownership to router lifecycle transitions.**
+  The render observer and direct history subscription could both miss the live
+  application navigation even though the URL changed. The shell now subscribes
+  to TanStack Router's `onBeforeNavigate` lifecycle owner and closes the
+  complete sidebar when its typed `pathChanged` flag is true. Same-path search
+  changes remain available to the typed Board/Workflow route owners, and
+  sidebar-local Push/Back still produce no browser navigation event. Regression
+  coverage uses the real `RouterProvider` and router history for
+  Project-to-Home, Project-to-Project, and search-only transitions.
+  Progress (August 5, 2026): Fresh QA reproduced the history-subscription
+  reappearance boundary on Home navigation. Replaced that observer with the
+  router lifecycle subscription and verified all three route cases in the
+  focused test. Final current-head verification passed: Apps lint (0 errors;
+  4 existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
+  375 tests), and `./scripts/build.sh desktop`.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from

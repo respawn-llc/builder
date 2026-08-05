@@ -42,13 +42,14 @@ import {
 export function SidebarRouteChangeCloser() {
   const router = useRouter();
   const { closeSidebar } = useSidebar();
-  const previousPathRef = useRef(router.state.location.pathname);
 
-  useLayoutEffect(() => router.history.subscribe(({ location }) => {
-    if (previousPathRef.current === location.pathname) return;
-    previousPathRef.current = location.pathname;
-    closeSidebar("route_change");
-  }), [closeSidebar, router.history]);
+  useLayoutEffect(
+    () =>
+      router.subscribe("onBeforeNavigate", ({ pathChanged }) => {
+        if (pathChanged) closeSidebar("route_change");
+      }),
+    [closeSidebar, router],
+  );
 
   return null;
 }

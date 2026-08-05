@@ -1,48 +1,29 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { useEffect } from "react";
-import type * as TanStackRouter from "@tanstack/react-router";
+import { useEffect, type ReactElement } from "react";
+import { z } from "zod";
 
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebar } from "@/app-facade";
 
-type HistoryListener = (event: Readonly<{ location: Readonly<{ pathname: string }> }>) => void;
-
-const routeState = vi.hoisted(() => ({
-  listeners: new Set<HistoryListener>(),
-  pathname: "/projects/project-1",
-}));
-
-vi.mock("@tanstack/react-router", async () => {
-  const actual = await vi.importActual<typeof TanStackRouter>("@tanstack/react-router");
-  return {
-    ...actual,
-    useRouter: () => ({
-      history: {
-        subscribe(listener: HistoryListener) {
-          routeState.listeners.add(listener);
-          return () => {
-            routeState.listeners.delete(listener);
-          };
-        },
-      },
-      state: { location: routeState },
-    }),
-  };
-});
-
 describe("SidebarRouteChangeCloser", () => {
   beforeEach(() => {
-    routeState.pathname = "/projects/project-1";
-    routeState.listeners.clear();
+    vi.restoreAllMocks();
   });
 
   it.each(["/", "/projects/project-2"])(
     "closes the complete sidebar when the browser pathname changes to %s",
     async (nextPathname) => {
       const services = createTestServices([]);
-      render(
+      const router = createTestRouter(
         <TestAppProviders services={services}>
           <SidebarProvider>
             <SidebarRouteChangeCloser />
@@ -51,12 +32,20 @@ describe("SidebarRouteChangeCloser", () => {
           </SidebarProvider>
         </TestAppProviders>,
       );
+      render(<RouterProvider router={router} />);
 
       await waitFor(() =>
         expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
       );
-      act(() => {
-        publishPathname(nextPathname);
+      await act(async () => {
+        if (nextPathname === "/") {
+          await router.navigate({ to: "/" });
+        } else {
+          await router.navigate({
+            params: { projectId: "project-2" },
+            to: "/projects/$projectId",
+          });
+        }
       });
 
       await waitFor(() =>
@@ -67,7 +56,7 @@ describe("SidebarRouteChangeCloser", () => {
 
   it("does not close for a search-only route change", async () => {
     const services = createTestServices([]);
-    render(
+    const router = createTestRouter(
       <TestAppProviders services={services}>
         <SidebarProvider>
           <SidebarRouteChangeCloser />
@@ -76,23 +65,37 @@ describe("SidebarRouteChangeCloser", () => {
         </SidebarProvider>
       </TestAppProviders>,
     );
+    render(<RouterProvider router={router} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
-    act(() => {
-      publishPathname("/projects/project-1");
+    await act(async () => {
+      router.history.push("/projects/project-1?filter=next");
     });
 
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
 });
 
-function publishPathname(pathname: string): void {
-  routeState.pathname = pathname;
-  for (const listener of routeState.listeners) {
-    listener({ location: routeState });
-  }
+function createTestRouter(children: ReactElement) {
+  const rootRoute = createRootRoute({ component: () => children });
+  const homeRoute = createRoute({
+    component: () => null,
+    getParentRoute: () => rootRoute,
+    path: "/",
+  });
+  const projectRoute = createRoute({
+    component: () => null,
+    getParentRoute: () => rootRoute,
+    path: "/projects/$projectId",
+    validateSearch: (search: Record<string, unknown>) =>
+      z.object({ filter: z.string().optional() }).parse(search),
+  });
+  return createRouter({
+    history: createMemoryHistory({ initialEntries: ["/projects/project-1"] }),
+    routeTree: rootRoute.addChildren([homeRoute, projectRoute]),
+  });
 }
 
 function OpenSidebar() {
