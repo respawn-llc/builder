@@ -90,7 +90,7 @@
 - Each returned board page is bounded. Clients never load a complete board or column to sort it.
 - Done has no Task-count bound. Board sorting may evaluate all matching Tasks before applying an offset, so Kent makes no board-sort latency guarantee for very large matching columns.
 - Board pagination uses a zero-based offset. Changing the complete filter or selected sort restarts pagination at offset zero.
-- A Task or Project Label order change between page requests may transiently repeat or skip a Task in the loaded view. A board refresh adopts the current server order, and Kent does not guarantee a stable snapshot across page requests.
+- A Task or Project Label mutation can change filtered-set membership for any board sort when a Label filter is active; outside `Labels` sorting it preserves the relative order of Tasks that remain members. Desktop invalidates and refetches active board cards after a committed local or subscribed Label mutation, preserving the retained offsets while adopting the current server order. A Task or Project Label order change between page requests may therefore transiently repeat or skip a Task in the loaded view, and Kent does not guarantee a stable snapshot across page requests.
 
 ## Task Dependencies
 
