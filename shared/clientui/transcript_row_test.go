@@ -23,7 +23,7 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 }
 
-func TestTranscriptCommittedRowValidateOwnsPayloadDiscriminator(t *testing.T) {
+func TestTranscriptCommittedRowValidateStructureOwnsPayloadDiscriminator(t *testing.T) {
 	row := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
@@ -34,11 +34,11 @@ func TestTranscriptCommittedRowValidateOwnsPayloadDiscriminator(t *testing.T) {
 			Text:        "Planning\nDetails",
 		},
 	}
-	if err := row.Validate(); err != nil {
-		t.Fatalf("validate committed reasoning row: %v", err)
+	if err := row.ValidateStructure(); err != nil {
+		t.Fatalf("validate committed reasoning row structure: %v", err)
 	}
 	row.ReasoningTrace = nil
-	if err := row.Validate(); err == nil {
+	if err := row.ValidateStructure(); err == nil {
 		t.Fatal("accepted committed reasoning row without its payload")
 	}
 }

@@ -157,7 +157,7 @@ type TranscriptBackgroundNoticeIdentity struct {
 	ExitCode   *int
 }
 
-func (r TranscriptCommittedRow) Validate() error {
+func (r TranscriptCommittedRow) ValidateStructure() error {
 	switch r.Visibility {
 	case transcript.EntryVisibilityOngoing,
 		transcript.EntryVisibilityOngoingCollapsed,
@@ -210,8 +210,12 @@ func (r TranscriptCommittedRow) Validate() error {
 	if r.Kind != expectedKind {
 		return fmt.Errorf("transcript committed row kind %q does not match payload kind %q", r.Kind, expectedKind)
 	}
-	if r.Integrity != transcript.RowIntegrityValid {
-		return nil
+	return nil
+}
+
+func (r TranscriptCommittedRow) Validate() error {
+	if err := r.ValidateStructure(); err != nil {
+		return err
 	}
 	switch r.Kind {
 	case TranscriptRowUser:

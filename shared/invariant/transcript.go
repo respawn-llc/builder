@@ -2,20 +2,31 @@ package invariant
 
 import (
 	"fmt"
+	"strings"
 
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
-	if err := row.Validate(); err != nil {
+	if err := row.ValidateStructure(); err != nil {
 		return err
 	}
 	if row.User != nil && row.User.RollbackTargetID != nil {
 		if _, err := rollbacktarget.DecodeUserMessageSeq(*row.User.RollbackTargetID); err != nil {
 			return fmt.Errorf("committed user row has invalid rollback_target_id: %w", err)
 		}
+	}
+	if row.Integrity != transcript.RowIntegrityValid {
+		return nil
+	}
+	if row.Assistant != nil && row.Assistant.StreamID != nil && row.Assistant.StreamID.IsZero() {
+		return fmt.Errorf("committed assistant row has zero stream_id")
+	}
+	if row.Tool != nil && strings.TrimSpace(string(row.Tool.ToolCallID)) == "" {
+		return fmt.Errorf("committed tool row has empty tool_call_id")
 	}
 	return nil
 }

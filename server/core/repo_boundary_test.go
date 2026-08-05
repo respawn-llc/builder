@@ -344,6 +344,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"validatePresentSessionExecutionTarget":                   {},
 		"validateRequiredOptionalText":                            {},
 		"validateSessionExecutionWorktree":                        {},
+		"TranscriptCommittedRow.ValidateStructure":                {},
 	}
 	seenTypes := make(map[string]struct{}, len(allowedTypes))
 	seenFuncs := make(map[string]struct{}, len(allowedFuncs))
