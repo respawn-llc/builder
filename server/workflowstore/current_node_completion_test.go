@@ -181,6 +181,14 @@ func TestCompleteCurrentNodeFanoutPendingApprovalCarriesCommentary(t *testing.T)
 func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := edgeByKey(t, def, "join_a")
+		record := workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID)
+		record.Parameters = append(
+			record.Parameters,
+			workflow.Parameter{Key: "agent_role", Purpose: workflow.ParameterPurposeTargetAssignee},
+		)
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]

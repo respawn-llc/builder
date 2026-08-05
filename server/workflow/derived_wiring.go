@@ -154,7 +154,7 @@ func deriveWiring(
 	}
 	for _, node := range def.Nodes {
 		if node.Kind() == NodeKindJoin {
-			derived.deriveJoinAggregateParameters(node, incomingByNode)
+			derived.deriveJoinAggregateParameters(node, incomingByNode, nodesByID, groupsByID, catalog)
 		}
 	}
 	derived.deriveParameterDependencies(incomingByNode, outgoingByNode)
@@ -274,13 +274,31 @@ func (w *DerivedWiring) addRequiredProviderFields(edgeID EdgeID, fields []Output
 	w.Diagnostics = append(w.Diagnostics, diagnostics...)
 }
 
-func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode map[NodeID][]Edge) {
+func (w *DerivedWiring) deriveJoinAggregateParameters(
+	join Node,
+	incomingByNode map[NodeID][]Edge,
+	nodesByID map[NodeID]Node,
+	groupsByID map[TransitionGroupID]TransitionGroup,
+	catalog TargetAgentCatalog,
+) {
 	incomingEdges := incomingByNode[NodeIDOf(join)]
 	groupFields := map[TransitionGroupID][]OutputField{}
 	groupOrder := []TransitionGroupID{}
 	seenGroup := map[TransitionGroupID]bool{}
 	for _, edge := range incomingEdges {
 		fields := edgeParameterFields(edge)
+		if group, exists := groupsByID[edge.TransitionGroupID]; exists {
+			if source, exists := nodesByID[group.SourceNodeID]; exists {
+				consumption := PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
+					Edge:       edge,
+					SourceKind: source.Kind(),
+					TargetKind: join.Kind(),
+					TargetRole: NodeSubagentRole(join),
+					Catalog:    catalog,
+				})
+				fields = filterProtectedParameterFields(edge, fields, consumption)
+			}
+		}
 		if len(fields) == 0 {
 			continue
 		}
@@ -312,6 +330,40 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 		}
 	}
 	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
+}
+
+func filterProtectedParameterFields(
+	edge Edge,
+	fields []OutputField,
+	consumption ProtectedParameterConsumption,
+) []OutputField {
+	filtered := make([]OutputField, 0, len(fields))
+	for _, field := range fields {
+		parameter, protected := edgeParameterByKey(edge, field.Name)
+		if protected {
+			switch CanonicalParameterPurpose(parameter.Purpose) {
+			case ParameterPurposeTargetAssignee:
+				if consumption.Assignee != ProtectedParameterConsumptionRequiredValidate {
+					continue
+				}
+			case ParameterPurposeTargetThinking:
+				if consumption.Thinking != ProtectedParameterConsumptionRequiredValidate {
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, field)
+	}
+	return filtered
+}
+
+func edgeParameterByKey(edge Edge, key string) (Parameter, bool) {
+	for _, parameter := range edge.Parameters {
+		if strings.TrimSpace(parameter.Key) == strings.TrimSpace(key) {
+			return parameter, true
+		}
+	}
+	return Parameter{}, false
 }
 
 func (w *DerivedWiring) deriveParameterDependencies(
