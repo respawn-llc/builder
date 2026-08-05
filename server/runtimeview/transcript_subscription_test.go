@@ -240,6 +240,53 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	}
 }
 
+func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing.T) {
+	firstIndex, secondIndex := int64(0), int64(1)
+	firstID := runtimeids.NewReasoningTraceID()
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
+			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
+			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
+		},
+	})
+	if len(hydration.ActiveReasoningTraces) != 2 || hydration.ActiveReasoningTraces[0].Identity.Kent == nil ||
+		hydration.ActiveReasoningTraces[1].Identity.Provider == nil {
+		t.Fatalf("hydrated reasoning order = %+v", hydration.ActiveReasoningTraces)
+	}
+	output := int64(0)
+	live := append(
+		TranscriptMessagesFromRuntimeEvent(runtime.Event{
+			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			ReasoningDelta: &llm.ReasoningSummaryDelta{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &firstIndex},
+				Text:             "first",
+			},
+			ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{Kent: &firstID},
+		}),
+		TranscriptMessagesFromRuntimeEvent(runtime.Event{
+			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			ReasoningDelta: &llm.ReasoningSummaryDelta{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &secondIndex},
+				Text:             "second",
+			},
+			ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+				Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex},
+			},
+		})...,
+	)
+	if len(live) != 2 {
+		t.Fatalf("live reasoning messages = %+v", live)
+	}
+	for index, event := range live {
+		update := transcriptPayload[clientui.TranscriptReasoningTraceUpdate](t, event)
+		hydrated := hydration.ActiveReasoningTraces[index]
+		if update.Identity.String() != hydrated.Identity.String() ||
+			update.Text != hydrated.Text {
+			t.Fatalf("live/hydration reasoning mismatch at %d: live=%+v hydration=%+v", index, update, hydrated)
+		}
+	}
+}
+
 func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventLocalEntryAdded,

@@ -71,13 +71,15 @@ func TestTranscriptReasoningStateRetainsMetadataWithoutChangingPublicIdentity(t 
 	if fallbackStatus != nil || len(traces) != 1 || traces[0].Identity.Kent == nil {
 		t.Fatalf("fallback reasoning state = status:%+v traces:%+v", fallbackStatus, traces)
 	}
+	fallbackIdentity := *traces[0].Identity.Kent
 	providerIndex := int64(0)
 	first := &llm.ReasoningItemIdentity{ItemID: "reason_a", PartIndex: &providerIndex}
 	if err := state.ObserveReasoningItemIdentity("step", coordinate, first); err != nil {
 		t.Fatalf("observe provider metadata: %v", err)
 	}
 	_, traces = state.ReasoningSnapshot()
-	if traces[0].Identity.Kent == nil || traces[0].Identity.Provider != nil ||
+	if traces[0].Identity.Kent == nil || traces[0].Identity.Kent.String() != fallbackIdentity.String() ||
+		traces[0].Identity.Provider != nil ||
 		traces[0].ProviderMetadata == nil || traces[0].ProviderMetadata.ItemID != "reason_a" {
 		t.Fatalf("reasoning identity after metadata = %+v, want immutable Kent identity plus metadata", traces[0])
 	}
@@ -344,6 +346,199 @@ func TestRunStepLoopNoopAcceptanceCommitsReasoning(t *testing.T) {
 		}
 	}
 	t.Fatalf("noop reasoning row missing from hydration: %+v", hydration.CommittedRows)
+}
+
+func TestReasoningCumulativeUpdatesKeepIdentityAndPosition(t *testing.T) {
+	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
+	firstOutput, secondOutput, part := int64(0), int64(1), int64(0)
+	providerIdentity := &llm.ReasoningItemIdentity{ItemID: "reason_provider", PartIndex: &part}
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
+		ItemIdentity:     providerIdentity,
+		Text:             "provider first",
+	})); err != nil {
+		t.Fatalf("steer provider reasoning: %v", err)
+	}
+	_, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
+	if len(traces) != 1 || traces[0].Identity.Provider == nil {
+		t.Fatalf("provider first reasoning state = %+v", traces)
+	}
+	providerPublicIdentity := traces[0].Identity
+
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
+		Text:             "Kent first",
+	})); err != nil {
+		t.Fatalf("steer Kent reasoning: %v", err)
+	}
+	_, traces = engine.transcriptRuntimeState().ReasoningSnapshot()
+	if len(traces) != 2 || traces[1].Identity.Kent == nil {
+		t.Fatalf("Kent first reasoning state = %+v", traces)
+	}
+	kentPublicIdentity := traces[1].Identity
+
+	// A cumulative provider update can omit metadata, while a cumulative Kent
+	// update can gain provider metadata. Neither transition changes its public ID.
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part},
+		Text:             "provider cumulative",
+	})); err != nil {
+		t.Fatalf("steer provider cumulative reasoning: %v", err)
+	}
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part},
+		ItemIdentity:     &llm.ReasoningItemIdentity{ItemID: "reason_metadata", PartIndex: &part},
+		Text:             "Kent cumulative",
+	})); err != nil {
+		t.Fatalf("steer Kent cumulative reasoning: %v", err)
+	}
+
+	_, traces = engine.transcriptRuntimeState().ReasoningSnapshot()
+	if len(traces) != 2 ||
+		traces[0].Text != "provider cumulative" ||
+		traces[1].Text != "Kent cumulative" ||
+		traces[0].Source.OutputIndex == nil || *traces[0].Source.OutputIndex != firstOutput ||
+		traces[1].Source.OutputIndex == nil || *traces[1].Source.OutputIndex != secondOutput ||
+		!llm.ReasoningItemIdentityEqual(providerPublicIdentity.Provider, traces[0].Identity.Provider) ||
+		providerPublicIdentity.Kent != nil || traces[0].Identity.Kent != nil ||
+		kentPublicIdentity.Kent == nil || traces[1].Identity.Kent == nil ||
+		kentPublicIdentity.Kent.String() != traces[1].Identity.Kent.String() ||
+		traces[1].Identity.Provider != nil {
+		t.Fatalf("cumulative reasoning state = %+v", traces)
+	}
+}
+
+func TestReasoningResetClearsEveryTraceAndRetainsStatus(t *testing.T) {
+	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
+	for index, text := range []string{"one", "two"} {
+		output, part := int64(index), int64(0)
+		delta := llm.ReasoningSummaryDelta{
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part},
+			Text:             text,
+		}
+		if index == 0 {
+			delta.CurrentStatus = &llm.ReasoningStatus{Text: "Thinking"}
+		}
+		if err := engine.steer("step", steerReasoningDeltaIntent(delta)); err != nil {
+			t.Fatalf("steer reset trace: %v", err)
+		}
+	}
+	if err := (&defaultStepExecutor{engine: engine}).resetProvisionalReasoning("step"); err != nil {
+		t.Fatalf("reset reasoning: %v", err)
+	}
+	status, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
+	if status == nil || status.Text != "Thinking" || len(traces) != 0 {
+		t.Fatalf("reset state = status:%+v traces:%+v", status, traces)
+	}
+}
+
+func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
+	var events []Event
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5", OnEvent: func(event Event) { events = append(events, event) },
+	})
+	output, part := int64(0), int64(0)
+	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
+	identity := &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part}
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: coordinate, ItemIdentity: identity, Text: "trace",
+	})); err != nil {
+		t.Fatalf("seed correlated trace: %v", err)
+	}
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "trace",
+		SourceCoordinate: coordinate, ItemIdentity: identity,
+	}}); err != nil {
+		t.Fatalf("commit correlated trace: %v", err)
+	}
+	localRows := 0
+	for _, event := range events {
+		if event.Kind == EventLocalEntryAdded && event.LocalEntry != nil &&
+			event.LocalEntry.Role == string(transcript.EntryRoleReasoning) {
+			localRows++
+			if event.ReasoningTraceIdentity == nil ||
+				event.ReasoningTraceIdentity.Provider == nil ||
+				event.ReasoningTraceIdentity.Provider.ItemID != "reason_1" {
+				t.Fatalf("correlated live row identity = %+v", event.ReasoningTraceIdentity)
+			}
+		}
+	}
+	if localRows != 1 {
+		t.Fatalf("correlated local rows = %d, want one", localRows)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+	if err != nil {
+		t.Fatalf("read correlated reasoning records: %v", err)
+	}
+	persistedRows := 0
+	for _, record := range window.Records {
+		local, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
+		if ok && local.Role == string(transcript.EntryRoleReasoning) {
+			persistedRows++
+			if local.Text != "trace" {
+				t.Fatalf("persisted correlated reasoning row = %+v", local)
+			}
+		}
+	}
+	if persistedRows != 1 {
+		t.Fatalf("persisted correlated reasoning rows = %d, want one", persistedRows)
+	}
+	hydration := hydrationSnapshot(t, engine)
+	hydratedRows := 0
+	for _, row := range hydration.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactReasoningTrace {
+			hydratedRows++
+			if row.ReasoningTrace == nil || row.ReasoningTrace.Text != "trace" {
+				t.Fatalf("hydrated correlated reasoning row = %+v", row)
+			}
+		}
+	}
+	if hydratedRows != 1 {
+		t.Fatalf("hydrated correlated reasoning rows = %d, want one", hydratedRows)
+	}
+	_, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
+	if len(traces) != 0 {
+		t.Fatalf("consumed provisional traces = %+v", traces)
+	}
+}
+
+func TestReasoningProjectionDoesNotRewritePersistedText(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	raw := "**raw reasoning**"
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: raw,
+	}}); err != nil {
+		t.Fatalf("persist raw reasoning: %v", err)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+	if err != nil {
+		t.Fatalf("read raw reasoning record: %v", err)
+	}
+	persistedRows := 0
+	for _, record := range window.Records {
+		if local, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok &&
+			local.Role == string(transcript.EntryRoleReasoning) {
+			persistedRows++
+			if local.Text != raw {
+				t.Fatalf("persisted reasoning text = %q, want %q", local.Text, raw)
+			}
+		}
+	}
+	if persistedRows != 1 {
+		t.Fatalf("persisted reasoning local entries = %d, want one", persistedRows)
+	}
+	hydration := hydrationSnapshot(t, engine)
+	for _, row := range hydration.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil {
+			if row.ReasoningTrace.Text != "raw reasoning" {
+				t.Fatalf("projected reasoning text = %q, want presentation cleanup", row.ReasoningTrace.Text)
+			}
+			return
+		}
+	}
+	t.Fatalf("projected reasoning row missing: %+v", hydration.CommittedRows)
 }
 
 func textPointer(value string) *string {
