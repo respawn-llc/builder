@@ -468,17 +468,8 @@ func manualMoveRequiredValuesForTarget(
 			if edge.TransitionGroupID != group.ID {
 				continue
 			}
-			for _, field := range derived.TransitionOutputFieldsForEdge(edge, source) {
-				contract := contracts[edge.ID]
-				if parameter, protected := transitionParameterByKey(edge, field.Name); protected {
-					planned, required := parameterByKey(contract.Parameters, parameter.Key)
-					if !required {
-						continue
-					}
-					field.Description = planned.Description
-				} else if planned, ordinary := parameterByKey(contract.Parameters, field.Name); ordinary {
-					field.Description = planned.Description
-				}
+			contract := contracts[edge.ID]
+			for _, field := range manualMoveTransitionOutputFields(derived, edge, source, contract) {
 				appendValue(workflow.NodeKey(source), field)
 			}
 		}
@@ -503,6 +494,36 @@ func manualMoveRequiredValuesForTarget(
 		return values[i].OutputName < values[j].OutputName
 	})
 	return values
+}
+
+func manualMoveTransitionOutputFields(
+	derived workflow.DerivedWiring,
+	edge workflow.Edge,
+	source workflow.Node,
+	contract workflow.TransitionParameterContract,
+) []workflow.OutputField {
+	fields := derived.TransitionOutputFieldsForEdge(edge, source)
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		seen[strings.TrimSpace(field.Name)] = struct{}{}
+	}
+	for _, parameter := range contract.Parameters {
+		name := strings.TrimSpace(parameter.Key)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		fields = append(fields, workflow.OutputField{Name: name, Description: parameter.Description})
+		seen[name] = struct{}{}
+	}
+	for index := range fields {
+		if parameter, exists := parameterByKey(contract.Parameters, fields[index].Name); exists {
+			fields[index].Description = parameter.Description
+		}
+	}
+	return fields
 }
 
 func manualMovePriorParameterDescription(
