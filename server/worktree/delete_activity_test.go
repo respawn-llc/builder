@@ -439,6 +439,38 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 	}
 }
 
+func TestDeleteWorktreeScheduledCurrentTargetForceDeletesBranch(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-scheduled-force-branch")
+	if err := os.WriteFile(filepath.Join(target.CanonicalRoot, "unmerged.txt"), []byte("unmerged"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGit(t, target.CanonicalRoot, "add", "unmerged.txt")
+	runGit(t, target.CanonicalRoot, "commit", "-m", "unmerged branch change")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+
+	request := worktreeDeleteRequest(env, target.WorktreeID)
+	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	result, err := env.service.DeleteWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindScheduled {
+		t.Fatalf("DeleteWorktree result = %+v, want scheduled", result)
+	}
+	outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
+	if outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("scheduled delete outcome = %+v, want completed", outcome)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, target.BranchName); err != nil || exists {
+		t.Fatalf("force-deleted branch exists=%v err=%v", exists, err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, target.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("scheduled target metadata = %v, want sql.ErrNoRows", err)
+	}
+	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
+}
+
 func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testing.T) {
 	tests := []struct {
 		name              string

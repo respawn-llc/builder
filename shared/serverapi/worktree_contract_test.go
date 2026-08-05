@@ -305,6 +305,7 @@ func TestWorktreeDeleteResultAndCleanupPoliciesAreDiscriminated(t *testing.T) {
 		WorktreeBranchCleanupModeRetain,
 		WorktreeBranchCleanupModeAutoIfKentCreated,
 		WorktreeBranchCleanupModeDeleteSafe,
+		WorktreeBranchCleanupModeDeleteForce,
 	} {
 		if err := policy.Validate(); err != nil {
 			t.Fatalf("cleanup policy %q rejected: %v", policy, err)

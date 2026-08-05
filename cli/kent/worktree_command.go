@@ -293,12 +293,17 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	sessionFlag := fs.String("session", "", "session to use; required outside Kent shell commands")
 	force := fs.Bool("force", false, "authorize forced Git worktree folder removal when dirty or indeterminate")
 	deleteBranch := fs.Bool("delete-branch", false, "safely delete the local branch after removing the worktree")
+	forceDeleteBranch := fs.Bool("force-delete-branch", false, "force-delete the local branch; requires --delete-branch")
 	jsonOut := fs.Bool("json", false, "write the delete result as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
 	if len(fs.Args()) != 1 {
 		fmt.Fprintln(stderr, "worktree delete requires exactly one selector")
+		return 2
+	}
+	if *forceDeleteBranch && !*deleteBranch {
+		fmt.Fprintln(stderr, "--force-delete-branch requires --delete-branch")
 		return 2
 	}
 	sessionID, err := resolveWorktreeCommandSession(*sessionFlag)
@@ -316,7 +321,9 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return 2
 	}
 	policy := serverapi.WorktreeBranchCleanupModeRetain
-	if *deleteBranch {
+	if *forceDeleteBranch {
+		policy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	} else if *deleteBranch {
 		policy = serverapi.WorktreeBranchCleanupModeDeleteSafe
 	}
 	return withWorktreeCommandRemote(stderr, sessionID, func(remote worktreeCommandRemote) int {
