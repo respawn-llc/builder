@@ -288,6 +288,15 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
 	})
 
+	t.Run("valid prior transition commentary placeholder passes without declared parameter", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.commentary}}."
+
+		result := validateForTask(def)
+
+		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
+	})
+
 	t.Run("legacy prior node placeholder is unsupported even when the node is guaranteed prior", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Nodes.implementation.summary}}."

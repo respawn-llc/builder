@@ -222,6 +222,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		target.Node,
 		currentSource,
 		prepared.OutputValues,
+		prepared.Commentary,
 		currentNodeReferenceBranchKey(currentSource.Reference),
 	)
 	if err != nil {
@@ -609,6 +610,7 @@ func materializeCompletionTargetCurrentNode(
 	target workflow.Node,
 	currentSource workflow.CurrentNode,
 	outputValues map[string]string,
+	commentary string,
 	transitionBranchKey *workflow.TransitionBranchKey,
 ) (workflow.CurrentNode, error) {
 	wiring := workflow.DeriveWiring(definition)
@@ -627,6 +629,9 @@ func materializeCompletionTargetCurrentNode(
 		if transitionKey == sourceTransitionKey &&
 			sourceTransitionKey != "" &&
 			(providerNode == sourceKey || source.Kind() == workflow.NodeKindJoin) {
+			if outputName == workflow.RuntimePromptParameterCommentary {
+				return commentary, true
+			}
 			if resolved, exists := outputValues[outputName]; exists {
 				return resolved, true
 			}
@@ -650,7 +655,7 @@ func materializeCompletionTargetCurrentNode(
 		}
 		return "", false
 	}
-	return materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
+	targetCurrentNode, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
 		Definition:           definition,
 		Edge:                 edge,
 		Source:               source,
@@ -661,6 +666,14 @@ func materializeCompletionTargetCurrentNode(
 		Value:                value,
 		TransitionBranchKey:  transitionBranchKey,
 	})
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	if targetCurrentNode.CurrentInputValues == nil {
+		targetCurrentNode.CurrentInputValues = make(map[string]string)
+	}
+	targetCurrentNode.CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
+	return targetCurrentNode, nil
 }
 
 func transitionTargetInputProviderNodeKey(

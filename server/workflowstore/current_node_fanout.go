@@ -50,6 +50,7 @@ func completeCurrentNodeFanout(
 			target.Node,
 			currentSource,
 			outputValues,
+			commentary,
 			&branchKey,
 		)
 		if err != nil {

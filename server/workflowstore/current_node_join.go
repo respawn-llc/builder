@@ -90,6 +90,7 @@ func completeCurrentNodeJoinArrival(
 		target.Node,
 		joinSource,
 		joinValues,
+		"",
 		nil,
 	)
 	if err != nil {

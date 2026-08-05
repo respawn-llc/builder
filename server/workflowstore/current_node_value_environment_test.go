@@ -69,6 +69,66 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorTransitionParameter
 	}
 }
 
+func TestCompleteCurrentNodeMaterializesCurrentAndPriorTransitionCommentary(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-review-"+workflowID.String()),
+		).PromptTemplate = "Review {{.Params.commentary}}."
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-audit-"+workflowID.String()),
+		).PromptTemplate = "Audit {{.Params.review.commentary}}."
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+		Commentary:   "plan handoff",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode plan: %v", err)
+	}
+	review := reviewResult.Mutation.Created[0]
+	if review.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review current inputs = %+v, want direct commentary", review.CurrentInputValues)
+	}
+	if review.PriorValues.TransitionParameters["review"][workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review prior Transition values = %+v, want review commentary", review.PriorValues)
+	}
+	reviewStart, err := store.ResolveCurrentNodeStartContext(ctx, review.Reference)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext review: %v", err)
+	}
+	if reviewStart.ParameterValues[workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review start parameters = %+v, want direct commentary", reviewStart.ParameterValues)
+	}
+
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Reference,
+		TransitionID: "audit",
+		Commentary:   "review handoff",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review: %v", err)
+	}
+	audit := auditResult.Mutation.Created[0]
+	if audit.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "review handoff" {
+		t.Fatalf("audit current inputs = %+v, want direct commentary", audit.CurrentInputValues)
+	}
+	if audit.PriorValues.TransitionParameters["review"][workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("audit prior Transition values = %+v, want review commentary", audit.PriorValues)
+	}
+}
+
 func TestCompleteCurrentNodeRecoversEnteringTransitionParameterFromCurrentInput(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
@@ -238,7 +298,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 			t,
 			req.Edges,
 			workflow.EdgeID("edge-join-synth-"+workflowID.String()),
-		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}}."
+		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}} and {{.Params.split.commentary}}."
 		for index := range req.TransitionGroups {
 			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(synth) {
 				req.TransitionGroups[index].TransitionID = "audit"
@@ -251,7 +311,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 			}
 			req.Edges[index].Key = "audit"
 			req.Edges[index].TargetNodeID = auditID
-			req.Edges[index].PromptTemplate = "Audit {{.Params.synthesize.joined}} from {{.Params.split.summary}}."
+			req.Edges[index].PromptTemplate = "Audit {{.Params.synthesize.joined}} from {{.Params.split.summary}} and {{.Params.split.commentary}}."
 		}
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           auditGroupID,
@@ -277,6 +337,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		Source:       plan.Reference,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "approved plan"},
+		Commentary:   "implementation handoff",
 	})
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode split: %v", err)
@@ -310,6 +371,9 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 	if synth.PriorValues.TransitionParameters["split"]["summary"] != "approved plan" {
 		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split output retained across join", synth.PriorValues)
 	}
+	if synth.PriorValues.TransitionParameters["split"][workflow.RuntimePromptParameterCommentary] != "implementation handoff" {
+		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split commentary retained across join", synth.PriorValues)
+	}
 	if synth.PriorValues.TransitionParameters["synthesize"]["joined"] != "joined implementation" {
 		t.Fatalf("synth prior parameter values = %+v, want join transition output under synthesize namespace", synth.PriorValues)
 	}
@@ -323,6 +387,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 	}
 	if len(auditResult.Mutation.Created) != 1 ||
 		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["split"]["summary"] != "approved plan" ||
+		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["split"][workflow.RuntimePromptParameterCommentary] != "implementation handoff" ||
 		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["synthesize"]["joined"] != "joined implementation" {
 		t.Fatalf("audit current node = %+v, want propagated pre-fanout and join transition outputs", auditResult.Mutation.Created)
 	}

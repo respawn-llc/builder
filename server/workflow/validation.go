@@ -889,6 +889,8 @@ func (s *validationState) validatePriorParameterReference(edge Edge, param Promp
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but more than one %q transition can run before %s. Give the producing transitions distinct keys and reference one.",
 			consumer, parameterKey, transitionKey, transitionKey, consumer), ref)
+	case parameterKey == RuntimePromptParameterCommentary:
+		return
 	case !s.transitionGroupParameterSet(resolution.guaranteed[0].ID, derived)[parameterKey]:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but transition %q does not declare a %q parameter.",
