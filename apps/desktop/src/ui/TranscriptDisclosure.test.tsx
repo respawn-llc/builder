@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TranscriptDisclosure, type TranscriptDisclosureIconTone } from "./index";
+import {
+  transcriptDisclosureIconToneClassName,
+  type TranscriptDisclosureIconTone,
+} from "./TranscriptDisclosureTone";
+import { TranscriptDisclosure } from "./index";
 
 type FixtureProps = Readonly<{
   actions?: ReactNode;
@@ -129,11 +133,9 @@ describe("TranscriptDisclosure", () => {
   });
 
   it.each(["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[])(
-    "accepts the %s leading icon tone",
+    "maps the %s leading icon tone to its semantic presentation class",
     (iconTone) => {
-      renderDisclosure({ iconTone });
-
-      expect(screen.getByRole("button", { name: "Expand transcript item" })).toBeInTheDocument();
+      expect(transcriptDisclosureIconToneClassName(iconTone)).toBe(`transcript-disclosure-icon--${iconTone}`);
     },
   );
 
@@ -147,9 +149,9 @@ describe("TranscriptDisclosure", () => {
 
     await user.click(header);
 
-    const body = screen.getByText("Full transcript content");
+    const body = screen.getByRole("region");
     expect(header).toHaveAttribute("aria-expanded", "true");
-    expect(body).not.toHaveAttribute("aria-hidden", "true");
+    expect(body).toHaveAttribute("id", header.getAttribute("aria-controls"));
   });
 
   it("retains the body during close motion and removes it after the shared exit duration", () => {
@@ -159,7 +161,7 @@ describe("TranscriptDisclosure", () => {
     const disclosure = screen.getByRole("button", { name: "Collapse transcript item" });
     fireEvent.click(disclosure);
 
-    const body = screen.getByText("Full transcript content");
+    const body = screen.getByRole("region", { hidden: true });
     expect(body).toHaveAttribute("aria-hidden", "true");
 
     act(() => {
@@ -209,29 +211,32 @@ describe("TranscriptDisclosure", () => {
 
   it("removes the body immediately when reduced motion is requested", async () => {
     const originalMatchMedia = window.matchMedia;
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: vi.fn((query: string) => ({
-        matches: query === "(prefers-reduced-motion: reduce)",
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    });
-    const user = userEvent.setup();
-    renderDisclosure({ defaultExpanded: true });
+    try {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: vi.fn((query: string) => ({
+          matches: query === "(prefers-reduced-motion: reduce)",
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      });
+      const user = userEvent.setup();
+      renderDisclosure({ defaultExpanded: true });
 
-    await user.click(screen.getByRole("button", { name: "Collapse transcript item" }));
+      await user.click(screen.getByRole("button", { name: "Collapse transcript item" }));
 
-    expect(screen.queryByText("Full transcript content")).not.toBeInTheDocument();
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: originalMatchMedia,
-    });
+      expect(screen.queryByText("Full transcript content")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
   });
 
   it("renders the compact identity in both collapsed and expanded states", async () => {

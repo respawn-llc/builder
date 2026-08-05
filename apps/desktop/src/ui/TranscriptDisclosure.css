@@ -2,6 +2,22 @@
   transition: background-color var(--motion-fast);
 }
 
+.transcript-disclosure-icon--neutral {
+  color: var(--color-muted);
+}
+
+.transcript-disclosure-icon--warning {
+  color: var(--color-warning);
+}
+
+.transcript-disclosure-icon--error {
+  color: var(--color-error);
+}
+
+.transcript-disclosure-icon--success {
+  color: var(--color-success);
+}
+
 .transcript-disclosure-body {
   transition:
     grid-template-rows var(--motion-fast),
