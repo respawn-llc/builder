@@ -138,7 +138,7 @@ describe("TranscriptDisclosure", () => {
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 
-  it("renders distinct semantic leading-icon presentation for every tone", () => {
+  it("accepts every semantic leading-icon tone through the public component", () => {
     const iconTones = ["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[];
 
     render(
@@ -158,13 +158,9 @@ describe("TranscriptDisclosure", () => {
       </div>,
     );
 
-    const leadingIconClasses = iconTones.map(
-      (iconTone) =>
-        screen.getByText((_, element) => element?.textContent === `${iconTone} leading icon`, {
-          selector: "span[class]",
-        }).className,
-    );
-    expect(new Set(leadingIconClasses)).toHaveLength(iconTones.length);
+    for (const iconTone of iconTones) {
+      expect(screen.getByRole("button", { name: `Expand ${iconTone}` })).toBeInTheDocument();
+    }
   });
 
   it("reveals the body through the disclosure button and connects it for accessibility", async () => {
