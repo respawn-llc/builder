@@ -842,6 +842,10 @@ func (e *Engine) emitRaw(evt Event) error {
 	if err != nil {
 		return err
 	}
+	return e.emitRawAtRevision(evt, revision)
+}
+
+func (e *Engine) emitRawAtRevision(evt Event, revision int64) error {
 	evt.TranscriptRevision = revision
 	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
 	if !carriesCommittedRange {

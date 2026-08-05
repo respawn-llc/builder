@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
@@ -38,6 +39,8 @@ type steeringItem struct {
 	committedAssistant          *steeringCommittedAssistantMessage
 	completedResponseResolution *steeringCompletedResponseResolution
 	localEntry                  *steeringLocalEntry
+	reviewerFeedback            *steeringReviewerFeedback
+	reviewerError               *steeringReviewerError
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
 	queuedFlush                 *steeringQueuedUserMessageFlush
@@ -78,6 +81,15 @@ type steeringGoalNoticeAndStatus struct {
 type steeringLocalEntry struct {
 	entry                  storedLocalEntry
 	reasoningTraceIdentity *TranscriptReasoningTraceIdentity
+}
+
+type steeringReviewerFeedback struct {
+	suggestions []string
+	visibility  transcript.EntryVisibility
+}
+
+type steeringReviewerError struct {
+	detail string
 }
 
 type steeringCommittedAssistantMessage struct {
@@ -234,6 +246,16 @@ func steerReasoningLocalEntryIntent(entry storedLocalEntry, identity TranscriptR
 			reasoningTraceIdentity: &identity,
 		}}},
 	}
+}
+
+func steerReviewerFeedbackIntent(suggestions []string, visibility transcript.EntryVisibility) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerFeedback: &steeringReviewerFeedback{
+		suggestions: append([]string(nil), suggestions...), visibility: visibility,
+	}}}}
+}
+
+func steerReviewerErrorIntent(detail string) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{detail: detail}}}}
 }
 
 func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer string, items []llm.ResponseItem) steeringIntent {
@@ -611,6 +633,44 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		item.recordCommitReceipt(receipt)
 		return err
 	}
+	if item.reviewerFeedback != nil {
+		id := runtimeids.NewReviewerFeedbackID()
+		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(item.reviewerFeedback.visibility)
+		if visibilityErr != nil {
+			return visibilityErr
+		}
+		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), item.reviewerFeedback.suggestions...), Visibility: visibility}
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		item.recordCommitReceipt(receipt)
+		if receipt.Committed {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID, &provenance)
+			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+		}
+		return err
+	}
+	if item.reviewerError != nil {
+		id := runtimeids.NewReviewerErrorID()
+		record := session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		item.recordCommitReceipt(receipt)
+		if receipt.Committed {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerErrorChatEntryFromSessionRecord(record, stepID, &provenance)
+			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+		}
+		return err
+	}
 	if item.historyReplace != nil {
 		receipt, err := e.replaceHistoryRaw(stepID, *item.historyReplace)
 		item.recordCommitReceipt(receipt)
@@ -654,11 +714,23 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if evt.StepID == "" {
 			evt.StepID = stepID
 		}
-		switch evt.Kind {
-		case EventReviewerStarted:
+		if evt.Kind == EventReviewerStarted {
+			revision, err := e.TranscriptRevision()
+			if err != nil {
+				return err
+			}
 			e.reviewerRuntimeState().SetActiveStep(evt.StepID)
-		case EventReviewerCompleted:
+			return e.emitRawAtRevision(evt, revision)
+		}
+		if evt.Kind == EventReviewerCompleted {
 			e.reviewerRuntimeState().ClearActiveStep(evt.StepID)
+			revision, err := e.TranscriptRevision()
+			if err != nil {
+				return err
+			}
+			return e.emitRawAtRevision(evt, revision)
+		}
+		switch evt.Kind {
 		case EventCompactionStarted:
 			if evt.Compaction != nil {
 				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)

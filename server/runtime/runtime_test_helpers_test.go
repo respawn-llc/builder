@@ -419,6 +419,10 @@ func appendTestEvent(
 			return session.EventRecord{}, session.CommitReceipt{}, err
 		}
 		record = adapted
+	case session.ReviewerFeedbackRecord:
+		record = value
+	case session.ReviewerErrorRecord:
+		record = value
 	case map[string]any:
 		body, err := json.Marshal(value)
 		if err != nil {

@@ -178,7 +178,7 @@ Configure the supervisor agent that oversees model changes ("reviewer" is the le
 | `reviewer.model_context_window` | int | inherits `model_context_window` | `KENT_REVIEWER_MODEL_CONTEXT_WINDOW` | Explicit reviewer context-window size sent to the reviewer provider. The effective value must be at least `40000`. |
 | `reviewer.system_prompt_file` | string | `""` |  | Path to a custom supervisor system prompt file. Relative paths resolve from the config file directory. Workspace config overrides global config; |
 | `reviewer.timeout_seconds` | int | `120` | `KENT_REVIEWER_TIMEOUT_SECONDS` | Reviewer HTTP timeout. Must be `> 0`. |
-| `reviewer.verbose_output` | bool | `false` | `KENT_REVIEWER_VERBOSE_OUTPUT` | Controls whether reviewer suggestion text is shown at all. When `false`, Kent only shows the concise reviewer result/status line. When `true`, Kent shows the full suggestion list at the moment the reviewer issues it, and the later reviewer status stays concise after the follow-up is applied or ignored. |
+| `reviewer.verbose_output` | bool | `false` | `KENT_REVIEWER_VERBOSE_OUTPUT` | Controls only whether the TUI initially expands Reviewer feedback. It never controls row existence or Desktop presentation. |
 
 
 

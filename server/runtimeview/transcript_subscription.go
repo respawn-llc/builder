@@ -723,6 +723,27 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 	case runtime.TranscriptCommittedRowFactNotice:
 		row.Kind = clientui.TranscriptRowNotice
 		row.Notice = transcriptNoticeFromFact(fact.StepID, fact.Notice)
+	case runtime.TranscriptCommittedRowFactReviewerFeedback:
+		if fact.ReviewerFeedback == nil {
+			panic("runtime transcript Reviewer feedback row fact is missing its payload")
+		}
+		row.Kind = clientui.TranscriptRowReviewerFeedback
+		row.ReviewerFeedback = &clientui.TranscriptReviewerFeedbackRow{
+			ID:              fact.ReviewerFeedback.ID,
+			StepID:          mustTranscriptStepID(fact.StepID, "committed Reviewer feedback row"),
+			Suggestions:     append([]string(nil), fact.ReviewerFeedback.Suggestions...),
+			SuggestionCount: fact.ReviewerFeedback.SuggestionCount,
+		}
+	case runtime.TranscriptCommittedRowFactReviewerError:
+		if fact.ReviewerError == nil {
+			panic("runtime transcript Reviewer error row fact is missing its payload")
+		}
+		row.Kind = clientui.TranscriptRowReviewerError
+		row.ReviewerError = &clientui.TranscriptReviewerErrorRow{
+			ID:     fact.ReviewerError.ID,
+			StepID: mustTranscriptStepID(fact.StepID, "committed Reviewer error row"),
+			Detail: fact.ReviewerError.Detail,
+		}
 	default:
 		panic(fmt.Sprintf("runtime transcript row fact has unknown kind %q", fact.Kind))
 	}
