@@ -62,6 +62,32 @@ describe("application chrome Search", () => {
     expect(within(navigation).getByTestId("app-chrome-search")).toBeInTheDocument();
   });
 
+  it("uses macOS navigation order for a Mac-hosted browser client", async () => {
+    const originalPlatform = window.navigator.platform;
+    Object.defineProperty(window.navigator, "platform", {
+      configurable: true,
+      value: "MacIntel",
+    });
+    try {
+      const services = createTestServices(startupRoutes);
+      render(<AppRoot services={services} />);
+      await waitFor(() => {
+        expect(screen.getByTestId("home-route-root")).toBeInTheDocument();
+      });
+
+      const controls = within(screen.getByTestId("app-chrome-navigation")).getAllByTestId(
+        /app-chrome-(search|home)/,
+      );
+      expect(controls[0]).toHaveAttribute("data-testid", "app-chrome-home");
+      expect(controls.at(-1)).toHaveAttribute("data-testid", "app-chrome-search");
+    } finally {
+      Object.defineProperty(window.navigator, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
   it("keeps Search adjacent to visible history when an update is available", async () => {
     const browserBridge = createBrowserNativeBridge({ platform: "linux" });
     const nativeBridge = {

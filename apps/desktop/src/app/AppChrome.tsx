@@ -14,6 +14,7 @@ import {
   appChromeTopTreatmentForPlatform,
   appChromeTitleClassNames,
   appChromeTitlePlacementClassNames,
+  appChromeUsesMacOSLayout,
 } from "./appChromeStyles";
 import { useAppNavigation, useNavigationStackState } from "@/app-facade";
 import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
@@ -33,7 +34,7 @@ export function AppChrome({ children }: AppChromeProps) {
   const { debugThemeOverrideEnabled, logger, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const stack = useNavigationStackState();
-  const macOS = nativeBridge.capabilities.platform === "macos";
+  const macOS = appChromeUsesMacOSLayout(nativeBridge.capabilities.platform);
   const topTreatment = appChromeTopTreatmentForPlatform(nativeBridge.capabilities.platform);
   const title = useCurrentWindowChromeTitle();
   const update = useDesktopUpdate(nativeBridge, logger);
