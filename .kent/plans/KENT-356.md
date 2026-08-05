@@ -723,4 +723,7 @@
   Workflow Editor transitions remain owned by their existing typed route
   owners.
   Progress (August 5, 2026): The stale-sidebar QA finding is remediated in the
-  current round; focused route-change and sidebar navigation tests pass.
+  current round; focused route-change and sidebar navigation tests pass. Final
+  verification passed with frozen Apps install, full Apps lint (0 errors; 4
+  existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
+  374 tests), and `./scripts/build.sh desktop`.
