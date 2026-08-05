@@ -12,8 +12,10 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	sessionruntime "core/server/sessionruntime"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -79,6 +81,7 @@ type realSessionRetargetFixture struct {
 	parent              *session.Store
 	child               *session.Store
 	childID             runtimeids.SessionID
+	managedBase         string
 	targetWorkspaceRoot string
 	authority           *sessionruntime.Authority
 	publisher           retargetIdentityPublisher
@@ -95,11 +98,24 @@ func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realS
 		t.Fatalf("metadata.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = metadataStore.Close() })
-	sourceBinding, err := metadataStore.RegisterWorkspaceBinding(ctx, t.TempDir())
+	managedBase := t.TempDir()
+	sourceRoot := filepath.Join(managedBase, "source")
+	targetRoot := filepath.Join(managedBase, "target")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll source: %v", err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll target: %v", err)
+	}
+	retargetRoot := filepath.Join(managedBase, "retarget")
+	if err := os.MkdirAll(retargetRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll retarget: %v", err)
+	}
+	sourceBinding, err := metadataStore.RegisterWorkspaceBinding(ctx, sourceRoot)
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding source: %v", err)
 	}
-	targetProject, err := metadataStore.CreateProjectForWorkspace(ctx, t.TempDir(), "Target")
+	targetProject, err := metadataStore.CreateProjectForWorkspace(ctx, targetRoot, "Target")
 	if err != nil {
 		t.Fatalf("CreateProjectForWorkspace target: %v", err)
 	}
@@ -159,7 +175,8 @@ func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realS
 		parent:              parent,
 		child:               child,
 		childID:             childID,
-		targetWorkspaceRoot: t.TempDir(),
+		managedBase:         managedBase,
+		targetWorkspaceRoot: retargetRoot,
 		authority:           authority,
 		publisher:           make(retargetIdentityPublisher),
 		storeOptions:        storeOptions,
@@ -179,8 +196,18 @@ func (f realSessionRetargetFixture) openRuntime(t *testing.T) {
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
 			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
-		Workdir: f.sourceBinding.CanonicalRoot,
-		Client:  retargetRuntimeClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(f.sourceBinding.CanonicalRoot, f.sourceBinding.CanonicalRoot, tools.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			context.ManagedWorktree, err = tools.NewManagedWorktreePathContext(f.managedBase, &f.sourceBinding.CanonicalRoot)
+			if err != nil {
+				t.Fatalf("NewManagedWorktreePathContext: %v", err)
+			}
+			return context
+		}(),
+		Client: retargetRuntimeClient{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
@@ -315,6 +342,16 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	}
 	if workdir := fixture.runtimeWorkdir(t); workdir != result.Binding.CanonicalRoot {
 		t.Fatalf("runtime workdir = %q, want %q", workdir, result.Binding.CanonicalRoot)
+	}
+	var foreign bool
+	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		foreign = maintenance.PreviousFilesystemContext.ManagedWorktree.IsForeignManagedWorktreePath(result.Binding.CanonicalRoot, result.Binding.CanonicalRoot)
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect retargeted filesystem context: %v", err)
+	}
+	if !foreign {
+		t.Fatal("retargeted Workspace was not protected by managed-worktree policy")
 	}
 }
 

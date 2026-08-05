@@ -94,11 +94,10 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolPatch},
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{Client: client},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: client},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -113,6 +112,15 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 }
 
 var runtimeWireTestSessionPersistence = sessiontest.NewPersistence()
+
+func runtimeWireFilesystemContext(t *testing.T, root string) tools.FilesystemContext {
+	t.Helper()
+	context, err := NewFilesystemContext(root, root, tools.ProjectWorkspaceBoundary{})
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	return context
+}
 
 func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *testing.T) {
 	workspace := t.TempDir()
@@ -317,7 +325,7 @@ func TestRuntimewireGeneratedPolicyPreservedAcrossWorkspaceRebind(t *testing.T) 
 		t.Fatalf("mkdir generated root: %v", err)
 	}
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       t.TempDir(),
+		FilesystemContext:   localToolFilesystemContext(t, t.TempDir()),
 		Enabled:             []toolspec.ID{toolspec.ToolPatch},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -327,7 +335,7 @@ func TestRuntimewireGeneratedPolicyPreservedAcrossWorkspaceRebind(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new local tool registry binding: %v", err)
 	}
-	if err := binding.Rebind(t.TempDir()); err != nil {
+	if err := binding.ReplaceFilesystemContext(localToolFilesystemContext(t, t.TempDir())); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
@@ -403,11 +411,30 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootA) {
 		t.Fatalf("pwd before rebind = %q, want %q", got, canonicalPathForTest(t, rootA))
 	}
-	if err := binding.Rebind(rootB); err != nil {
+	if err := binding.ReplaceFilesystemContext(localToolFilesystemContext(t, rootB)); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
 		t.Fatalf("pwd after rebind = %q, want %q", got, canonicalPathForTest(t, rootB))
+	}
+}
+
+func TestLocalToolRegistryBindingReplacesCompleteFilesystemContext(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	binding := newRuntimeWireBinding(t, rootA, toolspec.ToolExecCommand)
+	next := localToolFilesystemContext(t, rootB)
+	if err := binding.ReplaceFilesystemContext(next); err != nil {
+		t.Fatalf("ReplaceFilesystemContext: %v", err)
+	}
+	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
+		t.Fatalf("pwd after context replacement = %q, want %q", got, canonicalPathForTest(t, rootB))
+	}
+	if err := binding.ReplaceFilesystemContext(tools.FilesystemContext{}); err == nil {
+		t.Fatal("ReplaceFilesystemContext accepted an invalid context")
+	}
+	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
+		t.Fatalf("pwd after rejected replacement = %q, want %q", got, canonicalPathForTest(t, rootB))
 	}
 }
 
@@ -423,7 +450,7 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 	t.Cleanup(func() { _ = manager.Close() })
 
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       workspace,
+		FilesystemContext:   localToolFilesystemContext(t, workspace),
 		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
 		MinimumExecToBgTime: 50 * time.Millisecond,
 		ShellOutputMaxChars: 16_000,
@@ -563,11 +590,10 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolExecCommand},
-		root,
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{Client: &runtimewireCaptureClient{}},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -601,11 +627,10 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolExecCommand},
-		rootA,
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{Client: &runtimewireCaptureClient{}},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, rootA), Client: &runtimewireCaptureClient{}},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -614,7 +639,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf original"); got != effectiveHook {
 		t.Fatalf("effective hook output = %q, want %q", got, effectiveHook)
 	}
-	if err := wiring.LocalTools.Rebind(rootB); err != nil {
+	if err := wiring.LocalTools.ReplaceFilesystemContext(localToolFilesystemContext(t, rootB)); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf rebound"); got != effectiveHook {
@@ -712,7 +737,7 @@ func callRuntimeWireExec(t *testing.T, registry *tools.Registry, command string)
 
 func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	_, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       "   ",
+		FilesystemContext:   tools.FilesystemContext{},
 		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -723,11 +748,46 @@ func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func localToolFilesystemContext(t testing.TB, root string) tools.FilesystemContext {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve filesystem root: %v", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		t.Fatalf("stat filesystem root: %v", err)
+	}
+	filesystemRoot := tools.FilesystemRoot{LexicalPath: root, RealPath: real, Info: info}
+	return tools.FilesystemContext{
+		Access: tools.FileAccessScope{
+			WorkingDirectory:    filesystemRoot,
+			ExecutionTargetRoot: filesystemRoot,
+		},
+	}
+}
+
+func TestNewFilesystemContextValidatesNamedRoots(t *testing.T) {
+	t.Parallel()
+	executionRoot := t.TempDir()
+	workingDirectory := filepath.Join(executionRoot, "nested")
+	if err := os.Mkdir(workingDirectory, 0o755); err != nil {
+		t.Fatalf("Mkdir working directory: %v", err)
+	}
+	boundary := tools.ProjectWorkspaceBoundary{Roots: []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: filepath.Join(t.TempDir(), "missing-secondary")}}}}
+	if context, err := NewFilesystemContext(workingDirectory, executionRoot, boundary); err != nil || len(context.Access.ProjectWorkspace.Roots) != 1 {
+		t.Fatalf("optional root = %+v, error=%v", context, err)
+	}
+	if _, err := NewFilesystemContext(filepath.Join(t.TempDir(), "outside"), executionRoot, tools.ProjectWorkspaceBoundary{}); err == nil {
+		t.Fatal("accepted working directory outside execution target root")
+	}
+}
+
 func TestLocalToolRegistryBindingRebindRejectsEmptyWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
 	binding := newRuntimeWireBinding(t, root, toolspec.ToolExecCommand)
-	if err := binding.Rebind("   "); !errors.Is(err, errWorkspaceRootRequired) {
-		t.Fatalf("rebind error = %v, want errWorkspaceRootRequired", err)
+	if err := binding.ReplaceFilesystemContext(tools.FilesystemContext{}); !errors.Is(err, errWorkspaceRootRequired) {
+		t.Fatalf("context replacement error = %v, want errWorkspaceRootRequired", err)
 	}
 }
 
@@ -752,11 +812,10 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		[]toolspec.ID{toolspec.ToolExecCommand},
-		root,
 		auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil),
 		nil,
 		nil,
-		RuntimeWiringOptions{},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root)},
 	)
 	if !errors.Is(err, runtime.ErrModelRequired) {
 		t.Fatalf("expected runtime.ErrModelRequired, got %v", err)
@@ -844,7 +903,7 @@ func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...tools
 func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Logger, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       workspace,
+		FilesystemContext:   localToolFilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -860,7 +919,7 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, configRoot string, allowNonCwdEdits bool, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       workspace,
+		FilesystemContext:   localToolFilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -877,7 +936,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.ID) *LocalToolRegistryBinding {
 	t.Helper()
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:       workspace,
+		FilesystemContext:   localToolFilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,

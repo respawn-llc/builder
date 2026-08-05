@@ -61,6 +61,19 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 	return next, nil
 }
 
+func (c *ManagedWorktreePathContext) Equal(other *ManagedWorktreePathContext) bool {
+	if c == nil || other == nil {
+		return c == other
+	}
+	if c.baseRoot != other.baseRoot {
+		return false
+	}
+	if c.currentRoot == nil || other.currentRoot == nil {
+		return c.currentRoot == nil && other.currentRoot == nil
+	}
+	return *c.currentRoot == *other.currentRoot
+}
+
 func pathWithin(root string, path string) bool {
 	rootIdentity, err := config.CanonicalLexicalPathIdentity(root)
 	if err != nil {

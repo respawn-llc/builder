@@ -2942,12 +2942,21 @@ SELECT
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
     CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
-    COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms
+    COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms,
+    w.created_at_unix_ms AS attached_at_unix_ms,
+    w.id AS workspace_order_id
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id
 LEFT JOIN sessions s ON s.workspace_id = w.id AND s.launch_visible <> 0
+JOIN (
+    SELECT recent.id
+    FROM workspaces recent
+    WHERE recent.project_id = sqlc.arg(project_id)
+    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
+    LIMIT 500
+) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = sqlc.arg(project_id)
-GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms
+GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms, w.created_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, latest_activity_unix_ms DESC, w.created_at_unix_ms ASC, w.rowid ASC;
 
 -- name: ListProjectWorkspacesPage :many
@@ -2960,6 +2969,13 @@ SELECT
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id
 LEFT JOIN sessions s ON s.workspace_id = w.id AND s.launch_visible <> 0
+JOIN (
+    SELECT recent.id
+    FROM workspaces recent
+    WHERE recent.project_id = sqlc.arg(project_id)
+    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
+    LIMIT 500
+) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = sqlc.arg(project_id)
 GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.created_at_unix_ms DESC, w.rowid DESC

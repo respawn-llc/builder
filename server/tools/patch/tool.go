@@ -19,9 +19,7 @@ type input struct {
 }
 
 type Tool struct {
-	workspaceRoot                string
-	workspaceRootReal            string
-	workspaceRootInfo            os.FileInfo
+	fileAccessScope              tools.FileAccessScope
 	workspaceOnly                bool
 	allowOutsideWorkspace        bool
 	outsideWorkspaceApprover     OutsideWorkspaceApprover
@@ -44,7 +42,13 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 	if err != nil {
 		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("stat workspace root: %w", err))
 	}
-	t := &Tool{workspaceRoot: abs, workspaceRootReal: real, workspaceRootInfo: rootInfo, workspaceOnly: workspaceOnly}
+	t := &Tool{
+		fileAccessScope: tools.FileAccessScope{
+			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+		},
+		workspaceOnly: workspaceOnly,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)

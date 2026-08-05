@@ -9,9 +9,11 @@ import (
 
 	"core/server/launch"
 	"core/server/llm"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -72,7 +74,8 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 			session.WithPersistenceObserver(persistenceGate),
 			session.WithPersistedSessionResolver(persistence),
 		},
-		PersistedSessions: persistence,
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
 	}).WithRuntimeAuthority(authority)
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: config.Settings{
@@ -83,8 +86,14 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 				PostprocessingMode: config.ShellPostprocessingModeNone,
 			},
 		},
-		Workdir: workspace,
-		Client:  sessionLaunchRuntimeClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(workspace, workspace, tools.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: sessionLaunchRuntimeClient{},
 	})
 	if err != nil {
 		t.Fatalf("create runtime plan: %v", err)
@@ -254,7 +263,8 @@ func TestServiceOpenExistingWithoutAuthorityFailsBeforeStoreMutation(t *testing.
 			session.WithPersistenceObserver(persistenceGate),
 			session.WithPersistedSessionResolver(persistence),
 		},
-		PersistedSessions: persistence,
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
 	})
 
 	persisted, releasePersistence := persistenceGate.BlockNext()

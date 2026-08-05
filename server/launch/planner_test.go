@@ -549,10 +549,11 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
 	planner := Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: metadataStore,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        metadataStore,
+		ProjectWorkspaceBoundary: metadataStore,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{

@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"core/server/metadata"
+	"core/server/runtimewire"
 	"core/server/session"
 	sessionruntime "core/server/sessionruntime"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -21,6 +23,8 @@ import (
 type sessionRetargetMetadata interface {
 	PlanSessionWorkspaceRetarget(context.Context, metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetPlan, error)
 	CommitSessionWorkspaceRetarget(context.Context, metadata.SessionWorkspaceRetargetPlan, time.Time) (metadata.SessionWorkspaceRetargetResult, error)
+	ResolveProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error)
+	ProjectWorkspaceAttached(context.Context, string, string) (bool, error)
 }
 
 type sessionIdentityPublisher interface {
@@ -105,6 +109,33 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 		if err := validateSessionArtifactSource(currentPlan.SourceSessionDir); err != nil {
 			return err
 		}
+		var targetFilesystemContext tools.FilesystemContext
+		if activeRuntime != nil {
+			targetBoundary, rootErr := s.metadata.ResolveProjectWorkspaceBoundary(runCtx, currentPlan.TargetProject.ID)
+			if rootErr != nil {
+				return rootErr
+			}
+			attached, rootErr := s.metadata.ProjectWorkspaceAttached(runCtx, currentPlan.TargetProject.ID, currentPlan.TargetWorkspaceRoot)
+			if rootErr != nil {
+				return rootErr
+			}
+			if !attached {
+				targetBoundary, _ = targetBoundary.WithWorkspace(tools.ProjectWorkspaceRoot{
+					FilesystemRoot: tools.FilesystemRoot{LexicalPath: currentPlan.TargetWorkspaceRoot},
+				}, tools.ProjectWorkspaceCollectionLimit)
+			}
+			targetFilesystemContext, rootErr = runtimewire.NewFilesystemContext(currentPlan.TargetWorkspaceRoot, currentPlan.TargetWorkspaceRoot, targetBoundary)
+			if rootErr != nil {
+				return rootErr
+			}
+			previous := activeRuntime.PreviousFilesystemContext
+			if previous.ManagedWorktree != nil {
+				targetFilesystemContext.ManagedWorktree, rootErr = previous.ManagedWorktree.WithCurrentWorktreeRoot(nil)
+				if rootErr != nil {
+					return rootErr
+				}
+			}
+		}
 		if currentPlan.CrossProject() {
 			if err := prepareSessionArtifactTarget(currentPlan.TargetSessionDir); err != nil {
 				return err
@@ -118,7 +149,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 			UpdatedAt:          updatedAt,
 		}, func() error {
 			if activeRuntime != nil {
-				if err := activeRuntime.Rebind(currentPlan.TargetWorkspaceRoot); err != nil {
+				if err := activeRuntime.Replace(targetFilesystemContext); err != nil {
 					return err
 				}
 			}
@@ -128,7 +159,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 					return nil
 				}
 				runtimeRebound = false
-				return activeRuntime.Rebind(activeRuntime.PreviousWorkdir)
+				return activeRuntime.Replace(activeRuntime.PreviousFilesystemContext)
 			}
 			moved := false
 			if currentPlan.CrossProject() {

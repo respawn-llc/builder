@@ -25,8 +25,7 @@ import (
 type AgentRuntimePlanOptions struct {
 	Settings                            config.Settings
 	EnabledTools                        []toolspec.ID
-	Workdir                             string
-	ManagedWorktreePathContext          *tools.ManagedWorktreePathContext
+	FilesystemContext                   tools.FilesystemContext
 	Sources                             map[string]string
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
@@ -49,14 +48,15 @@ type AgentRuntimePlan struct {
 }
 
 func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, error) {
-	options.Workdir = strings.TrimSpace(options.Workdir)
-	if options.Workdir == "" {
-		return AgentRuntimePlan{}, errors.New("agent runtime workdir is required")
+	if strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" {
+		return AgentRuntimePlan{}, errors.New("agent runtime filesystem context is required")
 	}
 	options.Settings = cloneAgentRuntimeSettings(options.Settings)
 	options.EnabledTools = append([]toolspec.ID(nil), options.EnabledTools...)
 	options.Sources = maps.Clone(options.Sources)
 	options.StartLogLines = append([]string(nil), options.StartLogLines...)
+	options.FilesystemContext = options.FilesystemContext.Clone()
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -214,7 +214,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,
 		SkipContinuationAgentRoleValidation: options.SkipContinuationAgentRoleValidation,
 		GlobalConfigDir:                     a.options.persistenceRoot,
-		ManagedWorktreePathContext:          options.ManagedWorktreePathContext,
+		FilesystemContext:                   options.FilesystemContext,
 		StepLifecycle:                       resource,
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
@@ -237,7 +237,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		eventLog,
 		options.Settings,
 		options.EnabledTools,
-		options.Workdir,
 		a.options.authManager,
 		logger,
 		a.options.background,

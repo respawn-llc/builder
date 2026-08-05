@@ -53,8 +53,10 @@
 ## Patch And Image Tools
 
 - `patch` applies atomically: malformed or conflicting patches leave files unchanged. It supports add, update, move, and delete; resolves real paths before validating targets; has no timeout; and is not retried automatically.
-- Outside-workspace edits require approval unless `allow_non_cwd_edits=true`; the default is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
-- `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes are blocked. Outside-workspace image reads use the same approval policy as edits.
+- Edits within the Session's Execution Target Root or any Workspace included in the Session's Project Workspace collection do not require approval. Attached Workspaces omitted by the Project Workspace collection limit use the ordinary approval policy. Other edits require approval unless `allow_non_cwd_edits=true`; the default is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
+- An edit that targets another Kent-managed Worktree is forbidden even when that Worktree belongs to a Workspace attached to the same Project.
+- `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes outside the Session's Execution Target Root and the Workspaces included in the Session's Project Workspace collection remain outside the trusted boundary. Image reads use the same Project boundary and approval policy as edits.
+- A Session Runtime prepares its Project Workspace collection once. Native file tools do not query Project metadata for each target because file operations must not add metadata contention.
 - Approved outside-workspace image reads appear in run logs with the requested and resolved paths.
 - `view_image` opens and reads each local file in an isolated worker. Kent terminates the worker and returns a recoverable tool error when opening or reading takes longer than 10 seconds or the Agent Step is interrupted.
 - When a successful patch cannot accurately describe its whole-file deletion count, Kent never invents a count or reverses the filesystem change. Debug mode fails fast with diagnostics. Production preserves the successful path-only result, records an operator diagnostic excluded from model context, and continues.

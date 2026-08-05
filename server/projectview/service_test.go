@@ -14,8 +14,10 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -1412,8 +1414,14 @@ func newProjectViewRuntimeAuthority(
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  sessionStore.Meta().WorkspaceRoot,
-		Client:   projectViewTestLLMClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			if contextErr != nil {
+				t.Fatalf("NewFilesystemContext: %v", contextErr)
+			}
+			return context
+		}(),
+		Client: projectViewTestLLMClient{},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

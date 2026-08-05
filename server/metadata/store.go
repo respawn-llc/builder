@@ -19,6 +19,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -39,6 +40,10 @@ type Binding struct {
 	WorkspaceName   string
 	WorkspaceStatus string
 }
+
+const ProjectWorkspaceCollectionLimit = tools.ProjectWorkspaceCollectionLimit
+
+type ProjectWorkspaceBoundary = tools.ProjectWorkspaceBoundary
 
 type WorktreeRecord struct {
 	ID                    string
@@ -2100,6 +2105,70 @@ func (s *Store) ResolveSessionNavigationBinding(ctx context.Context, sessionID s
 		return serverapi.SessionNavigationBinding{}, err
 	}
 	return binding, nil
+}
+
+func (s *Store) ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sessionID string) (ProjectWorkspaceBoundary, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return ProjectWorkspaceBoundary{}, err
+	}
+	projectID := strings.TrimSpace(row.ProjectID)
+	if projectID == "" {
+		return ProjectWorkspaceBoundary{}, errors.New("session project id is required")
+	}
+	return s.ResolveProjectWorkspaceBoundary(ctx, projectID)
+}
+
+func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID string) (ProjectWorkspaceBoundary, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return ProjectWorkspaceBoundary{}, errors.New("project id is required")
+	}
+	workspaces, err := s.queries.ListProjectWorkspaces(ctx, projectID)
+	if err != nil {
+		return ProjectWorkspaceBoundary{}, err
+	}
+	slices.SortStableFunc(workspaces, func(left, right sqlitegen.ListProjectWorkspacesRow) int {
+		if left.AttachedAtUnixMs != right.AttachedAtUnixMs {
+			if left.AttachedAtUnixMs > right.AttachedAtUnixMs {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(right.WorkspaceOrderID, left.WorkspaceOrderID)
+	})
+	boundary := ProjectWorkspaceBoundary{
+		ProjectID: projectID,
+		Roots:     make([]tools.ProjectWorkspaceRoot, 0, len(workspaces)),
+	}
+	for _, workspace := range workspaces {
+		root := strings.TrimSpace(workspace.RootPath)
+		if root == "" {
+			return ProjectWorkspaceBoundary{}, fmt.Errorf("project workspace %q has empty root path", workspace.ID)
+		}
+		workspaceID := strings.TrimSpace(workspace.ID)
+		boundary.Roots = append(boundary.Roots, tools.ProjectWorkspaceRoot{
+			WorkspaceID: &workspaceID,
+			FilesystemRoot: tools.FilesystemRoot{
+				LexicalPath: root,
+			},
+		})
+	}
+	return boundary, nil
+}
+
+func (s *Store) ProjectWorkspaceAttached(ctx context.Context, projectID string, root string) (bool, error) {
+	projectID, root = strings.TrimSpace(projectID), strings.TrimSpace(root)
+	if projectID == "" || root == "" {
+		return false, errors.New("project id and workspace root are required")
+	}
+	_, err := s.queries.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{
+		ProjectID: projectID, CanonicalRootPath: root,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) (bool, error) {

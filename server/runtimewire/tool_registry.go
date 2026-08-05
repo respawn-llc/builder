@@ -19,6 +19,7 @@ import (
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -33,8 +34,7 @@ type Logger interface {
 var errWorkspaceRootRequired = errors.New("workspace root is required")
 
 type LocalToolRuntimeContext struct {
-	WorkspaceRoot                   string
-	ManagedWorktreePathContext      *tools.ManagedWorktreePathContext
+	FilesystemContext               tools.FilesystemContext
 	OwnerSessionID                  string
 	ExecutionCorrelation            *runtimeids.ExecutionCorrelation
 	ShellOutputMaxChars             int
@@ -61,10 +61,11 @@ type LocalToolRegistryBinding struct {
 func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext) (tools.Handler, error) {
 	switch def.LocalRuntimeBuilder() {
 	case tools.LocalRuntimeBuilderExecCommand:
+		workingDirectory := ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("exec_command background manager is unavailable")
 		}
-		return shelltool.NewExecCommandToolWithConfig(ctx.WorkspaceRoot, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, shelltool.ExecCommandToolConfig{
+		return shelltool.NewExecCommandToolWithConfig(workingDirectory, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, shelltool.ExecCommandToolConfig{
 			Postprocessor:        ctx.ShellPostprocessor,
 			ExecutionCorrelation: ctx.ExecutionCorrelation,
 		}), nil
@@ -78,24 +79,26 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			return nil, fmt.Errorf("patch outside-workspace approver is unavailable")
 		}
 		return patchtool.New(
-			ctx.WorkspaceRoot,
+			ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath,
 			true,
 			patchtool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			patchtool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			patchtool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
-			patchtool.WithManagedWorktreePathContext(ctx.ManagedWorktreePathContext),
+			patchtool.WithFileAccessScope(ctx.FilesystemContext.Access),
+			patchtool.WithManagedWorktreePathContext(ctx.FilesystemContext.ManagedWorktree),
 		)
 	case tools.LocalRuntimeBuilderEdit:
 		if ctx.OutsideWorkspaceEditApprover == nil {
 			return nil, fmt.Errorf("edit outside-workspace approver is unavailable")
 		}
 		return edittool.New(
-			ctx.WorkspaceRoot,
+			ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath,
 			true,
 			edittool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			edittool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			edittool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
-			edittool.WithManagedWorktreePathContext(ctx.ManagedWorktreePathContext),
+			edittool.WithFileAccessScope(ctx.FilesystemContext.Access),
+			edittool.WithManagedWorktreePathContext(ctx.FilesystemContext.ManagedWorktree),
 		)
 	case tools.LocalRuntimeBuilderAskQuestion:
 		if ctx.AskQuestionBroker == nil {
@@ -116,11 +119,12 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		opts := []readimagetool.Option{
 			readimagetool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			readimagetool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceReadApprover),
+			readimagetool.WithFileAccessScope(ctx.FilesystemContext.Access),
 		}
 		if ctx.ViewImageOutsideWorkspaceLogger != nil {
 			opts = append(opts, readimagetool.WithOutsideWorkspaceAuditLogger(ctx.ViewImageOutsideWorkspaceLogger))
 		}
-		return readimagetool.New(ctx.WorkspaceRoot, ctx.SupportsVision, opts...)
+		return readimagetool.New(ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath, ctx.SupportsVision, opts...)
 	default:
 		return nil, fmt.Errorf("unsupported local runtime builder %q for tool %q", def.LocalRuntimeBuilder(), def.ID)
 	}
@@ -143,51 +147,32 @@ func (b *LocalToolRegistryBinding) Registry() *tools.Registry {
 	return b.registry
 }
 
-func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
-	return b.RebindExecutionTarget(workspaceRoot, nil)
-}
-
-func (b *LocalToolRegistryBinding) RebindExecutionTarget(workspaceRoot string, currentWorktreeRoot *string) error {
+func (b *LocalToolRegistryBinding) ReplaceFilesystemContext(next tools.FilesystemContext) error {
 	if b == nil {
 		return fmt.Errorf("local tool registry binding is required")
 	}
-	trimmedRoot := strings.TrimSpace(workspaceRoot)
-	if trimmedRoot == "" {
+	if strings.TrimSpace(next.Access.WorkingDirectory.LexicalPath) == "" ||
+		strings.TrimSpace(next.Access.ExecutionTargetRoot.LexicalPath) == "" {
 		return errWorkspaceRootRequired
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	managedWorktreePathContext, err := b.ctx.ManagedWorktreePathContext.WithCurrentWorktreeRoot(currentWorktreeRoot)
-	if err != nil {
+	previous := b.ctx.FilesystemContext
+	b.ctx.FilesystemContext = next.Clone()
+	if err := b.rebuildLocked(); err != nil {
+		b.ctx.FilesystemContext = previous
 		return err
 	}
-	b.ctx.WorkspaceRoot = trimmedRoot
-	b.ctx.ManagedWorktreePathContext = managedWorktreePathContext
-	return b.rebuildLocked()
+	return nil
 }
 
-func (b *LocalToolRegistryBinding) ManagedWorktreePathContext() *tools.ManagedWorktreePathContext {
+func (b *LocalToolRegistryBinding) FilesystemContext() tools.FilesystemContext {
 	if b == nil {
-		return nil
+		return tools.FilesystemContext{}
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.ctx.ManagedWorktreePathContext
-}
-
-func (b *LocalToolRegistryBinding) RebindWithManagedWorktreePathContext(workspaceRoot string, managedWorktreePathContext *tools.ManagedWorktreePathContext) error {
-	if b == nil {
-		return fmt.Errorf("local tool registry binding is required")
-	}
-	trimmedRoot := strings.TrimSpace(workspaceRoot)
-	if trimmedRoot == "" {
-		return errWorkspaceRootRequired
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.ctx.WorkspaceRoot = trimmedRoot
-	b.ctx.ManagedWorktreePathContext = managedWorktreePathContext
-	return b.rebuildLocked()
+	return b.ctx.FilesystemContext.Clone()
 }
 
 // BindExecutionCorrelation binds the exact execution scope for subsequently constructed local tool handlers.
@@ -252,27 +237,31 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 }
 
 type LocalToolRegistryOptions struct {
-	WorkspaceRoot              string
-	ManagedWorktreePathContext *tools.ManagedWorktreePathContext
-	OwnerSessionID             string
-	ExecutionCorrelation       *runtimeids.ExecutionCorrelation
-	Enabled                    []toolspec.ID
-	MinimumExecToBgTime        time.Duration
-	ShellOutputMaxChars        int
-	AllowNonCwdEdits           bool
-	SupportsVision             bool
-	Logger                     Logger
-	Background                 *shelltool.Manager
-	ShellPostprocessor         *postprocess.Runner
-	TriggerHandoffController   func() triggerhandofftool.TriggerHandoffController
-	QuestionsEnabledGetter     func() bool
-	GlobalConfigDir            string
+	FilesystemContext        tools.FilesystemContext
+	OwnerSessionID           string
+	ExecutionCorrelation     *runtimeids.ExecutionCorrelation
+	Enabled                  []toolspec.ID
+	MinimumExecToBgTime      time.Duration
+	ShellOutputMaxChars      int
+	AllowNonCwdEdits         bool
+	SupportsVision           bool
+	Logger                   Logger
+	Background               *shelltool.Manager
+	ShellPostprocessor       *postprocess.Runner
+	TriggerHandoffController func() triggerhandofftool.TriggerHandoffController
+	QuestionsEnabledGetter   func() bool
+	GlobalConfigDir          string
 }
 
 func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	trimmedRoot := strings.TrimSpace(opts.WorkspaceRoot)
-	if trimmedRoot == "" {
+	if strings.TrimSpace(opts.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" {
 		return nil, nil, nil, errWorkspaceRootRequired
+	}
+	if len(opts.FilesystemContext.Access.ProjectWorkspace.Roots) > tools.ProjectWorkspaceCollectionLimit {
+		return nil, nil, nil, fmt.Errorf("project workspace boundary contains %d roots, maximum is %d", len(opts.FilesystemContext.Access.ProjectWorkspace.Roots), tools.ProjectWorkspaceCollectionLimit)
+	}
+	if !filesystemRootContains(opts.FilesystemContext.Access.ExecutionTargetRoot, opts.FilesystemContext.Access.WorkingDirectory.RealPath) {
+		return nil, nil, nil, errors.New("working directory is outside execution target root")
 	}
 	if opts.ExecutionCorrelation != nil {
 		if err := opts.ExecutionCorrelation.Validate(); err != nil {
@@ -301,8 +290,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	}
 	registry := tools.NewRegistry()
 	ctx := LocalToolRuntimeContext{
-		WorkspaceRoot:                trimmedRoot,
-		ManagedWorktreePathContext:   opts.ManagedWorktreePathContext,
+		FilesystemContext:            opts.FilesystemContext.Clone(),
 		OwnerSessionID:               opts.OwnerSessionID,
 		ExecutionCorrelation:         opts.ExecutionCorrelation,
 		ShellOutputMaxChars:          opts.ShellOutputMaxChars,
@@ -337,6 +325,96 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		return nil, nil, nil, err
 	}
 	return binding, broker, background, nil
+}
+
+func NewFilesystemContext(workdir string, targetRoot string, boundary tools.ProjectWorkspaceBoundary) (tools.FilesystemContext, error) {
+	if len(boundary.Roots) > tools.ProjectWorkspaceCollectionLimit {
+		return tools.FilesystemContext{}, fmt.Errorf("project workspace boundary contains %d roots, maximum is %d", len(boundary.Roots), tools.ProjectWorkspaceCollectionLimit)
+	}
+	resolved := boundary.Clone()
+	roots := make([]tools.ProjectWorkspaceRoot, 0, len(boundary.Roots))
+	for _, root := range boundary.Roots {
+		if strings.TrimSpace(root.LexicalPath) == "" {
+			return tools.FilesystemContext{}, errors.New("project workspace root is required")
+		}
+		resolvedFilesystemRoot, err := trustedRootForPath(root.LexicalPath)
+		if err != nil {
+			continue
+		}
+		roots = append(roots, tools.ProjectWorkspaceRoot{
+			WorkspaceID:    root.WorkspaceID,
+			FilesystemRoot: resolvedFilesystemRoot,
+		})
+	}
+	resolved.Roots = roots
+	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
+	if err != nil {
+		return tools.FilesystemContext{}, err
+	}
+	if !filesystemRootContains(target, working.RealPath) {
+		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
+	}
+	return tools.FilesystemContext{Access: tools.FileAccessScope{
+		WorkingDirectory: working, ExecutionTargetRoot: target, ProjectWorkspace: resolved,
+	}}, nil
+}
+
+func WithExecutionTarget(current tools.FilesystemContext, workdir string, targetRoot string, managed *tools.ManagedWorktreePathContext) (tools.FilesystemContext, error) {
+	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
+	if err != nil {
+		return tools.FilesystemContext{}, err
+	}
+	next := current.Clone()
+	next.Access.WorkingDirectory = working
+	next.Access.ExecutionTargetRoot = target
+	if !filesystemRootContains(target, working.RealPath) {
+		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
+	}
+	next.ManagedWorktree = managed
+	return next, nil
+}
+
+func requiredFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot, tools.FilesystemRoot, error) {
+	working, err := trustedRootForPath(workdir)
+	if err != nil {
+		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve working directory: %w", err)
+	}
+	target, err := trustedRootForPath(targetRoot)
+	if err != nil {
+		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve execution target root: %w", err)
+	}
+	return working, target, nil
+}
+
+func filesystemRootContains(root tools.FilesystemRoot, candidate string) bool {
+	relative, err := filepath.Rel(root.RealPath, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func trustedRootForPath(root string) (tools.FilesystemRoot, error) {
+	trimmed := strings.TrimSpace(root)
+	if trimmed == "" {
+		return tools.FilesystemRoot{}, errors.New("filesystem root is required")
+	}
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return tools.FilesystemRoot{}, fmt.Errorf("resolve trusted root: %w", err)
+	}
+	info, statErr := os.Stat(absolute)
+	if errors.Is(statErr, os.ErrNotExist) {
+		return tools.FilesystemRoot{LexicalPath: absolute, RealPath: absolute}, nil
+	}
+	if statErr != nil {
+		return tools.FilesystemRoot{}, fmt.Errorf("stat trusted root: %w", statErr)
+	}
+	real, err := config.ResolveExistingAncestorRealPath(absolute)
+	if err != nil {
+		return tools.FilesystemRoot{}, fmt.Errorf("resolve trusted root real path: %w", err)
+	}
+	return tools.FilesystemRoot{LexicalPath: absolute, RealPath: real, Info: info}, nil
 }
 
 func enabledToolsNeedEditDenyPolicy(enabled []toolspec.ID) bool {

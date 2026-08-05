@@ -39,11 +39,10 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		[]toolspec.ID{toolspec.ToolExecCommand},
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -67,13 +66,13 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 		materializedRuntimeWireEventLog(t, store),
 		config.Settings{Model: "gpt-5", ModelContextWindow: 200000, Timeouts: config.Timeouts{ModelRequestSeconds: 1}},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
 		RuntimeWiringOptions{
-			Client:        &runtimewireCaptureClient{},
-			ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
+			FilesystemContext: runtimeWireFilesystemContext(t, root),
+			Client:            &runtimewireCaptureClient{},
+			ClientFactory:     RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
 		},
 	)
 	if !errors.Is(err, ErrRuntimeClientFactoryConflict) {
@@ -106,11 +105,11 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
 		RuntimeWiringOptions{
+			FilesystemContext:     runtimeWireFilesystemContext(t, root),
 			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}},
 			ReviewerClientFactory: factory,
 		},
@@ -149,11 +148,10 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{Context: ctx, ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -179,11 +177,10 @@ func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
 			calls++
 			return nil, wantErr
 		})},
@@ -264,11 +261,10 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)

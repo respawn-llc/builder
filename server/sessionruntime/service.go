@@ -114,6 +114,21 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	if err := context.Cause(ctx); err != nil {
 		return AgentRuntimePlan{}, err
 	}
+	projectWorkspaceBoundary, err := s.metadataStore.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	executionRoot := target.WorkspaceRoot
+	var currentWorktreeRoot *string
+	if target.Worktree != nil {
+		executionRoot = target.Worktree.Root
+		root := target.Worktree.Root
+		currentWorktreeRoot = &root
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(target.EffectiveWorkdir, executionRoot, projectWorkspaceBoundary)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
 	if err != nil {
 		return AgentRuntimePlan{}, err
@@ -135,11 +150,6 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
-	var currentWorktreeRoot *string
-	if target.Worktree != nil {
-		root := target.Worktree.Root
-		currentWorktreeRoot = &root
-	}
 	var managedWorktreePathContext *tools.ManagedWorktreePathContext
 	if strings.TrimSpace(req.ActiveSettings.Worktrees.BaseDir) != "" {
 		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
@@ -148,15 +158,14 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		}
 	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:                   req.ActiveSettings,
-		EnabledTools:               enabledTools,
-		Workdir:                    target.EffectiveWorkdir,
-		ManagedWorktreePathContext: managedWorktreePathContext,
-		Sources:                    req.Source.Sources,
-		FastMode:                   s.fastModeState,
-		ClientFactory:              s.runtimeClientFactory,
-		StartLogLines:              startLogLines,
-		RecoveredWarningProvider:   s.recoveredWarningProvider,
+		Settings:                 req.ActiveSettings,
+		EnabledTools:             enabledTools,
+		FilesystemContext:        tools.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:                  req.Source.Sources,
+		FastMode:                 s.fastModeState,
+		ClientFactory:            s.runtimeClientFactory,
+		StartLogLines:            startLogLines,
+		RecoveredWarningProvider: s.recoveredWarningProvider,
 	})
 }
 

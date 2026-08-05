@@ -29,6 +29,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/apicontract"
@@ -263,16 +264,26 @@ func newTestHeadlessSessionLaunch(
 		persistence = persistences[0]
 	}
 	return sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             persistence.Options(),
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: fixedProjectWorkspaceBoundaryResolver{root: cfg.WorkspaceRoot},
 		ExecutionTargets: fixedSessionExecutionTargetResolver{target: clientui.SessionExecutionTarget{
 			WorkspaceRoot:    cfg.WorkspaceRoot,
 			CwdRelpath:       ".",
 			EffectiveWorkdir: cfg.WorkspaceRoot,
 		}},
 	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
+}
+
+type fixedProjectWorkspaceBoundaryResolver struct{ root string }
+
+func (r fixedProjectWorkspaceBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{
+		ProjectID: "test-project",
+		Roots:     []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: r.root}}},
+	}, nil
 }
 
 func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, background *shelltool.Manager, storeOptions ...session.StoreOption) *sessionruntime.Authority {
@@ -468,10 +479,11 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
-			Config:            cfg,
-			ContainerDir:      containerDir,
-			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-			PersistedSessions: meta,
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
@@ -624,10 +636,11 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, meta.AuthoritativeSessionStoreOptions()...)
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
 	}).WithRuntimeAuthority(authority)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    sessionLauncher,
@@ -819,10 +832,11 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
-			Config:            cfg,
-			ContainerDir:      containerDir,
-			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-			PersistedSessions: meta,
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,

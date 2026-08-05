@@ -463,9 +463,15 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 		})
 	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:                     settings,
-		EnabledTools:                 enabledTools,
-		Workdir:                      store.Meta().WorkspaceRoot,
+		Settings:     settings,
+		EnabledTools: enabledTools,
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
 		Client:                       client,
 		ReviewerClientFactory:        reviewerClientFactory,
 		CurrentNodeExecution:         cfg.CurrentNodeExecution,

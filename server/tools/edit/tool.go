@@ -23,9 +23,7 @@ const (
 )
 
 type Tool struct {
-	workspaceRoot                string
-	workspaceRootReal            string
-	workspaceRootInfo            os.FileInfo
+	fileAccessScope              tools.FileAccessScope
 	workspaceOnly                bool
 	allowOutsideWorkspace        bool
 	outsideWorkspaceApprover     tools.FSGuardApprover
@@ -54,7 +52,13 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 	if err != nil {
 		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("stat workspace root: %w", err))
 	}
-	t := &Tool{workspaceRoot: abs, workspaceRootReal: real, workspaceRootInfo: rootInfo, workspaceOnly: workspaceOnly}
+	t := &Tool{
+		fileAccessScope: tools.FileAccessScope{
+			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+		},
+		workspaceOnly: workspaceOnly,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)
@@ -327,7 +331,7 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 	}
 	candidate := requested
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.workspaceRoot, candidate)
+		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
 	}
 	cleaned := filepath.Clean(candidate)
 	approved := map[string]bool{}
@@ -362,11 +366,11 @@ func (t *Tool) isUserSymlink(cleaned string, real string) bool {
 	if cleaned == real {
 		return false
 	}
-	rel, err := filepath.Rel(t.workspaceRoot, cleaned)
+	rel, err := filepath.Rel(t.fileAccessScope.WorkingDirectory.LexicalPath, cleaned)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return true
 	}
-	expected := filepath.Clean(filepath.Join(t.workspaceRootReal, rel))
+	expected := filepath.Clean(filepath.Join(t.fileAccessScope.WorkingDirectory.RealPath, rel))
 	return expected != real
 }
 
@@ -380,9 +384,7 @@ func resolveRealTarget(cleaned string) (string, error) {
 
 func (t *Tool) outsideGuard() tools.FSGuard {
 	return tools.NewFSGuard(tools.FSGuardConfig{
-		WorkspaceRoot:         t.workspaceRoot,
-		WorkspaceRootReal:     t.workspaceRootReal,
-		WorkspaceRootInfo:     t.workspaceRootInfo,
+		Scope:                 t.fileAccessScope,
 		WorkspaceOnly:         t.workspaceOnly,
 		AllowOutsideWorkspace: t.allowOutsideWorkspace,
 		Approver:              t.outsideWorkspaceApprover,

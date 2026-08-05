@@ -21,6 +21,7 @@ import (
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -753,9 +754,15 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings:     initialRuntime.ActiveSettings,
 		EnabledTools: initialRuntime.EnabledTools,
-		Workdir:      f.workspace,
-		Sources:      initialRuntime.Sources,
-		Client:       f.client,
+		FilesystemContext: func() tools.FilesystemContext {
+			context, contextErr := runtimewire.NewFilesystemContext(f.workspace, f.workspace, tools.ProjectWorkspaceBoundary{})
+			if contextErr != nil {
+				t.Fatalf("NewFilesystemContext: %v", contextErr)
+			}
+			return context
+		}(),
+		Sources: initialRuntime.Sources,
+		Client:  f.client,
 	})
 	if err != nil {
 		t.Fatalf("build attached Session runtime: %v", err)

@@ -87,9 +87,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 	}
 	for _, target := range targets {
 		match, denied, denyErr := s.tool.pathDenyPolicy.Check(tools.PathDenyCheck{
-			RequestedPath:     target.raw,
-			ResolvedPath:      target.resolved,
-			WorkspaceRootReal: s.tool.workspaceRootReal,
+			RequestedPath:        target.raw,
+			ResolvedPath:         target.resolved,
+			WorkingDirectoryReal: s.tool.fileAccessScope.WorkingDirectory.RealPath,
 		})
 		if denyErr != nil {
 			return nil, denyErr

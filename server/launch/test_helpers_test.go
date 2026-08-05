@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -27,10 +29,20 @@ var testSessionStores sync.Map
 
 func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session.StoreOption) Planner {
 	return Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: storeOptions,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             storeOptions,
+		ProjectWorkspaceBoundary: testProjectBoundaryResolver{},
 	}
+}
+
+type testProjectBoundaryResolver struct{}
+
+func (testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{
+		ProjectID: testProjectID,
+		Roots:     []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: "/tmp/workspace-a"}}},
+	}, nil
 }
 
 func newPersistenceBackedTestPlanner(cfg config.App, containerDir string, persistence *sessiontest.Persistence) Planner {

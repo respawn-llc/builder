@@ -8,9 +8,11 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
@@ -307,8 +309,14 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings:     settings,
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		Workdir:      workdir,
-		Client:       goalAuthorityClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(workdir, workdir, tools.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: goalAuthorityClient{},
 		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
 			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{

@@ -54,6 +54,14 @@ The target-selection provenance locked to a task when its first executable actio
 
 The directory Kent uses as the working directory and relative-path base for a Task's executable Nodes. It is the Task's source workspace when the Task uses no managed worktree and the managed worktree root otherwise.
 
+### Working Directory
+
+The directory Kent uses as the shell working directory and relative-path base for a Session's tools. It may be the Session's Execution Target Root or one of its descendant directories.
+
+### Execution Target Root
+
+The Workspace root or current managed Worktree root that contains a Session's Working Directory. It is the Workspace root when the Session does not use a managed Worktree.
+
 ### Workflow Draft
 
 A Workflow definition that users can save while validation reports graph or Project errors. A Workflow Draft must have valid identifiers, valid references, unique keys, supported values, and exactly one Start Node.

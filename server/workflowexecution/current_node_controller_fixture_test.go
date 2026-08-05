@@ -11,6 +11,7 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -688,8 +689,14 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  f.cfg.WorkspaceRoot,
-		Client:   currentNodeQuestionLLMClient{},
+		FilesystemContext: func() askquestion.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(f.cfg.WorkspaceRoot, f.cfg.WorkspaceRoot, askquestion.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: currentNodeQuestionLLMClient{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)

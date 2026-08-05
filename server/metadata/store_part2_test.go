@@ -225,6 +225,53 @@ func TestResolveSessionExecutionTargetUsesMetadataAuthority(t *testing.T) {
 	}
 }
 
+func TestResolveSessionProjectWorkspaceBoundaryUsesOwningProject(t *testing.T) {
+	store, cfg, source := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, source)
+	sourceSibling, err := store.AttachWorkspaceToProject(t.Context(), source.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject source sibling: %v", err)
+	}
+	foreign, err := store.CreateProjectForWorkspace(t.Context(), t.TempDir(), "Foreign")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace foreign: %v", err)
+	}
+	foreignOnly, err := store.AttachWorkspaceToProject(t.Context(), foreign.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject foreign-only: %v", err)
+	}
+
+	boundary, err := store.ResolveSessionProjectWorkspaceBoundary(t.Context(), sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionProjectWorkspaceBoundary: %v", err)
+	}
+	if boundary.ProjectID != source.ProjectID {
+		t.Fatalf("boundary project id = %q, want %q", boundary.ProjectID, source.ProjectID)
+	}
+	if _, err := store.db.ExecContext(t.Context(), "UPDATE sessions SET workspace_id = NULL WHERE id = ?", sess.Meta().SessionID); err != nil {
+		t.Fatalf("unlink retained session: %v", err)
+	}
+	if _, err := store.ResolveSessionProjectWorkspaceBoundary(t.Context(), sess.Meta().SessionID); err != nil {
+		t.Fatalf("resolve unlinked retained session boundary: %v", err)
+	}
+	roots := boundary.Roots
+	if len(roots) != 2 {
+		t.Fatalf("boundary roots = %+v, want two source project roots", roots)
+	}
+	rootsByPath := map[string]bool{}
+	for _, root := range roots {
+		rootsByPath[root.LexicalPath] = true
+	}
+	if !rootsByPath[source.CanonicalRoot] || !rootsByPath[sourceSibling.CanonicalRoot] {
+		t.Fatalf("boundary roots = %+v, want source project roots", roots)
+	}
+	for _, workspace := range roots {
+		if workspace.WorkspaceID != nil && *workspace.WorkspaceID == foreignOnly.WorkspaceID {
+			t.Fatalf("boundary included foreign project workspace %q", foreignOnly.WorkspaceID)
+		}
+	}
+}
+
 func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

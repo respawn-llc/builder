@@ -36,6 +36,10 @@ type SessionExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
 
+type SessionProjectWorkspaceBoundaryResolver interface {
+	ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sessionID string) (metadata.ProjectWorkspaceBoundary, error)
+}
+
 // MetadataExecutionTargetStore is the metadata subset needed to copy a parent
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
@@ -49,13 +53,14 @@ type MetadataExecutionTargetStore interface {
 type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
 
 type Planner struct {
-	Config              config.App
-	ContainerDir        string
-	StoreOptions        []session.StoreOption
-	ReloadConfig        func() (config.App, error)
-	PersistedSessions   session.PersistedSessionResolver
-	ExecutionTargets    SessionExecutionTargetResolver
-	MetadataStoreOpener MetadataExecutionTargetStoreOpener
+	Config                   config.App
+	ContainerDir             string
+	StoreOptions             []session.StoreOption
+	ReloadConfig             func() (config.App, error)
+	PersistedSessions        session.PersistedSessionResolver
+	ExecutionTargets         SessionExecutionTargetResolver
+	ProjectWorkspaceBoundary SessionProjectWorkspaceBoundaryResolver
+	MetadataStoreOpener      MetadataExecutionTargetStoreOpener
 }
 
 type SessionRequest struct {
@@ -82,6 +87,7 @@ type SessionPlan struct {
 	SkipContinuationAgentRoleValidation bool
 	WorkspaceRoot                       string
 	ExecutionTarget                     clientui.SessionExecutionTarget
+	ProjectWorkspaceBoundary            metadata.ProjectWorkspaceBoundary
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
 }
@@ -405,6 +411,13 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	if p.ProjectWorkspaceBoundary == nil {
+		return SessionPlan{}, errors.New("project workspace boundary resolver is required")
+	}
+	projectWorkspaceBoundary, err := p.ProjectWorkspaceBoundary.ResolveSessionProjectWorkspaceBoundary(ctx, meta.SessionID)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
@@ -415,6 +428,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
 		ExecutionTarget:                     executionTarget,
+		ProjectWorkspaceBoundary:            projectWorkspaceBoundary.Clone(),
 		Source:                              source,
 		BaseSource:                          baseSource,
 	}, store), nil

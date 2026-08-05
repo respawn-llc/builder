@@ -24,9 +24,9 @@ type FSGuardFailureFactory struct {
 }
 
 type FSGuardRequest struct {
-	RequestedPath string
-	ResolvedPath  string
-	WorkspaceRoot string
+	RequestedPath    string
+	ResolvedPath     string
+	WorkingDirectory string
 }
 
 type FSGuardDecision int
@@ -44,10 +44,100 @@ type FSGuardApproval struct {
 
 type FSGuardApprover func(context.Context, FSGuardRequest) (FSGuardApproval, error)
 
+type FilesystemRoot struct {
+	LexicalPath string
+	RealPath    string
+	Info        os.FileInfo
+}
+
+type ProjectWorkspaceRoot struct {
+	WorkspaceID *string
+	FilesystemRoot
+}
+
+type ProjectWorkspaceBoundary struct {
+	ProjectID string
+	Roots     []ProjectWorkspaceRoot
+}
+
+const ProjectWorkspaceCollectionLimit = 500
+
+func (b ProjectWorkspaceBoundary) Clone() ProjectWorkspaceBoundary {
+	b.Roots = append([]ProjectWorkspaceRoot(nil), b.Roots...)
+	return b
+}
+
+func (b ProjectWorkspaceBoundary) WithWorkspace(root ProjectWorkspaceRoot, limit int) (ProjectWorkspaceBoundary, bool) {
+	for _, existing := range b.Roots {
+		if existing.LexicalPath == root.LexicalPath {
+			return b.Clone(), false
+		}
+	}
+	next := b.Clone()
+	next.Roots = append([]ProjectWorkspaceRoot{root}, next.Roots...)
+	if len(next.Roots) > limit {
+		next.Roots = next.Roots[:limit]
+	}
+	return next, true
+}
+
+type FileAccessScope struct {
+	WorkingDirectory    FilesystemRoot
+	ExecutionTargetRoot FilesystemRoot
+	ProjectWorkspace    ProjectWorkspaceBoundary
+}
+
+func (s FileAccessScope) Clone() FileAccessScope {
+	s.ProjectWorkspace = s.ProjectWorkspace.Clone()
+	return s
+}
+
+type FilesystemContext struct {
+	Access          FileAccessScope
+	ManagedWorktree *ManagedWorktreePathContext
+}
+
+func (c FilesystemContext) Clone() FilesystemContext {
+	return FilesystemContext{Access: c.Access.Clone(), ManagedWorktree: c.ManagedWorktree}
+}
+
+func (c FilesystemContext) Equal(other FilesystemContext) bool {
+	if !sameFilesystemRoot(c.Access.WorkingDirectory, other.Access.WorkingDirectory) ||
+		!sameFilesystemRoot(c.Access.ExecutionTargetRoot, other.Access.ExecutionTargetRoot) ||
+		c.Access.ProjectWorkspace.ProjectID != other.Access.ProjectWorkspace.ProjectID ||
+		len(c.Access.ProjectWorkspace.Roots) != len(other.Access.ProjectWorkspace.Roots) ||
+		!c.ManagedWorktree.Equal(other.ManagedWorktree) {
+		return false
+	}
+	for i, left := range c.Access.ProjectWorkspace.Roots {
+		right := other.Access.ProjectWorkspace.Roots[i]
+		if !sameWorkspaceID(left.WorkspaceID, right.WorkspaceID) ||
+			!sameFilesystemRoot(left.FilesystemRoot, right.FilesystemRoot) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameFilesystemRoot(left, right FilesystemRoot) bool {
+	if left.LexicalPath != right.LexicalPath || left.RealPath != right.RealPath {
+		return false
+	}
+	if left.Info == nil || right.Info == nil {
+		return left.Info == nil && right.Info == nil
+	}
+	return os.SameFile(left.Info, right.Info)
+}
+
+func sameWorkspaceID(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 type FSGuard struct {
-	workspaceRoot         string
-	workspaceRootReal     string
-	workspaceRootInfo     os.FileInfo
+	scope                 FileAccessScope
 	workspaceOnly         bool
 	allowOutsideWorkspace bool
 	approver              FSGuardApprover
@@ -62,9 +152,7 @@ type FSGuard struct {
 }
 
 type FSGuardConfig struct {
-	WorkspaceRoot         string
-	WorkspaceRootReal     string
-	WorkspaceRootInfo     os.FileInfo
+	Scope                 FileAccessScope
 	WorkspaceOnly         bool
 	AllowOutsideWorkspace bool
 	Approver              FSGuardApprover
@@ -80,9 +168,7 @@ type FSGuardConfig struct {
 
 func NewFSGuard(config FSGuardConfig) FSGuard {
 	return FSGuard{
-		workspaceRoot:         config.WorkspaceRoot,
-		workspaceRootReal:     config.WorkspaceRootReal,
-		workspaceRootInfo:     config.WorkspaceRootInfo,
+		scope:                 config.Scope.Clone(),
 		workspaceOnly:         config.WorkspaceOnly,
 		allowOutsideWorkspace: config.AllowOutsideWorkspace,
 		approver:              config.Approver,
@@ -99,14 +185,14 @@ func NewFSGuard(config FSGuardConfig) FSGuard {
 
 func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath string, approvedOutside map[string]bool) (string, error) {
 	req := FSGuardRequest{
-		RequestedPath: requestedPath,
-		ResolvedPath:  resolvedPath,
-		WorkspaceRoot: g.workspaceRoot,
+		RequestedPath:    requestedPath,
+		ResolvedPath:     resolvedPath,
+		WorkingDirectory: g.scope.WorkingDirectory.LexicalPath,
 	}
 	match, denied, denyErr := g.pathDenyPolicy.Check(PathDenyCheck{
-		RequestedPath:     requestedPath,
-		ResolvedPath:      resolvedPath,
-		WorkspaceRootReal: g.workspaceRootReal,
+		RequestedPath:        requestedPath,
+		ResolvedPath:         resolvedPath,
+		WorkingDirectoryReal: g.scope.WorkingDirectory.RealPath,
 	})
 	if denyErr != nil {
 		return "", denyErr
@@ -117,7 +203,7 @@ func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath s
 	if !g.workspaceOnly {
 		return resolvedPath, nil
 	}
-	insideWorkspace, containmentErr := g.isWithinWorkspace(resolvedPath)
+	insideWorkspace, containmentErr := g.isWithinTrustedRoot(resolvedPath)
 	if containmentErr != nil {
 		return "", fmt.Errorf("workspace boundary check for %q: %w", requestedPath, containmentErr)
 	}
@@ -188,8 +274,29 @@ func LexicalPathForDenyPolicy(workspaceRootReal string, requestedPath string) (s
 	return filepath.Clean(path), nil
 }
 
-func (g FSGuard) isWithinWorkspace(real string) (bool, error) {
-	rel, relErr := filepath.Rel(g.workspaceRootReal, real)
+func (g FSGuard) isWithinTrustedRoot(real string) (bool, error) {
+	roots := make([]FilesystemRoot, 0, len(g.scope.ProjectWorkspace.Roots)+1)
+	roots = append(roots, g.scope.ExecutionTargetRoot)
+	for _, root := range g.scope.ProjectWorkspace.Roots {
+		roots = append(roots, root.FilesystemRoot)
+	}
+	for _, root := range roots {
+		inside, err := isWithinFSGuardRoot(root, real)
+		if err != nil {
+			return false, err
+		}
+		if inside {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isWithinFSGuardRoot(root FilesystemRoot, real string) (bool, error) {
+	if root.Info == nil {
+		return false, nil
+	}
+	rel, relErr := filepath.Rel(root.RealPath, real)
 	if relErr == nil {
 		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
 			return true, nil
@@ -197,7 +304,7 @@ func (g FSGuard) isWithinWorkspace(real string) (bool, error) {
 		return false, nil
 	}
 
-	if g.workspaceRootInfo == nil {
+	if root.Info == nil {
 		return false, errors.New("workspace root info unavailable")
 	}
 
@@ -215,7 +322,7 @@ func (g FSGuard) isWithinWorkspace(real string) (bool, error) {
 			current = next
 			continue
 		}
-		if os.SameFile(info, g.workspaceRootInfo) {
+		if os.SameFile(info, root.Info) {
 			return true, nil
 		}
 		next := filepath.Dir(current)

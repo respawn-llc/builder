@@ -11,10 +11,12 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/sessionview"
+	"core/server/tools"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -173,8 +175,14 @@ func newProjectedAuthorityRuntime(
 	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Meta().WorkspaceRoot,
-		Client:   client,
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: client,
 	})
 	if err != nil {
 		t.Fatalf("new projected runtime plan: %v", err)
