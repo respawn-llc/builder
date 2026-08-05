@@ -48,7 +48,7 @@ export function isProtectedWorkflowParameter(parameter: {
 }
 
 export function visibleWorkflowEdgeParameters(
-  edge: DraftWorkflowEdge,
+  edge: Pick<DraftWorkflowEdge, "parameters" | "assigneeSelection" | "thinkingSelection">,
   protectedParameterVisibility: Readonly<{
     target_assignee?: boolean;
     target_thinking?: boolean;
