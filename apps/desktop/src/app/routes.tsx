@@ -12,16 +12,17 @@ import {
   WorkflowLibraryShellRoute,
 } from "./routeComponents";
 
-const optionalSearchString = z.string().catch("");
+const optionalProjectID = z.string().catch("");
+const optionalTaskID = z.string().min(1).optional();
 const optionalWorkflowSelector = workflowIDSchema.optional();
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
-  taskId: optionalSearchString,
+  taskId: optionalTaskID,
 });
 
 const workflowEditorSearchSchema = z.object({
-  projectId: optionalSearchString,
+  projectId: optionalProjectID,
 });
 
 const rootRoute = createRootRoute({ component: RootRoute });

@@ -699,3 +699,15 @@
   (0 errors; 4 existing warnings), Apps typecheck,
   `./scripts/test.sh desktop` (83 files / 373 tests), and
   `./scripts/build.sh desktop`.
+  Progress (August 5, 2026): Remediated the compliance boundary by making
+  Project `taskId` optional and non-empty when present, omitting it from
+  project navigation and route restoration when absent, and carrying
+  `string | undefined` through Board selector and subscription contracts.
+  Board deletion navigation now receives only the Design-owned selected
+  workflow selector; the redundant workflow fallback was removed. Product
+  boundary tests cover omitted task selectors, rejection of empty selectors,
+  and success/failure after selector absence commits without empty-string
+  absence values. Final verification passed again: frozen Apps install, full
+  Apps lint (0 errors; 4 existing warnings), Apps typecheck,
+  `./scripts/test.sh desktop` (83 files / 373 tests), and
+  `./scripts/build.sh desktop`. Browser/manual QA remains excluded.

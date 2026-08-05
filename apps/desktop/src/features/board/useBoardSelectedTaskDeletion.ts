@@ -52,23 +52,24 @@ export function useBoardSelectedTaskDeletion({
   projectId,
   selectedTaskId,
   selectedWorkflowID,
-  workflowId,
 }: Readonly<{
   enabled: boolean;
   onNavigationError(error: unknown): void;
   projectId: string;
-  selectedTaskId: string;
+  selectedTaskId: string | undefined;
   selectedWorkflowID: string | undefined;
-  workflowId: string | undefined;
 }>) {
   const navigation = useAppNavigation();
   const { closeSidebar, invalidateSidebar, openSidebar } = useSidebar();
   const [state, dispatch] = useReducer(reduceCoordinatorState, initialCoordinatorState);
   const request = useCallback(() => {
+    if (!enabled || selectedTaskId === undefined || selectedWorkflowID === undefined) {
+      return;
+    }
     const attempt = { taskID: selectedTaskId };
     dispatch({ attempt, kind: "record" });
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
-    void navigation.closeProjectTask(projectId, selectedWorkflowID ?? workflowId).then((result) => {
+    void navigation.closeProjectTask(projectId, selectedWorkflowID).then((result) => {
       dispatch({
         attempt,
         kind: "settle",
@@ -83,20 +84,20 @@ export function useBoardSelectedTaskDeletion({
     });
   }, [
     dispatch,
+    enabled,
     invalidateSidebar,
     navigation,
     onNavigationError,
     projectId,
     selectedTaskId,
     selectedWorkflowID,
-    workflowId,
   ]);
 
   useLayoutEffect(() => {
     if (!enabled || selectedWorkflowID === undefined) {
       return;
     }
-    const next = selectedTaskId.length === 0 ? null : selectedTaskId;
+    const next = selectedTaskId ?? null;
     const previous = state.committedTaskID;
     if (previous === next || boardTaskDeletionCauseShouldDefer(state.deletionCause, previous, next)) {
       return;

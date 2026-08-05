@@ -52,7 +52,7 @@ import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
 export type BoardRouteProps = Readonly<{
   projectId: string;
   workflowId: string | undefined;
-  selectedTaskId: string;
+  selectedTaskId: string | undefined;
 }>;
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
@@ -171,12 +171,11 @@ function BoardRouteData({
     projectId,
     selectedTaskId,
     selectedWorkflowID,
-    workflowId,
   });
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
     onSelectedTaskDeleted: deletionCoordinator.request,
-    selectedTaskID: selectedTaskId,
+    ...(selectedTaskId === undefined ? {} : { selectedTaskID: selectedTaskId }),
     selectedWorkflowID,
   });
 
@@ -226,7 +225,7 @@ function BoardContent({
   boardRefreshError: Error | null;
   onBoardRefreshRetry(): void;
   onSelectedTaskDeletionRequested(): void;
-  selectedTaskId: string;
+  selectedTaskId: string | undefined;
 }>) {
   const { t } = useTranslation();
   const [workflowIssuesCollapsed, setWorkflowIssuesCollapsed] = useState(false);

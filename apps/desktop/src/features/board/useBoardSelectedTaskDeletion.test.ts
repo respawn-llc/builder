@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type * as AppFacade from "@/app-facade";
+import type { AppNavigationResult } from "@/app-facade";
 
 const navigation = vi.hoisted(() => ({
   closeProjectTask: vi.fn(),
@@ -31,15 +32,21 @@ describe("useBoardSelectedTaskDeletion", () => {
     const error = new Error("navigation failed");
     navigation.closeProjectTask.mockResolvedValueOnce({ error, status: "failed" });
     const onNavigationError = vi.fn();
-    const { result, rerender } = renderCoordinator({ onNavigationError });
+    const { result, rerender } = renderCoordinator({ initialTaskId: undefined, onNavigationError });
+    rerender({ selectedTaskId: "task-1" });
 
     await waitFor(() => {
       expect(sidebar.openSidebar).toHaveBeenCalled();
     });
-    act(() => {
-      result.current.request();
+    await act(async () => {
+      await Promise.resolve();
     });
-    rerender({ selectedTaskId: "" });
+    sidebar.closeSidebar.mockClear();
+    await act(async () => {
+      result.current.request();
+      await Promise.resolve();
+    });
+    rerender({ selectedTaskId: undefined });
 
     await waitFor(() => {
       expect(onNavigationError).toHaveBeenCalledWith(error);
@@ -48,40 +55,60 @@ describe("useBoardSelectedTaskDeletion", () => {
   });
 
   it("preserves the unrelated survivor after selector absence commits before success", async () => {
-    navigation.closeProjectTask.mockResolvedValueOnce({ status: "completed" });
-    const { result, rerender } = renderCoordinator();
+    let resolveNavigation: ((result: AppNavigationResult) => void) | undefined;
+    navigation.closeProjectTask.mockReturnValueOnce(
+      new Promise<AppNavigationResult>((resolve) => {
+        resolveNavigation = resolve;
+      }),
+    );
+    const { result, rerender } = renderCoordinator({ initialTaskId: undefined });
+    rerender({ selectedTaskId: "task-1" });
 
     await waitFor(() => {
       expect(sidebar.openSidebar).toHaveBeenCalled();
     });
-    act(() => {
+    await act(async () => {
+      await Promise.resolve();
+    });
+    sidebar.closeSidebar.mockClear();
+    await act(async () => {
       result.current.request();
+      await Promise.resolve();
     });
-    rerender({ selectedTaskId: "" });
+    rerender({ selectedTaskId: undefined });
 
-    await waitFor(() => {
-      expect(navigation.closeProjectTask).toHaveBeenCalledWith("project-1", "workflow-1");
-    });
+    expect(navigation.closeProjectTask).toHaveBeenCalledWith("project-1", "workflow-1");
     expect(sidebar.closeSidebar).not.toHaveBeenCalled();
+    if (resolveNavigation === undefined) {
+      throw new Error("Navigation resolver is unavailable.");
+    }
+    resolveNavigation({ status: "completed" });
+    await waitFor(() => {
+      expect(sidebar.closeSidebar).not.toHaveBeenCalled();
+    });
     expect(sidebar.invalidateSidebar).toHaveBeenCalledWith({ kind: "task", taskID: "task-1" });
   });
 });
 
 function renderCoordinator({
+  initialTaskId = "task-1",
   onNavigationError,
 }: Readonly<{
+  initialTaskId?: string | undefined;
   onNavigationError?: ((error: unknown) => void) | undefined;
 }> = {}) {
-  return renderHook(
-    ({ selectedTaskId }) =>
+  return renderHook<
+    ReturnType<typeof useBoardSelectedTaskDeletion>,
+    Readonly<{ selectedTaskId: string | undefined }>
+  >(
+    ({ selectedTaskId }: Readonly<{ selectedTaskId: string | undefined }>) =>
       useBoardSelectedTaskDeletion({
         enabled: true,
         onNavigationError: onNavigationError ?? vi.fn(),
         projectId: "project-1",
         selectedTaskId,
         selectedWorkflowID: "workflow-1",
-        workflowId: "workflow-1",
       }),
-    { initialProps: { selectedTaskId: "task-1" } },
+    { initialProps: { selectedTaskId: initialTaskId } },
   );
 }
