@@ -17,3 +17,5 @@
 - [x] Exclude Workflow Transition Approvals from `kent question --task` while retaining live access Questions.
 - [x] Represent Run terminal reason presence without an empty-string field sentinel.
 - [x] Add owner-boundary coverage for committed completion errors, aggregate interruption wakes, publication identity/errors, and transition-approval filtering.
+- [x] Keep pre-commit completion failures from mutating controller lifecycle state.
+- [x] Cover initial Run-watch Question arbitration and Exact-Scope prompt publication rejection.
