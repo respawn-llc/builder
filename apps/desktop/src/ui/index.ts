@@ -15,6 +15,8 @@ export { ProgressChip, ProgressInteractiveChip } from "./ProgressChip";
 export type { ProgressChipProps, ProgressInteractiveChipProps } from "./ProgressChip";
 export { ActionableListRow } from "./ActionableListRow";
 export type { ActionableListRowProps } from "./ActionableListRow";
+export { TranscriptDisclosure } from "./TranscriptDisclosure";
+export type { TranscriptDisclosureIconTone, TranscriptDisclosureProps } from "./TranscriptDisclosure";
 export { OneLineOverflowRow } from "./OneLineOverflowRow";
 export type { OneLineOverflowItem, OneLineOverflowRowProps } from "./OneLineOverflowRow";
 export { SegmentedControl } from "./SegmentedControl";
