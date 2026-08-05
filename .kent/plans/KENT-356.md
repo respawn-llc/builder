@@ -777,6 +777,13 @@
   it must already be false while phase is closing, followed by complete
   sidebar removal. This fails the prior phase-only flush because the old
   current stack would still report Back available.
+  Progress (August 5, 2026): Consolidated the route-test harness into one
+  typed `SidebarFixture` that owns an explicit non-empty destination sequence.
+  Existing single-destination cases use its default sequence, while the Home
+  guard supplies two destinations; no copied opener, pushed flag, or
+  one-off outlet boolean remains. The route helper now accepts one coherent
+  root-composition callback for placing the public route probe inside
+  AppChrome.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from

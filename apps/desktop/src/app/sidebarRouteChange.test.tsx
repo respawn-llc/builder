@@ -13,7 +13,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
-import type { SidebarController } from "@/app-facade";
+import type { SidebarController, SidebarDestination } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
@@ -419,16 +419,19 @@ describe("Sidebar route transition ownership", () => {
     const services = createTestServices([]);
     const routeStates: RouteMountSnapshot[] = [];
     const router = createTestRouter(
-      <TestAppProviders services={services}>
-        <AppChrome>
-          <OpenSidebarStack />
-          <Outlet />
-        </AppChrome>
-      </TestAppProviders>,
+      <AppChrome>
+        <SidebarFixture
+          destinations={[
+            { content: <div>Task 1</div>, kind: "custom", title: "Task 1" },
+            { content: <div>Task 2</div>, kind: "custom", title: "Task 2" },
+          ]}
+        />
+        <Outlet />
+      </AppChrome>,
       ["/projects/project-1"],
       {
+        composeRoot: (children) => <TestAppProviders services={services}>{children}</TestAppProviders>,
         home: () => <RouteMountProbe onMount={(state) => routeStates.push(state)} />,
-        outletInsideChildren: true,
       },
     );
     render(<RouterProvider router={router} />);
@@ -475,8 +478,8 @@ describe("Sidebar route transition ownership", () => {
 });
 
 type RouteLifecycle = Readonly<{
+  composeRoot?: (children: ReactElement) => ReactElement;
   home?: () => ReactElement;
-  outletInsideChildren?: boolean;
 }>;
 
 type RouteMountSnapshot = Readonly<{ canGoBack: boolean; phase: string }>;
@@ -495,9 +498,7 @@ function createTestRouter(
   lifecycle: RouteLifecycle = {},
 ) {
   const rootRoute = createRootRoute({
-    component: () => (
-      lifecycle.outletInsideChildren ? children : <>{children}<Outlet /></>
-    ),
+    component: () => lifecycle.composeRoot?.(children) ?? <>{children}<Outlet /></>,
   });
   const homeRoute = createRoute({
     component: lifecycle.home ?? (() => null),
@@ -530,37 +531,30 @@ function createTestRouter(
   });
 }
 
+type SidebarFixtureSequence = readonly [SidebarDestination, ...SidebarDestination[]];
+const defaultSidebarFixtureSequence: SidebarFixtureSequence = [
+  { content: <div>Task</div>, kind: "custom", title: "Task" },
+];
+
 function OpenSidebar() {
-  const { openSidebar } = useSidebar();
-  useEffect(() => {
-    void openSidebar({
-      content: <div>Task</div>,
-      kind: "custom",
-      title: "Task",
-    });
-  }, [openSidebar]);
-  return null;
+  return <SidebarFixture />;
 }
 
-function OpenSidebarStack() {
+function SidebarFixture({
+  destinations = defaultSidebarFixtureSequence,
+}: Readonly<{ destinations?: SidebarFixtureSequence }>) {
   const { activeDestination, openSidebar, pushSidebar } = useSidebar();
-  const pushedRef = useRef(false);
+  const nextIndexRef = useRef(0);
   useEffect(() => {
-    void openSidebar({
-      content: <div>Task 1</div>,
-      kind: "custom",
-      title: "Task 1",
-    });
-  }, [openSidebar]);
+    nextIndexRef.current = 0;
+    void openSidebar(destinations[0]);
+  }, [destinations, openSidebar]);
   useEffect(() => {
-    if (activeDestination === null || pushedRef.current) return;
-    pushedRef.current = true;
-    pushSidebar({
-      content: <div>Task 2</div>,
-      kind: "custom",
-      title: "Task 2",
-    });
-  }, [activeDestination, pushSidebar]);
+    const nextIndex = nextIndexRef.current + 1;
+    if (activeDestination === null || nextIndex >= destinations.length) return;
+    nextIndexRef.current = nextIndex;
+    pushSidebar(destinations[nextIndex]);
+  }, [activeDestination, destinations, pushSidebar]);
   return null;
 }
 
