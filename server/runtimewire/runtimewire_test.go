@@ -17,6 +17,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -115,7 +116,7 @@ var runtimeWireTestSessionPersistence = sessiontest.NewPersistence()
 
 func runtimeWireFilesystemContext(t *testing.T, root string) tools.FilesystemContext {
 	t.Helper()
-	context, err := NewFilesystemContext(root, root, tools.ProjectWorkspaceBoundary{})
+	context, err := NewFilesystemContext(root, root, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 	if err != nil {
 		t.Fatalf("NewFilesystemContext: %v", err)
 	}
@@ -133,6 +134,91 @@ func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *tes
 	}
 	if defs[0].ID != toolspec.ToolExecCommand {
 		t.Fatalf("expected exec_command runtime tool definition, got %+v", defs[0])
+	}
+}
+
+func TestLocalToolRegistrySiblingWorkspaceBypassesNativeToolApprovals(t *testing.T) {
+	workspace := t.TempDir()
+	sibling := t.TempDir()
+	editPath := filepath.Join(sibling, "edit.txt")
+	if err := os.WriteFile(editPath, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write edit fixture: %v", err)
+	}
+	imagePath := filepath.Join(sibling, "image.pdf")
+	if err := os.WriteFile(imagePath, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+		t.Fatalf("write image fixture: %v", err)
+	}
+	filesystemContext, err := NewFilesystemContext(workspace, workspace, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "project",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: sibling}},
+	})
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		FilesystemContext:   filesystemContext,
+		Enabled:             []toolspec.ID{toolspec.ToolEdit, toolspec.ToolPatch, toolspec.ToolViewImage},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalToolRegistryBinding: %v", err)
+	}
+	var approvalRequests int
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		approvalRequests++
+		return askquestion.AskQuestionResponse{
+			Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny},
+		}, nil
+	})
+
+	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
+	if !ok {
+		t.Fatal("missing edit handler")
+	}
+	editInput, err := json.Marshal(map[string]any{
+		"path":       editPath,
+		"old_string": "before",
+		"new_string": "after",
+	})
+	if err != nil {
+		t.Fatalf("marshal edit input: %v", err)
+	}
+	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "sibling-edit", Name: toolspec.ToolEdit, Input: editInput})
+	if err != nil || editResult.IsError {
+		t.Fatalf("sibling edit result = %+v, error=%v", editResult, err)
+	}
+
+	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("missing patch handler")
+	}
+	patchInput, err := json.Marshal(map[string]any{
+		"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(sibling, "patch.txt") + "\n+patched\n*** End Patch\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal patch input: %v", err)
+	}
+	patchResult, err := patchHandler.Call(context.Background(), tools.Call{ID: "sibling-patch", Name: toolspec.ToolPatch, Input: patchInput})
+	if err != nil || patchResult.IsError {
+		t.Fatalf("sibling patch result = %+v, error=%v", patchResult, err)
+	}
+
+	viewImageHandler, ok := binding.Registry().Get(toolspec.ToolViewImage)
+	if !ok {
+		t.Fatal("missing view_image handler")
+	}
+	viewInput, err := json.Marshal(map[string]any{"path": imagePath})
+	if err != nil {
+		t.Fatalf("marshal view_image input: %v", err)
+	}
+	viewResult, err := viewImageHandler.Call(context.Background(), tools.Call{ID: "sibling-view-image", Name: toolspec.ToolViewImage, Input: viewInput})
+	if err != nil || viewResult.IsError {
+		t.Fatalf("sibling view_image result = %+v, error=%v", viewResult, err)
+	}
+	if approvalRequests != 0 {
+		t.Fatalf("sibling Workspace triggered %d approval requests", approvalRequests)
 	}
 }
 
@@ -763,6 +849,7 @@ func localToolFilesystemContext(t testing.TB, root string) tools.FilesystemConte
 		Access: tools.FileAccessScope{
 			WorkingDirectory:    filesystemRoot,
 			ExecutionTargetRoot: filesystemRoot,
+			ProjectWorkspace:    tools.ProjectWorkspaceScope{ProjectID: "test"},
 		},
 	}
 }
@@ -774,12 +861,64 @@ func TestNewFilesystemContextValidatesNamedRoots(t *testing.T) {
 	if err := os.Mkdir(workingDirectory, 0o755); err != nil {
 		t.Fatalf("Mkdir working directory: %v", err)
 	}
-	boundary := tools.ProjectWorkspaceBoundary{Roots: []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: filepath.Join(t.TempDir(), "missing-secondary")}}}}
+	boundary := metadata.ProjectWorkspaceBoundary{ProjectID: "test", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: filepath.Join(t.TempDir(), "missing-secondary")}}}
 	if context, err := NewFilesystemContext(workingDirectory, executionRoot, boundary); err != nil || len(context.Access.ProjectWorkspace.Roots) != 1 {
 		t.Fatalf("optional root = %+v, error=%v", context, err)
 	}
-	if _, err := NewFilesystemContext(filepath.Join(t.TempDir(), "outside"), executionRoot, tools.ProjectWorkspaceBoundary{}); err == nil {
+	if _, err := NewFilesystemContext(filepath.Join(t.TempDir(), "outside"), executionRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"}); err == nil {
 		t.Fatal("accepted working directory outside execution target root")
+	}
+}
+
+func TestNewFilesystemContextRequiresAvailableMandatoryRootsAndSurfacesSecondaryResolutionErrors(t *testing.T) {
+	executionRoot := t.TempDir()
+	if _, err := NewFilesystemContext(filepath.Join(executionRoot, "missing"), executionRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing working directory error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := NewFilesystemContext(executionRoot, filepath.Join(executionRoot, "missing"), metadata.ProjectWorkspaceBoundary{ProjectID: "test"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing execution target error = %v, want os.ErrNotExist", err)
+	}
+
+	loop := filepath.Join(executionRoot, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := NewFilesystemContext(executionRoot, executionRoot, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "test",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: loop}},
+	}); err == nil {
+		t.Fatal("accepted secondary workspace with an unresolvable symlink")
+	}
+}
+
+func TestMissingSecondaryWorkspaceIdentityTrustsItsLaterMaterializedRoot(t *testing.T) {
+	executionRoot := t.TempDir()
+	secondaryParent := t.TempDir()
+	missingSecondary := filepath.Join(secondaryParent, "workspace")
+	filesystemContext, err := NewFilesystemContext(executionRoot, executionRoot, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "test",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: missingSecondary}},
+	})
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	if err := os.MkdirAll(missingSecondary, 0o755); err != nil {
+		t.Fatalf("materialize secondary workspace: %v", err)
+	}
+	target := filepath.Join(missingSecondary, "file.txt")
+	if err := os.WriteFile(target, []byte("trusted"), 0o644); err != nil {
+		t.Fatalf("write secondary file: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("resolve secondary file: %v", err)
+	}
+	guard := tools.NewFSGuard(tools.FSGuardConfig{
+		Scope:         filesystemContext.Access,
+		WorkspaceOnly: true,
+	})
+	if _, err := guard.Allow(context.Background(), target, resolved, nil); err != nil {
+		t.Fatalf("missing secondary identity was not trusted after materialization: %v", err)
 	}
 }
 

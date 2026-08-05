@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -65,7 +66,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
-			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}

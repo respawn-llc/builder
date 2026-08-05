@@ -120,9 +120,12 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 				return rootErr
 			}
 			if !attached {
-				targetBoundary, _ = targetBoundary.WithWorkspace(tools.ProjectWorkspaceRoot{
-					FilesystemRoot: tools.FilesystemRoot{LexicalPath: currentPlan.TargetWorkspaceRoot},
-				}, tools.ProjectWorkspaceCollectionLimit)
+				targetBoundary, _, rootErr = targetBoundary.WithWorkspace(metadata.ProjectWorkspace{
+					CanonicalRoot: currentPlan.TargetWorkspaceRoot,
+				})
+				if rootErr != nil {
+					return rootErr
+				}
 			}
 			targetFilesystemContext, rootErr = runtimewire.NewFilesystemContext(currentPlan.TargetWorkspaceRoot, currentPlan.TargetWorkspaceRoot, targetBoundary)
 			if rootErr != nil {

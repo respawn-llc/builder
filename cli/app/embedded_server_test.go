@@ -21,7 +21,6 @@ import (
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	"core/server/sessionservice"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -334,7 +333,7 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 type appTestProjectBoundaryResolver struct{ root string }
 
 func (r appTestProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
-	return metadata.ProjectWorkspaceBoundary{ProjectID: "project-test", Roots: []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: r.root}}}}, nil
+	return metadata.ProjectWorkspaceBoundary{ProjectID: "project-test", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
 }
 
 func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecycleService {

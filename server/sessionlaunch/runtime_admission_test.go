@@ -9,6 +9,7 @@ import (
 
 	"core/server/launch"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -87,7 +88,7 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 			},
 		},
 		FilesystemContext: func() tools.FilesystemContext {
-			context, err := runtimewire.NewFilesystemContext(workspace, workspace, tools.ProjectWorkspaceBoundary{})
+			context, err := runtimewire.NewFilesystemContext(workspace, workspace, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}

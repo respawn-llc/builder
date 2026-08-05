@@ -5760,6 +5760,45 @@ func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID
 	return items, nil
 }
 
+const listProjectWorkspaceBoundary = `-- name: ListProjectWorkspaceBoundary :many
+SELECT
+    w.id,
+    w.canonical_root_path AS root_path
+FROM workspaces w
+WHERE w.project_id = ?1
+ORDER BY w.created_at_unix_ms DESC, w.rowid DESC
+LIMIT 500
+`
+
+type ListProjectWorkspaceBoundaryRow struct {
+	ID       string
+	RootPath string
+}
+
+func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, projectID string) ([]ListProjectWorkspaceBoundaryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceBoundary, projectID)
+	err = recordQueryError(ctx, err, listProjectWorkspaceBoundary, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectWorkspaceBoundaryRow
+	for rows.Next() {
+		var i ListProjectWorkspaceBoundaryRow
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.RootPath), listProjectWorkspaceBoundary, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceBoundary, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceBoundary, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectWorkspaces = `-- name: ListProjectWorkspaces :many
 SELECT
     w.id,

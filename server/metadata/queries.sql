@@ -2959,6 +2959,15 @@ WHERE w.project_id = sqlc.arg(project_id)
 GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms, w.created_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, latest_activity_unix_ms DESC, w.created_at_unix_ms ASC, w.rowid ASC;
 
+-- name: ListProjectWorkspaceBoundary :many
+SELECT
+    w.id,
+    w.canonical_root_path AS root_path
+FROM workspaces w
+WHERE w.project_id = sqlc.arg(project_id)
+ORDER BY w.created_at_unix_ms DESC, w.rowid DESC
+LIMIT 500;
+
 -- name: ListProjectWorkspacesPage :many
 SELECT
     w.id,

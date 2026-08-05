@@ -17,7 +17,6 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -61,7 +60,7 @@ func newSessionLaunchTestService(cfg config.App, containerDir string) *Service {
 type sessionLaunchBoundaryResolver struct{ root string }
 
 func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
-	return metadata.ProjectWorkspaceBoundary{ProjectID: "test-project", Roots: []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: r.root}}}}, nil
+	return metadata.ProjectWorkspaceBoundary{ProjectID: "test-project", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
 }
 
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {

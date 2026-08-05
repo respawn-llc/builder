@@ -498,6 +498,14 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
+	siblingWorkspace := t.TempDir()
+	canonicalSiblingWorkspace, err := config.CanonicalWorkspaceRoot(siblingWorkspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot sibling: %v", err)
+	}
+	if _, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, canonicalSiblingWorkspace); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
 	parent := createTestSessionInContainer(t, containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
 	if err := parent.EnsureDurable(); err != nil {
@@ -612,6 +620,16 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	}
 	if !clientui.SessionExecutionTargetsEqual(plan.ExecutionTarget, target) {
 		t.Fatalf("new child plan execution target = %+v, want %+v", plan.ExecutionTarget, target)
+	}
+	foundSibling := false
+	for _, workspace := range plan.ProjectWorkspaceBoundary.Workspaces {
+		if workspace.CanonicalRoot == canonicalSiblingWorkspace {
+			foundSibling = true
+			break
+		}
+	}
+	if !foundSibling {
+		t.Fatalf("interactive plan boundary = %+v, want sibling Workspace %q", plan.ProjectWorkspaceBoundary, canonicalSiblingWorkspace)
 	}
 	reopenedPlan, err := planner.PlanSession(ctx, SessionRequest{
 		Mode:   ModeInteractive,

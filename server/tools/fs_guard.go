@@ -55,36 +55,20 @@ type ProjectWorkspaceRoot struct {
 	FilesystemRoot
 }
 
-type ProjectWorkspaceBoundary struct {
+type ProjectWorkspaceScope struct {
 	ProjectID string
 	Roots     []ProjectWorkspaceRoot
 }
 
-const ProjectWorkspaceCollectionLimit = 500
-
-func (b ProjectWorkspaceBoundary) Clone() ProjectWorkspaceBoundary {
+func (b ProjectWorkspaceScope) Clone() ProjectWorkspaceScope {
 	b.Roots = append([]ProjectWorkspaceRoot(nil), b.Roots...)
 	return b
-}
-
-func (b ProjectWorkspaceBoundary) WithWorkspace(root ProjectWorkspaceRoot, limit int) (ProjectWorkspaceBoundary, bool) {
-	for _, existing := range b.Roots {
-		if existing.LexicalPath == root.LexicalPath {
-			return b.Clone(), false
-		}
-	}
-	next := b.Clone()
-	next.Roots = append([]ProjectWorkspaceRoot{root}, next.Roots...)
-	if len(next.Roots) > limit {
-		next.Roots = next.Roots[:limit]
-	}
-	return next, true
 }
 
 type FileAccessScope struct {
 	WorkingDirectory    FilesystemRoot
 	ExecutionTargetRoot FilesystemRoot
-	ProjectWorkspace    ProjectWorkspaceBoundary
+	ProjectWorkspace    ProjectWorkspaceScope
 }
 
 func (s FileAccessScope) Clone() FileAccessScope {
@@ -293,7 +277,7 @@ func (g FSGuard) isWithinTrustedRoot(real string) (bool, error) {
 }
 
 func isWithinFSGuardRoot(root FilesystemRoot, real string) (bool, error) {
-	if root.Info == nil {
+	if root.RealPath == "" {
 		return false, nil
 	}
 	rel, relErr := filepath.Rel(root.RealPath, real)
@@ -305,7 +289,7 @@ func isWithinFSGuardRoot(root FilesystemRoot, real string) (bool, error) {
 	}
 
 	if root.Info == nil {
-		return false, errors.New("workspace root info unavailable")
+		return false, nil
 	}
 
 	current := real

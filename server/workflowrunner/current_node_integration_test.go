@@ -21,7 +21,6 @@ import (
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -751,18 +750,41 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		time.Sleep(10 * time.Millisecond)
 	}
 	initialRuntime := f.runtimeRequests()[0]
+	siblingWorkspace := t.TempDir()
+	canonicalSiblingWorkspace, err := config.CanonicalWorkspaceRoot(siblingWorkspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot sibling: %v", err)
+	}
+	if _, err := f.metadata.AttachWorkspaceToProject(context.Background(), f.projectID, canonicalSiblingWorkspace); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
+	projectBoundary, err := f.metadata.ResolveProjectWorkspaceBoundary(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceBoundary: %v", err)
+	}
+	interactiveFilesystemContext, err := runtimewire.NewFilesystemContext(f.workspace, f.workspace, projectBoundary)
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	if len(interactiveFilesystemContext.Access.ProjectWorkspace.Roots) != 2 {
+		t.Fatalf("workflow runtime Project Workspace roots = %+v, want source and sibling", interactiveFilesystemContext.Access.ProjectWorkspace.Roots)
+	}
+	foundSibling := false
+	for _, root := range interactiveFilesystemContext.Access.ProjectWorkspace.Roots {
+		if root.RealPath == canonicalSiblingWorkspace {
+			foundSibling = true
+			break
+		}
+	}
+	if !foundSibling {
+		t.Fatalf("workflow runtime roots = %+v, want sibling %q", interactiveFilesystemContext.Access.ProjectWorkspace.Roots, canonicalSiblingWorkspace)
+	}
 	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     initialRuntime.ActiveSettings,
-		EnabledTools: initialRuntime.EnabledTools,
-		FilesystemContext: func() tools.FilesystemContext {
-			context, contextErr := runtimewire.NewFilesystemContext(f.workspace, f.workspace, tools.ProjectWorkspaceBoundary{})
-			if contextErr != nil {
-				t.Fatalf("NewFilesystemContext: %v", contextErr)
-			}
-			return context
-		}(),
-		Sources: initialRuntime.Sources,
-		Client:  f.client,
+		Settings:          initialRuntime.ActiveSettings,
+		EnabledTools:      initialRuntime.EnabledTools,
+		FilesystemContext: interactiveFilesystemContext,
+		Sources:           initialRuntime.Sources,
+		Client:            f.client,
 	})
 	if err != nil {
 		t.Fatalf("build attached Session runtime: %v", err)

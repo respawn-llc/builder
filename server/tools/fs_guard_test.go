@@ -13,20 +13,6 @@ func singleFileAccessScopeForTest(root string, real string, info os.FileInfo) Fi
 	return FileAccessScope{WorkingDirectory: filesystemRoot, ExecutionTargetRoot: filesystemRoot}
 }
 
-func TestProjectWorkspaceBoundaryWithWorkspaceKeepsNewestBoundedMembership(t *testing.T) {
-	boundary := ProjectWorkspaceBoundary{ProjectID: "project", Roots: []ProjectWorkspaceRoot{
-		{FilesystemRoot: FilesystemRoot{LexicalPath: "newer"}},
-		{FilesystemRoot: FilesystemRoot{LexicalPath: "older"}},
-	}}
-	next, added := boundary.WithWorkspace(ProjectWorkspaceRoot{FilesystemRoot: FilesystemRoot{LexicalPath: "newest"}}, 2)
-	if !added || len(next.Roots) != 2 || next.Roots[0].LexicalPath != "newest" || next.Roots[1].LexicalPath != "newer" {
-		t.Fatalf("bounded membership = %+v, added=%t", next, added)
-	}
-	if duplicate, added := next.WithWorkspace(next.Roots[1], 2); added || len(duplicate.Roots) != 2 {
-		t.Fatalf("duplicate membership changed boundary = %+v, added=%t", duplicate, added)
-	}
-}
-
 func TestDefaultUserDeniedIncludesRejectionInstruction(t *testing.T) {
 	workspace := t.TempDir()
 	real, err := filepath.EvalSymlinks(workspace)

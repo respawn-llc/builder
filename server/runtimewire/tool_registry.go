@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"core/prompts"
+	"core/server/metadata"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
@@ -151,9 +152,8 @@ func (b *LocalToolRegistryBinding) ReplaceFilesystemContext(next tools.Filesyste
 	if b == nil {
 		return fmt.Errorf("local tool registry binding is required")
 	}
-	if strings.TrimSpace(next.Access.WorkingDirectory.LexicalPath) == "" ||
-		strings.TrimSpace(next.Access.ExecutionTargetRoot.LexicalPath) == "" {
-		return errWorkspaceRootRequired
+	if err := validateFilesystemContext(next); err != nil {
+		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -254,14 +254,8 @@ type LocalToolRegistryOptions struct {
 }
 
 func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	if strings.TrimSpace(opts.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" {
-		return nil, nil, nil, errWorkspaceRootRequired
-	}
-	if len(opts.FilesystemContext.Access.ProjectWorkspace.Roots) > tools.ProjectWorkspaceCollectionLimit {
-		return nil, nil, nil, fmt.Errorf("project workspace boundary contains %d roots, maximum is %d", len(opts.FilesystemContext.Access.ProjectWorkspace.Roots), tools.ProjectWorkspaceCollectionLimit)
-	}
-	if !filesystemRootContains(opts.FilesystemContext.Access.ExecutionTargetRoot, opts.FilesystemContext.Access.WorkingDirectory.RealPath) {
-		return nil, nil, nil, errors.New("working directory is outside execution target root")
+	if err := validateFilesystemContext(opts.FilesystemContext); err != nil {
+		return nil, nil, nil, err
 	}
 	if opts.ExecutionCorrelation != nil {
 		if err := opts.ExecutionCorrelation.Validate(); err != nil {
@@ -327,26 +321,11 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	return binding, broker, background, nil
 }
 
-func NewFilesystemContext(workdir string, targetRoot string, boundary tools.ProjectWorkspaceBoundary) (tools.FilesystemContext, error) {
-	if len(boundary.Roots) > tools.ProjectWorkspaceCollectionLimit {
-		return tools.FilesystemContext{}, fmt.Errorf("project workspace boundary contains %d roots, maximum is %d", len(boundary.Roots), tools.ProjectWorkspaceCollectionLimit)
+func NewFilesystemContext(workdir string, targetRoot string, boundary metadata.ProjectWorkspaceBoundary) (tools.FilesystemContext, error) {
+	normalizedBoundary, err := boundary.Normalize()
+	if err != nil {
+		return tools.FilesystemContext{}, err
 	}
-	resolved := boundary.Clone()
-	roots := make([]tools.ProjectWorkspaceRoot, 0, len(boundary.Roots))
-	for _, root := range boundary.Roots {
-		if strings.TrimSpace(root.LexicalPath) == "" {
-			return tools.FilesystemContext{}, errors.New("project workspace root is required")
-		}
-		resolvedFilesystemRoot, err := trustedRootForPath(root.LexicalPath)
-		if err != nil {
-			continue
-		}
-		roots = append(roots, tools.ProjectWorkspaceRoot{
-			WorkspaceID:    root.WorkspaceID,
-			FilesystemRoot: resolvedFilesystemRoot,
-		})
-	}
-	resolved.Roots = roots
 	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
 	if err != nil {
 		return tools.FilesystemContext{}, err
@@ -354,8 +333,20 @@ func NewFilesystemContext(workdir string, targetRoot string, boundary tools.Proj
 	if !filesystemRootContains(target, working.RealPath) {
 		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
+	scope := tools.ProjectWorkspaceScope{ProjectID: normalizedBoundary.ProjectID, Roots: make([]tools.ProjectWorkspaceRoot, 0, len(normalizedBoundary.Workspaces))}
+	for _, workspace := range normalizedBoundary.Workspaces {
+		root := strings.TrimSpace(workspace.CanonicalRoot)
+		resolvedFilesystemRoot, err := secondaryRootForPath(workspace)
+		if err != nil {
+			return tools.FilesystemContext{}, fmt.Errorf("resolve project workspace %q: %w", root, err)
+		}
+		scope.Roots = append(scope.Roots, tools.ProjectWorkspaceRoot{
+			WorkspaceID:    workspace.WorkspaceID,
+			FilesystemRoot: resolvedFilesystemRoot,
+		})
+	}
 	return tools.FilesystemContext{Access: tools.FileAccessScope{
-		WorkingDirectory: working, ExecutionTargetRoot: target, ProjectWorkspace: resolved,
+		WorkingDirectory: working, ExecutionTargetRoot: target, ProjectWorkspace: scope,
 	}}, nil
 }
 
@@ -375,15 +366,61 @@ func WithExecutionTarget(current tools.FilesystemContext, workdir string, target
 }
 
 func requiredFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot, tools.FilesystemRoot, error) {
-	working, err := trustedRootForPath(workdir)
+	working, err := requiredRootForPath(workdir)
 	if err != nil {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve working directory: %w", err)
 	}
-	target, err := trustedRootForPath(targetRoot)
+	target, err := requiredRootForPath(targetRoot)
 	if err != nil {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve execution target root: %w", err)
 	}
 	return working, target, nil
+}
+
+func requiredRootForPath(root string) (tools.FilesystemRoot, error) {
+	resolved, err := trustedRootForPath(root)
+	if err != nil {
+		return tools.FilesystemRoot{}, err
+	}
+	if resolved.Info == nil {
+		return tools.FilesystemRoot{}, fmt.Errorf("%w: required filesystem root %q is unavailable", os.ErrNotExist, root)
+	}
+	return resolved, nil
+}
+
+func validateFilesystemContext(context tools.FilesystemContext) error {
+	if strings.TrimSpace(context.Access.WorkingDirectory.LexicalPath) == "" ||
+		strings.TrimSpace(context.Access.ExecutionTargetRoot.LexicalPath) == "" {
+		return errWorkspaceRootRequired
+	}
+	if strings.TrimSpace(context.Access.WorkingDirectory.RealPath) == "" ||
+		strings.TrimSpace(context.Access.ExecutionTargetRoot.RealPath) == "" {
+		return errWorkspaceRootRequired
+	}
+	if context.Access.WorkingDirectory.Info == nil || context.Access.ExecutionTargetRoot.Info == nil {
+		return fmt.Errorf("%w: required filesystem root is unavailable", os.ErrNotExist)
+	}
+	if !filesystemRootContains(context.Access.ExecutionTargetRoot, context.Access.WorkingDirectory.RealPath) {
+		return errors.New("working directory is outside execution target root")
+	}
+	for _, workspace := range context.Access.ProjectWorkspace.Roots {
+		if strings.TrimSpace(workspace.LexicalPath) == "" || strings.TrimSpace(workspace.RealPath) == "" {
+			return errors.New("project workspace filesystem root is invalid")
+		}
+	}
+	return nil
+}
+
+func secondaryRootForPath(workspace metadata.ProjectWorkspace) (tools.FilesystemRoot, error) {
+	root := strings.TrimSpace(workspace.CanonicalRoot)
+	if root == "" {
+		return tools.FilesystemRoot{}, errors.New("filesystem root is required")
+	}
+	resolved, err := trustedRootForPath(root)
+	if err != nil {
+		return tools.FilesystemRoot{}, err
+	}
+	return resolved, nil
 }
 
 func filesystemRootContains(root tools.FilesystemRoot, candidate string) bool {
@@ -405,7 +442,11 @@ func trustedRootForPath(root string) (tools.FilesystemRoot, error) {
 	}
 	info, statErr := os.Stat(absolute)
 	if errors.Is(statErr, os.ErrNotExist) {
-		return tools.FilesystemRoot{LexicalPath: absolute, RealPath: absolute}, nil
+		real, err := config.ResolveExistingAncestorRealPath(absolute)
+		if err != nil {
+			return tools.FilesystemRoot{}, fmt.Errorf("resolve trusted root real path: %w", err)
+		}
+		return tools.FilesystemRoot{LexicalPath: absolute, RealPath: real}, nil
 	}
 	if statErr != nil {
 		return tools.FilesystemRoot{}, fmt.Errorf("stat trusted root: %w", statErr)

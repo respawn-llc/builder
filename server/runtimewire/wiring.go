@@ -2,7 +2,6 @@ package runtimewire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -87,9 +86,8 @@ func NewRuntimeWiringWithBackground(
 		return nil, fmt.Errorf("compile effective shell postprocessor: %w", err)
 	}
 	filesystemContext := opts.FilesystemContext.Clone()
-	if strings.TrimSpace(filesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
-		strings.TrimSpace(filesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" {
-		return nil, errors.New("runtime filesystem context is required")
+	if err := validateFilesystemContext(filesystemContext); err != nil {
+		return nil, err
 	}
 	workingDirectory := filesystemContext.Access.WorkingDirectory.LexicalPath
 	var eng *runtime.Engine

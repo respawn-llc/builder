@@ -14,6 +14,7 @@ import (
 
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -3127,7 +3128,7 @@ func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, clien
 
 func runtimeTestFilesystemContext(t *testing.T, root string) tools.FilesystemContext {
 	t.Helper()
-	context, err := runtimewire.NewFilesystemContext(root, root, tools.ProjectWorkspaceBoundary{})
+	context, err := runtimewire.NewFilesystemContext(root, root, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 	if err != nil {
 		t.Fatalf("NewFilesystemContext: %v", err)
 	}

@@ -55,7 +55,7 @@ func deleteActivityTestRuntimePlan(t *testing.T, env *serviceTestEnv, workdir st
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
-			context, err := runtimewire.NewFilesystemContext(workdir, workdir, tools.ProjectWorkspaceBoundary{})
+			context, err := runtimewire.NewFilesystemContext(workdir, workdir, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}

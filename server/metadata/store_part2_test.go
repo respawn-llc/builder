@@ -254,13 +254,13 @@ func TestResolveSessionProjectWorkspaceBoundaryUsesOwningProject(t *testing.T) {
 	if _, err := store.ResolveSessionProjectWorkspaceBoundary(t.Context(), sess.Meta().SessionID); err != nil {
 		t.Fatalf("resolve unlinked retained session boundary: %v", err)
 	}
-	roots := boundary.Roots
+	roots := boundary.Workspaces
 	if len(roots) != 2 {
 		t.Fatalf("boundary roots = %+v, want two source project roots", roots)
 	}
 	rootsByPath := map[string]bool{}
 	for _, root := range roots {
-		rootsByPath[root.LexicalPath] = true
+		rootsByPath[root.CanonicalRoot] = true
 	}
 	if !rootsByPath[source.CanonicalRoot] || !rootsByPath[sourceSibling.CanonicalRoot] {
 		t.Fatalf("boundary roots = %+v, want source project roots", roots)
@@ -268,6 +268,52 @@ func TestResolveSessionProjectWorkspaceBoundaryUsesOwningProject(t *testing.T) {
 	for _, workspace := range roots {
 		if workspace.WorkspaceID != nil && *workspace.WorkspaceID == foreignOnly.WorkspaceID {
 			t.Fatalf("boundary included foreign project workspace %q", foreignOnly.WorkspaceID)
+		}
+	}
+}
+
+func TestResolveProjectWorkspaceBoundaryPreservesRowIDOrderOnTimestampTies(t *testing.T) {
+	store, _, source := newMetadataTestStore(t)
+	ctx := context.Background()
+	first, err := store.AttachWorkspaceToProject(ctx, source.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject first: %v", err)
+	}
+	second, err := store.AttachWorkspaceToProject(ctx, source.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject second: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		"UPDATE workspaces SET created_at_unix_ms = ? WHERE project_id = ?",
+		int64(123), source.ProjectID,
+	); err != nil {
+		t.Fatalf("set tied workspace timestamps: %v", err)
+	}
+
+	boundary, err := store.ResolveProjectWorkspaceBoundary(ctx, source.ProjectID)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceBoundary: %v", err)
+	}
+	if len(boundary.Workspaces) != 3 {
+		t.Fatalf("boundary workspace count = %d, want 3", len(boundary.Workspaces))
+	}
+	wantNewestFirst := []string{second.CanonicalRoot, first.CanonicalRoot, source.CanonicalRoot}
+	for index, want := range wantNewestFirst {
+		if got := boundary.Workspaces[index].CanonicalRoot; got != want {
+			t.Fatalf("boundary workspace %d = %q, want %q", index, got, want)
+		}
+	}
+
+	retargeted, added, err := boundary.WithWorkspace(ProjectWorkspace{CanonicalRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("WithWorkspace: %v", err)
+	}
+	if !added {
+		t.Fatal("WithWorkspace reported no insertion")
+	}
+	for index, want := range wantNewestFirst {
+		if got := retargeted.Workspaces[index+1].CanonicalRoot; got != want {
+			t.Fatalf("retargeted workspace %d = %q, want %q", index, got, want)
 		}
 	}
 }

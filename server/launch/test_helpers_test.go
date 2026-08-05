@@ -13,7 +13,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -32,16 +31,18 @@ func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session
 		Config:                   cfg,
 		ContainerDir:             containerDir,
 		StoreOptions:             storeOptions,
-		ProjectWorkspaceBoundary: testProjectBoundaryResolver{},
+		ProjectWorkspaceBoundary: testProjectBoundaryResolver{root: cfg.WorkspaceRoot},
 	}
 }
 
-type testProjectBoundaryResolver struct{}
+type testProjectBoundaryResolver struct {
+	root string
+}
 
-func (testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+func (r testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
 	return metadata.ProjectWorkspaceBoundary{
-		ProjectID: testProjectID,
-		Roots:     []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: "/tmp/workspace-a"}}},
+		ProjectID:  testProjectID,
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}},
 	}, nil
 }
 

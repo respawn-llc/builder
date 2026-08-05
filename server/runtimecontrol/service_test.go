@@ -466,7 +466,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 		Settings:     settings,
 		EnabledTools: enabledTools,
 		FilesystemContext: func() tools.FilesystemContext {
-			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}

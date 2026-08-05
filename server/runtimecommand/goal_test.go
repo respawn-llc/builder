@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -310,7 +311,7 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 		Settings:     settings,
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		FilesystemContext: func() tools.FilesystemContext {
-			context, err := runtimewire.NewFilesystemContext(workdir, workdir, tools.ProjectWorkspaceBoundary{})
+			context, err := runtimewire.NewFilesystemContext(workdir, workdir, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}

@@ -1415,7 +1415,7 @@ func newProjectViewRuntimeAuthority(
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
 		FilesystemContext: func() tools.FilesystemContext {
-			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, tools.ProjectWorkspaceBoundary{})
+			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if contextErr != nil {
 				t.Fatalf("NewFilesystemContext: %v", contextErr)
 			}

@@ -29,7 +29,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/apicontract"
@@ -281,8 +280,8 @@ type fixedProjectWorkspaceBoundaryResolver struct{ root string }
 
 func (r fixedProjectWorkspaceBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
 	return metadata.ProjectWorkspaceBoundary{
-		ProjectID: "test-project",
-		Roots:     []tools.ProjectWorkspaceRoot{{FilesystemRoot: tools.FilesystemRoot{LexicalPath: r.root}}},
+		ProjectID:  "test-project",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}},
 	}, nil
 }
 
@@ -304,9 +303,10 @@ type selectedRunPromptFixture struct {
 func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {
 	t.Helper()
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -336,6 +336,101 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 			RuntimeAuthority: authority,
 			PromptHistory:    history,
 		}),
+	}
+}
+
+func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := t.TempDir()
+	sibling := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	if _, err := meta.AttachWorkspaceToProject(ctx, binding.ProjectID, sibling); err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+
+	target := filepath.Join(sibling, "headless.txt")
+	patchArgs, err := json.Marshal(map[string]any{"patch": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: " + target,
+		"+headless sibling",
+		"*** End Patch",
+		"",
+	}, "\n")})
+	if err != nil {
+		t.Fatalf("marshal patch arguments: %v", err)
+	}
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		switch providerCalls.Add(1) {
+		case 1:
+			writeRunPromptFunctionCallResponse(w, "fc-sibling-patch", "call-sibling-patch", toolspec.ToolPatch, patchArgs)
+		case 2:
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+		default:
+			t.Errorf("unexpected provider request %d", providerCalls.Load())
+		}
+	}))
+	defer provider.Close()
+
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:         "gpt-5",
+			OpenAIBaseURL: provider.URL,
+			EnabledTools:  map[toolspec.ID]bool{toolspec.ToolPatch: true},
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		RuntimeAuthority: authority,
+	})
+	sessionID := mustRunPromptSessionID(t, store.Meta().SessionID)
+	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "headless-sibling-workspace",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		Prompt:          "write to the sibling Workspace",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if response.Result != "done" {
+		t.Fatalf("RunPrompt result = %q, want done", response.Result)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "headless sibling\n" {
+		t.Fatalf("sibling patch data = %q, error = %v", data, err)
 	}
 }
 
@@ -948,9 +1043,10 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 
 func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -998,7 +1094,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}), nil, time.Now)
 
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
@@ -1487,9 +1583,10 @@ func mustRunPromptSessionID(t *testing.T, raw string) runtimeids.SessionID {
 
 func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1501,7 +1598,7 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	}
 
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
@@ -1523,9 +1620,10 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 
 func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1555,7 +1653,7 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
 	}), nil, time.Now)
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
@@ -1609,9 +1707,10 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	t.Setenv(config.PersistenceRootEnvName, home)
 
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1641,7 +1740,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
 	}), nil, time.Now)
 
-	cfg, err := config.Load("/tmp/workspace-a", config.LoadOptions{})
+	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
