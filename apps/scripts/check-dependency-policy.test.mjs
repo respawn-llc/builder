@@ -11,7 +11,6 @@ test("accepts package deps that match policy and workspace gates", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
-      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {
           dependencies: ["react"],
@@ -39,7 +38,6 @@ test("rejects unreviewed direct deps", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
-      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {
           dependencies: ["react"],
@@ -67,7 +65,6 @@ test("rejects workspace policy drift", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 60\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
-      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {},
       },

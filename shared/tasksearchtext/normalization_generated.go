@@ -4,11 +4,11 @@ package tasksearchtext
 
 const NormalizationContractVersion = "kent-task-search-fts5-trigram-normalization-v1"
 const normalizationSourceModulePath = "modernc.org/sqlite"
-const normalizationSourceModuleVersion = "v1.53.0"
-const normalizationSourceModuleChecksum = "h1:20WG8N9q4ji/dEqGk4uiI0c6OPjSeLTNYGFCc3+7c1M="
-const normalizationSQLiteVersion = "3.53.2"
+const normalizationSourceModuleVersion = "v1.56.0"
+const normalizationSourceModuleChecksum = "h1:/D8e2RfFqoy/Zc6PuC76U28zFwmI/sYx1Kjm4yEn9e0="
+const normalizationSQLiteVersion = "3.53.3"
 const normalizationSQLiteSourceUnit = "fts5_unicode2.c"
-const normalizationSourceChecksum = "sha256:2d2a354b1eb98dcd6cb19e5a9ae5a699a964419608cbaea48735c89de5ed0f98"
+const normalizationSourceChecksum = "sha256:ae154d7744f686f7f32f43634d4b6f30c21f7aa0423a52cf6d170ce38c8dbdcd"
 
 type normalizationRuneMapping struct {
 	source  rune

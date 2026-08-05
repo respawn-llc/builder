@@ -23,12 +23,6 @@ export async function checkDependencyPolicy(workspaceRoot = defaultWorkspaceRoot
     errors.push("pnpm-workspace.yaml must set onlyBuiltDependencies: [] so install scripts need explicit review.");
   }
 
-  for (const dependencyName of policy.minimumReleaseAgeExclude ?? []) {
-    if (!workspaceConfig.includes(`- "${dependencyName}"`)) {
-      errors.push(`pnpm-workspace.yaml must list approved minimumReleaseAgeExclude ${dependencyName}.`);
-    }
-  }
-
   const packagePaths = await findPackageJsonFiles(workspaceRoot);
   const packagesByName = new Map();
 

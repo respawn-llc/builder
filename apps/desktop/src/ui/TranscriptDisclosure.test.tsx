@@ -234,7 +234,7 @@ describe("TranscriptDisclosure", () => {
   });
 
   it("removes the body immediately when reduced motion is requested", async () => {
-    const originalMatchMedia = window.matchMedia;
+    const originalMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia");
     try {
       Object.defineProperty(window, "matchMedia", {
         configurable: true,
@@ -256,10 +256,11 @@ describe("TranscriptDisclosure", () => {
 
       expect(screen.queryByText("Full transcript content")).not.toBeInTheDocument();
     } finally {
-      Object.defineProperty(window, "matchMedia", {
-        configurable: true,
-        value: originalMatchMedia,
-      });
+      if (originalMatchMediaDescriptor === undefined) {
+        Reflect.deleteProperty(window, "matchMedia");
+      } else {
+        Object.defineProperty(window, "matchMedia", originalMatchMediaDescriptor);
+      }
     }
   });
 

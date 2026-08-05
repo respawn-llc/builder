@@ -113,8 +113,7 @@ function MarkdownCore({
 function MarkdownTaskListItem({ children, node, ...props }: ComponentProps<"li"> & ExtraProps) {
   const taskListItem = useContext(MarkdownTaskListItemContext);
   const className = node?.properties.className;
-  const isTaskItem =
-    className === "task-list-item" || (Array.isArray(className) && className.includes("task-list-item"));
+  const isTaskItem = className?.some((value) => value === "task-list-item") === true;
   if (!isTaskItem) return <li {...props}>{children}</li>;
   if (taskListItem === null) return <li {...props}>{children}</li>;
   return (
