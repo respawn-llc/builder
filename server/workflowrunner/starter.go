@@ -200,11 +200,13 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	})
 	if steerErr == nil && admission.RuntimeAvailable {
 		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			if selection.Thinking != nil {
-				if err := engine.SetWorkflowThinkingValue(*selection.Thinking); err != nil {
+			thinkingMutation := workflowThinkingMutationFor(input, selection)
+			switch thinkingMutation.Kind() {
+			case launch.WorkflowThinkingMutationSet:
+				if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
 					return err
 				}
-			} else if workflowThinkingClearRequested(input, selection) {
+			case launch.WorkflowThinkingMutationClear:
 				if err := engine.ClearWorkflowThinkingValue(); err != nil {
 					return err
 				}
@@ -507,7 +509,8 @@ func (s *Starter) planCurrentNodeSession(
 		if err != nil {
 			return launch.SessionPlan{}, disposable, err
 		}
-		if selection.Thinking != nil || workflowThinkingClearRequested(input, selection) {
+		thinkingMutation := workflowThinkingMutationFor(input, selection)
+		if thinkingMutation.Kind() != launch.WorkflowThinkingMutationUnchanged {
 			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 				var applyErr error
 				plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
@@ -515,10 +518,7 @@ func (s *Starter) planCurrentNodeSession(
 					store,
 					serverapi.RunPromptOverrides{},
 					auth.EmptyState(),
-					launch.RunPromptOverrideOptions{
-						WorkflowThinking:      selection.Thinking,
-						ClearWorkflowThinking: workflowThinkingClearRequested(input, selection),
-					},
+					launch.RunPromptOverrideOptions{WorkflowThinking: thinkingMutation},
 				)
 				return applyErr
 			}); err != nil {
@@ -534,17 +534,16 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
+	thinkingMutation := workflowThinkingMutationFor(input, selection)
 	if policy.assignee != currentNodeSessionAssigneeEstablishTarget &&
-		selection.Thinking == nil &&
-		!workflowThinkingClearRequested(input, selection) {
+		thinkingMutation.Kind() == launch.WorkflowThinkingMutationUnchanged {
 		return plan, disposable, nil
 	}
 	options := launch.RunPromptOverrideOptions{}
 	if selection.Origin == workflow.AssigneeOriginTransitionSelected {
 		options.RequiredTools = []toolspec.ID{toolspec.ToolAskQuestion}
 	}
-	options.WorkflowThinking = selection.Thinking
-	options.ClearWorkflowThinking = workflowThinkingClearRequested(input, selection)
+	options.WorkflowThinking = thinkingMutation
 	overrides := serverapi.RunPromptOverrides{}
 	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		overrides = workflowPromptOverrides(selection.Assignee)
@@ -887,10 +886,15 @@ func currentNodeAgentExecutionSelection(input workflowstore.CurrentNodeStartCont
 	return selection, nil
 }
 
-func workflowThinkingClearRequested(input workflowstore.CurrentNodeStartContext, selection workflow.AgentExecutionSelection) bool {
-	return selection.Origin == workflow.AssigneeOriginRetainedSession &&
-		workflow.CanonicalThinkingSelection(input.EnteringEdge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode &&
-		selection.Thinking == nil
+func workflowThinkingMutationFor(input workflowstore.CurrentNodeStartContext, selection workflow.AgentExecutionSelection) launch.WorkflowThinkingMutation {
+	if selection.Thinking != nil {
+		return launch.SetWorkflowThinking(*selection.Thinking)
+	}
+	if selection.Origin == workflow.AssigneeOriginRetainedSession &&
+		workflow.CanonicalThinkingSelection(input.EnteringEdge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode {
+		return launch.ClearWorkflowThinking()
+	}
+	return launch.KeepWorkflowThinking()
 }
 
 type executionPromptAwaiter struct {

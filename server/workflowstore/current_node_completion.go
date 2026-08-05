@@ -632,17 +632,18 @@ func materializeTargetAgentSelection(
 		}
 	}
 	plan, err := workflow.PlanTransitionSelection(workflow.TransitionParameterContractRequest{
-		Edge:                 request.Edge,
-		SourceKind:           request.Source.Kind(),
-		TargetKind:           request.Target.Kind(),
-		TargetRole:           workflow.NodeSubagentRole(request.Target),
-		FallbackRole:         workflow.NodeSubagentRole(request.Target),
-		Catalog:              request.Catalog,
-		SubmittedRole:        submittedRole,
-		SubmittedThinking:    submittedThinking,
-		ThinkingDescription:  thinkingDescription,
-		RetainedSession:      retainedSessionSelection,
-		MaterializeSelection: true,
+		Edge:       request.Edge,
+		SourceKind: request.Source.Kind(),
+		TargetKind: request.Target.Kind(),
+		TargetRole: workflow.NodeSubagentRole(request.Target),
+		Catalog:    request.Catalog,
+		Materialization: &workflow.TransitionSelectionMaterializationRequest{
+			FallbackRole:        workflow.NodeSubagentRole(request.Target),
+			SubmittedRole:       submittedRole,
+			SubmittedThinking:   submittedThinking,
+			ThinkingDescription: thinkingDescription,
+			RetainedSession:     retainedSessionSelection,
+		},
 	})
 	if err != nil {
 		var selectionErr workflow.TargetAgentSelectionError

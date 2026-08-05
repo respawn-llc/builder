@@ -469,9 +469,9 @@ func (s *Store) currentNodeTransitionParameters(
 				target,
 				&currentSource,
 				transitionBranchKeyForCurrentNode(currentSource.Reference),
-				false,
 				true,
 				true,
+				transitionContractContextResolutionDeferred,
 			)
 			if err != nil {
 				return nil, err

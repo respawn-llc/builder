@@ -9,6 +9,20 @@ import (
 	"core/server/workflow"
 )
 
+type transitionContractContextResolutionMode uint8
+
+const (
+	transitionContractContextResolutionRequired transitionContractContextResolutionMode = iota
+	transitionContractContextResolutionDeferred
+)
+
+type transitionContractTargetSessionPolicyMode uint8
+
+const (
+	transitionContractTargetSessionPolicyNotNeeded transitionContractTargetSessionPolicyMode = iota
+	transitionContractTargetSessionPolicyRequired
+)
+
 func (s *Store) planTransitionParameterContract(
 	ctx context.Context,
 	q *sqlitegen.Queries,
@@ -20,25 +34,12 @@ func (s *Store) planTransitionParameterContract(
 	transitionBranchKey *workflow.TransitionBranchKey,
 	manualMoveContext bool,
 	requireExecutionDescriptions bool,
-	deferContextResolution bool,
+	contextResolutionMode transitionContractContextResolutionMode,
 ) (workflow.TransitionParameterContract, error) {
 	if currentSource == nil {
 		return workflow.TransitionParameterContract{}, nil
 	}
-	requiresProtectedPolicy := false
-	for _, parameter := range edge.Parameters {
-		if purpose := workflow.CanonicalParameterPurpose(parameter.Purpose); purpose == workflow.ParameterPurposeTargetAssignee || purpose == workflow.ParameterPurposeTargetThinking {
-			requiresProtectedPolicy =
-				(purpose == workflow.ParameterPurposeTargetAssignee &&
-					workflow.CanonicalAssigneeSelection(edge.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode) ||
-					(purpose == workflow.ParameterPurposeTargetThinking &&
-						workflow.CanonicalThinkingSelection(edge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode)
-			if requiresProtectedPolicy {
-				break
-			}
-		}
-	}
-	if !requiresProtectedPolicy {
+	if transitionContractTargetSessionPolicyModeForEdge(edge) != transitionContractTargetSessionPolicyRequired {
 		return workflow.PlanTransitionParameterContract(workflow.TransitionParameterContractRequest{
 			Edge:                         edge,
 			SourceKind:                   source.Kind(),
@@ -60,7 +61,8 @@ func (s *Store) planTransitionParameterContract(
 		manualMoveContext,
 	)
 	if err != nil {
-		if !deferContextResolution || (!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrManualMoveTransitionNotUsable)) {
+		if contextResolutionMode != transitionContractContextResolutionDeferred ||
+			(!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrManualMoveTransitionNotUsable)) {
 			return workflow.TransitionParameterContract{}, err
 		}
 		sessionID = nil
@@ -81,7 +83,7 @@ func (s *Store) planTransitionParameterContract(
 		if policy == workflow.AssigneeSessionPolicyPreserve {
 			selection, err := s.resolveRetainedSessionSelection(ctx, *sessionID)
 			if err != nil {
-				if !deferContextResolution || !errors.Is(err, sql.ErrNoRows) {
+				if contextResolutionMode != transitionContractContextResolutionDeferred || !errors.Is(err, sql.ErrNoRows) {
 					return workflow.TransitionParameterContract{}, err
 				}
 				sessionID = nil
@@ -116,6 +118,22 @@ func (s *Store) planTransitionParameterContract(
 		Catalog:                      s.roleResolver,
 		RequireExecutionDescriptions: requireExecutionDescriptions,
 	})
+}
+
+func transitionContractTargetSessionPolicyModeForEdge(edge workflow.Edge) transitionContractTargetSessionPolicyMode {
+	for _, parameter := range edge.Parameters {
+		if workflow.CanonicalParameterPurpose(parameter.Purpose) != workflow.ParameterPurposeTargetAssignee ||
+			workflow.CanonicalAssigneeSelection(edge.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode {
+			continue
+		}
+		contextSourceKind := workflow.CanonicalContextSource(edge.ContextSource).Kind
+		if edge.ContextMode == workflow.ContextModeContinueSession &&
+			(contextSourceKind == workflow.ContextSourcePreviousTarget ||
+				contextSourceKind == workflow.ContextSourcePreviousTargetOrNew) {
+			return transitionContractTargetSessionPolicyRequired
+		}
+	}
+	return transitionContractTargetSessionPolicyNotNeeded
 }
 
 func transitionBranchKeyForCurrentNode(reference workflow.CurrentNodeReference) *workflow.TransitionBranchKey {

@@ -125,22 +125,30 @@ func TestThinkingSelectionIsUnavailableForFiniteNonReasoningRoles(t *testing.T) 
 func TestExecutionValidationRequiresDescriptionForOpenThinkingSelection(t *testing.T) {
 	def := serialAgentTargetWorkflow(t)
 	edge := edgeByIDForValidationTest(t, &def, "edge_done")
+	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 	edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
-	edge.Parameters = []workflow.Parameter{{Key: "thinking", Purpose: workflow.ParameterPurposeTargetThinking}}
+	edge.Parameters = []workflow.Parameter{
+		{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee},
+		{Key: "thinking", Purpose: workflow.ParameterPurposeTargetThinking},
+	}
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
 		Context: workflow.ValidationContextExecution,
 		RoleResolver: selectorCatalog{
 			configured: map[string]workflow.TargetAgentRole{
 				"coder": {Identity: "coder", QuestionsEnabled: true},
 			},
-			explicit: []workflow.TargetAgentRole{{
-				Identity:              "coder",
-				ExplicitAgentCallable: true,
-				Thinking:              workflow.ThinkingCapability{ReasoningCapable: true, Finite: false},
-			}},
+			explicit: []workflow.TargetAgentRole{
+				{Identity: "coder", ExplicitAgentCallable: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: false}},
+				{Identity: "reviewer", ExplicitAgentCallable: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: false}},
+			},
 		},
 	})
 	assertHasCodes(t, result, workflow.CodeThinkingSelectionUnavailable)
+	for _, issue := range result.Errors {
+		if issue.Code == workflow.CodeAssigneeSelectionUnavailable {
+			t.Fatalf("execution validation misattributed open thinking description failure to Assignee: %+v", result.Errors)
+		}
+	}
 }
 
 func serialAgentTargetWorkflow(t *testing.T) workflow.Definition {

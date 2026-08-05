@@ -449,20 +449,13 @@ func (s *Service) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdg
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
 	}
-	edge := workflow.Edge{
-		ID:                workflow.EdgeID(req.EdgeID),
-		WorkflowID:        req.WorkflowID,
-		TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID),
-		Key:               workflow.ModelKey(req.Key),
-		TargetNodeID:      workflow.NodeID(req.TargetNodeID),
-		AssigneeSelection: workflow.AssigneeSelection(req.AssigneeSelection),
-		ThinkingSelection: workflow.ThinkingSelection(req.ThinkingSelection),
-		ContextMode:       workflow.ContextMode(req.ContextMode),
-		ContextSource:     workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}),
-		Parameters:        domainParameters(req.Parameters),
-	}
+	edge := workflowEdgeRecordFromValues(
+		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
+		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
+		req.ContextSource, req.PromptTemplate, req.Parameters,
+	)
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddEdge(ctx, workflowstore.EdgeRecord{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: edge.AssigneeSelection, ThinkingSelection: edge.ThinkingSelection, RequiresApproval: req.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, PromptTemplate: req.PromptTemplate, Parameters: edge.Parameters})
+		return s.store.AddEdge(ctx, edge)
 	})
 	if err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
@@ -475,26 +468,52 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
-	edge := workflow.Edge{
-		ID:                workflow.EdgeID(req.EdgeID),
-		WorkflowID:        req.WorkflowID,
-		TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID),
-		Key:               workflow.ModelKey(req.Key),
-		TargetNodeID:      workflow.NodeID(req.TargetNodeID),
-		AssigneeSelection: workflow.AssigneeSelection(req.AssigneeSelection),
-		ThinkingSelection: workflow.ThinkingSelection(req.ThinkingSelection),
-		ContextMode:       workflow.ContextMode(req.ContextMode),
-		ContextSource:     workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}),
-		Parameters:        domainParameters(req.Parameters),
-	}
+	edge := workflowEdgeRecordFromValues(
+		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
+		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
+		req.ContextSource, req.PromptTemplate, req.Parameters,
+	)
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: edge.AssigneeSelection, ThinkingSelection: edge.ThinkingSelection, RequiresApproval: req.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, PromptTemplate: req.PromptTemplate, Parameters: edge.Parameters})
+		return s.store.UpdateEdge(ctx, edge)
 	})
 	if err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeUpdated, req.EdgeID)
 	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
+}
+
+func workflowEdgeRecordFromValues(
+	edgeID string,
+	workflowID runtimeids.WorkflowID,
+	transitionGroupID string,
+	key string,
+	targetNodeID string,
+	assigneeSelection string,
+	thinkingSelection string,
+	requiresApproval bool,
+	contextMode string,
+	contextSource serverapi.WorkflowContextSource,
+	promptTemplate string,
+	parameters []serverapi.WorkflowParameter,
+) workflowstore.EdgeRecord {
+	return workflowstore.EdgeRecord{
+		ID:                workflow.EdgeID(edgeID),
+		WorkflowID:        workflowID,
+		TransitionGroupID: workflow.TransitionGroupID(transitionGroupID),
+		Key:               workflow.ModelKey(key),
+		TargetNodeID:      workflow.NodeID(targetNodeID),
+		AssigneeSelection: workflow.AssigneeSelection(assigneeSelection),
+		ThinkingSelection: workflow.ThinkingSelection(thinkingSelection),
+		RequiresApproval:  requiresApproval,
+		ContextMode:       workflow.ContextMode(contextMode),
+		ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{
+			Kind:    workflow.ContextSourceKind(contextSource.Kind),
+			NodeKey: workflow.ModelKey(contextSource.NodeKey),
+		}),
+		PromptTemplate: promptTemplate,
+		Parameters:     domainParameters(parameters),
+	}
 }
 
 func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {

@@ -117,8 +117,40 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
 	RequiredTools              []toolspec.ID
-	WorkflowThinking           *workflow.ThinkingValue
-	ClearWorkflowThinking      bool
+	WorkflowThinking           WorkflowThinkingMutation
+}
+
+type WorkflowThinkingMutationKind uint8
+
+const (
+	WorkflowThinkingMutationUnchanged WorkflowThinkingMutationKind = iota
+	WorkflowThinkingMutationSet
+	WorkflowThinkingMutationClear
+)
+
+type WorkflowThinkingMutation struct {
+	kind  WorkflowThinkingMutationKind
+	value workflow.ThinkingValue
+}
+
+func KeepWorkflowThinking() WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationUnchanged}
+}
+
+func SetWorkflowThinking(value workflow.ThinkingValue) WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationSet, value: value}
+}
+
+func ClearWorkflowThinking() WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationClear}
+}
+
+func (mutation WorkflowThinkingMutation) Kind() WorkflowThinkingMutationKind {
+	return mutation.kind
+}
+
+func (mutation WorkflowThinkingMutation) Value() workflow.ThinkingValue {
+	return mutation.value
 }
 
 func optionalSessionName(name string) (*string, error) {
@@ -512,7 +544,7 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	next, err = withWorkflowThinking(next, options.WorkflowThinking, options.ClearWorkflowThinking)
+	next, err = withWorkflowThinking(next, options.WorkflowThinking)
 	return next, warnings, err
 }
 
@@ -529,20 +561,24 @@ func withRequiredRunPromptTools(plan SessionPlan, required []toolspec.ID) (Sessi
 	return plan, nil
 }
 
-func withWorkflowThinking(plan SessionPlan, thinking *workflow.ThinkingValue, clear bool) (SessionPlan, error) {
-	if thinking == nil && !clear {
+func withWorkflowThinking(plan SessionPlan, mutation WorkflowThinkingMutation) (SessionPlan, error) {
+	switch mutation.kind {
+	case WorkflowThinkingMutationUnchanged:
 		return plan, nil
-	}
-	if thinking != nil {
-		if err := thinking.Validate(); err != nil {
+	case WorkflowThinkingMutationSet:
+		if err := mutation.value.Validate(); err != nil {
 			return SessionPlan{}, err
 		}
+	case WorkflowThinkingMutationClear:
+	default:
+		return SessionPlan{}, errors.New("workflow thinking mutation is invalid")
 	}
 	plan.ActiveSettings = cloneSettings(plan.ActiveSettings)
-	if clear {
+	switch mutation.kind {
+	case WorkflowThinkingMutationClear:
 		plan.ActiveSettings.ThinkingLevel = ""
-	} else {
-		plan.ActiveSettings.ThinkingLevel = string(*thinking)
+	case WorkflowThinkingMutationSet:
+		plan.ActiveSettings.ThinkingLevel = string(mutation.value)
 	}
 	return plan, nil
 }

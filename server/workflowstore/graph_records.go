@@ -54,20 +54,7 @@ func workflowDefinitionFromPreparedGraph(
 		})
 	}
 	for _, edge := range prepared.edges {
-		definition.Edges = append(definition.Edges, workflow.Edge{
-			WorkflowID:         edge.WorkflowID,
-			ID:                 edge.ID,
-			Key:                edge.Key,
-			TransitionGroupID:  edge.TransitionGroupID,
-			TargetNodeID:       edge.TargetNodeID,
-			ContextMode:        edge.ContextMode,
-			ContextSource:      workflow.CanonicalContextSource(edge.ContextSource),
-			RequiresApproval:   edge.RequiresApproval,
-			PromptTemplate:     edge.PromptTemplate,
-			Parameters:         edge.Parameters,
-			InputBindings:      edge.InputBindings,
-			OutputRequirements: edge.OutputRequirements,
-		})
+		definition.Edges = append(definition.Edges, workflowEdgeFromRecord(edge))
 	}
 	return definition, nil
 }
@@ -186,6 +173,25 @@ func withWorkflowGraphEdge(prepared preparedWorkflowGraphSave, edge EdgeRecord) 
 	out := clonePreparedWorkflowGraphSave(prepared)
 	out.edges = upsertWorkflowGraphRecord(out.edges, edge, func(edge EdgeRecord) workflow.EdgeID { return edge.ID })
 	return out
+}
+
+func workflowEdgeFromRecord(edge EdgeRecord) workflow.Edge {
+	return workflow.Edge{
+		WorkflowID:         edge.WorkflowID,
+		ID:                 edge.ID,
+		Key:                edge.Key,
+		TransitionGroupID:  edge.TransitionGroupID,
+		TargetNodeID:       edge.TargetNodeID,
+		AssigneeSelection:  edge.AssigneeSelection,
+		ThinkingSelection:  edge.ThinkingSelection,
+		ContextMode:        edge.ContextMode,
+		ContextSource:      workflow.CanonicalContextSource(edge.ContextSource),
+		RequiresApproval:   edge.RequiresApproval,
+		PromptTemplate:     edge.PromptTemplate,
+		Parameters:         edge.Parameters,
+		InputBindings:      edge.InputBindings,
+		OutputRequirements: edge.OutputRequirements,
+	}
 }
 
 func withoutWorkflowGraphEdge(prepared preparedWorkflowGraphSave, edgeID workflow.EdgeID) preparedWorkflowGraphSave {

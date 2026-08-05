@@ -18,12 +18,15 @@ type TransitionParameterContractRequest struct {
 	TargetSessionPolicy          AssigneeSessionPolicy
 	Catalog                      TargetAgentCatalog
 	RequireExecutionDescriptions bool
-	FallbackRole                 string
-	SubmittedRole                string
-	SubmittedThinking            string
-	ThinkingDescription          string
-	RetainedSession              *AgentExecutionSelection
-	MaterializeSelection         bool
+	Materialization              *TransitionSelectionMaterializationRequest
+}
+
+type TransitionSelectionMaterializationRequest struct {
+	FallbackRole        string
+	SubmittedRole       string
+	SubmittedThinking   string
+	ThinkingDescription string
+	RetainedSession     *AgentExecutionSelection
 }
 
 type TransitionParameterContract struct {
@@ -37,6 +40,57 @@ type TransitionSelectionPlan struct {
 	Applicability      EdgeSelectorApplicability
 	Contract           TransitionParameterContract
 	ExecutionSelection *AgentExecutionSelection
+}
+
+func PlanDefinitionTransitionSelection(
+	definition Definition,
+	edge Edge,
+	catalog TargetAgentCatalog,
+	requireExecutionDescriptions bool,
+) (TransitionSelectionPlan, error) {
+	var source Node
+	var target Node
+	var group TransitionGroup
+	groupFound := false
+	for _, candidate := range definition.TransitionGroups {
+		if candidate.ID == edge.TransitionGroupID {
+			group = candidate
+			groupFound = true
+			break
+		}
+	}
+	if !groupFound {
+		return TransitionSelectionPlan{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
+	}
+	for _, candidate := range definition.Nodes {
+		switch NodeIDOf(candidate) {
+		case group.SourceNodeID:
+			source = candidate
+		case edge.TargetNodeID:
+			target = candidate
+		}
+	}
+	if source == nil {
+		return TransitionSelectionPlan{}, fmt.Errorf("transition source node %q is absent", group.SourceNodeID)
+	}
+	if target == nil {
+		return TransitionSelectionPlan{}, fmt.Errorf("transition target node %q is absent", edge.TargetNodeID)
+	}
+	fanOut := 0
+	for _, candidate := range definition.Edges {
+		if candidate.TransitionGroupID == edge.TransitionGroupID {
+			fanOut++
+		}
+	}
+	return PlanTransitionSelection(TransitionParameterContractRequest{
+		Edge:                         edge,
+		SourceKind:                   source.Kind(),
+		TargetKind:                   target.Kind(),
+		TargetRole:                   NodeSubagentRole(target),
+		FanOut:                       fanOut > 1,
+		Catalog:                      catalog,
+		RequireExecutionDescriptions: requireExecutionDescriptions,
+	})
 }
 
 func PlanTransitionSelection(request TransitionParameterContractRequest) (TransitionSelectionPlan, error) {
@@ -55,15 +109,15 @@ func PlanTransitionSelection(request TransitionParameterContractRequest) (Transi
 		return plan, err
 	}
 	plan.Contract = contract
-	if request.MaterializeSelection {
+	if request.Materialization != nil {
 		selection, err := planTargetAgentExecutionSelection(TargetAgentExecutionSelectionRequest{
 			Edge:                request.Edge,
-			FallbackRole:        request.FallbackRole,
+			FallbackRole:        request.Materialization.FallbackRole,
 			Catalog:             request.Catalog,
-			SubmittedRole:       request.SubmittedRole,
-			SubmittedThinking:   request.SubmittedThinking,
-			ThinkingDescription: request.ThinkingDescription,
-			RetainedSession:     request.RetainedSession,
+			SubmittedRole:       request.Materialization.SubmittedRole,
+			SubmittedThinking:   request.Materialization.SubmittedThinking,
+			ThinkingDescription: request.Materialization.ThinkingDescription,
+			RetainedSession:     request.Materialization.RetainedSession,
 		})
 		if err != nil {
 			return plan, err

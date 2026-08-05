@@ -336,7 +336,7 @@ func (s *Store) manualMoveProtectedParameterPolicies(
 			nil,
 			true,
 			true,
-			false,
+			transitionContractContextResolutionRequired,
 		)
 		if err != nil {
 			return nil, nil, err

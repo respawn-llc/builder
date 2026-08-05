@@ -710,12 +710,6 @@ func (s *validationState) validateSelectorApplicability(edge Edge, source Node, 
 		RequireExecutionDescriptions: s.context == ValidationContextExecution,
 	})
 	applicability := plan.Applicability
-	if planErr != nil {
-		applicability = EdgeSelectorApplicability{
-			Assignee: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
-			Thinking: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
-		}
-	}
 	if assigneeSelection == AssigneeSelectionPreviousNode {
 		if applicability.Assignee.Reason == SelectorApplicabilityTopology ||
 			applicability.Assignee.Reason == SelectorApplicabilityContextSource {

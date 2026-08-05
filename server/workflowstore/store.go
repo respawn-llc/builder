@@ -834,38 +834,28 @@ func (s *Store) validateDirectEdgeSelection(ctx context.Context, candidate EdgeR
 	if err != nil {
 		return err
 	}
-	edges := make([]workflow.Edge, 0, len(definition.Edges)+1)
-	for _, edge := range definition.Edges {
-		if updating && edge.ID == candidate.ID {
+	candidateValue := workflowEdgeFromRecord(candidate)
+	replaced := false
+	for index, edge := range definition.Edges {
+		if edge.ID != candidate.ID {
 			continue
 		}
-		edges = append(edges, edge)
+		if updating {
+			definition.Edges[index] = candidateValue
+			replaced = true
+		}
 	}
-	candidateValue := candidateEdge(candidate)
-	edges = append(edges, candidateValue)
-	group, ok := workflowTransitionGroupByID(definition.TransitionGroups, candidate.TransitionGroupID)
-	if !ok {
+	if updating && !replaced {
 		return nil
 	}
-	var source, target workflow.Node
-	for _, node := range definition.Nodes {
-		if workflow.NodeIDOf(node) == group.SourceNodeID {
-			source = node
-		}
-		if workflow.NodeIDOf(node) == candidate.TargetNodeID {
-			target = node
-		}
+	if !updating {
+		definition.Edges = append(definition.Edges, candidateValue)
 	}
-	if source == nil || target == nil {
-		return nil
+	planned, err := workflow.PlanDefinitionTransitionSelection(definition, candidateValue, s.roleResolver, false)
+	if err != nil {
+		return err
 	}
-	fanOut := 0
-	for _, edge := range edges {
-		if edge.TransitionGroupID == candidate.TransitionGroupID {
-			fanOut++
-		}
-	}
-	applicability := workflow.ResolveEdgeSelectorApplicability(candidateValue, source.Kind(), target.Kind(), fanOut > 1, s.roleResolver, workflow.NodeSubagentRole(target))
+	applicability := planned.Applicability
 	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode &&
 		!applicability.Assignee.Available {
 		return fmt.Errorf("edge Assignee selection is inapplicable: %s", applicability.Assignee.Reason)
@@ -875,30 +865,6 @@ func (s *Store) validateDirectEdgeSelection(ctx context.Context, candidate EdgeR
 		return fmt.Errorf("edge thinking selection is inapplicable: %s", applicability.Thinking.Reason)
 	}
 	return nil
-}
-
-func candidateEdge(record EdgeRecord) workflow.Edge {
-	return workflow.Edge{
-		ID:                record.ID,
-		WorkflowID:        record.WorkflowID,
-		TransitionGroupID: record.TransitionGroupID,
-		Key:               record.Key,
-		TargetNodeID:      record.TargetNodeID,
-		AssigneeSelection: record.AssigneeSelection,
-		ThinkingSelection: record.ThinkingSelection,
-		ContextMode:       record.ContextMode,
-		ContextSource:     record.ContextSource,
-		Parameters:        record.Parameters,
-	}
-}
-
-func workflowTransitionGroupByID(groups []workflow.TransitionGroup, id workflow.TransitionGroupID) (workflow.TransitionGroup, bool) {
-	for _, group := range groups {
-		if group.ID == id {
-			return group, true
-		}
-	}
-	return workflow.TransitionGroup{}, false
 }
 
 func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
