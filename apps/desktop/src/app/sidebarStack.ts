@@ -172,14 +172,12 @@ export function createSidebarHistory<T, R>(
     notify("push");
     return true;
   };
-
   const replace = (request: Parameters<SidebarHistory<T, R>["replace"]>[0]): boolean => {
     if (destroyed || request.sourceKey !== currentKey()) return false;
     refreshCurrent(request);
     notify("push");
     return true;
   };
-
   const back = (request: Parameters<SidebarHistory<T, R>["back"]>[0]): boolean => {
     if (destroyed || request.sourceKey !== currentKey() || currentIndex === 0) return false;
     entries[currentIndex] = { ...entryAt(entries, currentIndex), retainedState: request.retainedState };
@@ -190,7 +188,6 @@ export function createSidebarHistory<T, R>(
     notify("back");
     return true;
   };
-
   const remove = (predicate: (destination: T) => boolean) => {
     if (destroyed) return { removedCount: 0, currentRemoved: false, empty: false };
     const matches = entries.map((entry) => predicate(entry.destination));
