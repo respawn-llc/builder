@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 
 	"core/server/llm"
 	"core/server/session"
@@ -93,6 +94,8 @@ type userInjectionCommitResult struct {
 	continueCombinedFlush bool
 }
 
+var errQueuedUserFlushStopped = errors.New("queued user flush stopped")
+
 func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
 	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
 }
@@ -124,8 +127,8 @@ type messageLifecycle interface {
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
 	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
-	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
+	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }

@@ -85,6 +85,9 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return err
 			}
 			consumedQueueItemIDs = flushResult.queueItemIDs
+			if !flushResult.continueCombinedFlush {
+				return nil
+			}
 			if flushResult.flushed == 0 {
 				return nil
 			}
@@ -155,7 +158,10 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 		}
 	})
 	if errors.Is(err, ErrAgentBusy) {
-		item := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		item, queueErr := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		if queueErr != nil {
+			return llm.Message{}, nil, queueErr
+		}
 		if onAccepted != nil {
 			onAccepted(true)
 		}
@@ -164,7 +170,7 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 	return msg, nil, err
 }
 
-func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) QueuedUserMessage {
+func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) (QueuedUserMessage, error) {
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true)
 }
 

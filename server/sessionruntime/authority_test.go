@@ -659,7 +659,10 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 		t.Fatalf("wait ownerless execution: %v", err)
 	}
 	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item := engine.QueueUserMessage("steer retained runtime")
+		item, queueErr := engine.QueueUserMessage("steer retained runtime")
+		if queueErr != nil {
+			return queueErr
+		}
 		if !engine.DiscardQueuedUserMessage(item.ID) {
 			return errors.New("discard retained runtime steering")
 		}
@@ -715,7 +718,10 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 	<-executionStarted
 	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item := engine.QueueUserMessage("accepted before execution exit")
+		item, queueErr := engine.QueueUserMessage("accepted before execution exit")
+		if queueErr != nil {
+			return queueErr
+		}
 		if item.ID == "" {
 			return errors.New("queued user message has no id")
 		}

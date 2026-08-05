@@ -20,8 +20,8 @@ func TestNewAgentSteerBuildsTypedDeveloperMessage(t *testing.T) {
 	if message.MessageType == nil || *message.MessageType != llm.MessageTypeAgentSteer {
 		t.Fatalf("message type = %v, want agent_steer", message.MessageType)
 	}
-	if steer.SourceSessionID() != sourceID || message.Content == nil || *message.Content == "" {
-		t.Fatalf("message provenance/content = %q/%v", steer.SourceSessionID(), message.Content)
+	if message.Content == nil || *message.Content == "" {
+		t.Fatalf("message content = %v", message.Content)
 	}
 }
 

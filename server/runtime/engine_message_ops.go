@@ -575,11 +575,16 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		Status:          status,
 		FailureReason:   reason,
 	}
+	text, err := item.DisplayText()
+	if err != nil {
+		e.surfaceRunError(fmt.Errorf("queued user message status: %w", err))
+		return
+	}
 	if restore {
-		event.RestoreText = item.DisplayText()
+		event.RestoreText = text
 	}
 	if status == QueuedUserMessageAccepted {
-		event.RestoreText = item.DisplayText()
+		event.RestoreText = text
 	}
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }

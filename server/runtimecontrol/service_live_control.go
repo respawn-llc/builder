@@ -80,7 +80,11 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 			if !accepted {
 				return serverapi.ErrRuntimeNoActiveRun
 			}
-			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.DisplayText(), ClientRequestID: item.ClientRequestID}
+			displayText, displayErr := item.DisplayText()
+			if displayErr != nil {
+				return displayErr
+			}
+			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText, ClientRequestID: item.ClientRequestID}
 			return nil
 		})
 		return resp, err

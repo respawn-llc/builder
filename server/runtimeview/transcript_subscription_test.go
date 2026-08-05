@@ -126,7 +126,7 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+			hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 				CommittedRows: []runtime.TranscriptCommittedRowFact{{
 					StepID:     transcriptProjectionStepID,
 					Visibility: transcript.EntryVisibilityOngoingCollapsed,
@@ -176,9 +176,18 @@ const (
 	transcriptProjectionStepID = "10000000-0000-4000-8000-000000000012"
 )
 
+func mustTranscriptHydration(t *testing.T, snapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
+	t.Helper()
+	hydration, err := TranscriptHydrationFromSnapshotChecked(snapshot)
+	if err != nil {
+		t.Fatalf("TranscriptHydrationFromSnapshot: %v", err)
+	}
+	return hydration
+}
+
 func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testing.T) {
 	streamID := uuid.MustParse("f84c7d21-4c94-4a54-87fd-b41f5bd01d38")
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 		ActiveAssistantStreamID: &streamID,
@@ -311,7 +320,7 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 		t.Fatalf("committed row visibility = %q, want detail", got)
 	}
 
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:     transcriptProjectionStepID,
 			Visibility: transcript.EntryVisibilityHidden,
@@ -471,7 +480,7 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 }
 
 func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testing.T) {
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:  transcriptProjectionStepID,
 			Kind:    runtime.TranscriptCommittedRowFactAssistant,
@@ -527,7 +536,7 @@ func TestTranscriptHydrationRejectsAssistantStreamWithoutRuntimeIdentity(t *test
 			t.Fatal("expected partial assistant stream identity panic")
 		}
 	}()
-	_ = TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+	_ = mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 	})

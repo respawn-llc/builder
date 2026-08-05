@@ -3,11 +3,14 @@ package runtime
 import (
 	"core/server/llm"
 	"core/shared/textutil"
+	"errors"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 )
+
+var errInvalidQueuedUserMessage = errors.New("queued message requires a role and content")
 
 type queuedUserMessageStore struct {
 	mu      sync.Mutex
@@ -22,7 +25,7 @@ func newQueuedUserMessageStore() *queuedUserMessageStore {
 	return &queuedUserMessageStore{}
 }
 
-func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) QueuedUserMessage {
+func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) (QueuedUserMessage, error) {
 	requestID := ""
 	if len(clientRequestID) > 0 {
 		requestID = clientRequestID[0]
@@ -34,29 +37,26 @@ func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) Q
 	})
 }
 
-func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) QueuedUserMessage {
+func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) (QueuedUserMessage, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	if item.ID == "" {
 		item.ID = uuid.NewString()
 	}
 	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-	if item.Message.Content == nil {
-		panic("queued message content is required")
-	}
-	if item.Message.Role == "" {
-		panic("queued message role is required")
+	if item.Message.Content == nil || strings.TrimSpace(string(item.Message.Role)) == "" {
+		return QueuedUserMessage{}, errInvalidQueuedUserMessage
 	}
 	s.mu.Lock()
 	s.pending = append(s.pending, queuedUserMessage{message: item})
 	s.mu.Unlock()
-	return item
+	return item, nil
 }
 
-func (m QueuedUserMessage) DisplayText() string {
+func (m QueuedUserMessage) DisplayText() (string, error) {
 	if m.Message.Content == nil {
-		panic("queued message content is required")
+		return "", errInvalidQueuedUserMessage
 	}
-	return *m.Message.Content
+	return *m.Message.Content, nil
 }
 
 func (s *queuedUserMessageStore) Discard(queueItemID string) bool {

@@ -15,12 +15,25 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 		t.Fatalf("NewAgentSteer: %v", err)
 	}
 	message := steer.Message()
-	item := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
+	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
 		Message: message,
 	})
+	if err != nil {
+		t.Fatalf("QueueItem: %v", err)
+	}
 	if item.Message.Role != llm.RoleDeveloper ||
 		item.Message.MessageType == nil || *item.Message.MessageType != llm.MessageTypeAgentSteer {
 		t.Fatalf("queued message lost typed agent steer: %+v", item.Message)
+	}
+}
+
+func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
+	store := &queuedUserMessageStore{}
+	if _, err := store.QueueItem(QueuedUserMessage{}); err == nil {
+		t.Fatal("QueueItem accepted an invalid payload")
+	}
+	if _, err := (QueuedUserMessage{}).DisplayText(); err == nil {
+		t.Fatal("DisplayText accepted an invalid payload")
 	}
 }
 
@@ -42,7 +55,10 @@ func TestQueuedUserMessageFlushGroupsKeepAgentSteersSeparate(t *testing.T) {
 		{message: QueuedUserMessage{ID: "a2", Message: secondMessage}},
 		{message: QueuedUserMessage{ID: "h2", Message: human}},
 	}
-	groups := queuedUserMessageFlushGroups(pending)
+	groups, err := queuedUserMessageFlushGroups(pending)
+	if err != nil {
+		t.Fatalf("queuedUserMessageFlushGroups: %v", err)
+	}
 	if len(groups) != 4 {
 		t.Fatalf("flush groups = %d, want 4", len(groups))
 	}

@@ -11,8 +11,7 @@ import (
 )
 
 type AgentSteer struct {
-	sourceSessionID runtimeids.SessionID
-	message         llm.Message
+	message llm.Message
 }
 
 func NewAgentSteer(sourceSessionID runtimeids.SessionID, text string) (AgentSteer, error) {
@@ -30,15 +29,11 @@ func NewAgentSteer(sourceSessionID runtimeids.SessionID, text string) (AgentStee
 		sourceSessionID.String(),
 	)
 	messageType := llm.MessageTypeAgentSteer
-	return AgentSteer{sourceSessionID: sourceSessionID, message: llm.Message{
+	return AgentSteer{message: llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: &messageType,
 		Content:     textutil.Value(content),
 	}}, nil
-}
-
-func (s AgentSteer) SourceSessionID() runtimeids.SessionID {
-	return s.sourceSessionID
 }
 
 func (s AgentSteer) Message() llm.Message {

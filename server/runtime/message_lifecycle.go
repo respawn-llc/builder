@@ -376,8 +376,12 @@ func handoffRequestFromToolCall(call llm.ToolCall) (*handoffRequest, bool) {
 	}, true
 }
 
-func queuedUserMessageText(message QueuedUserMessage) string {
-	return strings.TrimSpace(message.DisplayText())
+func queuedUserMessageText(message QueuedUserMessage) (string, error) {
+	text, err := message.DisplayText()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(text), nil
 }
 
 type queuedUserMessageFlushGroup struct {
@@ -387,14 +391,20 @@ type queuedUserMessageFlushGroup struct {
 	pending    []queuedUserMessage
 }
 
-func queuedUserMessageFlushGroups(messages []queuedUserMessage) []queuedUserMessageFlushGroup {
+func queuedUserMessageFlushGroups(messages []queuedUserMessage) ([]queuedUserMessageFlushGroup, error) {
 	groups := make([]queuedUserMessageFlushGroup, 0, len(messages))
 	for _, pending := range messages {
-		text := queuedUserMessageText(pending.message)
+		text, err := queuedUserMessageText(pending.message)
+		if err != nil {
+			return nil, err
+		}
 		if text == "" {
 			continue
 		}
-		queueItems := queuedUserMessagesForFlush([]queuedUserMessage{pending})
+		queueItems, err := queuedUserMessagesForFlush([]queuedUserMessage{pending})
+		if err != nil {
+			return nil, err
+		}
 		if len(queueItems) == 0 {
 			continue
 		}
@@ -414,21 +424,25 @@ func queuedUserMessageFlushGroups(messages []queuedUserMessage) []queuedUserMess
 			pending:    []queuedUserMessage{pending},
 		})
 	}
-	return groups
+	return groups, nil
 }
 
-func queuedUserMessagesForFlush(messages []queuedUserMessage) []QueuedUserMessage {
+func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessage, error) {
 	items := make([]QueuedUserMessage, 0, len(messages))
 	for _, message := range messages {
 		item := message.message
 		item.ID = strings.TrimSpace(item.ID)
 		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-		if item.ID == "" || queuedUserMessageText(item) == "" {
+		text, err := queuedUserMessageText(item)
+		if err != nil {
+			return nil, err
+		}
+		if item.ID == "" || text == "" {
 			continue
 		}
 		items = append(items, item)
 	}
-	return items
+	return items, nil
 }
 
 func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
@@ -470,7 +484,10 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 
 	// Recheck immediately before commit because a live-run stop can race the drain.
 	pending = e.dropStoppedLiveRunQueueItems(pending)
-	groups := queuedUserMessageFlushGroups(pending)
+	groups, err := queuedUserMessageFlushGroups(pending)
+	if err != nil {
+		return result, err
+	}
 	for groupIndex, group := range groups {
 		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(group.pending, func() error {
 			receipt, persistErr := e.steerWithCommitReceipt(
@@ -527,16 +544,16 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	return result, nil
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {
+func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}
+		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
 	return m.queue.Queue(text, clientRequestID)
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage {
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}
+		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
 	return m.queue.QueueItem(item)
 }

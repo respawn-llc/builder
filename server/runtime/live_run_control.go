@@ -242,7 +242,13 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	}
 	committed = true
 	e.outputMutationMu.Lock()
-	item = e.messageFlow.QueueUserMessageWithID(item)
+	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
+	if queueErr != nil {
+		e.outputMutationMu.Unlock()
+		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
+		return QueuedUserMessage{}, false, queueErr
+	}
+	item = queuedItem
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 	e.outputMutationMu.Unlock()
 	queueItemID := mustQueueItemID(item.ID)
@@ -616,6 +622,12 @@ func (c *liveRunCoordinator) rollbackAdmission(admission liveRunAdmission) {
 
 func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
 	c.mu.Lock()
+	for id := range ids {
+		delete(c.stoppedQueueItems, id)
+	}
+	if len(c.stoppedQueueItems) == 0 {
+		c.stoppedQueueItems = nil
+	}
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
@@ -625,7 +637,6 @@ func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]s
 	for id := range ids {
 		delete(group.taggedQueueItems, id)
 		delete(group.publishingItems, id)
-		delete(c.stoppedQueueItems, id)
 	}
 	if len(group.taggedQueueItems) == 0 {
 		group.taggedQueueItems = nil

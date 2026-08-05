@@ -534,22 +534,25 @@ type QueuedUserMessage struct {
 	Message         llm.Message
 }
 
-func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
+func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 	return e.QueueUserMessageWithClientRequestID(text, "")
 }
 
-func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) QueuedUserMessage {
+func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (QueuedUserMessage, error) {
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
 }
 
-func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
+func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
 		e.outputMutationMu.Lock()
 		defer e.outputMutationMu.Unlock()
-		item := e.messageFlow.QueueUserMessage(text, clientRequestID)
+		item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
+		if err != nil {
+			return QueuedUserMessage{}, err
+		}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		return item
+		return item, nil
 	}
 	liveItem := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), text, clientRequestID)
 	waitedForLiveRunStep := false
@@ -558,7 +561,11 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
 			e.outputMutationMu.Lock()
-			item := e.messageFlow.QueueUserMessageWithID(liveItem)
+			item, err := e.messageFlow.QueueUserMessageWithID(liveItem)
+			if err != nil {
+				e.outputMutationMu.Unlock()
+				return QueuedUserMessage{}, err
+			}
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			e.outputMutationMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
@@ -567,7 +574,7 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
-			return item
+			return item, nil
 		}
 		if !e.waitingForLiveRunStepStart() {
 			break
@@ -579,15 +586,19 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		e.outputMutationMu.Lock()
 		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 		e.outputMutationMu.Unlock()
-		return liveItem
+		return liveItem, nil
 	}
 	e.outputMutationMu.Lock()
-	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
+	item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
+	if err != nil {
+		e.outputMutationMu.Unlock()
+		return QueuedUserMessage{}, err
+	}
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 	e.outputMutationMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
-	return item
+	return item, nil
 }
 
 func (e *Engine) waitingForLiveRunStepStart() bool {

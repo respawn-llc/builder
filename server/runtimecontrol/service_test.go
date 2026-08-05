@@ -63,6 +63,29 @@ func runtimeControlCurrentNodeInstructions() workflowruntime.TaskInstructions {
 	}
 }
 
+func mustQueueRuntimeControlMessage(t *testing.T, engine *runtime.Engine, text string) runtime.QueuedUserMessage {
+	t.Helper()
+	item, err := engine.QueueUserMessage(text)
+	if err != nil {
+		t.Fatalf("queue runtime message: %v", err)
+	}
+	return item
+}
+
+func mustQueueRuntimeControlMessageWithClientRequestID(
+	t *testing.T,
+	engine *runtime.Engine,
+	text string,
+	clientRequestID string,
+) runtime.QueuedUserMessage {
+	t.Helper()
+	item, err := engine.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	if err != nil {
+		t.Fatalf("queue runtime message with client request ID: %v", err)
+	}
+	return item
+}
+
 type runtimeControlPromptHistoryStore struct {
 	mu             sync.Mutex
 	records        []metadata.PromptHistoryRecord
@@ -2347,7 +2370,7 @@ reconciled:
 func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	queued := engine.QueueUserMessageWithClientRequestID("discard runtime only", runtimeids.NewRuntimeClientRequestID().String())
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(t, engine, "discard runtime only", runtimeids.NewRuntimeClientRequestID().String())
 	discardReq := serverapi.RuntimeDiscardQueuedUserMessageRequest{
 		ClientRequestID: "req-discard-runtime",
 		SessionID:       sessionStore.Meta().SessionID,
@@ -2372,7 +2395,7 @@ func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	target := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	queued := engine.QueueUserMessageWithClientRequestID("discard on interrupt", target.ClientRequestID.String())
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(t, engine, "discard on interrupt", target.ClientRequestID.String())
 	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
 	target.QueueItemID = &queueItemID
 	if err := service.operations.RecordQueuedMessageStatus(
