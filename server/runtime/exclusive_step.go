@@ -189,7 +189,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	status := statusFromRunError(err)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
 	if status != RunStatusCompleted {
-		if cleanupErr := s.engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); cleanupErr != nil {
+		if cleanupErr := s.engine.resetReasoningAndClearStreamingState(stepID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("reset failed-step streaming state: %w", cleanupErr))
 		}
 	}

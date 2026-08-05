@@ -344,6 +344,15 @@ func steerClearReasoningStateIntent() steeringIntent {
 	}
 }
 
+func (e *Engine) resetReasoningAndClearStreamingState(stepID string) error {
+	if e == nil {
+		return nil
+	}
+	resetErr := e.steer(stepID, steerResetReasoningStateIntent())
+	clearErr := e.steer(stepID, steerClearStreamingStateIntent())
+	return errors.Join(resetErr, clearErr)
+}
+
 func steerResetReasoningStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,

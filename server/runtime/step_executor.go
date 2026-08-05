@@ -100,7 +100,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 			},
 			func() {
-				_ = e.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent())
+				_ = e.resetReasoningAndClearStreamingState(stepID)
 			},
 		)
 		if err != nil {
@@ -647,7 +647,7 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 	if err != nil || !completed {
 		return false, err
 	}
-	if err := s.engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
+	if err := s.engine.resetReasoningAndClearStreamingState(stepID); err != nil {
 		return false, err
 	}
 	return true, nil
