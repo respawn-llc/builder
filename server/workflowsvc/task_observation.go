@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -46,7 +48,10 @@ func normalizeTaskObservationError(err error) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return serverapi.ErrWorkflowTaskNotFound
 	}
-	return err
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: task observation event stream closed: %v", serverapi.ErrStreamFailed, err)
+	}
+	return serverapi.NormalizeStreamError(err)
 }
 
 func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, bool, error) {

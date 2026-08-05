@@ -3,6 +3,7 @@ package workflowsvc
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -11,6 +12,16 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
+
+func TestNormalizeTaskObservationErrorClassifiesClosedEventStream(t *testing.T) {
+	err := normalizeTaskObservationError(io.EOF)
+	if !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("normalized error = %v, want stream failure", err)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("normalized error = %v, must not remain raw EOF", err)
+	}
+}
 
 type observationApprovalViewStub struct {
 	approvals []clientui.PendingApproval

@@ -63,3 +63,11 @@
   remains exit 130.
 - [x] Add service, gateway, and CLI boundary coverage for canceled stream
   failure versus caller cancellation.
+
+## Latest QA remediation
+
+- [x] Normalize Task observation event-stream EOF at the Workflow service
+  boundary to typed `ErrStreamFailed`, preserving caller cancellation as
+  cancellation and preventing raw EOF from reaching `task wait` or `task
+  watch` output.
+- [x] Add Workflow-service regression coverage for closed observation streams.
