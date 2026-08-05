@@ -20,6 +20,7 @@ import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
 import { useSidebar, type SidebarDestination } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
+import { TaskSearchGlobalTrigger, TaskSearchHost, TaskSearchProvider } from "@/shared/task-search";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useCurrentWindowChromeTitle } from "@/app-facade";
@@ -29,7 +30,6 @@ export type AppChromeProps = Readonly<{
 }>;
 
 export function AppChrome({ children }: AppChromeProps) {
-  const { t } = useTranslation();
   const { debugThemeOverrideEnabled, logger, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const stack = useNavigationStackState();
@@ -39,7 +39,8 @@ export function AppChrome({ children }: AppChromeProps) {
   const update = useDesktopUpdate(nativeBridge, logger);
 
   return (
-    <main className="window-glass-fill grid h-screen w-screen overflow-hidden pt-[var(--native-titlebar-height)]">
+    <TaskSearchProvider>
+      <main className="window-glass-fill grid h-screen w-screen overflow-hidden pt-[var(--native-titlebar-height)]">
       <div
         aria-hidden="true"
         className={topTreatment.classNames.join(" ")}
@@ -54,49 +55,14 @@ export function AppChrome({ children }: AppChromeProps) {
           void startNativeWindowDrag(event, nativeBridge.window.startDragging);
         }}
       />
-      <div
-        className={`app-region-no-drag fixed top-[8px] z-30 flex h-6 items-center ${macOS ? "left-[var(--native-home-link-left-macos)]" : "right-[var(--space-4)]"}`}
-        data-testid="app-chrome-navigation"
-      >
-        {!macOS ? <AppUpdateChip state={update} /> : null}
-        {stack.hasHistory && !macOS ? (
-          <HistoryButtons
-            backLabel={t("app.back")}
-            forwardLabel={t("app.forward")}
-            navigation={navigation}
-            placement="before-home"
-            stack={stack}
-          />
-        ) : null}
-        <Link
-          aria-label={t("app.home")}
-          className="grid h-6 w-6 place-items-center rounded-full border border-transparent text-[var(--color-on-island)]"
-          onClick={(event) => {
-            if (isPlainPrimaryClick(event)) {
-              event.preventDefault();
-              void navigation.openHome();
-            }
-          }}
-          to="/"
-        >
-          <Home aria-hidden="true" size={16} strokeWidth={1.125} />
-        </Link>
-        {stack.hasHistory && macOS ? (
-          <HistoryButtons
-            backLabel={t("app.back")}
-            forwardLabel={t("app.forward")}
-            navigation={navigation}
-            placement="after-home"
-            stack={stack}
-          />
-        ) : null}
-        {debugThemeOverrideEnabled ? <DebugThemeToggle label={t("app.toggleTheme")} /> : null}
-        {title !== null && macOS ? (
-          <div className={appChromeInlineTitleClassNames.join(" ")} data-testid="app-chrome-title">
-            {title}
-          </div>
-        ) : null}
-      </div>
+      <AppChromeNavigation
+        debugThemeOverrideEnabled={debugThemeOverrideEnabled}
+        macOS={macOS}
+        navigation={navigation}
+        stack={stack}
+        title={title}
+        update={update}
+      />
       <AppChromeFloatingUpdateChip state={update} visible={macOS} />
       {title !== null && !macOS ? (
         <div
@@ -107,6 +73,7 @@ export function AppChrome({ children }: AppChromeProps) {
         </div>
       ) : null}
       <SidebarProvider>
+        <TaskSearchHost />
         <WorkflowEditorDraftBridgeProvider>
           <ProjectDeletionEventHandler />
           <AttentionNotificationController />
@@ -122,7 +89,74 @@ export function AppChrome({ children }: AppChromeProps) {
           <SidebarRouteChangeCloser />
         </WorkflowEditorDraftBridgeProvider>
       </SidebarProvider>
-    </main>
+      </main>
+    </TaskSearchProvider>
+  );
+}
+
+function AppChromeNavigation({
+  debugThemeOverrideEnabled,
+  macOS,
+  navigation,
+  stack,
+  title,
+  update,
+}: Readonly<{
+  debugThemeOverrideEnabled: boolean;
+  macOS: boolean;
+  navigation: ReturnType<typeof useAppNavigation>;
+  stack: ReturnType<typeof useNavigationStackState>;
+  title: string | null;
+  update: DesktopUpdateState;
+}>) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className={`app-region-no-drag fixed top-[8px] z-30 flex h-6 items-center ${macOS ? "left-[var(--native-home-link-left-macos)]" : "right-[var(--space-4)]"}`}
+      data-testid="app-chrome-navigation"
+    >
+      {!macOS ? <TaskSearchGlobalTrigger /> : null}
+      {stack.hasHistory && !macOS ? (
+        <HistoryButtons
+          backLabel={t("app.back")}
+          forwardLabel={t("app.forward")}
+          navigation={navigation}
+          placement="before-home"
+          stack={stack}
+        />
+      ) : null}
+      {!macOS ? <AppUpdateChip state={update} /> : null}
+      <Link
+        aria-label={t("app.home")}
+        className="grid h-6 w-6 place-items-center rounded-full border border-transparent text-[var(--color-on-island)]"
+        data-testid="app-chrome-home"
+        onClick={(event) => {
+          if (isPlainPrimaryClick(event)) {
+            event.preventDefault();
+            void navigation.openHome();
+          }
+        }}
+        to="/"
+      >
+        <Home aria-hidden="true" size={16} strokeWidth={1.125} />
+      </Link>
+      {stack.hasHistory && macOS ? (
+        <HistoryButtons
+          backLabel={t("app.back")}
+          forwardLabel={t("app.forward")}
+          navigation={navigation}
+          placement="after-home"
+          stack={stack}
+        />
+      ) : null}
+      {macOS ? <TaskSearchGlobalTrigger /> : null}
+      {debugThemeOverrideEnabled ? <DebugThemeToggle label={t("app.toggleTheme")} /> : null}
+      {title !== null && macOS ? (
+        <div className={appChromeInlineTitleClassNames.join(" ")} data-testid="app-chrome-title">
+          {title}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

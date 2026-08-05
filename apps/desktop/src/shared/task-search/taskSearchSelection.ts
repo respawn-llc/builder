@@ -1,6 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 
-import { useTaskSearchMemory, type TaskSearchMemorySelection } from "@/app-facade";
+import {
+  taskSearchScopesEqual,
+  useTaskSearchMemory,
+  type TaskSearchMemorySelection,
+  type TaskSearchScope,
+} from "@/app-facade";
 import { prefersReducedMotion } from "@/ui";
 import type { TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
 
@@ -11,24 +16,24 @@ export type TaskSearchScrollRequest = Readonly<{
 }>;
 
 export function useTaskSearchSelection(
-  projectID: string,
+  scope: TaskSearchScope,
   displayedQuery: string | null,
   results: readonly SearchResult[],
 ) {
   const memory = useTaskSearchMemory();
-  const selected = memory.selectionFor(projectID);
+  const selected = memory.selectionFor(scope);
   const [scrollRequest, setScrollRequest] = useState<TaskSearchScrollRequest | null>(null);
   const nextScrollRequestIDRef = useRef(1);
-  const activeKey = resolveActiveSearchResult(results, selected, projectID, displayedQuery);
+  const activeKey = resolveActiveSearchResult(results, selected, scope, displayedQuery);
   const select = useCallback(
     (key: string): void => {
       if (displayedQuery === null) {
         throw new Error("Task Search result selection requires a displayed query.");
       }
-      const next = { key, projectID, query: displayedQuery };
+      const next = { key, scope, query: displayedQuery };
       memory.rememberSelection(next);
     },
-    [displayedQuery, memory, projectID],
+    [displayedQuery, memory, scope],
   );
   const requestReveal = useCallback(
     (key: string, behavior: "auto" | "smooth"): void => {
@@ -92,10 +97,15 @@ export function adjacentSearchResult(
 function resolveActiveSearchResult(
   results: readonly SearchResult[],
   selected: TaskSearchMemorySelection | null,
-  projectID: string,
+  scope: TaskSearchScope,
   displayedQuery: string | null,
 ): string | null {
-  if (displayedQuery !== null && selected?.projectID === projectID && selected.query === displayedQuery) {
+  if (
+    displayedQuery !== null &&
+    selected !== null &&
+    taskSearchScopesEqual(selected.scope, scope) &&
+    selected.query === displayedQuery
+  ) {
     return results.some((result) => result.key === selected.key) ? selected.key : (results[0]?.key ?? null);
   }
   return results[0]?.key ?? null;

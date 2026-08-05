@@ -1,9 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 
 import { appI18n } from "@/i18n";
+import { useSidebar } from "@/app-facade";
+import { SidebarProvider } from "@/app/sidebarProvider";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
-import { BoardTaskSearchChrome } from "./BoardTaskSearch";
+import {
+  TaskSearchGlobalTrigger,
+  TaskSearchHost,
+  TaskSearchProjectTrigger,
+  TaskSearchProvider,
+} from "@/shared/task-search";
 
 const searchResponse = {
   mode: "literal",
@@ -168,66 +176,6 @@ describe("Board Task Search", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("retains one query while rerunning Search in the next Project scope", async () => {
-    vi.useRealTimers();
-    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
-    const view = renderSearch(services, "project-first");
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
-    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
-    fireEvent.change(input, { target: { value: "search" } });
-    await waitFor(() => {
-      expect(services.transport.dedicatedCalls).toHaveLength(1);
-    });
-
-    view.rerender(
-      <TestAppProviders services={services}>
-        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-second" />
-      </TestAppProviders>,
-    );
-
-    expect(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") })).toHaveValue("search");
-    await waitFor(() => {
-      expect(services.transport.dedicatedCalls.at(-1)?.params).toMatchObject({
-        project_ids: ["project-second"],
-        query: "search",
-      });
-    });
-  });
-
-  it("retains each Project selection while switching Project scope", async () => {
-    vi.useRealTimers();
-    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
-    const view = renderSearch(services, "project-first");
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
-    const firstInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
-    fireEvent.change(firstInput, { target: { value: "search" } });
-    expect(await screen.findAllByRole("option")).toHaveLength(2);
-    fireEvent.keyDown(firstInput, { key: "ArrowDown" });
-    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
-
-    view.rerender(
-      <TestAppProviders services={services}>
-        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-second" />
-      </TestAppProviders>,
-    );
-    const secondInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
-    await waitFor(() => {
-      expect(screen.getAllByRole("option")).toHaveLength(2);
-    });
-    fireEvent.keyDown(secondInput, { key: "ArrowDown" });
-    fireEvent.keyDown(secondInput, { key: "ArrowUp" });
-    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
-
-    view.rerender(
-      <TestAppProviders services={services}>
-        <BoardTaskSearchChrome onOpenTask={vi.fn()} projectID="project-first" />
-      </TestAppProviders>,
-    );
-    await waitFor(() => {
-      expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
-    });
-  });
-
   it("keeps the prior Task result actionable while a replacement query debounces", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
@@ -293,6 +241,13 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent.change(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") }), {
+      target: { value: "global" },
+    });
+    await waitFor(() => {
+      expect(services.transport.dedicatedCalls.at(-1)?.params).not.toHaveProperty("project_ids");
+    });
 
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => {
@@ -328,16 +283,194 @@ describe("Board Task Search", () => {
     fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 11, clientY: 10 });
     expect(second).toHaveAttribute("aria-selected", "true");
   });
+
+  it("closes the route-owned Task lifecycle after replacing it from global Search", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const onRouteResult = vi.fn();
+
+    render(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <TaskSearchProvider>
+            <TaskSearchHost />
+            <TaskSearchGlobalTrigger />
+            <RouteTaskLifecycle onResult={onRouteResult} />
+          </TaskSearchProvider>
+        </SidebarProvider>
+      </TestAppProviders>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-sidebar-task")).toHaveTextContent("task-2");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close sidebar for test" }));
+
+    await waitFor(() => {
+      expect(onRouteResult).toHaveBeenCalledWith({ status: "canceled", reason: "closed" });
+    });
+  });
+
+  it("invalidates Project Search when its BoardRoute owner changes", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([
+      { method: "workflow.task.search", handler: async () => new Promise<never>(() => undefined) },
+    ]);
+    const view = renderSearch(services, "project-1", vi.fn(), { ownerKey: "project-1:workflow-1" });
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    view.rerender(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <TaskSearchProvider>
+            <TaskSearchHost />
+            <TaskSearchProjectTrigger
+              onOpenTask={vi.fn()}
+              ownerKey="project-1:workflow-2"
+              projectID="project-1"
+            />
+          </TaskSearchProvider>
+        </SidebarProvider>
+      </TestAppProviders>,
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    view.rerender(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <TaskSearchProvider>
+            <TaskSearchHost />
+            <TaskSearchProjectTrigger
+              onOpenTask={vi.fn()}
+              ownerKey="project-2:workflow-2"
+              projectID="project-2"
+            />
+          </TaskSearchProvider>
+        </SidebarProvider>
+      </TestAppProviders>,
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens a global result while a Task Detail sidebar is closing", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const onRouteResult = vi.fn();
+    render(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <TaskSearchProvider>
+            <TaskSearchHost />
+            <TaskSearchGlobalTrigger />
+            <RouteTaskLifecycle onResult={onRouteResult} />
+          </TaskSearchProvider>
+        </SidebarProvider>
+      </TestAppProviders>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Close sidebar for test" }));
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-sidebar-task")).toHaveTextContent("task-2");
+    });
+  });
+
+  it("shares the query while retaining selections independently by Search scope", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+    const onOpenTask = vi.fn();
+
+    renderSearch(services, "project-1", onOpenTask, { global: true });
+
+    const [globalTrigger, projectTrigger] = screen.getAllByRole("button", {
+      name: appI18n.t("taskSearch.open"),
+    });
+    if (globalTrigger === undefined || projectTrigger === undefined) {
+      throw new Error("Task Search scope test requires both entry points.");
+    }
+    fireEvent.click(projectTrigger);
+    const projectInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(projectInput, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(projectInput, { key: "ArrowDown" });
+
+    fireEvent.click(globalTrigger);
+    const globalInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    expect(globalInput).toHaveValue("search");
+    await waitFor(() => {
+      expect(services.transport.dedicatedCalls.at(-1)?.params).not.toHaveProperty("project_ids");
+    });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(globalInput, { key: "ArrowDown" });
+
+    fireEvent.click(projectTrigger);
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    });
+    const reopenedProjectInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    expect(reopenedProjectInput).toHaveAttribute(
+      "aria-activedescendant",
+      screen.getAllByRole("option")[1]?.id,
+    );
+  });
 });
 
 function renderSearch(
   services: ReturnType<typeof createTestServices>,
   projectID: string,
   onOpenTask = vi.fn(),
+  options: Readonly<{ global?: boolean; ownerKey?: string }> = {},
 ): ReturnType<typeof render> {
   return render(
     <TestAppProviders services={services}>
-      <BoardTaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />
+      <SidebarProvider>
+        <TaskSearchProvider>
+          <TaskSearchHost />
+          {options.global ? <TaskSearchGlobalTrigger /> : null}
+          <TaskSearchProjectTrigger
+            onOpenTask={onOpenTask}
+            ownerKey={options.ownerKey ?? projectID}
+            projectID={projectID}
+          />
+        </TaskSearchProvider>
+      </SidebarProvider>
     </TestAppProviders>,
+  );
+}
+
+function RouteTaskLifecycle({ onResult }: Readonly<{ onResult(result: unknown): void }>) {
+  const { activeDestination, closeSidebar, openSidebar } = useSidebar();
+  useEffect(() => {
+    void openSidebar({ kind: "taskDetail", taskID: "task-1" }).then(onResult);
+  }, [onResult, openSidebar]);
+  return (
+    <>
+      <output data-testid="active-sidebar-task">
+        {activeDestination?.kind === "taskDetail" ? activeDestination.taskID : ""}
+      </output>
+      <button
+        onClick={() => {
+          closeSidebar();
+        }}
+        type="button"
+      >
+        Close sidebar for test
+      </button>
+    </>
   );
 }

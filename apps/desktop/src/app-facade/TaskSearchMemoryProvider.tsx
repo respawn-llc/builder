@@ -5,29 +5,40 @@ import {
   type TaskSearchMemory,
   type TaskSearchMemorySelection,
 } from "./taskSearchMemoryContext";
+import type { TaskSearchScope } from "./taskSearchScope";
 
 export function TaskSearchMemoryProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [query, setQuery] = useState("");
-  const [selections, setSelections] = useState<ReadonlyMap<string, TaskSearchMemorySelection>>(
-    () => new Map(),
-  );
+  const [globalSelection, setGlobalSelection] = useState<TaskSearchMemorySelection | null>(null);
+  const [projectSelections, setProjectSelections] =
+    useState<ReadonlyMap<string, TaskSearchMemorySelection>>(() => new Map());
   const rememberSelection = useCallback(
     (nextSelection: TaskSearchMemorySelection): void => {
-      setSelections((current) => {
-        const previous = current.get(nextSelection.projectID);
+      if (nextSelection.scope.kind === "global") {
+        setGlobalSelection((current) =>
+          current?.key === nextSelection.key && current.query === nextSelection.query
+            ? current
+            : nextSelection,
+        );
+        return;
+      }
+      const projectID = nextSelection.scope.projectID;
+      setProjectSelections((current) => {
+        const previous = current.get(projectID);
         if (previous?.key === nextSelection.key && previous.query === nextSelection.query) {
           return current;
         }
         const next = new Map(current);
-        next.set(nextSelection.projectID, nextSelection);
+        next.set(projectID, nextSelection);
         return next;
       });
     },
-    [setSelections],
+    [],
   );
   const selectionFor = useCallback(
-    (projectID: string): TaskSearchMemorySelection | null => selections.get(projectID) ?? null,
-    [selections],
+    (scope: TaskSearchScope): TaskSearchMemorySelection | null =>
+      scope.kind === "global" ? globalSelection : (projectSelections.get(scope.projectID) ?? null),
+    [globalSelection, projectSelections],
   );
   const memory = useMemo<TaskSearchMemory>(
     () => ({ query, rememberSelection, selectionFor, setQuery }),

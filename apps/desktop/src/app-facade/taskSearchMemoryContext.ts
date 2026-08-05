@@ -1,15 +1,17 @@
 import { createContext, useContext } from "react";
 
+import type { TaskSearchScope } from "./taskSearchScope";
+
 export type TaskSearchMemorySelection = Readonly<{
   key: string;
-  projectID: string;
+  scope: TaskSearchScope;
   query: string;
 }>;
 
 export type TaskSearchMemory = Readonly<{
   query: string;
   rememberSelection(selection: TaskSearchMemorySelection): void;
-  selectionFor(projectID: string): TaskSearchMemorySelection | null;
+  selectionFor(scope: TaskSearchScope): TaskSearchMemorySelection | null;
   setQuery(query: string): void;
 }>;
 
