@@ -17,22 +17,27 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	entries := []runtime.ChatEntry{
 		{
 			StepID: stepID, Visibility: transcript.EntryVisibilityOngoingCollapsed,
-			ReviewerFeedback: &runtime.ReviewerFeedbackChatEntry{ID: feedbackID, Suggestions: []string{"  **one**  ", "two\nline"}},
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
+			ReviewerFeedback:    &runtime.ReviewerFeedbackChatEntry{ID: feedbackID, Suggestions: []string{"  **one**  ", "two\nline"}},
 		},
 		{
 			StepID: stepID, Visibility: transcript.EntryVisibilityOngoing,
-			ReviewerError: &runtime.ReviewerErrorChatEntry{ID: errorID, Detail: " raw failure "},
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 2},
+			ReviewerError:       &runtime.ReviewerErrorChatEntry{ID: errorID, Detail: " raw failure "},
 		},
 	}
 	snapshot := runtime.ChatSnapshot{Entries: entries}
 	liveFacts := runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot)
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{CommittedRows: liveFacts})
-	page := TranscriptPageFromSegment(
+	page, err := TranscriptPageFromSegment(
 		"58e121b5-30f7-4d0f-a1fa-fb3e6695e39c",
 		"name",
 		clientui.ConversationFreshnessEstablished,
 		runtime.TranscriptSegmentPage{Snapshot: snapshot},
 	)
+	if err != nil {
+		t.Fatalf("project page: %v", err)
+	}
 	if !reflect.DeepEqual(hydration.CommittedRows, page.Entries) {
 		t.Fatalf("hydration/page Reviewer rows differ: hydration=%+v page=%+v", hydration.CommittedRows, page.Entries)
 	}
@@ -48,6 +53,7 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 		event := runtime.Event{
 			Kind: runtime.EventLocalEntryAdded, StepID: stepID,
 			LocalEntry: &entries[index], LocalEntryProjected: true,
+			CommittedProvenance: entries[index].CommittedProvenance,
 		}
 		liveMessages := TranscriptMessagesFromRuntimeEvent(event)
 		if len(liveMessages) != 1 {

@@ -17,6 +17,7 @@ func TestReviewerRowsValidateTheirTypedPayloads(t *testing.T) {
 	}
 	feedbackRow := TranscriptCommittedRow{
 		Visibility:       transcript.EntryVisibilityOngoingCollapsed,
+		Locator:          transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Kind:             TranscriptRowReviewerFeedback,
 		ReviewerFeedback: &feedback,
 	}
@@ -26,6 +27,7 @@ func TestReviewerRowsValidateTheirTypedPayloads(t *testing.T) {
 
 	errorRow := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoing,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1},
 		Kind:       TranscriptRowReviewerError,
 		ReviewerError: &TranscriptReviewerErrorRow{
 			ID:     runtimeids.NewReviewerErrorID(),
@@ -42,6 +44,7 @@ func TestReviewerRowsRejectMissingOrInconsistentFacts(t *testing.T) {
 	stepID := transcriptTestStepID(t)
 	validFeedback := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoingCollapsed,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 		Kind:       TranscriptRowReviewerFeedback,
 		ReviewerFeedback: &TranscriptReviewerFeedbackRow{
 			ID:              runtimeids.NewReviewerFeedbackID(),
@@ -74,6 +77,7 @@ func TestReviewerRowsRejectMissingOrInconsistentFacts(t *testing.T) {
 		}(),
 		{
 			Visibility: transcript.EntryVisibilityOngoing,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 4, RowOrdinal: 1},
 			Kind:       TranscriptRowReviewerError,
 			ReviewerError: &TranscriptReviewerErrorRow{
 				ID:     runtimeids.NewReviewerErrorID(),

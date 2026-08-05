@@ -640,23 +640,34 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return visibilityErr
 		}
 		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), item.reviewerFeedback.suggestions...), Visibility: visibility}
-		_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	}
 	if item.reviewerError != nil {
 		id := runtimeids.NewReviewerErrorID()
-		_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail})
+		record := session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			entry := reviewerErrorChatEntryFromSessionRecord(session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}, stepID)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerErrorChatEntryFromSessionRecord(record, stepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	}

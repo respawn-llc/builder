@@ -135,12 +135,20 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID, &provenance)
 		case session.ReviewerFeedbackRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer feedback provenance: %w", provenanceErr)
+			}
 			e.transcriptRuntimeState().AppendLocalEntryRecord(
-				reviewerFeedbackChatEntryFromSessionRecord(payload, stepID), nil,
+				reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
 			)
 		case session.ReviewerErrorRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer error provenance: %w", provenanceErr)
+			}
 			e.transcriptRuntimeState().AppendLocalEntryRecord(
-				reviewerErrorChatEntryFromSessionRecord(payload, stepID), nil,
+				reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
 			)
 		case session.CacheWarningRecord:
 			provenance, provenanceErr := transcriptProvenanceFromRecord(record)

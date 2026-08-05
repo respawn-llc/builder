@@ -146,10 +146,18 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		s.appendLocalEntry(entry, stepID, &provenance)
 	case session.ReviewerFeedbackRecord:
 		s.closeTurn()
-		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID))
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance))
 	case session.ReviewerErrorRecord:
 		s.closeTurn()
-		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID))
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance))
 	case session.CacheWarningRecord:
 		s.closeTurn()
 		warning := cacheWarningFromSessionRecord(payload)

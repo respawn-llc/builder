@@ -71,10 +71,10 @@ func TestChatStoreDeliverySnapshotKeepsTypedReviewerFactsProjected(t *testing.T)
 		ID:          runtimeids.NewReviewerFeedbackID(),
 		Suggestions: []string{"first", "second"},
 		Visibility:  session.EntryVisibilityOngoingCollapsed,
-	}, "11111111-1111-4111-8111-111111111111"), nil)
+	}, "11111111-1111-4111-8111-111111111111", nil), nil)
 	chat.appendLocalEntryRecord(reviewerErrorChatEntryFromSessionRecord(session.ReviewerErrorRecord{
 		ID: runtimeids.NewReviewerErrorID(), Detail: "failure",
-	}, "22222222-2222-4222-8222-222222222222"), nil)
+	}, "22222222-2222-4222-8222-222222222222", nil), nil)
 	snapshot := chat.deliverySnapshot()
 	if len(snapshot.Rows) != 2 || snapshot.Rows[0].ReviewerFeedback == nil || snapshot.Rows[1].ReviewerError == nil {
 		t.Fatalf("typed Reviewer delivery rows = %+v", snapshot.Rows)

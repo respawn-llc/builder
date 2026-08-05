@@ -18,6 +18,7 @@ func TestValidateTranscriptCommittedRowAcceptsReviewerFacts(t *testing.T) {
 	rows := []clientui.TranscriptCommittedRow{
 		{
 			Visibility: transcript.EntryVisibilityOngoingCollapsed,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Kind:       clientui.TranscriptRowReviewerFeedback,
 			ReviewerFeedback: &clientui.TranscriptReviewerFeedbackRow{
 				ID:              runtimeids.NewReviewerFeedbackID(),
@@ -28,6 +29,7 @@ func TestValidateTranscriptCommittedRowAcceptsReviewerFacts(t *testing.T) {
 		},
 		{
 			Visibility: transcript.EntryVisibilityOngoing,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1},
 			Kind:       clientui.TranscriptRowReviewerError,
 			ReviewerError: &clientui.TranscriptReviewerErrorRow{
 				ID:     runtimeids.NewReviewerErrorID(),
@@ -50,6 +52,7 @@ func TestValidateTranscriptCommittedRowRejectsReviewerFactContractViolations(t *
 	}
 	feedback := clientui.TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoingCollapsed,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 		Kind:       clientui.TranscriptRowReviewerFeedback,
 		ReviewerFeedback: &clientui.TranscriptReviewerFeedbackRow{
 			ID:              runtimeids.NewReviewerFeedbackID(),
