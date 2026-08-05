@@ -176,6 +176,16 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
+	if err != nil {
+		if _, traces := s.engine.transcriptRuntimeState().ReasoningSnapshot(); len(traces) > 0 {
+			if resetReasoningErr := s.engine.steer(stepID, steerResetReasoningStateIntent()); resetReasoningErr != nil {
+				err = errors.Join(err, fmt.Errorf("reset reasoning state after agent step failure: %w", resetReasoningErr))
+			}
+		}
+	}
+	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
+		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
+	}
 	if assignmentErr := s.engine.flushPendingWorkflowAssignments(stepID); assignmentErr != nil {
 		err = errors.Join(err, fmt.Errorf("flush workflow assignments: %w", assignmentErr))
 	}

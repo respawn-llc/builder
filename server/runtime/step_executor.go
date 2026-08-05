@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/prompts"
@@ -11,7 +12,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type defaultStepExecutor struct {
@@ -77,6 +77,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 
+		var reasoningSteerErr error
 		resp, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
@@ -94,7 +95,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
 			},
 			func(delta llm.ReasoningSummaryDelta) {
-				_ = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				if reasoningSteerErr == nil {
+					reasoningSteerErr = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				}
 			},
 			func() {
 				_ = e.steer(stepID, steerClearStreamingStateIntent())
@@ -102,6 +105,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		)
 		if err != nil {
 			return stepLoopResult{}, err
+		}
+		if reasoningSteerErr != nil {
+			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
 		if _, err := e.recordLastUsage(resp.Usage); err != nil {
 			return stepLoopResult{}, err
@@ -136,9 +142,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
+			if err := s.reconcileReasoning(stepID, prepared.response.Reasoning); err != nil {
+				return stepLoopResult{}, err
+			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
+			if err := s.reconcileReasoning(stepID, prepared.response.Reasoning); err != nil {
+				return stepLoopResult{}, err
+			}
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
 		}
@@ -153,15 +165,6 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		assistantEventEmitted := resolution.committedAssistantEventPublished
 
 		if !noopFinalAnswer {
-			for _, entry := range resp.Reasoning {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-					Visibility: transcript.EntryVisibilityDetail,
-					Role:       string(transcript.EntryRoleReasoning),
-					Text:       entry.Text,
-				})); err != nil {
-					return stepLoopResult{}, err
-				}
-			}
 			if phaseTurn.MissingAssistantPhase {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(missingAssistantPhaseWarning)}})); err != nil {
 					return stepLoopResult{}, err
@@ -446,7 +449,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		if terminal {
 			return preparedCompletedResponse{
 				next:              completedResponseNextFinalAnswerToolsTerminal,
-				resolution:        completedResponseDiscardInstruction(),
+				resolution:        completedResponsePreserveReasoningInstruction(),
 				response:          resp,
 				phaseTurn:         phaseTurn,
 				assistant:         assistantMsg,
@@ -509,7 +512,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
-	resolution := completedResponseDiscardInstruction()
+	resolution := completedResponsePreserveReasoningInstruction()
 	if committedAssistantMessageFinalizesStreaming(assistantMsg) {
 		if assistantCommittedCoordinate == nil {
 			return preparedCompletedResponse{}, errors.New("persisted assistant text row has no committed transcript coordinate")

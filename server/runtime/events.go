@@ -110,6 +110,7 @@ type Event struct {
 	AssistantTranscriptStreamID  *uuid.UUID
 	AssistantStreamAbortReason   string
 	ReasoningDelta               *llm.ReasoningSummaryDelta
+	ReasoningTraceIdentity       *TranscriptReasoningTraceIdentity
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string

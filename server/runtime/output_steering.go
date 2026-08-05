@@ -61,7 +61,8 @@ type steeringGoalNoticeAndStatus struct {
 }
 
 type steeringLocalEntry struct {
-	entry storedLocalEntry
+	entry                  storedLocalEntry
+	reasoningTraceIdentity *TranscriptReasoningTraceIdentity
 }
 
 type steeringCommittedAssistantMessage struct {
@@ -78,6 +79,7 @@ type completedResponseResolutionInstructionKind uint8
 const (
 	completedResponseResolutionInstructionInvalid completedResponseResolutionInstructionKind = iota
 	completedResponseResolutionInstructionFinalize
+	completedResponseResolutionInstructionPreserveReasoning
 	completedResponseResolutionInstructionDiscard
 )
 
@@ -116,9 +118,13 @@ type steeringStreamingOutput struct {
 	assistantDelta *llm.AssistantDelta
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
+	clearReasoning bool
+	reasoningReset *steeringReasoningReset
 	resetEvents    bool
 	abortReason    *AssistantStreamAbortReason
 }
+
+type steeringReasoningReset struct{}
 
 type steeringCacheWarning struct {
 	warning    transcript.CacheWarning
@@ -175,6 +181,17 @@ func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
 		priority: steeringPriorityNormal,
 		items: []steeringItem{{localEntry: &steeringLocalEntry{
 			entry: copyEntry,
+		}}},
+	}
+}
+
+func steerReasoningLocalEntryIntent(entry storedLocalEntry, identity TranscriptReasoningTraceIdentity) steeringIntent {
+	copyEntry := entry
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{localEntry: &steeringLocalEntry{
+			entry:                  copyEntry,
+			reasoningTraceIdentity: &identity,
 		}}},
 	}
 }
@@ -287,6 +304,12 @@ func completedResponseDiscardInstruction() completedResponseResolutionInstructio
 	}
 }
 
+func completedResponsePreserveReasoningInstruction() completedResponseResolutionInstruction {
+	return completedResponseResolutionInstruction{
+		kind: completedResponseResolutionInstructionPreserveReasoning,
+	}
+}
+
 func steerCompletedResponseResolutionIntent(instruction completedResponseResolutionInstruction, outcome *completedResponseResolutionOutcome) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
@@ -318,6 +341,20 @@ func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}}},
+	}
+}
+
+func steerClearReasoningStateIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearReasoning: true}}},
+	}
+}
+
+func steerResetReasoningStateIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{reasoningReset: &steeringReasoningReset{}}}},
 	}
 }
 
@@ -457,7 +494,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return nil
 	}
 	if item.localEntry != nil {
-		receipt, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)
+		receipt, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry, item.localEntry.reasoningTraceIdentity)
 		item.recordCommitReceipt(receipt)
 		return err
 	}
@@ -562,6 +599,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
 	}
 	if item.streaming != nil {
+		if item.streaming.reasoningReset != nil {
+			e.transcriptRuntimeState().ResetReasoningTraces(stepID)
+			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+		}
+		if item.streaming.clearReasoning {
+			e.transcriptRuntimeState().ClearReasoningState(stepID)
+			return nil
+		}
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
 			if delta.Text == "" {
@@ -576,8 +621,16 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		if item.streaming.reasoningDelta != nil {
 			delta := *item.streaming.reasoningDelta
-			e.transcriptRuntimeState().SetReasoningState(stepID, delta)
-			return e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
+			identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
+			if err != nil {
+				return err
+			}
+			return e.emitRaw(Event{
+				Kind:                   EventReasoningDelta,
+				StepID:                 stepID,
+				ReasoningDelta:         &delta,
+				ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
+			})
 		}
 		var clearedMetadata *AssistantStreamMetadata
 		var clearedStreamID *uuid.UUID

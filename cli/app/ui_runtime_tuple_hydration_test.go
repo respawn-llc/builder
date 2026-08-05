@@ -494,14 +494,19 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		Text:     "assistant hydration",
 		Phase:    transcript.AssistantPhaseCommentary,
 	}
-	hydration.ActiveReasoning = &clientui.TranscriptReasoningUpdate{
+	hydration.ActiveThinkingStatus = &clientui.TranscriptThinkingStatusUpdate{
 		StepID: stepID,
-		Key:    "reasoning",
-		Text:   "reasoning body",
-		CurrentStatus: &clientui.ReasoningStatus{
-			Text: "reasoning",
-		},
+		Text:   "reasoning",
 	}
+	traceID := runtimeids.NewReasoningTraceID()
+	hydration.ActiveReasoningTraces = []clientui.TranscriptReasoningTraceUpdate{{
+		StepID: stepID,
+		Identity: clientui.TranscriptReasoningTraceIdentity{
+			Kent: &traceID,
+		},
+		CompactText: "reasoning body",
+		Text:        "reasoning body",
+	}}
 	hydration.ActiveStep = &clientui.TranscriptStepState{
 		RunID:      runID,
 		StepID:     stepID,

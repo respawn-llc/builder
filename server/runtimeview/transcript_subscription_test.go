@@ -199,10 +199,17 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		ActiveReasoning: &runtime.TranscriptReasoningState{
-			StepID: transcriptProjectionStepID, Key: "plan", Text: "inspect",
-			CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
+		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
+			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
+		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{{
+			StepID: transcriptProjectionStepID,
+			Identity: runtime.TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+				id := runtimeids.NewReasoningTraceID()
+				return &id
+			}()},
+			Text: "inspect",
+		}},
 		InFlightTools:    []runtime.TranscriptLiveToolStart{{StepID: transcriptProjectionStepID, ToolCallID: "call-1", ToolName: "shell"}},
 		QueuedMessages:   []runtime.QueuedUserMessage{{ID: queueItemID.String(), ClientRequestID: clientRequestID.String(), Text: "queued"}},
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
@@ -211,8 +218,9 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
 		GoalSuspended:    true,
 	})
-	if hydration.ActiveReasoning == nil || hydration.ActiveReasoning.Text != "inspect" {
-		t.Fatalf("reasoning = %+v", hydration.ActiveReasoning)
+	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||
+		len(hydration.ActiveReasoningTraces) != 1 || hydration.ActiveReasoningTraces[0].Text != "inspect" {
+		t.Fatalf("reasoning = status %+v traces %+v", hydration.ActiveThinkingStatus, hydration.ActiveReasoningTraces)
 	}
 	if len(hydration.InFlightTools) != 1 || hydration.InFlightTools[0].ToolCallID != "call-1" {
 		t.Fatalf("tools = %+v", hydration.InFlightTools)

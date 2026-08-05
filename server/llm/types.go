@@ -607,8 +607,43 @@ type Usage struct {
 }
 
 type ReasoningEntry struct {
-	Role *string `json:"role,omitempty"`
-	Text string  `json:"text"`
+	Role             *string                    `json:"role,omitempty"`
+	Text             string                     `json:"text"`
+	SourceCoordinate *ReasoningSourceCoordinate `json:"-"`
+	ItemIdentity     *ReasoningItemIdentity     `json:"-"`
+}
+
+type ReasoningSourceCoordinate struct {
+	OutputIndex *int64
+	PartIndex   *int64
+}
+
+type ReasoningItemIdentity struct {
+	ItemID    string
+	PartIndex *int64
+}
+
+func (c ReasoningSourceCoordinate) Validate() error {
+	if c.OutputIndex == nil || c.PartIndex == nil {
+		return fmt.Errorf("reasoning source coordinate requires output and part indexes")
+	}
+	if *c.OutputIndex < 0 || *c.PartIndex < 0 {
+		return fmt.Errorf("reasoning source coordinate indexes must be nonnegative")
+	}
+	return nil
+}
+
+func (i ReasoningItemIdentity) Validate() error {
+	if strings.TrimSpace(i.ItemID) == "" {
+		return fmt.Errorf("reasoning item identity id is required")
+	}
+	if i.PartIndex == nil {
+		return fmt.Errorf("reasoning item identity part index is required")
+	}
+	if *i.PartIndex < 0 {
+		return fmt.Errorf("reasoning item identity part index must be nonnegative")
+	}
+	return nil
 }
 
 type ReasoningItem struct {
@@ -706,10 +741,11 @@ type ReasoningStatus struct {
 }
 
 type ReasoningSummaryDelta struct {
-	Key           string
-	Role          string
-	Text          string
-	CurrentStatus *ReasoningStatus
+	SourceCoordinate *ReasoningSourceCoordinate
+	ItemIdentity     *ReasoningItemIdentity
+	Role             string
+	Text             string
+	CurrentStatus    *ReasoningStatus
 }
 
 type StreamCallbacks struct {

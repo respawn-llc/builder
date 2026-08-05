@@ -15,21 +15,23 @@ import (
 type TranscriptCommittedRowFactKind string
 
 const (
-	TranscriptCommittedRowFactUser      TranscriptCommittedRowFactKind = "user"
-	TranscriptCommittedRowFactAssistant TranscriptCommittedRowFactKind = "assistant"
-	TranscriptCommittedRowFactTool      TranscriptCommittedRowFactKind = "tool"
-	TranscriptCommittedRowFactNotice    TranscriptCommittedRowFactKind = "notice"
+	TranscriptCommittedRowFactUser           TranscriptCommittedRowFactKind = "user"
+	TranscriptCommittedRowFactAssistant      TranscriptCommittedRowFactKind = "assistant"
+	TranscriptCommittedRowFactTool           TranscriptCommittedRowFactKind = "tool"
+	TranscriptCommittedRowFactReasoningTrace TranscriptCommittedRowFactKind = "reasoning_trace"
+	TranscriptCommittedRowFactNotice         TranscriptCommittedRowFactKind = "notice"
 )
 
 type TranscriptCommittedRowFact struct {
-	StepID     string
-	Visibility transcript.EntryVisibility
-	Integrity  transcript.RowIntegrity
-	Kind       TranscriptCommittedRowFactKind
-	User       *TranscriptUserRowFact
-	Assistant  *TranscriptAssistantRowFact
-	Tool       *TranscriptToolRowFact
-	Notice     *TranscriptNoticeRowFact
+	StepID         string
+	Visibility     transcript.EntryVisibility
+	Integrity      transcript.RowIntegrity
+	Kind           TranscriptCommittedRowFactKind
+	User           *TranscriptUserRowFact
+	Assistant      *TranscriptAssistantRowFact
+	Tool           *TranscriptToolRowFact
+	ReasoningTrace *TranscriptReasoningTraceRowFact
+	Notice         *TranscriptNoticeRowFact
 }
 
 type TranscriptUserRowFact struct {
@@ -53,6 +55,12 @@ type TranscriptToolRowFact struct {
 	ResultSummary string
 	CondensedText string
 	Presentation  *transcript.ToolCallMeta
+}
+
+type TranscriptReasoningTraceRowFact struct {
+	Text                string
+	CompactText         string
+	ProvisionalIdentity *TranscriptReasoningTraceIdentity
 }
 
 type TranscriptNoticeRowFact struct {
@@ -112,6 +120,19 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		}
 		if evt.LocalEntryProjected {
 			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				if fact.Kind == TranscriptCommittedRowFactReasoningTrace && fact.ReasoningTrace != nil {
+					fact.ReasoningTrace.ProvisionalIdentity = cloneTranscriptReasoningTraceIdentity(evt.ReasoningTraceIdentity)
+				}
+				facts = []TranscriptCommittedRowFact{fact}
+				break
+			}
+			return nil
+		}
+		if strings.TrimSpace(evt.LocalEntry.Role) == string(transcript.EntryRoleReasoning) {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				if fact.ReasoningTrace != nil {
+					fact.ReasoningTrace.ProvisionalIdentity = cloneTranscriptReasoningTraceIdentity(evt.ReasoningTraceIdentity)
+				}
 				facts = []TranscriptCommittedRowFact{fact}
 				break
 			}
@@ -289,6 +310,21 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
+		}, true
+	case string(transcript.EntryRoleReasoning):
+		if strings.TrimSpace(entry.Text) == "" {
+			return TranscriptCommittedRowFact{}, false
+		}
+		presentation := ProjectReasoningTrace(entry.Text)
+		return TranscriptCommittedRowFact{
+			StepID:     entry.StepID,
+			Kind:       TranscriptCommittedRowFactReasoningTrace,
+			Visibility: transcript.EntryVisibilityDetail,
+			Integrity:  transcript.RowIntegrityValid,
+			ReasoningTrace: &TranscriptReasoningTraceRowFact{
+				Text:        presentation.Text,
+				CompactText: presentation.CompactText,
+			},
 		}, true
 	case "tool_call":
 		return TranscriptCommittedRowFact{}, false

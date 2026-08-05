@@ -13,8 +13,9 @@ const (
 	TranscriptMessageCommittedRow              TranscriptMessageKind = "committed_row"
 	TranscriptMessageAssistantDelta            TranscriptMessageKind = "assistant_delta"
 	TranscriptMessageAssistantStreamAbort      TranscriptMessageKind = "assistant_stream_abort"
-	TranscriptMessageReasoningUpdate           TranscriptMessageKind = "reasoning_update"
-	TranscriptMessageReasoningReset            TranscriptMessageKind = "reasoning_reset"
+	TranscriptMessageThinkingStatusUpdate      TranscriptMessageKind = "thinking_status_update"
+	TranscriptMessageReasoningTraceUpdate      TranscriptMessageKind = "reasoning_trace_update"
+	TranscriptMessageReasoningTraceReset       TranscriptMessageKind = "reasoning_trace_reset"
 	TranscriptMessageToolStart                 TranscriptMessageKind = "tool_start"
 	TranscriptMessageToolAbort                 TranscriptMessageKind = "tool_abort"
 	TranscriptMessageUserMessageFlushed        TranscriptMessageKind = "user_message_flushed"
@@ -49,8 +50,9 @@ type transcriptEventPayloadValue interface {
 		TranscriptCommittedRow |
 		TranscriptAssistantDelta |
 		TranscriptAssistantStreamAbort |
-		TranscriptReasoningUpdate |
-		TranscriptReasoningReset |
+		TranscriptThinkingStatusUpdate |
+		TranscriptReasoningTraceUpdate |
+		TranscriptReasoningTraceReset |
 		TranscriptToolStart |
 		TranscriptToolAbort |
 		TranscriptUserMessageFlushed |
@@ -111,7 +113,8 @@ type TranscriptHydration struct {
 	RuntimeReadModelUpdate RuntimeReadModelUpdate
 	CommittedRows          []TranscriptCommittedRow
 	ActiveAssistant        *TranscriptAssistantStream
-	ActiveReasoning        *TranscriptReasoningUpdate
+	ActiveThinkingStatus   *TranscriptThinkingStatusUpdate
+	ActiveReasoningTraces  []TranscriptReasoningTraceUpdate
 	ActiveStep             *TranscriptStepState
 	ActiveReviewer         *TranscriptReviewerState
 	ActiveCompaction       *TranscriptCompactionStatus
@@ -205,10 +208,12 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 		return decodeTranscriptPayload[TranscriptAssistantDelta](data)
 	case TranscriptMessageAssistantStreamAbort:
 		return decodeTranscriptPayload[TranscriptAssistantStreamAbort](data)
-	case TranscriptMessageReasoningUpdate:
-		return decodeTranscriptPayload[TranscriptReasoningUpdate](data)
-	case TranscriptMessageReasoningReset:
-		return decodeTranscriptPayload[TranscriptReasoningReset](data)
+	case TranscriptMessageThinkingStatusUpdate:
+		return decodeTranscriptPayload[TranscriptThinkingStatusUpdate](data)
+	case TranscriptMessageReasoningTraceUpdate:
+		return decodeTranscriptPayload[TranscriptReasoningTraceUpdate](data)
+	case TranscriptMessageReasoningTraceReset:
+		return decodeTranscriptPayload[TranscriptReasoningTraceReset](data)
 	case TranscriptMessageToolStart:
 		return decodeTranscriptPayload[TranscriptToolStart](data)
 	case TranscriptMessageToolAbort:
@@ -272,12 +277,16 @@ func (TranscriptAssistantStreamAbort) transcriptEventKind() TranscriptMessageKin
 	return TranscriptMessageAssistantStreamAbort
 }
 
-func (TranscriptReasoningUpdate) transcriptEventKind() TranscriptMessageKind {
-	return TranscriptMessageReasoningUpdate
+func (TranscriptThinkingStatusUpdate) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageThinkingStatusUpdate
 }
 
-func (TranscriptReasoningReset) transcriptEventKind() TranscriptMessageKind {
-	return TranscriptMessageReasoningReset
+func (TranscriptReasoningTraceUpdate) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageReasoningTraceUpdate
+}
+
+func (TranscriptReasoningTraceReset) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageReasoningTraceReset
 }
 
 func (TranscriptToolStart) transcriptEventKind() TranscriptMessageKind {

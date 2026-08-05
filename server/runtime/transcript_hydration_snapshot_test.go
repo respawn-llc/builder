@@ -29,8 +29,10 @@ func hydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot
 func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T) {
 	engine := newTranscriptHydrationSnapshotTestEngine(t, &fakeClient{})
 	const stepID = "step-current"
+	outputIndex, partIndex := int64(0), int64(0)
 	if err := engine.steer(stepID, steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
-		Key: "plan", Text: "inspect the repository", CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
+		Text:             "inspect the repository", CurrentStatus: &llm.ReasoningStatus{Text: "Planning"},
 	})); err != nil {
 		t.Fatalf("reasoning: %v", err)
 	}
@@ -42,10 +44,11 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	first := engine.QueueUserMessageWithClientRequestID("first", "client-1")
 	second := engine.QueueUserMessageWithClientRequestID("second", "client-2")
 	snapshot := hydrationSnapshot(t, engine)
-	if snapshot.ActiveReasoning == nil || snapshot.ActiveReasoning.StepID != stepID ||
-		snapshot.ActiveReasoning.Key != "plan" || snapshot.ActiveReasoning.Text != "inspect the repository" ||
-		snapshot.ActiveReasoning.CurrentStatus == nil || snapshot.ActiveReasoning.CurrentStatus.Text != "Planning" {
-		t.Fatalf("reasoning = %+v", snapshot.ActiveReasoning)
+	if snapshot.ActiveThinkingStatus == nil || snapshot.ActiveThinkingStatus.StepID != stepID ||
+		snapshot.ActiveThinkingStatus.Text != "Planning" ||
+		len(snapshot.ActiveReasoningTraces) != 1 ||
+		snapshot.ActiveReasoningTraces[0].Text != "inspect the repository" {
+		t.Fatalf("reasoning = status %+v traces %+v", snapshot.ActiveThinkingStatus, snapshot.ActiveReasoningTraces)
 	}
 	if len(snapshot.InFlightTools) != 2 || snapshot.InFlightTools[0].ToolCallID != "call-1" ||
 		snapshot.InFlightTools[1].ToolCallID != "call-2" ||
@@ -56,8 +59,12 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 	if err := engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
-	if got := hydrationSnapshot(t, engine).ActiveReasoning; got != nil {
-		t.Fatalf("reasoning after reset = %+v", got)
+	afterReset := hydrationSnapshot(t, engine)
+	if afterReset.ActiveThinkingStatus == nil || afterReset.ActiveThinkingStatus.Text != "Planning" {
+		t.Fatalf("thinking status after reset = %+v", afterReset.ActiveThinkingStatus)
+	}
+	if len(afterReset.ActiveReasoningTraces) != 0 {
+		t.Fatalf("reasoning traces after reset = %+v", afterReset.ActiveReasoningTraces)
 	}
 }
 
