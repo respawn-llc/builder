@@ -1,5 +1,6 @@
 export type SidebarRouteKind = "board" | "workflowEditor" | "other";
 type SimpleTransition = "none" | "pathname" | "boardWorkflow" | "workflowEditorProject";
+type SidebarRouteSearch = Readonly<Partial<Record<"projectId" | "taskId" | "workflowId", string>>>;
 
 export type SidebarRouteLocation = Readonly<{
   pathname: string;
@@ -10,37 +11,25 @@ export type SidebarRouteLocation = Readonly<{
 }>;
 
 export type SidebarRouteTransition =
-  | Readonly<{ kind: SimpleTransition }>
+  | Readonly<{ kind: "none" | "pathname" | "boardWorkflow" | "workflowEditorProject" }>
   | Readonly<{ kind: "boardTask"; from: string | undefined; to: string | undefined }>;
 
-export type SidebarRouteMatch = Readonly<{
-  routeId: string;
-  search: Readonly<{
-    projectId?: string | undefined;
-    taskId?: string | undefined;
-    workflowId?: string | undefined;
-  }>;
-}>;
+export type SidebarRouteMatch = Readonly<{ routeId: string; search: SidebarRouteSearch }>;
 
 export function sidebarRouteLocationFromMatches(
   pathname: string,
   matches: readonly SidebarRouteMatch[],
 ): SidebarRouteLocation {
-  const boardMatch = matches.find((match) => match.routeId === "/projects/$projectId");
-  const workflowEditorMatch = matches.find(
-    (match) => match.routeId === "/workflows/$workflowId/editor",
-  );
+  const searchFor = (routeId: string) => matches.find((match) => match.routeId === routeId)?.search;
+  const boardSearch = searchFor("/projects/$projectId");
+  const workflowEditorSearch = searchFor("/workflows/$workflowId/editor");
   return {
     pathname,
-    projectID: workflowEditorMatch?.search.projectId,
+    projectID: workflowEditorSearch?.projectId,
     routeKind:
-      boardMatch === undefined
-        ? workflowEditorMatch === undefined
-          ? "other"
-          : "workflowEditor"
-        : "board",
-    taskID: boardMatch?.search.taskId,
-    workflowID: boardMatch?.search.workflowId,
+      boardSearch === undefined ? (workflowEditorSearch === undefined ? "other" : "workflowEditor") : "board",
+    taskID: boardSearch?.taskId,
+    workflowID: boardSearch?.workflowId,
   };
 }
 

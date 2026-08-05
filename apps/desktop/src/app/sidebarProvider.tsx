@@ -35,16 +35,8 @@ import {
   sameSidebarDestination,
   deactivateSidebarDestination,
 } from "./sidebarDestinationAdapter";
-import {
-  SidebarHostContext,
-  type SidebarHostState,
-  type SidebarScopedActions,
-} from "./sidebarHostContext";
-import {
-  createSidebarHistory,
-  type SidebarHistory,
-  type SidebarHistorySnapshot,
-} from "./sidebarStack";
+import { SidebarHostContext, type SidebarHostState, type SidebarScopedActions } from "./sidebarHostContext";
+import { createSidebarHistory, type SidebarHistory, type SidebarHistorySnapshot } from "./sidebarStack";
 import {
   classifySidebarRouteTransition,
   sidebarRouteLocationFromMatches,
@@ -58,9 +50,17 @@ const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing
 type History = SidebarHistory<SidebarDestination, SidebarDestinationSnapshot>;
 type HistorySnapshot = SidebarHistorySnapshot<SidebarDestination, SidebarDestinationSnapshot>;
 type PendingSidebar = Readonly<{ history: History; resolve: (result: SidebarResult) => void }>;
-type VisibleSidebar = Readonly<{ destination: SidebarDestination; snapshot: SidebarDestinationSnapshot | null; key: string }>;
+type VisibleSidebar = Readonly<{
+  destination: SidebarDestination;
+  snapshot: SidebarDestinationSnapshot | null;
+  key: string;
+}>;
 type SidebarActivation = Readonly<{ history: History; key: string }>;
-type TaskDeletionOperation = Readonly<{ activation: SidebarActivation | null; taskID: string; state: "pending" | "deferred" | "completed" }>;
+type TaskDeletionOperation = Readonly<{
+  activation: SidebarActivation | null;
+  taskID: string;
+  state: "pending" | "deferred" | "completed";
+}>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [currentHistory, setCurrentHistory] = useState<History | null>(null);
@@ -79,10 +79,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closingHistoryRef = useRef<History | null>(null);
   const router = useRouter();
   const previousLocationRef = useRef(
-    sidebarRouteLocationFromMatches(
-      router.state.location.pathname,
-      router.state.matches,
-    ),
+    sidebarRouteLocationFromMatches(router.state.location.pathname, router.state.matches),
   );
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
@@ -92,22 +89,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   }, [currentHistory]);
 
   const subscribe = useCallback(
-    (listener: () => void) =>
-      currentHistory?.subscribe(listener) ??
-      (() => {
-        return;
-      }),
+    (listener: () => void) => currentHistory?.subscribe(listener) ?? (() => {}),
     [currentHistory],
   );
-  const getSnapshot = useCallback(
-    () => currentHistory?.snapshot() ?? null,
-    [currentHistory],
-  );
-  const historySnapshot = useSyncExternalStore<HistorySnapshot | null>(
-    subscribe,
-    getSnapshot,
-    () => null,
-  );
+  const getSnapshot = useCallback(() => currentHistory?.snapshot() ?? null, [currentHistory]);
+  const historySnapshot = useSyncExternalStore(subscribe, getSnapshot, () => null);
 
   const clearCloseTimeout = useCallback(() => {
     if (closeTimeoutRef.current !== null) {
@@ -117,24 +103,23 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   }, []);
 
   const setWidthFor = useCallback((destination: SidebarDestination | null) => {
-    if (destination !== null) {
-      const profile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(profile);
-      setSidebarWidths((current) =>
-        sidebarWidthForProfile(current, profile) === undefined
-          ? [...current, { profile, widthPx: defaultSidebarWidth(destination) }]
-          : current,
-      );
-    }
-  }, []);
-
-  const isCurrent = useCallback((history: History, key: string): boolean => {
-    return (
-      currentHistoryRef.current === history &&
-      pendingRef.current?.history === history &&
-      history.snapshot()?.key === key
+    if (destination === null) return;
+    const profile = sidebarWidthProfile(destination);
+    setActiveWidthProfile(profile);
+    setSidebarWidths((current) =>
+      sidebarWidthForProfile(current, profile) === undefined
+        ? [...current, { profile, widthPx: defaultSidebarWidth(destination) }]
+        : current,
     );
   }, []);
+
+  const isCurrent = useCallback(
+    (history: History, key: string) =>
+      currentHistoryRef.current === history &&
+      pendingRef.current?.history === history &&
+      history.snapshot()?.key === key,
+    [],
+  );
 
   const clearMutationAdmission = useCallback((history?: History) => {
     const admission = mutationAdmissionRef.current;
@@ -185,12 +170,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         (deletionOperation.activation === null
           ? currentHistoryRef.current === null && pendingRef.current === null
           : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
-      const deletedTaskRouteCleared =
+      if (
         transition.kind === "boardTask" &&
         transition.to === undefined &&
-        deletionOperation !== null &&
-        deletionOperation.taskID === transition.from;
-      if (deletedTaskRouteCleared) {
+        deletionOperation?.taskID === transition.from
+      ) {
         if (!deletionActivationIsCurrent) {
           taskDeletionRef.current = null;
         } else if (deletionOperation.state === "completed") {
@@ -275,9 +259,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         previous.history.destroy();
         previous.resolve({ status: "canceled", reason: "replaced" });
       }
-      const history = createSidebarHistory<SidebarDestination, SidebarDestinationSnapshot>(
-        destination,
-      );
+      const history = createSidebarHistory<SidebarDestination, SidebarDestinationSnapshot>(destination);
       const promise = new Promise<SidebarResult>((resolve) => {
         pendingRef.current = { history, resolve };
       });
@@ -375,7 +357,10 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       if (history === null) return { kind: "absent" };
       const visible = readVisible(history.snapshot());
       const deletionOperation = taskDeletionRef.current;
-      const deletionActivationIsCurrent = deletionOperation?.activation !== undefined && deletionOperation.activation !== null && isCurrent(deletionOperation.activation.history, deletionOperation.activation.key);
+      const deletionActivationIsCurrent =
+        deletionOperation?.activation !== undefined &&
+        deletionOperation.activation !== null &&
+        isCurrent(deletionOperation.activation.history, deletionOperation.activation.key);
       const result = history.remove((destination) => sidebarDestinationMatches(destination, target));
       if (result.removedCount === 0) return { kind: "absent" };
       if (deletionOperation !== null && deletionActivationIsCurrent) {
@@ -444,11 +429,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   );
   const hostCapture = useMemo(
     () => (stateCapture: SidebarStateCapture) => {
-      if (
-        scopedHistory === null ||
-        scopedKey === null ||
-        !isCurrent(scopedHistory, scopedKey)
-      ) {
+      if (scopedHistory === null || scopedKey === null || !isCurrent(scopedHistory, scopedKey)) {
         return () => {
           return;
         };
@@ -588,7 +569,7 @@ function sidebarHostDirection(
   history: History | null,
   snapshot: HistorySnapshot | null,
 ): "push" | "back" | null {
-  return history === null ? null : snapshot?.direction ?? null;
+  return history === null ? null : (snapshot?.direction ?? null);
 }
 
 function sidebarHostKey(
@@ -596,7 +577,7 @@ function sidebarHostKey(
   snapshot: HistorySnapshot | null,
   outgoing: VisibleSidebar | null,
 ): string | null {
-  return history === null ? outgoing?.key ?? null : snapshot?.key ?? null;
+  return history === null ? (outgoing?.key ?? null) : (snapshot?.key ?? null);
 }
 
 function sidebarHostSnapshot(
@@ -604,10 +585,14 @@ function sidebarHostSnapshot(
   snapshot: HistorySnapshot | null,
   outgoing: VisibleSidebar | null,
 ): SidebarDestinationSnapshot | null {
-  return history === null ? outgoing?.snapshot ?? null : snapshot?.retainedState ?? null;
+  return history === null ? (outgoing?.snapshot ?? null) : (snapshot?.retainedState ?? null);
 }
 
-function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null { return snapshot === null ? null : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key }; }
+function readVisible(snapshot: HistorySnapshot | null): VisibleSidebar | null {
+  return snapshot === null
+    ? null
+    : { destination: snapshot.destination, snapshot: snapshot.retainedState, key: snapshot.key };
+}
 
 function taskIDOf(destination: SidebarDestination): string {
   if (destination.kind !== "taskDetail") {
@@ -616,19 +601,16 @@ function taskIDOf(destination: SidebarDestination): string {
   return destination.taskID;
 }
 
-function sidebarActivation(history: History): SidebarActivation | null { const key = history.snapshot()?.key; return key === undefined ? null : { history, key }; }
+function sidebarActivation(history: History): SidebarActivation | null {
+  const key = history.snapshot()?.key;
+  return key === undefined ? null : { history, key };
+}
 
 function defaultSidebarWidth(destination: SidebarDestination | null = null): number {
   const preference = sidebarSizePreference(destination);
-  return initialSidebarWidthForViewport(
-    typeof window === "undefined" ? 0 : window.innerWidth,
-    preference,
-  );
+  return initialSidebarWidthForViewport(typeof window === "undefined" ? 0 : window.innerWidth, preference);
 }
 
-function sidebarWidthForProfile(
-  widths: SidebarWidths,
-  profile: SidebarWidthProfile,
-): number | undefined {
+function sidebarWidthForProfile(widths: SidebarWidths, profile: SidebarWidthProfile): number | undefined {
   return widths.find((entry) => sidebarWidthProfileEquals(entry.profile, profile))?.widthPx;
 }
