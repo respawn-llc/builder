@@ -15,6 +15,24 @@ import (
 func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"coder": {
+				Identity:           "coder",
+				QuestionsEnabled:   true,
+				ConfiguredThinking: "low",
+			},
+			"reviewer": {
+				Identity:           "reviewer",
+				QuestionsEnabled:   true,
+				ConfiguredThinking: "high",
+			},
+		},
+		selectable: []workflow.TargetAgentRole{
+			{Identity: "coder", ExplicitAgentCallable: true, QuestionsEnabled: true},
+			{Identity: "reviewer", ExplicitAgentCallable: true, QuestionsEnabled: true},
+		},
+	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -65,8 +83,30 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	}
 	if target.AgentExecutionSelection == nil ||
 		target.AgentExecutionSelection.Assignee != "reviewer" ||
+		target.AgentExecutionSelection.Thinking == nil ||
+		*target.AgentExecutionSelection.Thinking != workflow.ThinkingValue("high") ||
 		target.AgentExecutionSelection.Origin != workflow.AssigneeOriginRetainedSession {
-		t.Fatalf("target execution selection = %+v, want retained reviewer", target.AgentExecutionSelection)
+		t.Fatalf("target execution selection = %+v, want retained reviewer/high", target.AgentExecutionSelection)
+	}
+
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"reviewer": {
+				Identity:           "reviewer",
+				QuestionsEnabled:   true,
+				ConfiguredThinking: "low",
+			},
+		},
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after role configuration change: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].AgentExecutionSelection == nil ||
+		currentNodes[0].AgentExecutionSelection.Thinking == nil ||
+		*currentNodes[0].AgentExecutionSelection.Thinking != workflow.ThinkingValue("high") {
+		t.Fatalf("materialized retained selection after role configuration change = %+v, want frozen high", currentNodes)
 	}
 }
 

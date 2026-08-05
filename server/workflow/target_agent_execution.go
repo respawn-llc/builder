@@ -26,13 +26,15 @@ func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 	if request.RetainedSession != nil {
 		selection := request.RetainedSession.Clone()
 		selection.Origin = AssigneeOriginRetainedSession
-		if CanonicalThinkingSelection(request.Edge.ThinkingSelection) == ThinkingSelectionPreviousNode {
-			role := TargetAgentRole{Identity: selection.Assignee}
-			if request.Catalog != nil {
-				if resolved, ok := request.Catalog.ResolveConfiguredRole(selection.Assignee); ok {
-					role = resolved
-				}
+		role := TargetAgentRole{Identity: selection.Assignee}
+		roleResolved := false
+		if request.Catalog != nil {
+			if resolved, ok := request.Catalog.ResolveConfiguredRole(selection.Assignee); ok {
+				role = resolved
+				roleResolved = true
 			}
+		}
+		if CanonicalThinkingSelection(request.Edge.ThinkingSelection) == ThinkingSelectionPreviousNode {
 			thinking, err := PlanTargetAgentThinkingSelection(TargetAgentThinkingSelectionRequest{
 				OverrideEnabled:     true,
 				TargetRole:          role,
@@ -46,6 +48,15 @@ func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 			selection.Thinking = nil
 			if strings.TrimSpace(thinking.Value) != "" {
 				value, err := NewThinkingValue(thinking.Value)
+				if err != nil {
+					return AgentExecutionSelection{}, err
+				}
+				selection.Thinking = &value
+			}
+		} else if roleResolved {
+			selection.Thinking = nil
+			if configured := strings.TrimSpace(role.ConfiguredThinking); configured != "" {
+				value, err := NewThinkingValue(configured)
 				if err != nil {
 					return AgentExecutionSelection{}, err
 				}
