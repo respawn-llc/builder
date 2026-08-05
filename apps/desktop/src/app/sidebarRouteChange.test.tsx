@@ -12,7 +12,11 @@ import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
-import type { SidebarDestination, SidebarTaskDeletionOutcome } from "@/app-facade";
+import type {
+  SidebarDestination,
+  SidebarInvalidationResult,
+  SidebarTaskDeletionOutcome,
+} from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
@@ -356,6 +360,64 @@ describe("Sidebar route transition ownership", () => {
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
 
+  it("keeps a replacement activation after stale failure and later same-history invalidation", async () => {
+    const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
+    let harness: TaskDeletionHarness | undefined;
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
+          <DeletionHarness onReady={(value) => { harness = value; }} />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?taskId=task-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: "task-1", workflowID: undefined });
+    });
+    await waitFor(() => {
+      expect(harness).toBeDefined();
+    });
+    const deletionHarness = requireDeletionHarness(harness);
+    deletionHarness.recordTaskDeletion("task-1");
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: {},
+        to: "/projects/$projectId",
+      });
+    });
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: undefined });
+    });
+
+    await act(async () => {
+      deletionHarness.replaceSidebar({
+        content: <div />,
+        kind: "custom",
+        title: "Replacement",
+      });
+      deletionHarness.pushSidebar({
+        kind: "taskDetail",
+        mode: "overlay",
+        projectID: "project-1",
+        taskID: "task-2",
+      });
+      const result = deletionHarness.invalidateSidebar({ kind: "task", taskID: "task-2" });
+      expect(result).toEqual({ kind: "discarded" } satisfies SidebarInvalidationResult);
+    });
+    await act(async () => {
+      deletionHarness.settleTaskDeletion("task-1", "failed");
+    });
+
+    expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+  });
+
   it("closes the sidebar through the AppChrome Home navigation", async () => {
     const services = createTestServices([]);
     const router = createTestRouter(
@@ -469,6 +531,8 @@ function BoardSelectorObserver({
 }
 
 type TaskDeletionHarness = Readonly<{
+  invalidateSidebar(target: Readonly<{ kind: "task"; taskID: string }>): SidebarInvalidationResult;
+  pushSidebar(destination: SidebarDestination): void;
   recordTaskDeletion(taskID: string): void;
   replaceSidebar(destination: SidebarDestination): void;
   settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
@@ -477,10 +541,10 @@ type TaskDeletionHarness = Readonly<{
 function DeletionHarness({
   onReady,
 }: Readonly<{ onReady(harness: TaskDeletionHarness): void }>) {
-  const { recordTaskDeletion, replaceSidebar, settleTaskDeletion } = useSidebar();
+  const { invalidateSidebar, pushSidebar, recordTaskDeletion, replaceSidebar, settleTaskDeletion } = useSidebar();
   useEffect(() => {
-    onReady({ recordTaskDeletion, replaceSidebar, settleTaskDeletion });
-  }, [onReady, recordTaskDeletion, replaceSidebar, settleTaskDeletion]);
+    onReady({ invalidateSidebar, pushSidebar, recordTaskDeletion, replaceSidebar, settleTaskDeletion });
+  }, [invalidateSidebar, onReady, pushSidebar, recordTaskDeletion, replaceSidebar, settleTaskDeletion]);
   return null;
 }
 

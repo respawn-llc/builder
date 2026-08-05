@@ -370,10 +370,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const history = currentHistoryRef.current;
       if (history === null) return { kind: "absent" };
       const visible = readVisible(history.snapshot());
+      const deletionOperation = taskDeletionRef.current;
+      const deletionActivationIsCurrent = deletionOperation?.activation !== undefined && deletionOperation.activation !== null && isCurrent(deletionOperation.activation.history, deletionOperation.activation.key);
       const result = history.remove((destination) => sidebarDestinationMatches(destination, target));
       if (result.removedCount === 0) return { kind: "absent" };
-      const deletionOperation = taskDeletionRef.current;
-      if (deletionOperation?.activation?.history === history) {
+      if (deletionOperation !== null && deletionActivationIsCurrent) {
         taskDeletionRef.current = {
           ...deletionOperation,
           activation: sidebarActivation(history),
@@ -389,7 +390,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       return { kind: "discarded" };
     },
-    [clearMutationAdmission, setWidthFor, settleAndClose],
+    [clearMutationAdmission, isCurrent, setWidthFor, settleAndClose],
   );
 
   const resizeSidebar = useCallback(
