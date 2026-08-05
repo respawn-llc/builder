@@ -141,10 +141,28 @@ func deriveWiring(
 			continue
 		}
 		source, sourceExists := nodesByID[group.SourceNodeID]
-		if sourceExists && (source.Kind() == NodeKindStart || source.Kind() == NodeKindJoin) {
+		if !sourceExists {
+			continue
+		}
+		if source.Kind() == NodeKindStart || source.Kind() == NodeKindJoin {
 			continue
 		}
 		requiredFields := edgeParameterFields(edge)
+		target, targetExists := nodesByID[edge.TargetNodeID]
+		targetKind := NodeKind("")
+		targetRole := ""
+		if targetExists {
+			targetKind = target.Kind()
+			targetRole = NodeSubagentRole(target)
+		}
+		requiredFields = filterProtectedParameterFields(edge, requiredFields, protectedParameterConsumptionForEdge(
+			edge,
+			source.Kind(),
+			targetKind,
+			targetRole,
+			len(edgesForTransitionGroup(def.Edges, edge.TransitionGroupID)) > 1,
+			catalog,
+		))
 		if len(requiredFields) == 0 {
 			continue
 		}
@@ -289,14 +307,14 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(
 		fields := edgeParameterFields(edge)
 		if group, exists := groupsByID[edge.TransitionGroupID]; exists {
 			if source, exists := nodesByID[group.SourceNodeID]; exists {
-				consumption := PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
-					Edge:       edge,
-					SourceKind: source.Kind(),
-					TargetKind: join.Kind(),
-					TargetRole: NodeSubagentRole(join),
-					Catalog:    catalog,
-				})
-				fields = filterProtectedParameterFields(edge, fields, consumption)
+				fields = filterProtectedParameterFields(edge, fields, protectedParameterConsumptionForEdge(
+					edge,
+					source.Kind(),
+					join.Kind(),
+					NodeSubagentRole(join),
+					false,
+					catalog,
+				))
 			}
 		}
 		if len(fields) == 0 {
@@ -330,6 +348,25 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(
 		}
 	}
 	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
+}
+
+func protectedParameterConsumptionForEdge(
+	edge Edge,
+	sourceKind NodeKind,
+	targetKind NodeKind,
+	targetRole string,
+	fanOut bool,
+	catalog TargetAgentCatalog,
+) ProtectedParameterConsumption {
+	return PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
+		Edge:                edge,
+		SourceKind:          sourceKind,
+		TargetKind:          targetKind,
+		TargetRole:          targetRole,
+		FanOut:              fanOut,
+		TargetSessionPolicy: AssigneeSessionPolicyEstablishTarget,
+		Catalog:             catalog,
+	})
 }
 
 func filterProtectedParameterFields(
