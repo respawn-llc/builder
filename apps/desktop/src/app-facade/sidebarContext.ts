@@ -131,14 +131,16 @@ export type SidebarInvalidationResult =
   | Readonly<{ kind: "discarded" }>
   | Readonly<{ kind: "closed" }>;
 
+export type SidebarTaskDeletionOutcome = "completed" | "failed";
+
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
   backSidebar(): void;
   canGoBack: boolean;
   closeSidebar(reason?: SidebarCancelReason): void;
   invalidateSidebar(target: SidebarInvalidationTarget): SidebarInvalidationResult;
-  clearTaskDeletion(): void;
   recordTaskDeletion(taskID: string): void;
+  settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   pushSidebar(destination: SidebarDestination): void;
   replaceSidebar(destination: SidebarDestination): void;

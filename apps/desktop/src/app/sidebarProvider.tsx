@@ -22,6 +22,7 @@ import {
   type SidebarPhase,
   type SidebarResult,
   type SidebarStateCapture,
+  type SidebarTaskDeletionOutcome,
   initialSidebarWidthForViewport,
   sidebarSizePreference,
   sidebarWidthProfile,
@@ -65,6 +66,11 @@ type VisibleSidebar = Readonly<{
   key: string;
 }>;
 type CompletedSidebarResult = Exclude<SidebarResult, SidebarCanceledResult>;
+type TaskDeletionOperation = Readonly<{
+  taskID: string;
+  outcome: "pending" | SidebarTaskDeletionOutcome;
+  selectorTransition: "awaiting" | "deferred";
+}>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [currentHistory, setCurrentHistory] = useState<History | null>(null);
@@ -103,7 +109,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     };
   }, [boardMatch, pathname, workflowEditorMatch]);
   const previousLocationRef = useRef(location);
-  const deletedTaskRouteRef = useRef<string | null>(null);
+  const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
   useLayoutEffect(() => {
@@ -197,23 +203,62 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   );
 
   const recordTaskDeletion = useCallback((taskID: string) => {
-    deletedTaskRouteRef.current = taskID;
+    taskDeletionRef.current = {
+      outcome: "pending",
+      selectorTransition: "awaiting",
+      taskID,
+    };
   }, []);
 
-  const clearTaskDeletion = useCallback(() => {
-    deletedTaskRouteRef.current = null;
-  }, []);
+  const settleTaskDeletion = useCallback(
+    (taskID: string, outcome: SidebarTaskDeletionOutcome) => {
+      const operation = taskDeletionRef.current;
+      if (operation?.taskID !== taskID) return;
+      if (outcome === "failed") {
+        taskDeletionRef.current = null;
+        if (operation.selectorTransition === "deferred") {
+          closeSidebar("route_change");
+        }
+        return;
+      }
+      if (operation.selectorTransition === "deferred") {
+        taskDeletionRef.current = null;
+      } else {
+        taskDeletionRef.current = {
+          outcome,
+          selectorTransition: operation.selectorTransition,
+          taskID,
+        };
+      }
+    },
+    [closeSidebar],
+  );
 
   useLayoutEffect(() => {
     const previousLocation = previousLocationRef.current;
     previousLocationRef.current = location;
     const transition = classifySidebarRouteTransition(previousLocation, location);
-    const preserveUnrelatedTaskSidebar =
+    const deletionOperation = taskDeletionRef.current;
+    const deletedTaskRouteCleared =
       transition.kind === "boardTask" &&
       transition.to === undefined &&
-      deletedTaskRouteRef.current === transition.from;
-    deletedTaskRouteRef.current = null;
-    if (transition.kind !== "none" && !preserveUnrelatedTaskSidebar) {
+      deletionOperation !== null &&
+      deletionOperation.taskID === transition.from;
+    if (deletedTaskRouteCleared) {
+      if (deletionOperation.outcome === "completed") {
+        taskDeletionRef.current = null;
+        return;
+      }
+      if (deletionOperation.outcome === "pending") {
+        taskDeletionRef.current = {
+          ...deletionOperation,
+          selectorTransition: "deferred",
+        };
+        return;
+      }
+    }
+    if (transition.kind !== "none") {
+      taskDeletionRef.current = null;
       closeSidebar("route_change");
     }
   }, [closeSidebar, location]);
@@ -458,8 +503,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       canGoBack: historySnapshot?.canGoBack ?? false,
       closeSidebar,
       invalidateSidebar,
-      clearTaskDeletion,
       recordTaskDeletion,
+      settleTaskDeletion,
       openSidebar,
       pushSidebar,
       replaceSidebar,
@@ -474,8 +519,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       closeSidebar,
       historySnapshot?.canGoBack,
       invalidateSidebar,
-      clearTaskDeletion,
       recordTaskDeletion,
+      settleTaskDeletion,
       openSidebar,
       phase,
       pushSidebar,

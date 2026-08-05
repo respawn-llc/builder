@@ -17,10 +17,10 @@ export function createTestSidebarController(
     invalidateSidebar() {
       return { kind: "absent" };
     },
-    clearTaskDeletion() {
+    recordTaskDeletion() {
       return;
     },
-    recordTaskDeletion() {
+    settleTaskDeletion() {
       return;
     },
     async openSidebar(destination) {

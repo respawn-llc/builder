@@ -8,8 +8,8 @@ const navigation = vi.hoisted(() => ({
 const sidebar = vi.hoisted(() => ({
   invalidateSidebar: vi.fn(),
   openSidebar: vi.fn(),
-  clearTaskDeletion: vi.fn(),
   recordTaskDeletion: vi.fn(),
+  settleTaskDeletion: vi.fn(),
 }));
 
 vi.mock("@/app-facade", async () => {
@@ -50,7 +50,7 @@ describe("useBoardSelectedTaskDeletion", () => {
 
     await waitFor(() => {
       expect(onNavigationError).toHaveBeenCalledWith(error);
-      expect(sidebar.clearTaskDeletion).toHaveBeenCalled();
+      expect(sidebar.settleTaskDeletion).toHaveBeenCalledWith("task-1", "failed");
     });
   });
 
@@ -83,6 +83,7 @@ describe("useBoardSelectedTaskDeletion", () => {
     resolveNavigation({ status: "completed" });
     await waitFor(() => {
       expect(sidebar.recordTaskDeletion).toHaveBeenCalledWith("task-1");
+      expect(sidebar.settleTaskDeletion).toHaveBeenCalledWith("task-1", "completed");
     });
     expect(sidebar.invalidateSidebar).toHaveBeenCalledWith({ kind: "task", taskID: "task-1" });
   });

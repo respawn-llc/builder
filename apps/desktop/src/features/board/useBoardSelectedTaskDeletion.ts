@@ -17,7 +17,7 @@ export function useBoardSelectedTaskDeletion({
   selectedWorkflowID: string | undefined;
 }>) {
   const navigation = useAppNavigation();
-  const { clearTaskDeletion, invalidateSidebar, recordTaskDeletion, openSidebar } = useSidebar();
+  const { invalidateSidebar, recordTaskDeletion, settleTaskDeletion, openSidebar } = useSidebar();
   const previousTaskIDRef = useRef<string | undefined>(undefined);
 
   const request = useCallback(() => {
@@ -27,12 +27,12 @@ export function useBoardSelectedTaskDeletion({
     recordTaskDeletion(selectedTaskId);
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
     void navigation.closeProjectTask(projectId, selectedWorkflowID).then((result) => {
+      settleTaskDeletion(selectedTaskId, result.status);
       if (result.status === "failed") {
-        clearTaskDeletion();
         onNavigationError(result.error);
       }
     }, (error: unknown) => {
-      clearTaskDeletion();
+      settleTaskDeletion(selectedTaskId, "failed");
       onNavigationError(error);
     });
   }, [
@@ -43,8 +43,8 @@ export function useBoardSelectedTaskDeletion({
     projectId,
     selectedTaskId,
     selectedWorkflowID,
-    clearTaskDeletion,
     recordTaskDeletion,
+    settleTaskDeletion,
   ]);
 
   useLayoutEffect(() => {

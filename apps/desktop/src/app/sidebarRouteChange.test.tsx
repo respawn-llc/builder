@@ -4,6 +4,7 @@ import {
   createRoute,
   createRouter,
   RouterProvider,
+  useMatch,
 } from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,11 +12,12 @@ import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
+import type { SidebarTaskDeletionOutcome } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
 import { SidebarHost } from "./sidebar";
 import { SidebarProvider } from "./sidebarProvider";
-import { useSidebar } from "@/app-facade";
 
 describe("Sidebar route transition ownership", () => {
   beforeEach(() => {
@@ -105,11 +107,13 @@ describe("Sidebar route transition ownership", () => {
 
   it("closes for a Board workflow search transition", async () => {
     const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
     const router = createTestRouter(
       <TestAppProviders services={services}>
         <SidebarProvider>
           <SidebarHost />
           <OpenSidebar />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
         </SidebarProvider>
       </TestAppProviders>,
       ["/projects/project-1?workflowId=workflow-1"],
@@ -119,6 +123,9 @@ describe("Sidebar route transition ownership", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: "workflow-1" });
+    });
     await act(async () => {
       await router.navigate({
         params: { projectId: "project-1" },
@@ -127,9 +134,10 @@ describe("Sidebar route transition ownership", () => {
       });
     });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
-    );
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: "workflow-2" });
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing");
+    });
   });
 
   it("closes for a Workflow Editor project search transition", async () => {
@@ -163,12 +171,15 @@ describe("Sidebar route transition ownership", () => {
 
   it("preserves an unrelated sidebar after a deleted Board task route clears", async () => {
     const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
+    let harness: TaskDeletionHarness | undefined;
     const router = createTestRouter(
       <TestAppProviders services={services}>
         <SidebarProvider>
           <SidebarHost />
           <OpenSidebar />
-          <MarkTaskDeleted />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
+          <DeletionHarness onReady={(value) => { harness = value; }} />
         </SidebarProvider>
       </TestAppProviders>,
       ["/projects/project-1?taskId=task-1"],
@@ -178,7 +189,14 @@ describe("Sidebar route transition ownership", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Mark task deleted" }));
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: "task-1", workflowID: undefined });
+    });
+    await waitFor(() => {
+      expect(harness).toBeDefined();
+    });
+    const deletionHarness = requireDeletionHarness(harness);
+    deletionHarness.recordTaskDeletion("task-1");
     await act(async () => {
       await router.navigate({
         params: { projectId: "project-1" },
@@ -187,7 +205,105 @@ describe("Sidebar route transition ownership", () => {
       });
     });
 
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: undefined });
+    });
+    await act(async () => {
+      deletionHarness.settleTaskDeletion("task-1", "completed");
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+  });
+
+  it("defers deleted Board task route reconciliation until delayed success", async () => {
+    const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
+    let harness: TaskDeletionHarness | undefined;
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
+          <DeletionHarness onReady={(value) => { harness = value; }} />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?taskId=task-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: "task-1", workflowID: undefined });
+    });
+    await waitFor(() => {
+      expect(harness).toBeDefined();
+    });
+    const deletionHarness = requireDeletionHarness(harness);
+    deletionHarness.recordTaskDeletion("task-1");
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: {},
+        to: "/projects/$projectId",
+      });
+    });
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: undefined });
+    });
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+    await act(async () => {
+      deletionHarness.settleTaskDeletion("task-1", "completed");
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+  });
+
+  it("closes after a delayed failed deleted Board task route navigation", async () => {
+    const services = createTestServices([]);
+    const selectors: BoardSelectorSnapshot[] = [];
+    let harness: TaskDeletionHarness | undefined;
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+          <BoardSelectorObserver onChange={(selector) => selectors.push(selector)} />
+          <DeletionHarness onReady={(value) => { harness = value; }} />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/projects/project-1?taskId=task-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: "task-1", workflowID: undefined });
+    });
+    await waitFor(() => {
+      expect(harness).toBeDefined();
+    });
+    const deletionHarness = requireDeletionHarness(harness);
+    deletionHarness.recordTaskDeletion("task-1");
+    await act(async () => {
+      await router.navigate({
+        params: { projectId: "project-1" },
+        search: {},
+        to: "/projects/$projectId",
+      });
+    });
+
+    await waitFor(() => {
+      expect(selectors).toContainEqual({ taskID: undefined, workflowID: undefined });
+    });
+    expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+    await act(async () => {
+      deletionHarness.settleTaskDeletion("task-1", "failed");
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
+    );
   });
 
   it("closes the sidebar through the AppChrome Home navigation", async () => {
@@ -251,7 +367,13 @@ function createTestRouter(
     getParentRoute: () => rootRoute,
     path: "/projects/$projectId",
     validateSearch: (search: Record<string, unknown>) =>
-      z.object({ filter: z.string().optional() }).parse(search),
+      z
+        .object({
+          filter: z.string().optional(),
+          taskId: z.string().min(1).optional(),
+          workflowId: z.string().min(1).optional(),
+        })
+        .parse(search),
   });
   const workflowEditorRoute = createRoute({
     component: () => null,
@@ -278,11 +400,40 @@ function OpenSidebar() {
   return null;
 }
 
-function MarkTaskDeleted() {
-  const { recordTaskDeletion } = useSidebar();
-  return (
-    <button onClick={() => { recordTaskDeletion("task-1"); }} type="button">
-      Mark task deleted
-    </button>
-  );
+type BoardSelectorSnapshot = Readonly<{
+  taskID: string | undefined;
+  workflowID: string | undefined;
+}>;
+
+function BoardSelectorObserver({
+  onChange,
+}: Readonly<{ onChange(selector: BoardSelectorSnapshot): void }>) {
+  const match = useMatch({ from: "/projects/$projectId", shouldThrow: false });
+  useEffect(() => {
+    onChange({
+      taskID: match?.search.taskId,
+      workflowID: match?.search.workflowId,
+    });
+  }, [match?.search.taskId, match?.search.workflowId, onChange]);
+  return null;
+}
+
+type TaskDeletionHarness = Readonly<{
+  recordTaskDeletion(taskID: string): void;
+  settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
+}>;
+
+function DeletionHarness({
+  onReady,
+}: Readonly<{ onReady(harness: TaskDeletionHarness): void }>) {
+  const { recordTaskDeletion, settleTaskDeletion } = useSidebar();
+  useEffect(() => {
+    onReady({ recordTaskDeletion, settleTaskDeletion });
+  }, [onReady, recordTaskDeletion, settleTaskDeletion]);
+  return null;
+}
+
+function requireDeletionHarness(harness: TaskDeletionHarness | undefined): TaskDeletionHarness {
+  if (harness === undefined) throw new Error("Deletion harness is unavailable.");
+  return harness;
 }
