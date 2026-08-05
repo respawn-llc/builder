@@ -375,6 +375,9 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				OutputValues: req.OutputValues,
 				Commentary:   req.Commentary,
 			})
+			if !currentNodeCompletionCommitted(completed) {
+				return completionErr
+			}
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 			if intentErr != nil {
 				return intentErr
@@ -424,6 +427,9 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 			OutputValues: outputValues,
 			Commentary:   commentary,
 		})
+		if !currentNodeCompletionCommitted(completed) {
+			return completed, completionErr
+		}
 		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 		if intentErr != nil {
 			return completed, errors.Join(completionErr, intentErr)
@@ -441,6 +447,15 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		}
 		return completed, completionErr
 	})
+}
+
+func currentNodeCompletionCommitted(result workflowstore.CurrentNodeCompletionResult) bool {
+	mutation := result.Mutation
+	return len(mutation.Removed) > 0 ||
+		len(mutation.Created) > 0 ||
+		len(mutation.Updated) > 0 ||
+		len(result.AutomaticIntents) > 0 ||
+		result.PendingApproval != nil
 }
 
 func (c *CurrentNodeController) RecordProtocolViolation(ctx context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {

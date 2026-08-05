@@ -1,12 +1,55 @@
 package runtimecontrol
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"core/server/attentionnotify"
+	"core/server/registry"
 	"core/server/runtime"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
+
+type liveWatchAskViewStub struct {
+	asks []clientui.PendingAsk
+}
+
+func (s liveWatchAskViewStub) ListPendingAsksBySession(context.Context, serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
+	return serverapi.AskListPendingBySessionResponse{Asks: s.asks}, nil
+}
+
+type liveWatchApprovalViewStub struct{}
+
+func (liveWatchApprovalViewStub) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return serverapi.ApprovalListPendingBySessionResponse{}, nil
+}
+
+func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	sessionID := store.Meta().SessionID
+	attention := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionnotify.NewBroker())
+	service.WithLiveWatchPromptSources(
+		liveWatchAskViewStub{asks: []clientui.PendingAsk{{
+			AskID: "ask-1", SessionID: sessionID, Question: "Continue?", CreatedAt: time.Now().UTC(),
+		}}},
+		liveWatchApprovalViewStub{},
+		attention,
+	)
+
+	response, err := service.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("LiveWatch: %v", err)
+	}
+	if response.Outcome.Kind != serverapi.RuntimeLiveWatchQuestion ||
+		response.Outcome.Question == nil || response.Outcome.Question.Ask == nil ||
+		response.Outcome.Question.Ask.AskID != "ask-1" {
+		t.Fatalf("LiveWatch response = %+v", response)
+	}
+}
 
 func TestLiveWatchResultClassifiesTypedTerminalStates(t *testing.T) {
 	id := runtimeids.NewSessionID()
