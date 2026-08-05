@@ -156,7 +156,7 @@ Per-transition-branch policy for the next node's execution context:
 
 ### Context Source
 
-Per-Transition-Branch policy deciding which retained Session supplies context for continuation modes. `immediate_source` uses the Session bound to the source current Node. `node:<node_key>` selects the latest retained Session associated with a guaranteed-prior agent Node. `previous_target` selects the latest retained Session associated with the Transition Branch target and requires that one exists. `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session. While parallel work is active, every selection is scoped to the same Transition Branch Key as the source current Node.
+Per-Transition-Branch policy deciding which retained Session supplies context for continuation modes. `immediate_source` uses the Session bound to the source Current Node during normal completion; during Manual Move it falls back to the latest retained unscoped Session associated with the selected Transition's source Node. `node:<node_key>` selects the latest retained Session associated with a guaranteed-prior agent Node. `previous_target` selects the latest retained Session associated with the Transition Branch target and requires that one exists. `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session. While parallel work is active, every selection is scoped to the same Transition Branch Key as the source Current Node.
 
 ### Exact Execution Scope
 
