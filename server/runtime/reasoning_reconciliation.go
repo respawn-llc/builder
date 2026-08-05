@@ -10,8 +10,12 @@ import (
 
 func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.ReasoningEntry) error {
 	_, provisional := s.engine.transcriptRuntimeState().ReasoningSnapshot()
-	byCoordinate := make(map[transcriptReasoningCoordinate]TranscriptReasoningTraceState, len(provisional))
-	for _, trace := range provisional {
+	type provisionalTrace struct {
+		trace   TranscriptReasoningTraceState
+		ordinal int
+	}
+	byCoordinate := make(map[transcriptReasoningCoordinate]provisionalTrace, len(provisional))
+	for ordinal, trace := range provisional {
 		if trace.Source.OutputIndex == nil || trace.Source.PartIndex == nil {
 			return fmt.Errorf("provisional reasoning trace has no source coordinate")
 		}
@@ -19,12 +23,11 @@ func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.Re
 			output: *trace.Source.OutputIndex,
 			part:   *trace.Source.PartIndex,
 		}
-		byCoordinate[key] = trace
+		byCoordinate[key] = provisionalTrace{trace: trace, ordinal: ordinal}
 	}
 	seenCoordinates := make(map[transcriptReasoningCoordinate]struct{}, len(entries))
 	seenAliases := make(map[string]transcriptReasoningCoordinate, len(entries))
-	lastMatched := transcriptReasoningCoordinate{}
-	hasLastMatched := false
+	lastMatchedOrdinal := -1
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.Text) == "" {
 			continue
@@ -33,25 +36,24 @@ func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.Re
 		if coordinateErr != nil {
 			return coordinateErr
 		}
+		if entry.ItemIdentity != nil {
+			if err := entry.ItemIdentity.Validate(); err != nil {
+				return err
+			}
+		}
 		if correlated {
 			if _, duplicate := seenCoordinates[coordinate]; duplicate {
 				return fmt.Errorf("completed reasoning response repeats source coordinate output=%d part=%d", coordinate.output, coordinate.part)
 			}
 			seenCoordinates[coordinate] = struct{}{}
-			if hasLastMatched && coordinate.output < lastMatched.output ||
-				(hasLastMatched && coordinate.output == lastMatched.output && coordinate.part < lastMatched.part) {
-				return fmt.Errorf("completed reasoning response reorders source coordinates")
-			}
-			lastMatched = coordinate
-			hasLastMatched = true
 			trace, ok := byCoordinate[coordinate]
-			if !ok {
-				return fmt.Errorf("completed reasoning response references an unprovisioned source coordinate output=%d part=%d", coordinate.output, coordinate.part)
+			if ok {
+				if trace.ordinal < lastMatchedOrdinal {
+					return fmt.Errorf("completed reasoning response reorders provisional source coordinates")
+				}
+				lastMatchedOrdinal = trace.ordinal
 			}
 			if entry.ItemIdentity != nil {
-				if err := entry.ItemIdentity.Validate(); err != nil {
-					return err
-				}
 				alias, err := llm.ReasoningItemIdentityAlias(*entry.ItemIdentity)
 				if err != nil {
 					return err
@@ -60,11 +62,19 @@ func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.Re
 					return fmt.Errorf("completed reasoning response aliases one provider item to multiple source coordinates")
 				}
 				seenAliases[alias] = coordinate
+			}
+			if !ok {
+				if err := s.persistCompletedOnlyReasoning(stepID, entry.Text); err != nil {
+					return err
+				}
+				continue
+			}
+			if entry.ItemIdentity != nil {
 				if err := s.engine.transcriptRuntimeState().ObserveReasoningItemIdentity(stepID, entry.SourceCoordinate, entry.ItemIdentity); err != nil {
 					return err
 				}
 			}
-			identity := cloneTranscriptReasoningTraceIdentity(&trace.Identity)
+			identity := cloneTranscriptReasoningTraceIdentity(&trace.trace.Identity)
 			receipt, err := s.engine.steerWithCommitReceipt(
 				stepID,
 				steerReasoningLocalEntryIntent(storedLocalEntry{
@@ -86,24 +96,56 @@ func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.Re
 			}
 			continue
 		}
-		receipt, err := s.engine.steerWithCommitReceipt(
-			stepID,
-			steerLocalEntryIntent(storedLocalEntry{
-				Visibility: transcript.EntryVisibilityDetail,
-				Role:       string(transcript.EntryRoleReasoning),
-				Text:       entry.Text,
-			}),
-		)
-		if err != nil {
+		if err := s.persistCompletedOnlyReasoning(stepID, entry.Text); err != nil {
 			return err
-		}
-		if !receipt.Committed {
-			return fmt.Errorf("completed-only reasoning persistence returned without a durable commit")
 		}
 	}
 	_, remaining := s.engine.transcriptRuntimeState().ReasoningSnapshot()
 	if len(remaining) != 0 {
 		return fmt.Errorf("accepted response left provisional reasoning traces unresolved")
+	}
+	return nil
+}
+
+func (s *defaultStepExecutor) resolveReasoningDisposition(
+	stepID string,
+	next completedResponseNext,
+	entries []llm.ReasoningEntry,
+) error {
+	switch next {
+	case completedResponseNextExternalWorkflowTerminal,
+		completedResponseNextWorkflowPreflightRejected:
+		return s.resetProvisionalReasoning(stepID)
+	case completedResponseNextAccepted,
+		completedResponseNextFinalAnswerToolsTerminal:
+		return s.reconcileReasoning(stepID, entries)
+	default:
+		return fmt.Errorf("completed response produced invalid reasoning disposition")
+	}
+}
+
+func (s *defaultStepExecutor) resetProvisionalReasoning(stepID string) error {
+	_, traces := s.engine.transcriptRuntimeState().ReasoningSnapshot()
+	if len(traces) == 0 {
+		return nil
+	}
+	return s.engine.steer(stepID, steerResetReasoningStateIntent())
+}
+
+func (s *defaultStepExecutor) persistCompletedOnlyReasoning(stepID, text string) error {
+	receipt, err := s.engine.steerWithCommitReceipt(
+		stepID,
+		steerLocalEntryIntent(storedLocalEntry{
+			Visibility: transcript.EntryVisibilityDetail,
+			Role:       string(transcript.EntryRoleReasoning),
+			Text:       text,
+		}),
+	)
+	if err != nil {
+		return err
+	}
+	if !receipt.Committed {
+		return fmt.Errorf("completed-only reasoning persistence returned without a durable commit")
 	}
 	return nil
 }

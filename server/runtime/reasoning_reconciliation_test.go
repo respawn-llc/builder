@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -8,10 +9,11 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
-func TestCompletedResponseDiscardResetsReasoningWithoutAssistantStream(t *testing.T) {
+func TestCompletedResponseAbortThenReasoningResetWithoutAssistantStream(t *testing.T) {
 	var events []Event
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
 		Model:   "gpt-5",
@@ -27,12 +29,15 @@ func TestCompletedResponseDiscardResetsReasoningWithoutAssistantStream(t *testin
 		t.Fatalf("seed reasoning trace: %v", err)
 	}
 
-	outcome, err := engine.resolveCompletedResponseStream(stepID, completedResponseDiscardInstruction())
+	outcome, err := engine.resolveCompletedResponseStream(stepID, completedResponseAbortInstruction())
 	if err != nil {
 		t.Fatalf("discard completed response: %v", err)
 	}
 	if outcome.kind != completedResponseResolutionDiscarded || outcome.streamID != nil {
 		t.Fatalf("discard outcome = %+v, want discarded without stream", outcome)
+	}
+	if err := (&defaultStepExecutor{engine: engine}).resetProvisionalReasoning(stepID); err != nil {
+		t.Fatalf("reset provisional reasoning: %v", err)
 	}
 	status, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
 	if status == nil || status.Text != "Thinking" {
@@ -207,6 +212,138 @@ func TestReconcileReasoningKeepsTraceWhenCommitIsNotDurable(t *testing.T) {
 	if len(traces) != 1 {
 		t.Fatalf("reasoning traces after uncommitted persistence = %+v, want retained", traces)
 	}
+}
+
+func TestReconcileReasoningPersistsValidUnprovisionedCoordinateAsCompletedOnly(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	executor := &defaultStepExecutor{engine: engine}
+	outputIndex, partIndex := int64(8), int64(2)
+	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		Role: textPointer(string(transcript.EntryRoleReasoning)),
+		Text: "completed only",
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{
+			OutputIndex: &outputIndex,
+			PartIndex:   &partIndex,
+		},
+	}}); err != nil {
+		t.Fatalf("reconcile completed-only coordinate: %v", err)
+	}
+	hydration := hydrationSnapshot(t, engine)
+	if len(hydration.CommittedRows) == 0 || hydration.CommittedRows[len(hydration.CommittedRows)-1].Kind != TranscriptCommittedRowFactReasoningTrace ||
+		hydration.CommittedRows[len(hydration.CommittedRows)-1].ReasoningTrace.ProvisionalIdentity != nil {
+		t.Fatalf("completed-only hydration rows = %+v", hydration.CommittedRows)
+	}
+}
+
+func TestReconcileReasoningUsesFirstSeenProvisionalOrder(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	executor := &defaultStepExecutor{engine: engine}
+	firstOutput, secondOutput, part := int64(9), int64(1), int64(0)
+	first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &part}
+	second := &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &part}
+	for _, item := range []llm.ReasoningSummaryDelta{
+		{SourceCoordinate: first, Text: "first"},
+		{SourceCoordinate: second, Text: "second"},
+	} {
+		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+			t.Fatalf("seed provisional reasoning: %v", err)
+		}
+	}
+	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
+		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
+	}); err != nil {
+		t.Fatalf("reconcile first-seen order: %v", err)
+	}
+
+	engine = mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	executor = &defaultStepExecutor{engine: engine}
+	for _, item := range []llm.ReasoningSummaryDelta{
+		{SourceCoordinate: first, Text: "first"},
+		{SourceCoordinate: second, Text: "second"},
+	} {
+		if err := engine.steer("step", steerReasoningDeltaIntent(item)); err != nil {
+			t.Fatalf("seed reordered reasoning: %v", err)
+		}
+	}
+	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
+		{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
+	}); err == nil {
+		t.Fatal("reordered provisional traces were accepted")
+	}
+}
+
+func TestReconcileReasoningRejectsMalformedCompletedOnlyIdentity(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	executor := &defaultStepExecutor{engine: engine}
+	if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+		Role:         textPointer(string(transcript.EntryRoleReasoning)),
+		Text:         "malformed",
+		ItemIdentity: &llm.ReasoningItemIdentity{ItemID: "reason_1"},
+	}}); err == nil {
+		t.Fatal("malformed completed-only identity was accepted")
+	}
+}
+
+func TestRunStepLoopResolvesCompletedOnlyReasoningAtBoundary(t *testing.T) {
+	outputIndex, partIndex := int64(8), int64(2)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("done"),
+		},
+		Reasoning: []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "completed",
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
+		}},
+		Usage: llm.Usage{WindowTokens: 200_000},
+	}}}
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), client, Config{Model: "gpt-5"})
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit completed-only reasoning turn: %v", err)
+	}
+	hydration := hydrationSnapshot(t, engine)
+	found := false
+	for _, row := range hydration.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil &&
+			row.ReasoningTrace.Text == "completed" &&
+			row.ReasoningTrace.ProvisionalIdentity == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("completed-only reasoning row missing from hydration: %+v", hydration.CommittedRows)
+	}
+}
+
+func TestRunStepLoopNoopAcceptanceCommitsReasoning(t *testing.T) {
+	outputIndex, partIndex := int64(0), int64(0)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value(transcript.NoopFinalToken),
+		},
+		Reasoning: []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "noop reasoning",
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex},
+		}},
+		Usage: llm.Usage{WindowTokens: 200_000},
+	}}}
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), client, Config{Model: "gpt-5"})
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit noop reasoning turn: %v", err)
+	}
+	hydration := hydrationSnapshot(t, engine)
+	for _, row := range hydration.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil &&
+			row.ReasoningTrace.Text == "noop reasoning" {
+			return
+		}
+	}
+	t.Fatalf("noop reasoning row missing from hydration: %+v", hydration.CommittedRows)
 }
 
 func textPointer(value string) *string {

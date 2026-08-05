@@ -887,6 +887,10 @@ func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected 
 		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
 			s.rows = append(s.rows, fact)
 		}
+	} else if strings.TrimSpace(entry.Role) == string(transcript.EntryRoleReasoning) {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
 	} else {
 		if fact, ok := transcriptNoticeRowFactFromChatEntry(entry); ok {
 			s.rows = append(s.rows, fact)

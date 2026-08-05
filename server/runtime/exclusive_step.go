@@ -176,13 +176,6 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
-	if err != nil {
-		if _, traces := s.engine.transcriptRuntimeState().ReasoningSnapshot(); len(traces) > 0 {
-			if resetReasoningErr := s.engine.steer(stepID, steerResetReasoningStateIntent()); resetReasoningErr != nil {
-				err = errors.Join(err, fmt.Errorf("reset reasoning state after agent step failure: %w", resetReasoningErr))
-			}
-		}
-	}
 	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
 		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
 	}
@@ -196,7 +189,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	status := statusFromRunError(err)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
 	if status != RunStatusCompleted {
-		_ = s.engine.steer(stepID, steerClearStreamingStateIntent())
+		if cleanupErr := s.engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("reset failed-step streaming state: %w", cleanupErr))
+		}
 	}
 	s.beginTerminalPublication()
 	if options.EmitRunState {

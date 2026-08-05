@@ -100,7 +100,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 			},
 			func() {
-				_ = e.steer(stepID, steerClearStreamingStateIntent())
+				_ = e.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent())
 			},
 		)
 		if err != nil {
@@ -125,6 +125,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
+		if err := s.resolveReasoningDisposition(stepID, prepared.next, prepared.response.Reasoning); err != nil {
+			return stepLoopResult{}, err
+		}
 		switch prepared.next {
 		case completedResponseNextExternalWorkflowTerminal:
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
@@ -142,15 +145,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
-			if err := s.reconcileReasoning(stepID, prepared.response.Reasoning); err != nil {
-				return stepLoopResult{}, err
-			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
-			if err := s.reconcileReasoning(stepID, prepared.response.Reasoning); err != nil {
-				return stepLoopResult{}, err
-			}
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
 		}
@@ -395,7 +392,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	} else if completed {
 		return preparedCompletedResponse{
 			next:       completedResponseNextExternalWorkflowTerminal,
-			resolution: completedResponseDiscardInstruction(),
+			resolution: completedResponseAbortInstruction(),
 			response:   resp,
 			assistant:  resp.Assistant,
 		}, nil
@@ -420,7 +417,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if rejection := classifyCompletedResponsePreflightRejection(e.currentNodeExecutionActive(), localToolCalls, hostedToolExecutions); rejection != nil {
 		return preparedCompletedResponse{
 			next:                 completedResponseNextWorkflowPreflightRejected,
-			resolution:           completedResponseDiscardInstruction(),
+			resolution:           completedResponseAbortInstruction(),
 			response:             resp,
 			phaseTurn:            phaseTurn,
 			assistant:            assistantMsg,
@@ -449,7 +446,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		if terminal {
 			return preparedCompletedResponse{
 				next:              completedResponseNextFinalAnswerToolsTerminal,
-				resolution:        completedResponsePreserveReasoningInstruction(),
+				resolution:        completedResponseAbortInstruction(),
 				response:          resp,
 				phaseTurn:         phaseTurn,
 				assistant:         assistantMsg,
@@ -512,7 +509,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
-	resolution := completedResponsePreserveReasoningInstruction()
+	resolution := completedResponseAbortInstruction()
 	if committedAssistantMessageFinalizesStreaming(assistantMsg) {
 		if assistantCommittedCoordinate == nil {
 			return preparedCompletedResponse{}, errors.New("persisted assistant text row has no committed transcript coordinate")
@@ -650,7 +647,7 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 	if err != nil || !completed {
 		return false, err
 	}
-	if err := s.engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
+	if err := s.engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		return false, err
 	}
 	return true, nil

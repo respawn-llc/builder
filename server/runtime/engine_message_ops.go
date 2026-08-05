@@ -545,23 +545,6 @@ func (e *Engine) emitStreamingAssistantCleanupEventsRaw(
 	streamID *uuid.UUID,
 	abortReason *AssistantStreamAbortReason,
 ) error {
-	e.transcriptRuntimeState().ResetReasoningTraces(stepID)
-	emissionErrors := []error{
-		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
-	}
-	if streamID != nil {
-		emissionErrors = append(emissionErrors, e.emitStreamingAssistantTerminalRaw(stepID, metadata, *streamID, abortReason))
-	}
-	emissionErrors = append(emissionErrors, e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID}))
-	return errors.Join(emissionErrors...)
-}
-
-func (e *Engine) emitStreamingAssistantCleanupEventsWithoutReasoningResetRaw(
-	stepID string,
-	metadata *AssistantStreamMetadata,
-	streamID *uuid.UUID,
-	abortReason *AssistantStreamAbortReason,
-) error {
 	emissionErrors := []error{
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	}
@@ -603,16 +586,12 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 		if instruction.abortReason != nil {
 			return completedResponseResolutionOutcome{}, errors.New("completed response finalize instruction cannot include an abort reason")
 		}
-	case completedResponseResolutionInstructionDiscard:
+	case completedResponseResolutionInstructionAbort:
 		if instruction.committedAssistant != nil {
-			return completedResponseResolutionOutcome{}, errors.New("completed response discard instruction cannot include a committed assistant row")
+			return completedResponseResolutionOutcome{}, errors.New("completed response abort instruction cannot include a committed assistant row")
 		}
 		if instruction.abortReason == nil {
-			return completedResponseResolutionOutcome{}, errors.New("completed response discard instruction requires an abort reason")
-		}
-	case completedResponseResolutionInstructionPreserveReasoning:
-		if instruction.committedAssistant != nil || instruction.abortReason != nil {
-			return completedResponseResolutionOutcome{}, errors.New("completed response preserve-reasoning instruction cannot include assistant or abort facts")
+			return completedResponseResolutionOutcome{}, errors.New("completed response abort instruction requires an abort reason")
 		}
 	default:
 		return completedResponseResolutionOutcome{}, errors.New("completed response stream resolution instruction is invalid")
@@ -636,7 +615,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 				committedAssistantEventPublished: true,
 			}, nil
 		}
-		if err := e.emitStreamingAssistantCleanupEventsWithoutReasoningResetRaw(stepID, clearedMetadata, clearedStreamID, nil); err != nil {
+		if err := e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, nil); err != nil {
 			return completedResponseResolutionOutcome{}, err
 		}
 		return completedResponseResolutionOutcome{
@@ -646,16 +625,6 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 		}, nil
 	}
 
-	if instruction.kind == completedResponseResolutionInstructionPreserveReasoning {
-		reason := AssistantStreamAbortSuperseded
-		if err := e.emitStreamingAssistantCleanupEventsWithoutReasoningResetRaw(stepID, clearedMetadata, clearedStreamID, &reason); err != nil {
-			return completedResponseResolutionOutcome{}, err
-		}
-		return completedResponseResolutionOutcome{
-			kind:     completedResponseResolutionFinalized,
-			streamID: cloneTranscriptStreamID(clearedStreamID),
-		}, nil
-	}
 	if err := e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason); err != nil {
 		return completedResponseResolutionOutcome{}, err
 	}

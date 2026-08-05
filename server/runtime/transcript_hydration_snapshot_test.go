@@ -56,7 +56,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 		snapshot.QueuedMessages[1].ID != second.ID {
 		t.Fatalf("owner facts = tools %+v queue %+v", snapshot.InFlightTools, snapshot.QueuedMessages)
 	}
-	if err := engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
+	if err := engine.steer(stepID, steerClearStreamingStateIntent(), steerResetReasoningStateIntent()); err != nil {
 		t.Fatalf("reset reasoning: %v", err)
 	}
 	afterReset := hydrationSnapshot(t, engine)

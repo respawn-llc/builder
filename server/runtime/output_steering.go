@@ -79,8 +79,7 @@ type completedResponseResolutionInstructionKind uint8
 const (
 	completedResponseResolutionInstructionInvalid completedResponseResolutionInstructionKind = iota
 	completedResponseResolutionInstructionFinalize
-	completedResponseResolutionInstructionPreserveReasoning
-	completedResponseResolutionInstructionDiscard
+	completedResponseResolutionInstructionAbort
 )
 
 type completedResponseResolutionInstruction struct {
@@ -296,17 +295,11 @@ func cloneCommittedAssistantCoordinate(coordinate *committedAssistantCoordinate)
 	return &copyCoordinate
 }
 
-func completedResponseDiscardInstruction() completedResponseResolutionInstruction {
+func completedResponseAbortInstruction() completedResponseResolutionInstruction {
 	reason := AssistantStreamAbortSuperseded
 	return completedResponseResolutionInstruction{
-		kind:        completedResponseResolutionInstructionDiscard,
+		kind:        completedResponseResolutionInstructionAbort,
 		abortReason: &reason,
-	}
-}
-
-func completedResponsePreserveReasoningInstruction() completedResponseResolutionInstruction {
-	return completedResponseResolutionInstruction{
-		kind: completedResponseResolutionInstructionPreserveReasoning,
 	}
 }
 
