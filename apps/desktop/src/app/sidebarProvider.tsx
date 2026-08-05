@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useMatch, useRouterState } from "@tanstack/react-router";
+import { useMatch, useRouter } from "@tanstack/react-router";
 
 import {
   SidebarContext,
@@ -76,7 +76,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const captureRef = useRef<SidebarStateCapture | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingHistoryRef = useRef<History | null>(null);
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const router = useRouter();
   const boardMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const workflowEditorMatch = useMatch({
     from: "/workflows/$workflowId/editor",
@@ -90,13 +90,13 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
           : "workflowEditor"
         : "board";
     return {
-      pathname,
+      pathname: router.state.location.pathname,
       projectID: workflowEditorMatch?.search.projectId,
       routeKind,
       taskID: boardMatch?.search.taskId,
       workflowID: boardMatch?.search.workflowId,
     };
-  }, [boardMatch, pathname, workflowEditorMatch]);
+  }, [boardMatch, router.state.location.pathname, workflowEditorMatch]);
   const previousLocationRef = useRef(location);
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
@@ -190,6 +190,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     },
     [settleAndClose],
   );
+
+  useLayoutEffect(() => router.subscribe("onBeforeLoad", ({ pathChanged }) => { if (pathChanged) closeSidebar("route_change"); }), [closeSidebar, router]);
 
   const recordTaskDeletion = useCallback((taskID: string) => {
     const history = currentHistoryRef.current;
