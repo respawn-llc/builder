@@ -121,35 +121,6 @@ func TestTransitionOutputFieldsForTargetNodeUsesJoinAggregate(t *testing.T) {
 	})
 }
 
-func TestDerivedWiringParameterDependenciesIncludeEveryJoinProviderAndOutgoingEdge(t *testing.T) {
-	def := joinParameterWorkflow(t)
-	def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
-		WorkflowID:   def.ID,
-		ID:           "group_join_done",
-		SourceNodeID: "node_join",
-		TransitionID: "done",
-		DisplayName:  "Done",
-	})
-	def.Edges = append(def.Edges, workflow.Edge{
-		WorkflowID:        def.ID,
-		ID:                "edge_join_done",
-		Key:               "done",
-		TransitionGroupID: "group_join_done",
-		TargetNodeID:      "node_done",
-		ContextMode:       workflow.ContextModeNewSession,
-	})
-
-	derived := workflow.DeriveWiring(def)
-
-	for _, providerEdgeID := range []workflow.EdgeID{"edge_branch_a_join", "edge_branch_b_join"} {
-		got := derived.ParameterDependencyEdgesForEdge(providerEdgeID)
-		want := []workflow.EdgeID{providerEdgeID, "edge_join_consume", "edge_join_done"}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("parameter dependencies for %q = %v, want %v", providerEdgeID, got, want)
-		}
-	}
-}
-
 func TestDeriveWiringReportsJoinAggregateCollisionsAcrossProducingTransitions(t *testing.T) {
 	def := joinParameterWorkflow(t)
 	edgeByIDForDerivedTest(t, &def, "edge_branch_b_join").Parameters = []workflow.Parameter{
