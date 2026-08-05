@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { ProjectLabel, WorkflowProjectEvent } from "@/api";
+import type { ProjectLabel, ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import type { LabelFilterAction } from "./labelFilterState";
 import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
@@ -32,6 +32,7 @@ export type LabelMembershipRefreshEffect =
 
 export type ProjectLabelEffects = Readonly<{
   applyLocalCreate(label: ProjectLabel): Promise<void>;
+  applyLocalReorder(catalog: ProjectLabelCatalog, generation: number): Promise<void>;
   applyLocalRename(label: ProjectLabel): Promise<void>;
   applyLocalDelete(labelID: string): Promise<void>;
   consumeProjectEvent(event: WorkflowProjectEvent): Promise<void>;
@@ -42,22 +43,30 @@ export function createProjectLabelEffects({
   authority,
   onFilterAction,
   onMembershipRefresh,
+  onBackgroundError = (error: unknown): void => {
+    throw error;
+  },
   projectID,
   queryClient,
 }: Readonly<{
   authority: ProjectCatalogAuthority;
   onFilterAction?: ((action: LabelFilterAction) => void) | undefined;
   onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
+  onBackgroundError?: ((error: unknown) => void) | undefined;
   projectID: string;
   queryClient: QueryClient;
 }>): ProjectLabelEffects {
   const registry = taskLabelAssignmentRegistryFor(queryClient);
+  const refreshBoardCards = async (): Promise<void> => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
+      refetchType: "active",
+    });
+  };
   const refreshMembership = async (effect: LabelMembershipRefreshEffect): Promise<void> => {
     await onMembershipRefresh?.(effect);
     const workflowID =
-      effect.kind === "task.labels_changed" || effect.kind === "task.deleted"
-        ? effect.workflowID
-        : undefined;
+      effect.kind === "task.labels_changed" || effect.kind === "task.deleted" ? effect.workflowID : undefined;
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey:
@@ -94,6 +103,10 @@ export function createProjectLabelEffects({
     async applyLocalCreate(label) {
       authority.applyCreate(label);
     },
+    async applyLocalReorder(catalog, generation) {
+      authority.installCatalog(catalog, generation);
+      void refreshBoardCards().catch(onBackgroundError);
+    },
     async applyLocalRename(label) {
       authority.applyRename(label);
     },
@@ -110,6 +123,9 @@ export function createProjectLabelEffects({
           return;
         }
         authority.requestRefresh();
+        if (event.action === "reordered") {
+          await refreshBoardCards();
+        }
         return;
       }
       if (event.resource !== "task" || event.workflowID === null) {

@@ -1,5 +1,6 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
+import { vi } from "vitest";
 
 import type { ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
@@ -95,6 +96,102 @@ describe("Project label event effects", () => {
       ],
     });
     await reorderEvent;
+  });
+
+  it("invalidates active board card queries after a committed local reorder without refreshing counts", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      projectID: "project-1",
+      queryClient,
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const catalog = {
+      projectID: "project-1",
+      labels: [{ id: alphaID, name: "Alpha" }],
+    };
+
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.projectBoardNodeCardsRoot("project-1"),
+      refetchType: "active",
+    });
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectBoardsRoot("project-1") }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectTaskListsRoot("project-1") }),
+    );
+  });
+
+  it("settles a local reorder before board refetch completion and reports refresh failures", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const refresh = deferred<void>();
+    const reportBackgroundError = vi.fn();
+    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(() => refresh.promise);
+    const effects = createProjectLabelEffects({
+      authority,
+      onBackgroundError: reportBackgroundError,
+      projectID: "project-1",
+      queryClient,
+    });
+    const catalog = {
+      projectID: "project-1",
+      labels: [{ id: alphaID, name: "Alpha" }],
+    };
+
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(queryKeys.projectLabels("project-1"))).toEqual(
+      catalog,
+    );
+    expect(reportBackgroundError).not.toHaveBeenCalled();
+
+    const refreshFailure = new Error("board refresh failed");
+    vi.spyOn(queryClient, "invalidateQueries").mockRejectedValueOnce(refreshFailure);
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+    await waitFor(() => {
+      expect(reportBackgroundError).toHaveBeenCalledWith(refreshFailure);
+    });
+    refresh.resolve();
+  });
+
+  it("invalidates active board card queries after a subscribed reorder event", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      projectID: "project-1",
+      queryClient,
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await effects.consumeProjectEvent(labelEvent("reordered", alphaID));
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.projectBoardNodeCardsRoot("project-1"),
+      refetchType: "active",
+    });
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectBoardsRoot("project-1") }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectTaskListsRoot("project-1") }),
+    );
   });
 
   it("keeps local delete and its event echo pruned before membership refresh", async () => {
@@ -335,7 +432,6 @@ describe("Project catalog authority projections", () => {
       ],
     });
   });
-
 });
 
 const pendingCatalog = deferred<ProjectLabelCatalog>();

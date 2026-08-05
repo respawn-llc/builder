@@ -152,6 +152,10 @@ function ContextProvider({
       effects: {
         applyLocalCreate: vi.fn(),
         applyLocalDelete: vi.fn(),
+        applyLocalReorder: (nextCatalog, generation) => {
+          authority.installCatalog(nextCatalog, generation);
+          return Promise.resolve();
+        },
         applyLocalRename: vi.fn(),
         consumeProjectEvent: vi.fn(),
         refreshAfterSubscriptionBoundary: vi.fn(),

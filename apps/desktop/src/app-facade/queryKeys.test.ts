@@ -44,6 +44,12 @@ describe("board query identities", () => {
     expect(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", filter)).not.toEqual(
       queryKeys.boardNodeCards("project-1", "workflow-1", "node-2", filter),
     );
+    expect(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", filter)).not.toEqual(
+      queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", filter, {
+        field: "created",
+        direction: "asc",
+      }),
+    );
   });
 
   it("distinguishes all dependency-filter values for the same Label filter", () => {

@@ -8,6 +8,7 @@ import type {
   BoardFilterGenerationController,
   BoardFilterGenerationSnapshot,
 } from "./BoardFilterGenerationController";
+import type { BoardNodeCardsSort } from "@/api";
 
 const labelRuntime = vi.hoisted(() => ({
   state: { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } },
@@ -16,6 +17,8 @@ const labelRuntime = vi.hoisted(() => ({
 interface GenerationRuntime {
   snapshot: BoardFilterGenerationSnapshot;
   controller: Pick<BoardFilterGenerationController, "getSnapshot" | "setDesiredFilter">;
+  sort: BoardNodeCardsSort;
+  setSort(sort: BoardNodeCardsSort): void;
 }
 const generationRuntime = vi.hoisted((): GenerationRuntime => ({
   snapshot: {
@@ -38,6 +41,8 @@ const generationRuntime = vi.hoisted((): GenerationRuntime => ({
     getSnapshot: () => generationRuntime.snapshot,
     setDesiredFilter: vi.fn(),
   },
+  sort: { field: "updated", direction: "desc" },
+  setSort: vi.fn(),
 }));
 
 vi.mock("@/shared/labels", () => ({
@@ -76,7 +81,12 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
   useBoardFilterGeneration: () => generationRuntime,
 }));
 
+vi.mock("./BoardTaskSearch", () => ({
+  BoardTaskSearchChrome: () => <button type="button">Search</button>,
+}));
+
 import { BoardFilterChrome } from "./BoardLabelFilter";
+import { BoardFilterRow } from "./BoardFilterRow";
 
 describe("BoardFilterChrome", () => {
   it("toggles Unblocked through the latest desired composite filter", async () => {
@@ -138,5 +148,29 @@ describe("BoardFilterChrome", () => {
       labelFilter: { kind: "none" },
       dependencyFilter: true,
     });
+  });
+
+  it("keeps Labels, Sort, Unblocked, and Search in the board chrome order", () => {
+    labelRuntime.state = { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } };
+    generationRuntime.snapshot = {
+      active: {
+        generation: 1,
+        filter: {
+          labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
+          dependencyFilter: true,
+        },
+        retiring: false,
+      },
+      desiredFilter: null,
+    };
+    render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
+
+    const labels = screen.getByRole("button", { name: "label-control" });
+    const sort = screen.getByRole("button", { name: "board.sort.chip" });
+    const unblocked = screen.getByRole("button", { name: "dependency-control" });
+    const search = screen.getByRole("button", { name: "Search" });
+    expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 });

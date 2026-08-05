@@ -66,7 +66,7 @@
   them from loaded relationship rows.
 - Selecting the dependency-progress chip opens Task Detail focused on
   Dependencies.
-- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's newest page without changing its expanded state.
+- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's first page in the selected order without changing its expanded state.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
@@ -110,7 +110,7 @@
 
 ## Board Task Search
 
-- A board has a `Search` chip immediately after the Labels chip. It uses the
+- A board has a `Search` chip immediately after the Unblocked chip. It uses the
   same visual treatment and height as the Labels chip.
 - Selecting Search opens one centered command-palette dialog over a blurred
   backdrop. The dialog uses a frosted-glass surface.
@@ -192,12 +192,22 @@
   closes Search and opens that Task in the board's Task Detail sidebar.
 - Escape and backdrop selection close Search without opening a Task.
 
-## Labels
+## Labels And Board Sorting
 
-- Boards have one transparent filter row. It provides Labels and Unblocked filters, but no status, attention, column, or sort filter.
+- Boards have one transparent filter-and-sort row. Its controls appear in this order: `Labels`, `Sort`, `Unblocked`, `Search`. It has no status, attention, or column filter.
+- `Sort` uses an icon followed by text and opens a popover styled like the Label chooser.
+- The Sort popover lists `Updated`, `Created`, `Labels`, and `Short ID`, in that order. An `Asc`/`Desc` segmented selector controls the direction.
+- The Sort popover has no Apply, Done, Clear, or Reset action. Sort changes apply immediately while the popover remains open, and changing the field retains the selected direction.
+- The default is `Updated Desc`. At that default, the chip is neutral and says `Sort`.
+- Any custom order makes the chip primary and changes its text to `Sort · Field · Asc` or `Sort · Field · Desc`.
+- Each newly opened Workflow board starts at `Updated Desc`. Switching away and back or relaunching Desktop resets the sort.
+- One selected sort applies inside every board column. Board field comparison and tie-breaking follow the Workflow orchestration specification.
+- Label filtering, Unblocked filtering, and sorting never change each other's selected state. Every active board filter combines with logical AND before the server sorts.
+- A sort change keeps rendered cards visible while replacement pages load. If replacement fails, Desktop keeps the selected sort and rendered cards and shows the existing retryable board or column error.
+- A sort replacement keeps each column mounted and uses the board's existing card movement animation, subject to reduced-motion preference. Desktop makes a best effort to retain the visible position, but that position may move as replacement card heights settle or normal bounds clamp it.
 - The Unblocked filter uses a two-state chip labeled `Unblocked`. Its inactive state applies no dependency restriction. Its selected state includes only Tasks with no direct Task Dependencies or no unsatisfied direct Task Dependencies.
 - The Unblocked chip uses the same styling and padding as the other filter chips. It appears after the other filters and before search.
-- The Unblocked filter applies to every board column and every column count. It combines with the Labels filter so a shown Task must satisfy both active filters.
+- The Unblocked filter applies to every board column and every column count.
 - The Unblocked selection belongs only to the current board route. Desktop resets it when the operator leaves the board or selects another Project or Workflow. Desktop does not persist it across relaunches.
 - Unblocked filter changes apply immediately through server filtering. Existing cards and counts remain visible until their corresponding replacement arrives, and each authoritative result applies as it arrives. If a replacement fails, Desktop retains the affected prior result and shows a persistent Retry error.
 - The trigger says `Labels` with no filter, `Labels · N` with named Label conditions, and `No labels` for the unlabeled filter. N counts included and excluded Label conditions. A clear action appears only for an active filter.
@@ -208,6 +218,7 @@
 - Deleting a participating Label removes its included or excluded condition from the saved filter. Removing the last named Label condition clears the named restriction; deleting another Label does not change an active `No labels` filter.
 - One chooser manages filtering, Task Label assignment, and Label creation, renaming, and deletion. There is no separate Project Label page.
 - Search is case-insensitive substring matching and preserves the Project's manual Label sequence. While search has text, the chooser hides reorder handles and does not permit reordering. When no exact case-insensitive name exists, offer `Create “…”`.
+- After a Project Label reorder succeeds locally or arrives from another client, active boards refresh their card pages and adopt the resulting server order while retaining rendered cards until replacement pages arrive.
 - A Project permits at most 100 Labels. At the limit, search and selection remain available and creation explains its unavailability; deletion restores creation.
 - The chooser shows at most 10 scrolling result rows, keeps search and context controls visible, remains open through selection and management actions, and discards an uncommitted rename on close.
 - In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser remains neutral.

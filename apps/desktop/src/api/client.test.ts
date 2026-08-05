@@ -108,23 +108,23 @@ describe("ApiClient", () => {
       workflowID: "11111111-1111-4111-8111-111111111111",
       nodeID: "node-1",
       filter: canonicalBoardFilter({ labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] }, dependencyFilter: null }),
-      pageToken: null,
+      offset: 25,
+      sort: { field: "labels", direction: "asc" },
     })).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "11111111-1111-4111-8111-111111111111",
       nodeID: "node-1",
       cards: [],
-      previousPageToken: null,
-      nextPageToken: "cursor-2",
+      nextOffset: 50,
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.board.nodeCards.list",
-      params: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-1", label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } }, dependency_filter: null, page_size: 25, page_token: null },
+      params: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-1", label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } }, dependency_filter: null, page_size: 25, sort: { field: "labels", direction: "asc" }, offset: 25 },
     });
     const unblockedFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true });
     await Promise.all([
       client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter),
-      client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, pageToken: null }),
+      client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, offset: 0, sort: { field: "updated", direction: "desc" } }),
     ]);
     expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
     expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
@@ -846,8 +846,7 @@ const emptyBoardNodeCardsResponse = {
   workflow_id: "11111111-1111-4111-8111-111111111111",
   node_id: "node-1",
   cards: null,
-  previous_page_token: null,
-  next_page_token: "cursor-2",
+  next_offset: 50,
   generated_at_unix_ms: 1,
 };
 

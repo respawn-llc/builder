@@ -1,7 +1,13 @@
 import { useCallback, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { canonicalBoardFilter, type BoardFilter, type TaskLabelFilter } from "@/api";
+import {
+  canonicalBoardFilter,
+  defaultBoardNodeCardsSort,
+  type BoardFilter,
+  type BoardNodeCardsSort,
+  type TaskLabelFilter,
+} from "@/api";
 import { useStableCallback } from "@/ui";
 import { createBoardFilterGenerationController } from "./BoardFilterGenerationController";
 import { createBoardGenerationRequestAdapter } from "./BoardGenerationRequestAdapter";
@@ -37,6 +43,7 @@ export function BoardFilterGenerationProvider({
       },
     }),
   );
+  const [sort, setSort] = useState<BoardNodeCardsSort>(defaultBoardNodeCardsSort);
   const requestAdapter = useMemo(
     () => createBoardGenerationRequestAdapter({ controller, queryClient, queryRegistry }),
     [controller, queryClient, queryRegistry],
@@ -64,8 +71,10 @@ export function BoardFilterGenerationProvider({
       queryRegistry,
       requestAdapter,
       snapshot,
+      setSort,
+      sort,
     }),
-    [controller, queriesEnabled, queryRegistry, requestAdapter, snapshot],
+    [controller, queriesEnabled, queryRegistry, requestAdapter, setSort, snapshot, sort],
   );
   return (
     <BoardFilterGenerationContext.Provider value={value}>{children}</BoardFilterGenerationContext.Provider>

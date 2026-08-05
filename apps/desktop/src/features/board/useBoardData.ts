@@ -8,7 +8,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
-import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { boardNodeCardsPageSize, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
 import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -60,15 +60,15 @@ function boardScopesEqual(left: BoardScope, right: BoardScope): boolean {
 
 export function useBoardNodeCards(projectID: string, workflowID: string, nodeID: string, enabled: boolean) {
   const { api } = useAppServices();
-  const { queriesEnabled, requestAdapter, snapshot } = useBoardFilterGeneration();
+  const { queriesEnabled, requestAdapter, snapshot, sort } = useBoardFilterGeneration();
   const { active } = snapshot;
-  const queryKey = queryKeys.boardNodeCards(projectID, workflowID, nodeID, active.filter);
+  const queryKey = queryKeys.boardNodeCards(projectID, workflowID, nodeID, active.filter, sort);
   const query = useInfiniteQuery<
     BoardNodeCardsPage,
     Error,
-    InfiniteData<BoardNodeCardsPage, string | null>,
-    readonly string[],
-    string | null
+    InfiniteData<BoardNodeCardsPage, number>,
+    readonly unknown[],
+    number
   >({
     queryKey,
     queryFn: async ({ pageParam, signal }) =>
@@ -83,10 +83,11 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
             workflowID,
             nodeID,
             filter: active.filter,
-            pageToken: pageParam,
+            offset: pageParam,
+            sort,
           }),
       }),
-    initialPageParam: null,
+    initialPageParam: 0,
     enabled:
       queriesEnabled &&
       !active.retiring &&
@@ -94,8 +95,9 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
       projectID.length > 0 &&
       workflowID.length > 0 &&
       nodeID.length > 0,
-    getPreviousPageParam: (firstPage) => firstPage.previousPageToken ?? undefined,
-    getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+    getPreviousPageParam: (_firstPage, _allPages, firstPageParam) =>
+      firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - boardNodeCardsPageSize),
+    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     maxPages: 3,
     gcTime: 0,
     placeholderData: (previous) => previous,

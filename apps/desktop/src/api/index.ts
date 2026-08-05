@@ -31,6 +31,8 @@ export type {
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
 export {
+  boardNodeCardsPageSize,
+  defaultBoardNodeCardsSort,
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
@@ -77,6 +79,7 @@ export type {
   BoardColumn,
   BoardGroup,
   BoardNodeCardsPage,
+  BoardNodeCardsSort,
   MarkdownPreview,
   PendingAsk,
   ProjectBinding,
@@ -134,6 +137,9 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
+  WorkflowTaskListSort,
+  WorkflowTaskListSortDirection,
+  WorkflowTaskListSortField,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,

@@ -54,7 +54,7 @@
 - A Project can have at most 100 Labels. Clients load the complete catalog without pagination.
 - A task may use any subset of its Project's catalog; there is no separate per-task label limit.
 - Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected Tasks are Backlog, active, running, interrupted, or done.
-- Label changes do not change a Task's update time, reorder Tasks, or move pagination anchors.
+- Label changes do not change a Task's update time. Outside Labels sorting, they do not change Task order between board page requests. While a Workflow board sorts by Labels, assignment, deletion, or Project Label reorder can reposition Tasks relative to subsequent offset requests.
 - Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
 - Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count. Desktop deletion uses explicit confirmation; invoking the explicit CLI delete command is sufficient confirmation and does not prompt or require a separate confirmation flag.
 - Labels have no color. A Project owns one durable manual Label sequence.
@@ -66,12 +66,31 @@
 - Concurrent Label catalog mutations may fail. A failed mutation leaves the catalog unchanged, and Kent does not retry it automatically.
 - The Desktop board filter chooser is the Label reorder surface. `kent task label` has no reorder command.
 - Kent does not promise the initial relative sequence of Labels that predate manual ordering.
-- Existing Task-list `labels` sorting remains available when explicitly requested; board Task ordering does not use Label order.
+- Task-list `labels` sorting remains available when explicitly requested.
 - Kent applies Label filters before pagination for Workflow boards and Task lists.
 - An included Label condition is true when a Task has that Label. An excluded Label condition is true when a Task does not have that Label.
 - OR matches a Task when at least one included or excluded Label condition is true. AND matches a Task when every included and excluded Label condition is true. A named filter may consist entirely of excluded Label conditions. One condition behaves identically in both modes.
 - `No labels` matches Tasks with zero Label assignments and is mutually exclusive with named Label conditions. No named Label conditions means no Label restriction.
 - Kent combines the complete Label expression with every other active Task-list filter. Filtering preserves sorting and pagination behavior. A client never loads the complete board or Task list to apply filters.
+
+## Workflow Board Ordering
+
+- A Workflow board applies one selected order independently inside every column.
+- Board sorting offers `Updated`, `Created`, `Labels`, and `Short ID`, in that order.
+- The default board order is `Updated Desc`.
+- `Created Asc` and `Updated Asc` show the oldest Tasks first. Their descending orders show the newest Tasks first.
+- `Short ID Asc` shows the lowest Task Short ID first. `Short ID Desc` shows the highest Task Short ID first.
+- Labels sorting arranges each Task's complete assigned Label sequence in the Project's manual Label order and compares the sequences from left to right.
+- In ascending Labels order, the first differing Label decides the order, and a shorter otherwise-identical sequence comes first.
+- Descending Labels order reverses the comparison among labeled Tasks.
+- Tasks with no Labels follow every labeled Task in both Labels directions.
+- When Tasks have equal values for any selected field, including equal Label sequences, Kent must use Task Short ID as the final tie-breaker in the selected direction.
+- Kent combines every active board filter with logical AND and applies the complete filter before sorting and pagination.
+- The Kent server owns board ordering and pagination. Clients preserve the returned order and do not sort board cards.
+- Each returned board page is bounded. Clients never load a complete board or column to sort it.
+- Done has no Task-count bound. Board sorting may evaluate all matching Tasks before applying an offset, so Kent makes no board-sort latency guarantee for very large matching columns.
+- Board pagination uses a zero-based offset. Changing the complete filter or selected sort restarts pagination at offset zero.
+- A Task or Project Label order change between page requests may transiently repeat or skip a Task in the loaded view. A board refresh adopts the current server order, and Kent does not guarantee a stable snapshot across page requests.
 
 ## Task Dependencies
 
