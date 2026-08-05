@@ -1,5 +1,4 @@
-{{define "boardSortOrder"}}
-{{.}}sort_null_labels ASC,
+{{define "boardSortOrder"}}{{.}}sort_null_labels ASC,
 {{.}}sort_updated_ascending ASC,
 {{.}}sort_updated_descending DESC,
 {{.}}sort_created_ascending ASC,
@@ -9,8 +8,7 @@
 {{.}}sort_short_id_ascending ASC,
 {{.}}sort_short_id_descending DESC,
 {{.}}sort_tiebreak_ascending ASC,
-{{.}}sort_tiebreak_descending DESC
-{{end}}
+{{.}}sort_tiebreak_descending DESC{{- end}}
 
 {{define "labelOrdinalSequence"}}
 (
