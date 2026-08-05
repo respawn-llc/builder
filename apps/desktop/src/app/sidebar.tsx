@@ -41,15 +41,15 @@ import {
 
 export function SidebarRouteChangeCloser() {
   const location = useLocation();
-  const { activeDestination, closeSidebar } = useSidebar();
+  const { closeSidebar } = useSidebar();
   const previousPathRef = useRef(location.pathname);
 
   useLayoutEffect(() => {
     if (previousPathRef.current !== location.pathname) {
       previousPathRef.current = location.pathname;
-      if (activeDestination !== null) closeSidebar("route_change");
+      closeSidebar("route_change");
     }
-  }, [activeDestination, closeSidebar, location.pathname]);
+  }, [closeSidebar, location.pathname]);
 
   return null;
 }

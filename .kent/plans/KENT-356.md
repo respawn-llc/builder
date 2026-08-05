@@ -711,3 +711,16 @@
   Apps lint (0 errors; 4 existing warnings), Apps typecheck,
   `./scripts/test.sh desktop` (83 files / 373 tests), and
   `./scripts/build.sh desktop`. Browser/manual QA remains excluded.
+
+- [x] **Close the complete sidebar on external browser pathname changes.**
+  Route-local sidebar Push/Back remains independent of browser history, while
+  the shell route-change owner now always submits the typed `route_change`
+  close command on a pathname transition. The command is intentionally
+  unconditional so a transient destination projection cannot leave the
+  current history reachable; the provider remains the authority and no-ops
+  when no history is active. Added a public shell regression covering an open
+  sidebar changing from a Project pathname to Home. Search-only Project and
+  Workflow Editor transitions remain owned by their existing typed route
+  owners.
+  Progress (August 5, 2026): The stale-sidebar QA finding is remediated in the
+  current round; focused route-change and sidebar navigation tests pass.
