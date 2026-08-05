@@ -498,6 +498,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			return persistErr
 		})
 		if err != nil {
+			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
 			if !result.receipt.Committed {
 				tail := make([]queuedUserMessage, 0, len(groups)-groupIndex)
 				for _, remaining := range groups[groupIndex:] {
@@ -525,6 +526,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
 			e.outputMutationMu.Unlock()
+			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
 			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
 			result.disposition = userInjectionFlushStopped
 			return result, nil

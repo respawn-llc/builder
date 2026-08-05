@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -211,7 +212,7 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	if message.Content == nil || *message.Content == "" {
+	if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
 		return QueuedUserMessage{}, false, errors.New("empty message")
 	}
 	e.ensureOrchestrationCollaborators()
@@ -245,6 +246,9 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
 	if queueErr != nil {
 		e.outputMutationMu.Unlock()
+		queueItemID := mustQueueItemID(item.ID)
+		e.liveRun.finishQueueItemPublication(queueItemID)
+		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 		return QueuedUserMessage{}, false, queueErr
 	}

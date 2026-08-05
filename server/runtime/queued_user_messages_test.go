@@ -32,6 +32,16 @@ func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
 	if _, err := store.QueueItem(QueuedUserMessage{}); err == nil {
 		t.Fatal("QueueItem accepted an invalid payload")
 	}
+	for _, content := range []string{"", " \t "} {
+		if _, err := store.QueueItem(QueuedUserMessage{
+			Message: llm.Message{
+				Role:    llm.RoleUser,
+				Content: textutil.Value(content),
+			},
+		}); err == nil {
+			t.Fatalf("QueueItem accepted whitespace-only content %q", content)
+		}
+	}
 	if _, err := (QueuedUserMessage{}).DisplayText(); err == nil {
 		t.Fatal("DisplayText accepted an invalid payload")
 	}

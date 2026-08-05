@@ -209,6 +209,17 @@ func (e *Engine) unmarkQueuedUserInjectionForAutoDrain(queueItemIDs ...string) {
 	e.queuedUserWorkMu.Unlock()
 }
 
+func (e *Engine) unmarkQueuedUserInjectionForAutoDrainSet(queueItemIDs map[string]struct{}) {
+	if len(queueItemIDs) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(queueItemIDs))
+	for queueItemID := range queueItemIDs {
+		ids = append(ids, queueItemID)
+	}
+	e.unmarkQueuedUserInjectionForAutoDrain(ids...)
+}
+
 func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if e == nil {
 		return false

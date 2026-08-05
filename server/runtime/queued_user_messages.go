@@ -43,7 +43,9 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) (QueuedUserMe
 		item.ID = uuid.NewString()
 	}
 	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-	if item.Message.Content == nil || strings.TrimSpace(string(item.Message.Role)) == "" {
+	if item.Message.Content == nil ||
+		strings.TrimSpace(*item.Message.Content) == "" ||
+		item.Message.Role == "" {
 		return QueuedUserMessage{}, errInvalidQueuedUserMessage
 	}
 	s.mu.Lock()

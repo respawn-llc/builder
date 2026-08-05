@@ -168,7 +168,9 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	eng.liveRun.beginStep(snapshot)
 	eng.ensureOrchestrationCollaborators()
 	queueItemID := runtimeids.NewQueueItemID()
-	eng.messageFlow.QueueUserMessageWithID(queuedUserMessageWithID(queueItemID.String(), "steer pending", liveRunTestRequestID(t).String()))
+	if _, err := eng.messageFlow.QueueUserMessageWithID(queuedUserMessageWithID(queueItemID.String(), "steer pending", liveRunTestRequestID(t).String())); err != nil {
+		t.Fatalf("queue pending steer: %v", err)
+	}
 	eng.liveRun.mu.Lock()
 	eng.liveRun.current.trackQueuedItemForLiveRun(queueItemID)
 	delete(eng.liveRun.current.publishingItems, queueItemID)

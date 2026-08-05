@@ -44,7 +44,7 @@ Agent from session <source-session-id> said:
 To respond, run: kent run steer <source-session-id> "message"
 ```
 
-- Kent inserts one literal `> ` immediately before the submitted steer text. It does not add quote markers to later lines.
+- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
 - The message includes the source Session ID and omits its name.
 - A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
 - Prompt history stores the complete wrapped message.

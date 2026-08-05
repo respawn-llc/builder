@@ -18,8 +18,7 @@ func NewAgentSteer(sourceSessionID runtimeids.SessionID, text string) (AgentStee
 	if sourceSessionID.IsZero() {
 		return AgentSteer{}, errors.New("source session ID is required")
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return AgentSteer{}, errors.New("agent steer text is required")
 	}
 	content := fmt.Sprintf(
