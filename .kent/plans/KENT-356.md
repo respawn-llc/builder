@@ -688,4 +688,13 @@
   unified, and committed Board deletion now dismisses its confirmation after a
   typed navigation failure while surfacing the error. Focused regression tests
   cover the virtual range/load-more behavior and deletion confirmation
-  settlement. Final verification is rerunning after this round.
+  settlement. Latest remediation routes mutation-driven and subscription-driven
+  selected-Task deletion through the same operation-scoped coordinator, which
+  coalesces duplicate close requests and permits retry after a failed outcome.
+  Focused coordinator/cause tests cover direct-before-subscription,
+  subscription-before-direct, and failure-then-success interleavings while
+  preserving the typed deletion cause for unrelated sidebar survivors. Final
+  verification passed after this round: `pnpm install --frozen-lockfile`,
+  full Apps lint (0 errors; 4 existing warnings), Apps typecheck,
+  `./scripts/test.sh desktop` (83 files / 374 tests), and
+  `./scripts/build.sh desktop`.

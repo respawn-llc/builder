@@ -49,7 +49,6 @@ import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
-import { finishBoardTaskDeletion } from "./boardTaskDeletionNavigation";
 import {
   boardTaskDeletionCauseMatches,
   recordBoardTaskDeletionAttempt,
@@ -234,6 +233,7 @@ function BoardRouteData({
       onBoardRefreshRetry={() => {
         void boardQuery.refetch().catch(reportBoardLoadError);
       }}
+      onSelectedTaskDeletionRequested={handleSelectedTaskDeleted}
       selectedTaskId={selectedTaskId}
       deletionCauseRef={deletionCauseRef}
     />
@@ -246,6 +246,7 @@ function BoardContent({
   boardRefreshError,
   deletionCauseRef,
   onBoardRefreshRetry,
+  onSelectedTaskDeletionRequested,
   selectedTaskId,
 }: Readonly<{
   board: SelectedWorkflowBoard;
@@ -253,6 +254,7 @@ function BoardContent({
   boardRefreshError: Error | null;
   deletionCauseRef: { current: BoardTaskDeletionCause | null };
   onBoardRefreshRetry(): void;
+  onSelectedTaskDeletionRequested(): void;
   selectedTaskId: string;
 }>) {
   const { t } = useTranslation();
@@ -461,8 +463,7 @@ function BoardContent({
     try {
       await actions.delete.mutateAsync(target.taskID);
       if (target.taskID === selectedTaskId) {
-        finishBoardTaskDeletion({ close, navigationResult: await navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id), onNavigationError: reportNavigationError });
-        return;
+        onSelectedTaskDeletionRequested();
       }
       close();
     } catch (error) {

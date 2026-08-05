@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { useAppNavigation, useSidebar } from "@/app-facade";
 import type { BoardTaskDeletionAttempt } from "./boardTaskDeletionCause";
@@ -22,8 +22,13 @@ export function useBoardSelectedTaskDeletion({
 }>) {
   const navigation = useAppNavigation();
   const { invalidateSidebar } = useSidebar();
+  const activeAttemptRef = useRef<BoardTaskDeletionAttempt | null>(null);
   return useCallback(() => {
+    if (activeAttemptRef.current?.taskID === selectedTaskId) {
+      return;
+    }
     const attempt = { taskID: selectedTaskId };
+    activeAttemptRef.current = attempt;
     onSelectedTaskDeleted?.(attempt);
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
     void navigation.closeProjectTask(projectId, workflowId).then((result) => {
@@ -31,9 +36,11 @@ export function useBoardSelectedTaskDeletion({
         onSelectedTaskDeletionNavigationSucceeded?.(attempt);
         return;
       }
+      activeAttemptRef.current = null;
       onSelectedTaskDeletionNavigationFailed?.(attempt);
       onNavigationError(result.error);
     }, (error: unknown) => {
+      activeAttemptRef.current = null;
       onSelectedTaskDeletionNavigationFailed?.(attempt);
       onNavigationError(error);
     });
