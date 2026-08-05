@@ -1,3 +1,17 @@
+{{define "boardSortOrder"}}
+{{.}}sort_null_labels ASC,
+{{.}}sort_updated_ascending ASC,
+{{.}}sort_updated_descending DESC,
+{{.}}sort_created_ascending ASC,
+{{.}}sort_created_descending DESC,
+{{.}}sort_labels_ascending ASC,
+{{.}}sort_labels_descending DESC,
+{{.}}sort_short_id_ascending ASC,
+{{.}}sort_short_id_descending DESC,
+{{.}}sort_tiebreak_ascending ASC,
+{{.}}sort_tiebreak_descending DESC
+{{end}}
+
 {{define "labelOrdinalSequence"}}
 (
     SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
@@ -3515,17 +3529,7 @@ paged_board_tasks AS (
     SELECT *
     FROM board_sort_keys
     ORDER BY
-        sort_null_labels ASC,
-        sort_updated_ascending ASC,
-        sort_updated_descending DESC,
-        sort_created_ascending ASC,
-        sort_created_descending DESC,
-        sort_labels_ascending ASC,
-        sort_labels_descending DESC,
-        sort_short_id_ascending ASC,
-        sort_short_id_descending DESC,
-        sort_tiebreak_ascending ASC,
-        sort_tiebreak_descending DESC
+{{template "boardSortOrder" "        "}}
     LIMIT sqlc.arg(limit_rows) + 1
     OFFSET sqlc.arg(offset_rows)
 ),
@@ -3570,19 +3574,8 @@ SELECT
     dependency_progress.dependency_total_count
 FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-CROSS JOIN board_sort sort
 ORDER BY
-    page.sort_null_labels ASC,
-    page.sort_updated_ascending ASC,
-    page.sort_updated_descending DESC,
-    page.sort_created_ascending ASC,
-    page.sort_created_descending DESC,
-    page.sort_labels_ascending ASC,
-    page.sort_labels_descending DESC,
-    page.sort_short_id_ascending ASC,
-    page.sort_short_id_descending DESC,
-    page.sort_tiebreak_ascending ASC,
-    page.sort_tiebreak_descending DESC;
+{{template "boardSortOrder" "    page."}};
 
 
 -- name: CountWorktreesByWorkspace :one

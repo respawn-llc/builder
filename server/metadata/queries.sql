@@ -1,5 +1,7 @@
 
 
+
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -3889,6 +3891,7 @@ paged_board_tasks AS (
     SELECT *
     FROM board_sort_keys
     ORDER BY
+
         sort_null_labels ASC,
         sort_updated_ascending ASC,
         sort_updated_descending DESC,
@@ -3900,6 +3903,7 @@ paged_board_tasks AS (
         sort_short_id_descending DESC,
         sort_tiebreak_ascending ASC,
         sort_tiebreak_descending DESC
+
     LIMIT sqlc.arg(limit_rows) + 1
     OFFSET sqlc.arg(offset_rows)
 ),
@@ -3944,8 +3948,8 @@ SELECT
     dependency_progress.dependency_total_count
 FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-CROSS JOIN board_sort sort
 ORDER BY
+
     page.sort_null_labels ASC,
     page.sort_updated_ascending ASC,
     page.sort_updated_descending DESC,
@@ -3956,7 +3960,8 @@ ORDER BY
     page.sort_short_id_ascending ASC,
     page.sort_short_id_descending DESC,
     page.sort_tiebreak_ascending ASC,
-    page.sort_tiebreak_descending DESC;
+    page.sort_tiebreak_descending DESC
+;
 
 
 -- name: CountWorktreesByWorkspace :one

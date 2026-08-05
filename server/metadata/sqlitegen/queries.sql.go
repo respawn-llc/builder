@@ -855,6 +855,9 @@ func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.Nul
 }
 
 const countWorktreesByWorkspace = `-- name: CountWorktreesByWorkspace :one
+;
+
+
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
 WHERE workspace_id = ?1
@@ -4045,6 +4048,7 @@ paged_board_tasks AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json, label_ordinals, sort_null_labels, sort_updated_ascending, sort_updated_descending, sort_created_ascending, sort_created_descending, sort_labels_ascending, sort_labels_descending, sort_short_id_ascending, sort_short_id_descending, sort_tiebreak_ascending, sort_tiebreak_descending
     FROM board_sort_keys
     ORDER BY
+
         sort_null_labels ASC,
         sort_updated_ascending ASC,
         sort_updated_descending DESC,
@@ -4056,6 +4060,7 @@ paged_board_tasks AS (
         sort_short_id_descending DESC,
         sort_tiebreak_ascending ASC,
         sort_tiebreak_descending DESC
+
     LIMIT ?12 + 1
     OFFSET ?11
 ),
@@ -4100,8 +4105,8 @@ SELECT
     dependency_progress.dependency_total_count
 FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-CROSS JOIN board_sort sort
 ORDER BY
+
     page.sort_null_labels ASC,
     page.sort_updated_ascending ASC,
     page.sort_updated_descending DESC,
