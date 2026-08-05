@@ -39,4 +39,4 @@ Boundary enforcement is fail-closed: every desktop TypeScript file and local dep
 - Frontend dependency policy is enforced by `apps/dependency-policy.json` and `apps/scripts/check-dependency-policy.mjs`. New direct dependencies are blocked until they are added to the allowlist intentionally.
 - TypeScript policy is enforced by `apps/scripts/check-typescript-policy.mjs`. Explicit `any`, including `as any`, is forbidden across the whole `apps/` workspace.
 - `apps/pnpm-workspace.yaml` enforces `minimumReleaseAge: 10080` and `onlyBuiltDependencies: []`; do not bypass these without explicit maintainer approval.
-- Do not add `minimumReleaseAgeExclude` entries. Maintainer-approved early adoption uses a one-time CLI override; dependency policy remains red until the package reaches the seven-day maturity threshold.
+- Add an exact-version `minimumReleaseAgeExclude` entry to both `apps/dependency-policy.json` and `apps/pnpm-workspace.yaml` only after explicit maintainer approval. Remove the entry after the package reaches the seven-day maturity threshold.

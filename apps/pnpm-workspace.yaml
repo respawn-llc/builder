@@ -5,6 +5,10 @@ packages:
 
 # 7 days. Keeps freshly published packages out of local installs/updates.
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  # Maintainer-approved exact versions required by this lockfile.
+  - "@napi-rs/wasm-runtime@1.2.2"
+  - "vite@8.2.0"
 
 # No frontend dependency may run install/build lifecycle scripts unless explicitly reviewed here.
 onlyBuiltDependencies: []

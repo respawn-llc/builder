@@ -11,6 +11,9 @@
       "type": "integer",
       "minimum": 10080
     },
+    "minimumReleaseAgeExclude": {
+      "$ref": "#/$defs/dependencyNames"
+    },
     "directDependencyAllowlist": {
       "type": "object",
       "additionalProperties": {

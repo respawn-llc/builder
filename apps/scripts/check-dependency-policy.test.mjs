@@ -11,6 +11,7 @@ test("accepts package deps that match policy and workspace gates", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
+      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {
           dependencies: ["react"],
@@ -38,6 +39,7 @@ test("rejects unreviewed direct deps", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
+      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {
           dependencies: ["react"],
@@ -65,6 +67,7 @@ test("rejects workspace policy drift", async () => {
     workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 60\n",
     policy: {
       minimumReleaseAgeMinutes: 10080,
+      minimumReleaseAgeExclude: [],
       directDependencyAllowlist: {
         app: {},
       },
@@ -83,6 +86,29 @@ test("rejects workspace policy drift", async () => {
     "pnpm-workspace.yaml must set minimumReleaseAge: 10080 to enforce dependency maturity.",
     "pnpm-workspace.yaml must set onlyBuiltDependencies: [] so install scripts need explicit review.",
   ]);
+});
+
+test("rejects an approved release-age exclusion missing from workspace policy", async () => {
+  const workspaceRoot = await makeWorkspace({
+    workspaceConfig: "packages:\n  - app\nminimumReleaseAge: 10080\nonlyBuiltDependencies: []\n",
+    policy: {
+      minimumReleaseAgeMinutes: 10080,
+      minimumReleaseAgeExclude: ["vite@8.2.0"],
+      directDependencyAllowlist: {
+        app: {},
+      },
+    },
+    packages: [
+      {
+        dir: "app",
+        json: {
+          name: "app",
+        },
+      },
+    ],
+  });
+
+  assert.equal((await checkDependencyPolicy(workspaceRoot)).length, 1);
 });
 
 async function makeWorkspace({ workspaceConfig, policy, packages }) {
