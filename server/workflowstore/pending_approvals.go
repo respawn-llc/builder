@@ -33,14 +33,16 @@ type pendingApprovalTransitionSnapshot struct {
 }
 
 type pendingApprovalTargetSnapshot struct {
-	NodeID              workflow.NodeID                      `json:"node_id"`
-	TransitionBranchKey *workflow.TransitionBranchKey        `json:"transition_branch_key,omitempty"`
-	EnteredByEdgeID     *workflow.EdgeID                     `json:"entered_by_edge_id,omitempty"`
-	DisplayName         string                               `json:"display_name"`
-	CurrentInputValues  map[string]string                    `json:"current_input_values"`
-	PriorValues         workflow.MaterializedPriorValues     `json:"prior_values"`
-	SessionID           *string                              `json:"session_id,omitempty"`
-	SchedulingState     *workflow.CurrentNodeSchedulingState `json:"scheduling_state,omitempty"`
+	NodeID                  workflow.NodeID                      `json:"node_id"`
+	NodeKind                workflow.NodeKind                    `json:"node_kind"`
+	TransitionBranchKey     *workflow.TransitionBranchKey        `json:"transition_branch_key,omitempty"`
+	EnteredByEdgeID         *workflow.EdgeID                     `json:"entered_by_edge_id,omitempty"`
+	DisplayName             string                               `json:"display_name"`
+	CurrentInputValues      map[string]string                    `json:"current_input_values"`
+	PriorValues             workflow.MaterializedPriorValues     `json:"prior_values"`
+	SessionID               *string                              `json:"session_id,omitempty"`
+	SchedulingState         *workflow.CurrentNodeSchedulingState `json:"scheduling_state,omitempty"`
+	AgentExecutionSelection *workflow.AgentExecutionSelection    `json:"agent_execution_selection,omitempty"`
 }
 
 type pendingApprovalEffectiveEdgeSnapshot struct {
@@ -49,6 +51,8 @@ type pendingApprovalEffectiveEdgeSnapshot struct {
 	Key                workflow.ModelKey            `json:"key"`
 	TransitionGroupID  workflow.TransitionGroupID   `json:"transition_group_id"`
 	TargetNodeID       workflow.NodeID              `json:"target_node_id"`
+	AssigneeSelection  workflow.AssigneeSelection   `json:"assignee_selection"`
+	ThinkingSelection  workflow.ThinkingSelection   `json:"thinking_selection"`
 	ContextMode        workflow.ContextMode         `json:"context_mode"`
 	ContextSource      workflow.ContextSource       `json:"context_source"`
 	RequiresApproval   bool                         `json:"requires_approval"`
@@ -164,7 +168,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
-		if err := insertTaskCurrentNode(ctx, q, targets[0]); err != nil {
+		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
 			return PendingApprovalApplyResult{}, err
 		}
 	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
@@ -259,6 +263,7 @@ func pendingApprovalFanoutTargets(source workflow.CurrentNodeReference, branches
 		targets = append(targets, currentNodeFanoutTarget{
 			BranchKey:   branchKey,
 			CurrentNode: target,
+			NodeKind:    branch.Target.NodeKind,
 		})
 	}
 	return targets, nil
@@ -288,6 +293,7 @@ func newPendingApproval(
 			Target: workflow.PendingApprovalTarget{
 				CurrentNode: targetCurrentNode,
 				DisplayName: workflow.NodeDisplayName(target),
+				NodeKind:    target.Kind(),
 			},
 			EffectiveEdge: edge,
 			ContextSourceResolution: workflow.PendingApprovalContextSourceResolution{
@@ -334,6 +340,18 @@ func newPendingApprovalWithBranches(
 		}
 		if err := branch.Target.CurrentNode.Reference.Validate(); err != nil {
 			return workflow.PendingApproval{}, err
+		}
+		switch branch.Target.NodeKind {
+		case workflow.NodeKindAgent:
+			if branch.Target.CurrentNode.AgentExecutionSelection == nil {
+				return workflow.PendingApproval{}, errors.New("pending approval Agent target requires execution selection")
+			}
+		case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+			if branch.Target.CurrentNode.AgentExecutionSelection != nil {
+				return workflow.PendingApproval{}, fmt.Errorf("pending approval %s target cannot carry Agent execution selection", branch.Target.NodeKind)
+			}
+		default:
+			return workflow.PendingApproval{}, errors.New("pending approval target node kind is invalid")
 		}
 		if _, exists := seenBranchKeys[branchKey]; exists {
 			return workflow.PendingApproval{}, fmt.Errorf("pending approval branch key %q is duplicated", branchKey)
@@ -415,6 +433,8 @@ func insertPendingApprovalBranch(ctx context.Context, q *sqlitegen.Queries, appr
 		Key:                branch.EffectiveEdge.Key,
 		TransitionGroupID:  branch.EffectiveEdge.TransitionGroupID,
 		TargetNodeID:       branch.EffectiveEdge.TargetNodeID,
+		AssigneeSelection:  workflow.CanonicalAssigneeSelection(branch.EffectiveEdge.AssigneeSelection),
+		ThinkingSelection:  workflow.CanonicalThinkingSelection(branch.EffectiveEdge.ThinkingSelection),
 		ContextMode:        branch.EffectiveEdge.ContextMode,
 		ContextSource:      workflow.CanonicalContextSource(branch.EffectiveEdge.ContextSource),
 		RequiresApproval:   branch.EffectiveEdge.RequiresApproval,
@@ -556,6 +576,8 @@ func pendingApprovalBranchFromRow(taskID workflow.TaskID, row sqlitegen.TaskPend
 			Key:                edgeSnapshot.Key,
 			TransitionGroupID:  edgeSnapshot.TransitionGroupID,
 			TargetNodeID:       edgeSnapshot.TargetNodeID,
+			AssigneeSelection:  workflow.CanonicalAssigneeSelection(edgeSnapshot.AssigneeSelection),
+			ThinkingSelection:  workflow.CanonicalThinkingSelection(edgeSnapshot.ThinkingSelection),
 			ContextMode:        edgeSnapshot.ContextMode,
 			ContextSource:      workflow.CanonicalContextSource(edgeSnapshot.ContextSource),
 			RequiresApproval:   edgeSnapshot.RequiresApproval,
@@ -596,20 +618,34 @@ func pendingApprovalTargetSnapshotJSON(target workflow.PendingApprovalTarget) (s
 		schedulingState = &value
 	}
 	return workflow.MarshalString(pendingApprovalTargetSnapshot{
-		NodeID:              currentNode.Reference.NodeID,
-		TransitionBranchKey: branchKey,
-		EnteredByEdgeID:     enteredByEdgeID,
-		DisplayName:         target.DisplayName,
-		CurrentInputValues:  cloneCurrentNodeOutputValues(currentNode.CurrentInputValues),
-		PriorValues:         currentNode.PriorValues.Clone(),
-		SessionID:           sessionID,
-		SchedulingState:     schedulingState,
+		NodeID:                  currentNode.Reference.NodeID,
+		NodeKind:                target.NodeKind,
+		TransitionBranchKey:     branchKey,
+		EnteredByEdgeID:         enteredByEdgeID,
+		DisplayName:             target.DisplayName,
+		CurrentInputValues:      cloneCurrentNodeOutputValues(currentNode.CurrentInputValues),
+		PriorValues:             currentNode.PriorValues.Clone(),
+		SessionID:               sessionID,
+		SchedulingState:         schedulingState,
+		AgentExecutionSelection: cloneCurrentNodeExecutionSelection(currentNode.AgentExecutionSelection),
 	})
 }
 
 func pendingApprovalTargetFromSnapshot(taskID workflow.TaskID, snapshot pendingApprovalTargetSnapshot) (workflow.PendingApprovalTarget, error) {
 	if strings.TrimSpace(snapshot.DisplayName) == "" {
 		return workflow.PendingApprovalTarget{}, errors.New("pending approval target display name is required")
+	}
+	switch snapshot.NodeKind {
+	case workflow.NodeKindAgent:
+		if snapshot.AgentExecutionSelection == nil {
+			return workflow.PendingApprovalTarget{}, errors.New("pending approval Agent target requires execution selection")
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if snapshot.AgentExecutionSelection != nil {
+			return workflow.PendingApprovalTarget{}, errors.New("pending approval non-Agent target cannot carry execution selection")
+		}
+	default:
+		return workflow.PendingApprovalTarget{}, errors.New("pending approval target node kind is invalid")
 	}
 	reference, err := workflow.NewCurrentNodeReference(taskID, snapshot.NodeID, snapshot.TransitionBranchKey)
 	if err != nil {
@@ -627,18 +663,31 @@ func pendingApprovalTargetFromSnapshot(taskID workflow.TaskID, snapshot pendingA
 	if snapshot.SchedulingState != nil {
 		scheduling = &workflow.CurrentNodeScheduling{State: *snapshot.SchedulingState}
 	}
-	currentNode, err := workflow.NewCurrentNodeWithEntry(
+	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(
 		reference,
-		snapshot.EnteredByEdgeID,
 		snapshot.CurrentInputValues,
 		snapshot.PriorValues,
 		sessionID,
 		scheduling,
+		snapshot.AgentExecutionSelection,
 	)
 	if err != nil {
 		return workflow.PendingApprovalTarget{}, fmt.Errorf("decode pending approval target current node: %w", err)
 	}
-	return workflow.PendingApprovalTarget{CurrentNode: currentNode, DisplayName: snapshot.DisplayName}, nil
+	currentNode.EnteredByEdgeID = snapshot.EnteredByEdgeID
+	return workflow.PendingApprovalTarget{
+		CurrentNode: currentNode,
+		DisplayName: snapshot.DisplayName,
+		NodeKind:    snapshot.NodeKind,
+	}, nil
+}
+
+func cloneCurrentNodeExecutionSelection(selection *workflow.AgentExecutionSelection) *workflow.AgentExecutionSelection {
+	if selection == nil {
+		return nil
+	}
+	cloned := selection.Clone()
+	return &cloned
 }
 
 func pendingApprovalContextSourceResolutionJSON(resolution workflow.PendingApprovalContextSourceResolution) (string, error) {

@@ -32,6 +32,16 @@ func resolveSubagentSettingsWithProviderID(base config.Settings, baseSource conf
 	)
 }
 
+// ResolveConfiguredSubagentSettings resolves one configured role against the
+// current base settings without creating a session or mutating configuration.
+func ResolveConfiguredSubagentSettings(base config.Settings, roleName string) (config.Settings, error) {
+	resolved, _, _, err := resolveSubagentSettingsWithProviderID(base, config.SourceReport{}, roleName, "", true, false)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	return resolved, nil
+}
+
 func resolveSubagentSettingsFromRole(base config.Settings, baseSource config.SourceReport, selector string, role config.SubagentRole, providerID string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	resolved := cloneSettings(base)
 	_ = applyBuiltInRoleHeuristics(&resolved, selector, providerID, allowModelOverride)

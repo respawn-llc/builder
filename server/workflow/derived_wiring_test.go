@@ -149,7 +149,7 @@ func TestDeriveWiringSkipsNonAgentSourceParameters(t *testing.T) {
 }
 
 func parameterWorkflow(t *testing.T) workflow.Definition {
-	return workflow.Definition{
+	return normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_parameters"),
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
@@ -188,7 +188,7 @@ func parameterWorkflow(t *testing.T) workflow.Definition {
 				Parameters:        []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}},
 			},
 		},
-	}
+	})
 }
 
 func fanoutParameterWorkflow(t *testing.T) workflow.Definition {

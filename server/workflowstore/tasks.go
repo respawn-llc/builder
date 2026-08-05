@@ -455,7 +455,19 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 			return StartTaskResult{}, err
 		}
 	}
-	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID)
+	var targetSelection *workflow.AgentExecutionSelection
+	if prepared.target.Kind() == workflow.NodeKindAgent {
+		value, selectionErr := workflow.PlanTargetAgentExecutionSelection(workflow.TargetAgentExecutionSelectionRequest{
+			Edge:         prepared.startEdge,
+			FallbackRole: workflow.NodeSubagentRole(prepared.target),
+			Catalog:      s.roleResolver,
+		})
+		if selectionErr != nil {
+			return StartTaskResult{}, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
+		}
+		targetSelection = &value
+	}
+	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID, targetSelection)
 	if err != nil {
 		return StartTaskResult{}, err
 	}

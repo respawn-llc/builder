@@ -19,6 +19,7 @@ type DerivedWiring struct {
 	currentNodeInputBindingsByEdge   map[EdgeID][]InputBinding
 	currentNodeOutputFieldsByGroup   map[TransitionGroupID][]OutputField
 	priorParameterRequirementsByNode map[NodeID][]PriorTransitionParameterRequirement
+	selectorApplicabilityByEdge      map[EdgeID]EdgeSelectorApplicability
 }
 
 type PriorTransitionParameterRequirement struct {
@@ -57,6 +58,26 @@ func DeriveWiringWithPriorParameterReferences(
 	def Definition,
 	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
 ) DerivedWiring {
+	return deriveWiring(def, nil, priorReferencesByEdge)
+}
+
+func DeriveWiringWithCatalog(def Definition, catalog TargetAgentCatalog) DerivedWiring {
+	priorReferencesByEdge := make(map[EdgeID][]PromptPriorParameterReference, len(def.Edges))
+	for _, edge := range def.Edges {
+		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
+		if err != nil {
+			continue
+		}
+		priorReferencesByEdge[edge.ID] = append([]PromptPriorParameterReference(nil), refs.PriorParams...)
+	}
+	return deriveWiring(def, catalog, priorReferencesByEdge)
+}
+
+func deriveWiring(
+	def Definition,
+	catalog TargetAgentCatalog,
+	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
+) DerivedWiring {
 	derived := DerivedWiring{
 		inputBindingsByEdge:              map[EdgeID][]InputBinding{},
 		requiredProvisionFieldsByEdge:    map[EdgeID][]OutputField{},
@@ -68,6 +89,7 @@ func DeriveWiringWithPriorParameterReferences(
 		currentNodeInputBindingsByEdge:   map[EdgeID][]InputBinding{},
 		currentNodeOutputFieldsByGroup:   map[TransitionGroupID][]OutputField{},
 		priorParameterRequirementsByNode: map[NodeID][]PriorTransitionParameterRequirement{},
+		selectorApplicabilityByEdge:      map[EdgeID]EdgeSelectorApplicability{},
 	}
 	nodesByID := make(map[NodeID]Node, len(def.Nodes))
 	groupsByID := make(map[TransitionGroupID]TransitionGroup, len(def.TransitionGroups))
@@ -89,6 +111,29 @@ func DeriveWiringWithPriorParameterReferences(
 			outgoingByNode[group.SourceNodeID] = append(outgoingByNode[group.SourceNodeID], edge)
 		}
 		derived.parameterDependencyEdgesByEdge[edge.ID] = []EdgeID{edge.ID}
+	}
+	for _, edge := range def.Edges {
+		group, groupExists := groupsByID[edge.TransitionGroupID]
+		if !groupExists {
+			continue
+		}
+		source, sourceExists := nodesByID[group.SourceNodeID]
+		target, targetExists := nodesByID[edge.TargetNodeID]
+		selector := EdgeSelectorApplicability{
+			Assignee: SelectorApplicability{Reason: SelectorApplicabilityTopology},
+			Thinking: SelectorApplicability{Reason: SelectorApplicabilityTopology},
+		}
+		if sourceExists && targetExists {
+			selector = ResolveEdgeSelectorApplicability(
+				edge,
+				source.Kind(),
+				target.Kind(),
+				len(edgesForTransitionGroup(def.Edges, edge.TransitionGroupID)) > 1,
+				catalog,
+				NodeSubagentRole(target),
+			)
+		}
+		derived.selectorApplicabilityByEdge[edge.ID] = selector
 	}
 	for _, edge := range def.Edges {
 		group, groupExists := groupsByID[edge.TransitionGroupID]
@@ -139,6 +184,20 @@ func (w DerivedWiring) RequiredProviderFieldsForJoinEdge(edgeID EdgeID) []Output
 
 func (w DerivedWiring) JoinOutputFieldsForNode(nodeID NodeID) []OutputField {
 	return append([]OutputField(nil), w.joinOutputFieldsByNode[nodeID]...)
+}
+
+func (w DerivedWiring) SelectorApplicabilityForEdge(edgeID EdgeID) EdgeSelectorApplicability {
+	return w.selectorApplicabilityByEdge[edgeID]
+}
+
+func edgesForTransitionGroup(edges []Edge, groupID TransitionGroupID) []Edge {
+	out := make([]Edge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.TransitionGroupID == groupID {
+			out = append(out, edge)
+		}
+	}
+	return out
 }
 
 func (w DerivedWiring) CurrentNodeInputBindingsForEdge(edgeID EdgeID) []InputBinding {

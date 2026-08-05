@@ -38,6 +38,13 @@ func WithRoleResolver(resolver workflow.RoleResolver) Option {
 	}
 }
 
+func (s *Store) TargetAgentCatalog() workflow.TargetAgentCatalog {
+	if s == nil {
+		return nil
+	}
+	return s.roleResolver
+}
+
 func WithNow(now func() time.Time) Option {
 	return func(s *Store) {
 		if now != nil {
@@ -211,6 +218,8 @@ type EdgeRecord struct {
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
+	AssigneeSelection  workflow.AssigneeSelection
+	ThinkingSelection  workflow.ThinkingSelection
 	RequiresApproval   bool
 	ContextMode        workflow.ContextMode
 	ContextSource      workflow.ContextSource

@@ -1,6 +1,7 @@
 import type { AttentionItem } from "./attention";
 
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
+import type { WorkflowEdgeSelectionMode, WorkflowParameterPurpose, WorkflowSelectorApplicability } from "./workflowSelectionModels";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 export type {
@@ -197,10 +198,12 @@ export type WorkflowOutputField = Readonly<{
   description: string;
 }>;
 
-export type WorkflowParameter = Readonly<{
-  key: string;
+export type WorkflowInputField = Readonly<{
+  name: string;
   description: string;
 }>;
+
+export type WorkflowParameter = Readonly<{ key: string; description: string; purpose: WorkflowParameterPurpose }>;
 
 export type WorkflowJoinInputProvider = Readonly<{
   inputName: string;
@@ -279,6 +282,8 @@ export type WorkflowDerivedEdgeWiring = Readonly<{
   inputBindings: readonly WorkflowInputBinding[];
   requiredProvisionFields: readonly WorkflowOutputField[];
   requiredProviderFields: readonly WorkflowOutputField[];
+  assigneeSelectionApplicability: WorkflowSelectorApplicability;
+  thinkingSelectionApplicability: WorkflowSelectorApplicability;
 }>;
 
 export const emptyWorkflowDerivedWiring: WorkflowDerivedWiring = {
@@ -308,6 +313,8 @@ export type WorkflowEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -365,6 +372,8 @@ export type WorkflowGraphDraftEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -666,6 +675,8 @@ export type TaskCurrentNode = Readonly<{
   nodeID: string;
   transitionBranchKey: string | null;
   sessionID: string | null;
+  effectiveAssignee: string | null;
+  effectiveThinking: string | null;
 }>;
 
 export type TaskScriptCurrentNode = Readonly<{

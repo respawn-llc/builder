@@ -102,6 +102,14 @@ func workflowCurrentNode(currentNode workflow.CurrentNode) serverapi.WorkflowTas
 		value := currentNode.SessionID.String()
 		projected.SessionID = &value
 	}
+	if currentNode.AgentExecutionSelection != nil {
+		assignee := currentNode.AgentExecutionSelection.Assignee
+		projected.EffectiveAssignee = &assignee
+		if currentNode.AgentExecutionSelection.Thinking != nil {
+			thinking := string(*currentNode.AgentExecutionSelection.Thinking)
+			projected.EffectiveThinking = &thinking
+		}
+	}
 	return projected
 }
 

@@ -119,7 +119,11 @@ func (s *Starter) StartCurrentNode(
 	case workflow.NodeKindScript:
 		return s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
-		if err := s.validateRole(input.Node.SubagentRole); err != nil {
+		selection, err := currentNodeAgentExecutionSelection(input)
+		if err != nil {
+			return err
+		}
+		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
 		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
@@ -145,7 +149,11 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
 	}
-	if err := s.validateRole(input.Node.SubagentRole); err != nil {
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
 	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false)
@@ -192,6 +200,11 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	})
 	if steerErr == nil && admission.RuntimeAvailable {
 		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			if selection.Thinking != nil {
+				if err := engine.SetWorkflowThinkingValue(*selection.Thinking); err != nil {
+					return err
+				}
+			}
 			var err error
 			steer, err = engine.SteerWorkflowAssignment(assignment)
 			return err
@@ -486,34 +499,66 @@ func (s *Starter) planCurrentNodeSession(
 		}
 	}
 	if sessionPrepared {
+		selection, err := currentNodeAgentExecutionSelection(input)
+		if err != nil {
+			return launch.SessionPlan{}, disposable, err
+		}
+		if selection.Thinking != nil {
+			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+				var applyErr error
+				plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
+					plan,
+					store,
+					serverapi.RunPromptOverrides{},
+					auth.EmptyState(),
+					launch.RunPromptOverrideOptions{WorkflowThinking: selection.Thinking},
+				)
+				return applyErr
+			}); err != nil {
+				return launch.SessionPlan{}, disposable, err
+			}
+		}
 		return plan, disposable, nil
 	}
 	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if policy.assignee != currentNodeSessionAssigneeEstablishTarget {
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	if policy.assignee != currentNodeSessionAssigneeEstablishTarget && selection.Thinking == nil {
 		return plan, disposable, nil
+	}
+	options := launch.RunPromptOverrideOptions{}
+	if selection.Origin == workflow.AssigneeOriginTransitionSelected {
+		options.RequiredTools = []toolspec.ID{toolspec.ToolAskQuestion}
+	}
+	options.WorkflowThinking = selection.Thinking
+	overrides := serverapi.RunPromptOverrides{}
+	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
+		overrides = workflowPromptOverrides(selection.Assignee)
 	}
 	err = s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var applyErr error
 		plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
 			plan,
 			store,
-			workflowPromptOverrides(input.Node.SubagentRole),
+			overrides,
 			auth.EmptyState(),
-			launch.RunPromptOverrideOptions{},
+			options,
 		)
 		return applyErr
 	})
 	return plan, disposable, err
 }
 
-type currentNodeSessionAssigneePolicy uint8
+type currentNodeSessionAssigneePolicy = workflow.AssigneeSessionPolicy
 
 const (
-	currentNodeSessionAssigneeEstablishTarget currentNodeSessionAssigneePolicy = iota + 1
-	currentNodeSessionAssigneeRequireTargetMatch
-	currentNodeSessionAssigneePreserve
+	currentNodeSessionAssigneeEstablishTarget    = workflow.AssigneeSessionPolicyEstablishTarget
+	currentNodeSessionAssigneeRequireTargetMatch = workflow.AssigneeSessionPolicyRequireTargetMatch
+	currentNodeSessionAssigneePreserve           = workflow.AssigneeSessionPolicyPreserve
 )
 
 type currentNodeSessionPolicy struct {
@@ -529,37 +574,20 @@ func resolveCurrentNodeSessionPolicy(input workflowstore.CurrentNodeStartContext
 	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
 		targetOwned = true
 	default:
-		return currentNodeSessionPolicy{}, fmt.Errorf(
-			"current node session policy does not support context source %q",
-			source.Kind,
-		)
+		return currentNodeSessionPolicy{}, fmt.Errorf("current node session policy does not support context source %q", source.Kind)
 	}
-	switch input.ContextMode {
-	case workflow.ContextModeNewSession:
-		return currentNodeSessionPolicy{
-			assignee: currentNodeSessionAssigneeEstablishTarget,
-		}, nil
-	case workflow.ContextModeCompactAndContinueSession:
-		return currentNodeSessionPolicy{
-			cloneRetainedSession: input.IsFanoutBranch && !targetOwned,
-			assignee:             currentNodeSessionAssigneeEstablishTarget,
-		}, nil
-	case workflow.ContextModeContinueSession:
-		if targetOwned {
-			return currentNodeSessionPolicy{
-				assignee: currentNodeSessionAssigneePreserve,
-			}, nil
-		}
-		return currentNodeSessionPolicy{
-			cloneRetainedSession: input.IsFanoutBranch,
-			assignee:             currentNodeSessionAssigneeRequireTargetMatch,
-		}, nil
-	default:
-		return currentNodeSessionPolicy{}, fmt.Errorf(
-			"current node session policy does not support context mode %q",
-			input.ContextMode,
-		)
+	assignee, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
+		ContextMode:           input.ContextMode,
+		ContextSource:         source,
+		TargetSessionResolved: input.CurrentNode.SessionID != nil,
+	})
+	if err != nil {
+		return currentNodeSessionPolicy{}, err
 	}
+	return currentNodeSessionPolicy{
+		cloneRetainedSession: input.IsFanoutBranch && !targetOwned && input.ContextMode != workflow.ContextModeNewSession,
+		assignee:             assignee,
+	}, nil
 }
 
 func validateRetainedWorkflowSessionAgentRole(
@@ -571,7 +599,11 @@ func validateRetainedWorkflowSessionAgentRole(
 		policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		return nil
 	}
-	roleOverride, err := workflowPromptOverrides(input.Node.SubagentRole).AgentRoleOverride()
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return err
+	}
+	roleOverride, err := workflowPromptOverrides(selection.Assignee).AgentRoleOverride()
 	if err != nil {
 		return err
 	}
@@ -832,6 +864,17 @@ func (s *Starter) validateRole(role string) error {
 		return nil
 	}
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
+}
+
+func currentNodeAgentExecutionSelection(input workflowstore.CurrentNodeStartContext) (workflow.AgentExecutionSelection, error) {
+	if input.CurrentNode.AgentExecutionSelection == nil {
+		return workflow.AgentExecutionSelection{}, errors.New("Agent Current Node execution selection is required")
+	}
+	selection := input.CurrentNode.AgentExecutionSelection.Clone()
+	if err := selection.Validate(); err != nil {
+		return workflow.AgentExecutionSelection{}, err
+	}
+	return selection, nil
 }
 
 type executionPromptAwaiter struct {

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEventHandler, type Ref
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail } from "@/api";
+import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
@@ -392,9 +392,32 @@ export function PropertiesIsland({
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
         <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
+        {detail.currentNodes.map((node) => (
+          <TaskCurrentNodeSelectionProperties key={node.nodeID} node={node} />
+        ))}
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
+  );
+}
+
+export function TaskCurrentNodeSelectionProperties({ node }: Readonly<{ node: TaskCurrentNode }>) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {node.effectiveAssignee === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeAssignee", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveAssignee}</span>}
+        />
+      )}
+      {node.effectiveThinking === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeThinking", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveThinking}</span>}
+        />
+      )}
+    </>
   );
 }
 

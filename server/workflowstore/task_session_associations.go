@@ -328,7 +328,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	transitionIDs, transitionOptions, err := currentNodeTransitionOptions(definition, node)
+	transitionIDs, transitionOptions, err := s.currentNodeTransitionOptions(ctx, s.queries, definition, currentNode, node)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
@@ -409,7 +409,13 @@ func transitionGroupSourceNodeID(definition workflow.Definition, groupID workflo
 	return ""
 }
 
-func currentNodeTransitionOptions(definition workflow.Definition, source workflow.Node) ([]string, []TransitionOption, error) {
+func (s *Store) currentNodeTransitionOptions(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	currentSource workflow.CurrentNode,
+	source workflow.Node,
+) ([]string, []TransitionOption, error) {
 	transitionIDs := make([]string, 0)
 	options := make([]TransitionOption, 0)
 	for _, group := range definition.TransitionGroups {
@@ -420,36 +426,80 @@ func currentNodeTransitionOptions(definition workflow.Definition, source workflo
 		if transitionID == "" {
 			return nil, nil, fmt.Errorf("workflow %q has a blank transition id for current node %q", definition.ID, workflow.NodeIDOf(source))
 		}
+		parameters, err := s.currentNodeTransitionParameters(ctx, q, definition, group, currentSource, source)
+		if err != nil {
+			return nil, nil, err
+		}
 		transitionIDs = append(transitionIDs, transitionID)
 		options = append(options, TransitionOption{
 			ID:          transitionID,
 			DisplayName: strings.TrimSpace(group.DisplayName),
 			Description: strings.TrimSpace(group.Description),
-			Parameters:  currentNodeTransitionParameters(definition, group),
+			Parameters:  parameters,
 		})
 	}
 	return transitionIDs, options, nil
 }
 
-func currentNodeTransitionParameters(definition workflow.Definition, group workflow.TransitionGroup) []workflow.Parameter {
+func (s *Store) currentNodeTransitionParameters(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	group workflow.TransitionGroup,
+	currentSource workflow.CurrentNode,
+	source workflow.Node,
+) ([]workflow.Parameter, error) {
 	wiring := workflow.DeriveWiring(definition)
-	if source, err := currentNodeDefinitionNode(definition, group.SourceNodeID); err == nil && source.Kind() == workflow.NodeKindJoin {
-		return parametersFromOutputFields(wiring.JoinOutputFieldsForNode(group.SourceNodeID))
+	if source.Kind() == workflow.NodeKindJoin {
+		return parametersFromOutputFields(wiring.JoinOutputFieldsForNode(group.SourceNodeID)), nil
 	}
+	var parameters []workflow.Parameter
 	for _, edge := range definition.Edges {
 		if edge.TransitionGroupID == group.ID {
-			return append([]workflow.Parameter(nil), edge.Parameters...)
+			target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+			if err != nil {
+				return nil, err
+			}
+			planned, err := s.planTransitionParameterContract(
+				ctx,
+				q,
+				definition,
+				edge,
+				source,
+				target,
+				&currentSource,
+				transitionBranchKeyForCurrentNode(currentSource.Reference),
+				false,
+				true,
+			)
+			if err != nil {
+				return nil, err
+			}
+			for _, parameter := range planned.Parameters {
+				if _, exists := parameterByKey(parameters, parameter.Key); !exists {
+					parameters = append(parameters, parameter)
+				}
+			}
 		}
 	}
-	return nil
+	return parameters, nil
 }
 
 func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parameter {
 	out := make([]workflow.Parameter, 0, len(fields))
 	for _, field := range fields {
-		out = append(out, workflow.Parameter{Key: field.Name, Description: field.Description})
+		out = append(out, workflow.Parameter{Key: field.Name, Description: field.Description, Purpose: workflow.ParameterPurposeOrdinary})
 	}
 	return out
+}
+
+func parameterByKey(parameters []workflow.Parameter, key string) (workflow.Parameter, bool) {
+	for _, parameter := range parameters {
+		if parameter.Key == key {
+			return parameter, true
+		}
+	}
+	return workflow.Parameter{}, false
 }
 
 func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {

@@ -98,11 +98,12 @@ type ManualMoveRequiredValue struct {
 }
 
 type ManualMoveTransitionChoice struct {
-	TransitionKey  workflow.TransitionID
-	Label          string
-	SourceNode     workflow.Node
-	Edges          []workflow.Edge
-	RequiredValues []ManualMoveRequiredValue
+	TransitionKey    workflow.TransitionID
+	Label            string
+	SourceNode       workflow.Node
+	Edges            []workflow.Edge
+	RequiredValues   []ManualMoveRequiredValue
+	authorizedValues map[manualMoveValueIdentity]struct{}
 }
 
 type ManualMovePreview struct {
@@ -224,7 +225,6 @@ func (s *Store) resolveManualMoveExecutablePreview(
 			SourceNode:    source,
 			Edges:         append([]workflow.Edge(nil), edgesByGroup[group.ID]...),
 		}
-		candidate.RequiredValues = manualMoveRequiredValues(definition, candidate, valueEnvironment, req.Values)
 		contextUnavailableForCandidate, err := manualMoveContextUnavailable(ctx, q, definition, req.TaskID, candidate, currentNodes)
 		if err != nil {
 			return ManualMovePreview{}, err
@@ -233,6 +233,12 @@ func (s *Store) resolveManualMoveExecutablePreview(
 			contextUnavailable = true
 			continue
 		}
+		contracts, authorizedValues, err := s.manualMoveProtectedParameterPolicies(ctx, q, definition, candidate, currentNodes)
+		if err != nil {
+			return ManualMovePreview{}, err
+		}
+		candidate.RequiredValues = manualMoveRequiredValues(definition, candidate, valueEnvironment, req.Values, contracts)
+		candidate.authorizedValues = authorizedValues
 		candidatesByGroup[group.ID] = candidate
 	}
 	candidates := make([]ManualMoveTransitionChoice, 0, len(candidatesByGroup))
@@ -304,11 +310,65 @@ func manualMoveContextUnavailable(
 	return false, nil
 }
 
+func (s *Store) manualMoveProtectedParameterPolicies(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	choice ManualMoveTransitionChoice,
+	currentNodes []workflow.CurrentNode,
+) (map[workflow.EdgeID]workflow.TransitionParameterContract, map[manualMoveValueIdentity]struct{}, error) {
+	contracts := make(map[workflow.EdgeID]workflow.TransitionParameterContract, len(choice.Edges))
+	authorized := make(map[manualMoveValueIdentity]struct{})
+	contextSource := manualMoveContextCurrentNode(currentNodes)
+	for _, edge := range choice.Edges {
+		target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		planned, err := s.planTransitionParameterContract(
+			ctx,
+			q,
+			definition,
+			edge,
+			choice.SourceNode,
+			target,
+			contextSource,
+			nil,
+			true,
+			true,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		contracts[edge.ID] = planned
+		policy := planned.Consumption
+		for _, parameter := range edge.Parameters {
+			var parameterPolicy workflow.ProtectedParameterConsumptionPolicy
+			switch workflow.CanonicalParameterPurpose(parameter.Purpose) {
+			case workflow.ParameterPurposeTargetAssignee:
+				parameterPolicy = policy.Assignee
+			case workflow.ParameterPurposeTargetThinking:
+				parameterPolicy = policy.Thinking
+			default:
+				continue
+			}
+			if parameterPolicy == workflow.ProtectedParameterConsumptionIgnoreAuthorized {
+				authorized[manualMoveValueIdentity{
+					NodeKey:    workflow.NodeKey(choice.SourceNode),
+					OutputName: parameter.Key,
+				}] = struct{}{}
+			}
+		}
+	}
+	return contracts, authorized, nil
+}
+
 func manualMoveRequiredValues(
 	definition workflow.Definition,
 	choice ManualMoveTransitionChoice,
 	environment manualMoveValueEnvironment,
 	submitted map[workflow.ModelKey]map[string]string,
+	contracts map[workflow.EdgeID]workflow.TransitionParameterContract,
 ) []ManualMoveRequiredValue {
 	merged := make(map[manualMoveValueIdentity]ManualMoveRequiredValue)
 	for _, edge := range choice.Edges {
@@ -327,6 +387,7 @@ func manualMoveRequiredValues(
 			choice.SourceNode,
 			environment,
 			submitted,
+			contracts,
 		) {
 			identity := manualMoveValueIdentity{NodeKey: required.NodeKey, OutputName: required.OutputName}
 			if existing, exists := merged[identity]; exists {
@@ -362,6 +423,7 @@ func manualMoveRequiredValuesForTarget(
 	source workflow.Node,
 	environment manualMoveValueEnvironment,
 	submitted map[workflow.ModelKey]map[string]string,
+	contracts map[workflow.EdgeID]workflow.TransitionParameterContract,
 ) []ManualMoveRequiredValue {
 	derived := workflow.DeriveWiring(definition)
 	values := make([]ManualMoveRequiredValue, 0)
@@ -406,6 +468,16 @@ func manualMoveRequiredValuesForTarget(
 				continue
 			}
 			for _, field := range derived.TransitionOutputFieldsForEdge(edge, source) {
+				contract := contracts[edge.ID]
+				if parameter, protected := transitionParameterByKey(edge, field.Name); protected {
+					planned, required := parameterByKey(contract.Parameters, parameter.Key)
+					if !required {
+						continue
+					}
+					field.Description = planned.Description
+				} else if planned, ordinary := parameterByKey(contract.Parameters, field.Name); ordinary {
+					field.Description = planned.Description
+				}
 				appendValue(workflow.NodeKey(source), field)
 			}
 		}
@@ -492,6 +564,10 @@ func validateManualMoveValues(
 	for _, required := range choice.RequiredValues {
 		requirements[manualMoveValueIdentity{NodeKey: required.NodeKey, OutputName: required.OutputName}] = struct{}{}
 		requiredNodes[required.NodeKey] = struct{}{}
+	}
+	for value := range choice.authorizedValues {
+		requirements[value] = struct{}{}
+		requiredNodes[value.NodeKey] = struct{}{}
 	}
 	for nodeKey, outputs := range submitted {
 		if _, exists := requiredNodes[nodeKey]; !exists {

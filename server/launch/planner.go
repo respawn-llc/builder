@@ -14,6 +14,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -115,6 +116,8 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
+	RequiredTools              []toolspec.ID
+	WorkflowThinking           *workflow.ThinkingValue
 }
 
 func optionalSessionName(name string) (*string, error) {
@@ -500,7 +503,41 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	return p.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+	next, warnings, err := p.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next, err = withRequiredRunPromptTools(next, options.RequiredTools)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next, err = withWorkflowThinking(next, options.WorkflowThinking)
+	return next, warnings, err
+}
+
+func withRequiredRunPromptTools(plan SessionPlan, required []toolspec.ID) (SessionPlan, error) {
+	if len(required) == 0 {
+		return plan, nil
+	}
+	enabled := cloneMapOrEmpty(plan.ActiveSettings.EnabledTools)
+	for _, tool := range required {
+		enabled[tool] = true
+	}
+	plan.ActiveSettings.EnabledTools = enabled
+	plan.EnabledTools = DedupeSortToolIDs(append(append([]toolspec.ID(nil), plan.EnabledTools...), required...))
+	return plan, nil
+}
+
+func withWorkflowThinking(plan SessionPlan, thinking *workflow.ThinkingValue) (SessionPlan, error) {
+	if thinking == nil {
+		return plan, nil
+	}
+	if err := thinking.Validate(); err != nil {
+		return SessionPlan{}, err
+	}
+	plan.ActiveSettings = cloneSettings(plan.ActiveSettings)
+	plan.ActiveSettings.ThinkingLevel = string(*thinking)
+	return plan, nil
 }
 
 func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

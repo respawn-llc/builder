@@ -464,12 +464,14 @@ WHERE EXISTS (
 );
 
 -- name: UpsertWorkflowEdge :execrows
-INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
+INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
     sqlc.arg(id),
     sqlc.arg(transition_group_id),
     sqlc.arg(edge_key),
     sqlc.arg(target_node_id),
+    sqlc.arg(assignee_selection),
+    sqlc.arg(thinking_selection),
     sqlc.arg(requires_approval),
     sqlc.arg(context_mode),
     sqlc.arg(context_source_kind),
@@ -492,6 +494,8 @@ ON CONFLICT(id) DO UPDATE SET
     transition_group_id = excluded.transition_group_id,
     edge_key = excluded.edge_key,
     target_node_id = excluded.target_node_id,
+    assignee_selection = excluded.assignee_selection,
+    thinking_selection = excluded.thinking_selection,
     requires_approval = excluded.requires_approval,
     context_mode = excluded.context_mode,
     context_source_kind = excluded.context_source_kind,
@@ -628,6 +632,8 @@ INSERT INTO workflow_edges (
     transition_group_id,
     edge_key,
     target_node_id,
+    assignee_selection,
+    thinking_selection,
     requires_approval,
     context_mode,
     context_source_kind,
@@ -642,6 +648,8 @@ INSERT INTO workflow_edges (
     sqlc.arg(transition_group_id),
     sqlc.arg(edge_key),
     sqlc.arg(target_node_id),
+    sqlc.arg(assignee_selection),
+    sqlc.arg(thinking_selection),
     sqlc.arg(requires_approval),
     sqlc.arg(context_mode),
     sqlc.arg(context_source_kind),
@@ -660,6 +668,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -682,6 +692,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -742,6 +754,8 @@ SET
     transition_group_id = sqlc.arg(transition_group_id),
     edge_key = sqlc.arg(edge_key),
     target_node_id = sqlc.arg(target_node_id),
+    assignee_selection = sqlc.arg(assignee_selection),
+    thinking_selection = sqlc.arg(thinking_selection),
     requires_approval = sqlc.arg(requires_approval),
     context_mode = sqlc.arg(context_mode),
     context_source_kind = sqlc.arg(context_source_kind),
@@ -3568,42 +3582,52 @@ ORDER BY
 
 -- name: ListTaskCurrentNodes :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id = sqlc.arg(task_id)
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id = sqlc.arg(task_id)
 ORDER BY
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key;
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key;
 
 -- name: ListTaskCurrentNodesByTasks :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id IN (sqlc.slice('task_ids'))
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id IN (sqlc.slice('task_ids'))
 ORDER BY
-    task_id,
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key;
+    current_node.task_id,
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key;
 
 -- name: AdmitSerialCurrentNode :execrows
 UPDATE task_current_nodes
@@ -3746,7 +3770,10 @@ INSERT INTO task_current_nodes (
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
-    interrupted_at_unix_ms
+    interrupted_at_unix_ms,
+    effective_assignee,
+    effective_thinking,
+    assignee_origin
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(node_id),
@@ -3758,7 +3785,10 @@ INSERT INTO task_current_nodes (
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
-    sqlc.arg(interrupted_at_unix_ms)
+    sqlc.arg(interrupted_at_unix_ms),
+    sqlc.narg(effective_assignee),
+    sqlc.narg(effective_thinking),
+    sqlc.narg(assignee_origin)
 );
 
 -- name: DeleteSerialTaskCurrentNode :execrows

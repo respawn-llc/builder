@@ -98,6 +98,16 @@ export function derivedEdgeWiring(definition: WorkflowDefinition, edgeID: string
       inputBindings: [],
       requiredProviderFields: [],
       requiredProvisionFields: [],
+      assigneeSelectionApplicability: {
+        available: false,
+        parameterVisible: false,
+        reason: "unavailable_configuration",
+      },
+      thinkingSelectionApplicability: {
+        available: false,
+        parameterVisible: false,
+        reason: "unavailable_configuration",
+      },
     }
   );
 }
@@ -111,6 +121,7 @@ export function edgePromptPlaceholderParameters(
     return derivedNodeWiring(definition, source.id).joinOutputFields.map((field) => ({
       description: field.description,
       key: field.name,
+      purpose: "ordinary",
     }));
   }
   return edge.parameters;

@@ -59,8 +59,9 @@ func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolver.RoleExists(tt.role); got != tt.want {
-				t.Fatalf("RoleExists(%q) = %v, want %v", tt.role, got, tt.want)
+			_, got := resolver.ResolveConfiguredRole(tt.role)
+			if got != tt.want {
+				t.Fatalf("ResolveConfiguredRole(%q) exists = %v, want %v", tt.role, got, tt.want)
 			}
 		})
 	}

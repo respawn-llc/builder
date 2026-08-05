@@ -73,7 +73,10 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	if len(completed.Mutation.Created) != 1 ||
 		!completed.Mutation.Created[0].Reference.Equal(target) ||
 		completed.Mutation.Created[0].Scheduling == nil ||
-		completed.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		completed.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady ||
+		completed.Mutation.Created[0].AgentExecutionSelection == nil ||
+		completed.Mutation.Created[0].AgentExecutionSelection.Assignee != "coder" ||
+		completed.Mutation.Created[0].AgentExecutionSelection.Origin != workflow.AssigneeOriginConfiguredFallback {
 		t.Fatalf("completion created = %+v, want ready review current node", completed.Mutation.Created)
 	}
 	if completed.Handoff != (CompletionHandoff{SourceNodeDisplayName: "Plan", DestinationDisplayName: "Review"}) {

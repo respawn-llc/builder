@@ -135,13 +135,16 @@ INSERT INTO task_active_fanout_branches (
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, transition_branch_key, current_input_values_json,
-    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id
-) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?)`,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, ?, ?)`,
 		string(task.ID),
 		string(started.Reference.NodeID),
 		string(branchKey),
 		sourceSessionID.String(),
 		string(*started.EnteredByEdgeID),
+		started.AgentExecutionSelection.Assignee,
+		string(started.AgentExecutionSelection.Origin),
 	); err != nil {
 		t.Fatalf("insert retained fan-out Current Node: %v", err)
 	}

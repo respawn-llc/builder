@@ -2308,6 +2308,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -2330,6 +2332,8 @@ type GetWorkflowEdgeRow struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -2350,6 +2354,8 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 		&i.TransitionGroupID,
 		&i.EdgeKey,
 		&i.TargetNodeID,
+		&i.AssigneeSelection,
+		&i.ThinkingSelection,
 		&i.RequiresApproval,
 		&i.ContextMode,
 		&i.ContextSourceKind,
@@ -3129,7 +3135,10 @@ INSERT INTO task_current_nodes (
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
-    interrupted_at_unix_ms
+    interrupted_at_unix_ms,
+    effective_assignee,
+    effective_thinking,
+    assignee_origin
 ) VALUES (
     ?1,
     ?2,
@@ -3141,7 +3150,10 @@ INSERT INTO task_current_nodes (
     ?8,
     ?9,
     ?10,
-    ?11
+    ?11,
+    ?12,
+    ?13,
+    ?14
 )
 `
 
@@ -3157,6 +3169,9 @@ type InsertTaskCurrentNodeParams struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
 }
 
 func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) error {
@@ -3172,8 +3187,11 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
 		arg.InterruptedAtUnixMs,
+		arg.EffectiveAssignee,
+		arg.EffectiveThinking,
+		arg.AssigneeOrigin,
 	)
-	err = recordQueryError(ctx, err, insertTaskCurrentNode, 11)
+	err = recordQueryError(ctx, err, insertTaskCurrentNode, 14)
 
 	return err
 }
@@ -3356,6 +3374,8 @@ INSERT INTO workflow_edges (
     transition_group_id,
     edge_key,
     target_node_id,
+    assignee_selection,
+    thinking_selection,
     requires_approval,
     context_mode,
     context_source_kind,
@@ -3378,7 +3398,9 @@ INSERT INTO workflow_edges (
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14,
+    ?15
 )
 `
 
@@ -3387,6 +3409,8 @@ type InsertWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -3404,6 +3428,8 @@ func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -3414,7 +3440,7 @@ func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdge
 		arg.OutputRequirementsJson,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowEdge, 13)
+	err = recordQueryError(ctx, err, insertWorkflowEdge, 15)
 
 	return err
 }
@@ -6287,22 +6313,27 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 
 const listTaskCurrentNodes = `-- name: ListTaskCurrentNodes :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id = ?1
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id = ?1
 ORDER BY
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key
 `
 
 type ListTaskCurrentNodesRow struct {
@@ -6317,6 +6348,10 @@ type ListTaskCurrentNodesRow struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
+	NodeKind               string
 }
 
 func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]ListTaskCurrentNodesRow, error) {
@@ -6341,6 +6376,10 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
+			&i.EffectiveAssignee,
+			&i.EffectiveThinking,
+			&i.AssigneeOrigin,
+			&i.NodeKind,
 		), listTaskCurrentNodes, 1); err != nil {
 			return nil, err
 		}
@@ -6357,23 +6396,28 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 
 const listTaskCurrentNodesByTasks = `-- name: ListTaskCurrentNodesByTasks :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id IN (/*SLICE:task_ids*/?)
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id IN (/*SLICE:task_ids*/?)
 ORDER BY
-    task_id,
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key
+    current_node.task_id,
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key
 `
 
 type ListTaskCurrentNodesByTasksRow struct {
@@ -6388,6 +6432,10 @@ type ListTaskCurrentNodesByTasksRow struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
+	NodeKind               string
 }
 
 func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []string) ([]ListTaskCurrentNodesByTasksRow, error) {
@@ -6422,6 +6470,10 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
+			&i.EffectiveAssignee,
+			&i.EffectiveThinking,
+			&i.AssigneeOrigin,
+			&i.NodeKind,
 		), query, 1); err != nil {
 			return nil, err
 		}
@@ -7287,6 +7339,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -7309,6 +7363,8 @@ type ListWorkflowEdgesRow struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -7336,6 +7392,8 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.W
 			&i.TransitionGroupID,
 			&i.EdgeKey,
 			&i.TargetNodeID,
+			&i.AssigneeSelection,
+			&i.ThinkingSelection,
 			&i.RequiresApproval,
 			&i.ContextMode,
 			&i.ContextSourceKind,
@@ -9581,30 +9639,32 @@ SET
     transition_group_id = ?1,
     edge_key = ?2,
     target_node_id = ?3,
-    requires_approval = ?4,
-    context_mode = ?5,
-    context_source_kind = ?6,
-    context_source_node_key = ?7,
-    prompt_template = ?8,
-    parameters_json = ?9,
-    input_bindings_json = ?10,
-    output_requirements_json = ?11
-WHERE workflow_edges.id = ?12
+    assignee_selection = ?4,
+    thinking_selection = ?5,
+    requires_approval = ?6,
+    context_mode = ?7,
+    context_source_kind = ?8,
+    context_source_node_key = ?9,
+    prompt_template = ?10,
+    parameters_json = ?11,
+    input_bindings_json = ?12,
+    output_requirements_json = ?13
+WHERE workflow_edges.id = ?14
   AND (
       SELECT source.workflow_id
       FROM workflow_edges existing
       JOIN workflow_transition_groups tg ON tg.id = existing.transition_group_id
       JOIN workflow_nodes source ON source.id = tg.source_node_id
-      WHERE existing.id = ?12
-  ) = ?13
+      WHERE existing.id = ?14
+  ) = ?15
   AND EXISTS (
       SELECT 1
       FROM workflow_transition_groups new_tg
       JOIN workflow_nodes new_source ON new_source.id = new_tg.source_node_id
       JOIN workflow_nodes target ON target.id = ?3
       WHERE new_tg.id = ?1
-        AND new_source.workflow_id = ?13
-        AND target.workflow_id = ?13
+        AND new_source.workflow_id = ?15
+        AND target.workflow_id = ?15
   )
 `
 
@@ -9612,6 +9672,8 @@ type UpdateWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -9629,6 +9691,8 @@ func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -9640,7 +9704,7 @@ func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdge
 		arg.EdgeID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowEdge, 13)
+	err = recordQueryError(ctx, err, updateWorkflowEdge, 15)
 
 	if err != nil {
 		return 0, err
@@ -10187,7 +10251,7 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 }
 
 const upsertWorkflowEdge = `-- name: UpsertWorkflowEdge :execrows
-INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
+INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
     ?1,
     ?2,
@@ -10201,20 +10265,24 @@ SELECT
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14,
+    ?15
 WHERE EXISTS (
     SELECT 1
     FROM workflow_transition_groups tg
     JOIN workflow_nodes source ON source.id = tg.source_node_id
     JOIN workflow_nodes target ON target.id = ?4
     WHERE tg.id = ?2
-      AND source.workflow_id = ?14
-      AND target.workflow_id = ?14
+      AND source.workflow_id = ?16
+      AND target.workflow_id = ?16
 )
 ON CONFLICT(id) DO UPDATE SET
     transition_group_id = excluded.transition_group_id,
     edge_key = excluded.edge_key,
     target_node_id = excluded.target_node_id,
+    assignee_selection = excluded.assignee_selection,
+    thinking_selection = excluded.thinking_selection,
     requires_approval = excluded.requires_approval,
     context_mode = excluded.context_mode,
     context_source_kind = excluded.context_source_kind,
@@ -10243,6 +10311,8 @@ type UpsertWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -10261,6 +10331,8 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -10272,7 +10344,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowEdge, 14)
+	err = recordQueryError(ctx, err, upsertWorkflowEdge, 16)
 
 	if err != nil {
 		return 0, err

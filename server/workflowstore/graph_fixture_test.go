@@ -110,12 +110,14 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		TransitionGroupID:  "transition-review",
 		Key:                "review",
 		TargetNodeID:       scriptID,
+		AssigneeSelection:  workflow.AssigneeSelectionConfigured,
+		ThinkingSelection:  workflow.ThinkingSelectionConfigured,
 		RequiresApproval:   true,
 		ContextMode:        workflow.ContextModeContinueSession,
 		ContextSource:      workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "agent"},
 		InputBindings:      []workflow.InputBinding{{Name: "summary", Source: workflow.BindingSourceTransitionOutput, Field: "summary"}},
 		PromptTemplate:     "Review {{.Params.summary}}.",
-		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary."}},
+		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary.", Purpose: workflow.ParameterPurposeOrdinary}},
 		OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 	}) {
 		t.Fatalf("edges = %+v, want invocation contract preserved", req.Edges)

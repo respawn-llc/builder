@@ -483,6 +483,9 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
+		for parameterIndex := range edge.Parameters {
+			edge.Parameters[parameterIndex] = edge.Parameters[parameterIndex].Canonical()
+		}
 		prepared.edges[i] = edge
 	}
 	def, err := workflowDefinitionFromPreparedGraph(prepared, workflowID, displayName, executionTargetPolicy)
@@ -632,6 +635,8 @@ type comparableWorkflowGraphSaveEdge struct {
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
+	AssigneeSelection  workflow.AssigneeSelection
+	ThinkingSelection  workflow.ThinkingSelection
 	RequiresApproval   bool
 	ContextMode        workflow.ContextMode
 	ContextSource      workflow.ContextSource
@@ -647,7 +652,7 @@ func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode,
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters) && slices.Equal(item.InputBindings, other.InputBindings) && slices.Equal(item.OutputRequirements, other.OutputRequirements)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.AssigneeSelection == other.AssigneeSelection && item.ThinkingSelection == other.ThinkingSelection && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters) && slices.Equal(item.InputBindings, other.InputBindings) && slices.Equal(item.OutputRequirements, other.OutputRequirements)
 }
 
 func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableWorkflowGraphSave {
@@ -672,7 +677,7 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 	}
 	for index, edge := range prepared.edges {
 		contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements, SortOrder: int64(index * 100)})
+		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: workflow.CanonicalAssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.CanonicalThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements, SortOrder: int64(index * 100)})
 	}
 	return out
 }
@@ -779,7 +784,11 @@ func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, gr
 
 func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeRecord, sortOrder int64, op string) error {
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-	parameters, err := marshalJSONArray(edge.Parameters)
+	canonicalParameters := make([]workflow.Parameter, 0, len(edge.Parameters))
+	for _, parameter := range edge.Parameters {
+		canonicalParameters = append(canonicalParameters, parameter.Canonical())
+	}
+	parameters, err := marshalJSONArray(canonicalParameters)
 	if err != nil {
 		return err
 	}
@@ -800,6 +809,8 @@ func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeReco
 		TransitionGroupID:      string(edge.TransitionGroupID),
 		EdgeKey:                string(edge.Key),
 		TargetNodeID:           string(edge.TargetNodeID),
+		AssigneeSelection:      string(workflow.CanonicalAssigneeSelection(edge.AssigneeSelection)),
+		ThinkingSelection:      string(workflow.CanonicalThinkingSelection(edge.ThinkingSelection)),
 		RequiresApproval:       requiresApproval,
 		ContextMode:            string(edge.ContextMode),
 		ContextSourceKind:      string(contextSource.Kind),

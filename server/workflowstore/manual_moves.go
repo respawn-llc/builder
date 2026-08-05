@@ -384,14 +384,16 @@ func (s *Store) materializeManualMoveTargets(
 			branchKey = &value
 		}
 		targetCurrentNode, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
-			Definition:           definition,
-			Edge:                 edge,
-			Source:               choice.SourceNode,
-			Target:               target,
-			ContextTaskID:        currentNodes[0].Reference.TaskID,
-			ContextCurrentSource: contextSource,
-			ManualMoveContext:    true,
-			PriorValues:          priorValues,
+			Definition:                      definition,
+			Edge:                            edge,
+			Source:                          choice.SourceNode,
+			Target:                          target,
+			Catalog:                         s.roleResolver,
+			ResolveRetainedSessionSelection: s.resolveRetainedSessionSelection,
+			ContextTaskID:                   currentNodes[0].Reference.TaskID,
+			ContextCurrentSource:            contextSource,
+			ManualMoveContext:               true,
+			PriorValues:                     priorValues,
 			Value: func(providerNode, _ workflow.ModelKey, outputName string) (string, bool) {
 				value := manualMoveSubmittedOrResolved(providerNode, outputName, environment, submitted)
 				if value == nil {

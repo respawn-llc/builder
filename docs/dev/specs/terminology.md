@@ -72,7 +72,7 @@ A Project-owned user-defined organizational tag with an immutable UUID v4 identi
 
 ### Assignee
 
-The subagent role associated with an executable node. UI surfaces may present the role as the node's assignee.
+The subagent role materialized for an Agent Current Node. An Agent Node configures the required fallback Assignee; an eligible incoming Transition Branch may select a different effective Assignee. There is no separate product Assignment entity.
 
 ### Node
 
@@ -117,6 +117,10 @@ A Transition with multiple branches that adds several parallel target Nodes to a
 ### Parameter
 
 A stable-key string fact produced by an agent source when it applies a Transition. Parameters are declared on Transition Branches, are required when declared, and can be materialized into target prompts, later-node prompt references, joins, and validation.
+
+### Protected Parameter
+
+A Parameter with a Kent-owned semantic purpose tied to a Workflow control. Its purpose remains stable when its editable Key or description changes. It stays in the Transition Branch's ordered Parameter collection and can be renamed, redescribed, and reordered, but cannot be deleted while its owning control is enabled. Disabling the control or making it inapplicable may hide the Protected Parameter while retaining its saved settings. It is required only when Kent exposes it in the effective Runtime Parameter Contract; while exposed, its value has ordinary Parameter behavior.
 
 ### Transition Prompt
 

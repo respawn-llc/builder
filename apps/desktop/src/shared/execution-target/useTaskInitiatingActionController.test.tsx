@@ -104,6 +104,8 @@ describe("task initiating action controller", () => {
           applied: {
             currentNodes: [
               {
+                effectiveAssignee: null,
+                effectiveThinking: null,
                 nodeID: "node-1",
                 transitionBranchKey: null,
                 sessionID: null,

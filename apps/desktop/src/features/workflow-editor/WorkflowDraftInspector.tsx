@@ -34,11 +34,8 @@ import {
 } from "./workflowEditorDraft";
 import { type WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { ApprovalToggle, Bindings, FieldSummary } from "./WorkflowInspectorSharedSections";
-import {
-  EditableEdgeParameters,
-  EditableJoinProviders,
-  PromptTemplateEditor,
-} from "./WorkflowDraftEditableSections";
+import { EditableJoinProviders } from "./WorkflowDraftEditableSections";
+import { EdgeInvocationSections } from "./WorkflowDraftEdgeInvocationSections";
 import { GroupDetails, NodeDetails } from "./WorkflowReadonlyInspector";
 import {
   contextModeOptions,
@@ -48,10 +45,8 @@ import {
   derivedEdgeWiring,
   derivedNodeWiring,
   edgeDetails,
-  edgePromptPlaceholderParameters,
   emptyWorkflowValidation,
   immediateContextSource,
-  parameterSummaryFields,
   workflowCompletionModeOptions,
   useWorkflowAssigneeOptions,
 } from "./workflowInspectorWiring";
@@ -306,6 +301,7 @@ function EdgeDraftDetails({
       <EdgeInvocationSections
         controller={controller}
         definition={definition}
+        derivedEdge={derivedEdge}
         edge={edge}
         sourceKind={details.sourceKind}
         targetKind={details.targetKind}
@@ -314,45 +310,6 @@ function EdgeDraftDetails({
       <ValidationDetails errors={details.directErrors} title={t("workflowEditor.edgeErrors")} />
       <ValidationDetails errors={details.groupErrors} title={t("workflowEditor.transitionGroupErrors")} />
     </InspectorStack>
-  );
-}
-
-function EdgeInvocationSections({
-  controller,
-  definition,
-  edge,
-  sourceKind,
-  targetKind,
-}: Readonly<{
-  controller: WorkflowEditorDraftController;
-  definition: WorkflowDefinition;
-  edge: DraftWorkflowEdge;
-  sourceKind: string;
-  targetKind: string;
-}>) {
-  const { t } = useTranslation();
-  const promptParameters = edgePromptPlaceholderParameters(definition, edge);
-  return (
-    <>
-      {targetKind === "agent" ? (
-        <PromptTemplateEditor
-          onPromptChange={(promptTemplate) => {
-            controller.dispatch({ edgeID: edge.id, promptTemplate, type: "editEdgePrompt" });
-          }}
-          parameters={promptParameters}
-          promptTemplate={edge.promptTemplate}
-        />
-      ) : null}
-      {sourceKind === "agent" || sourceKind === "script" ? (
-        <EditableEdgeParameters controller={controller} edge={edge} />
-      ) : null}
-      {sourceKind === "join" && targetKind === "agent" ? (
-        <FieldSummary
-          fields={parameterSummaryFields(promptParameters)}
-          title={t("workflowEditor.joinAggregateParameters")}
-        />
-      ) : null}
-    </>
   );
 }
 

@@ -368,6 +368,8 @@ export const englishResources = {
       workspace: "Workspace",
       workflow: "Workflow",
       source: "Source",
+      currentNodeAssignee: "Node {{nodeID}} effective assignee",
+      currentNodeThinking: "Node {{nodeID}} effective thinking",
       sourceWorkspaceLocked: "Source workspace locked after start.",
       validationError: "Task validation failed",
       start: "Start task",

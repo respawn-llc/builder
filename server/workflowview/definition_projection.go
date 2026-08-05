@@ -12,7 +12,8 @@ import (
 )
 
 type DefinitionProjection struct {
-	store *workflowstore.Store
+	store   *workflowstore.Store
+	catalog workflow.TargetAgentCatalog
 }
 
 type definitionSnapshot struct {
@@ -25,7 +26,7 @@ func NewDefinitionProjection(store *workflowstore.Store) (*DefinitionProjection,
 	if store == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	return &DefinitionProjection{store: store}, nil
+	return &DefinitionProjection{store: store, catalog: store.TargetAgentCatalog()}, nil
 }
 
 func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.ProjectWorkflowLinkRecord, validation *workflow.ValidationResult) serverapi.WorkflowPickerItem {
@@ -71,12 +72,12 @@ func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID runtimei
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
-	api, nodeKinds := ProjectDefinition(domain, record)
+	api, nodeKinds := ProjectDefinition(domain, record, p.catalog)
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 
 // ProjectDefinition is the canonical pure domain-to-API workflow projection.
-func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
+func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRecord, catalogs ...workflow.TargetAgentCatalog) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind) {
 	api := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{
 			ID:                    record.ID,
@@ -144,7 +145,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 	for _, edge := range def.Edges {
 		parameters := make([]serverapi.WorkflowParameter, 0, len(edge.Parameters))
 		for _, parameter := range edge.Parameters {
-			parameters = append(parameters, serverapi.WorkflowParameter{Key: parameter.Key, Description: parameter.Description})
+			parameters = append(parameters, serverapi.WorkflowParameter{Key: parameter.Key, Description: parameter.Description, Purpose: string(workflow.CanonicalParameterPurpose(parameter.Purpose))})
 		}
 		requirements := make([]serverapi.WorkflowOutputRequirement, 0, len(edge.OutputRequirements))
 		for _, requirement := range edge.OutputRequirements {
@@ -156,6 +157,8 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			TransitionGroupID:  string(edge.TransitionGroupID),
 			Key:                string(edge.Key),
 			TargetNodeID:       string(edge.TargetNodeID),
+			AssigneeSelection:  string(workflow.CanonicalAssigneeSelection(edge.AssigneeSelection)),
+			ThinkingSelection:  string(workflow.CanonicalThinkingSelection(edge.ThinkingSelection)),
 			RequiresApproval:   edge.RequiresApproval,
 			ContextMode:        string(edge.ContextMode),
 			ContextSource:      apiContextSource(edge.ContextSource),
@@ -165,7 +168,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			OutputRequirements: requirements,
 		})
 	}
-	api.DerivedWiring = DerivedWiring(def)
+	api.DerivedWiring = DerivedWiring(def, catalogs...)
 	return api, nodeKinds
 }
 
