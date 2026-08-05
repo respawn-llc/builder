@@ -336,20 +336,24 @@
   selector as a fresh root; transition to absence stops after close. Therefore
   `/projects/P?taskId=A` with unrelated sidebar B followed by `taskId=C` always
   removes B and ends with exactly C open, regardless of React effect order.
-  Selected-Task deletion reports the deleted Task fact to `SidebarProvider`
-  before invalidating A and clearing `taskId`; the provider consumes that fact
-  on the exact search transition, preserves unrelated sidebar survivors, and
-  opens no replacement. Navigation failure clears the provider's fact and
-  surfaces the existing error. The Board coordinator retains only the
-  previously selected Task for opening; ordinary browser/search transitions
-  follow the central close-then-optional-open contract.
+  Selected-Task deletion records a typed pending operation in
+  `SidebarProvider` before invalidating A and clearing `taskId`; the provider
+  defers the exact selector transition until the typed navigation outcome
+  settles. Completed navigation consumes the operation and preserves unrelated
+  sidebar survivors; failed navigation clears it and reconciles through the
+  ordinary route-close path while the Board surfaces the existing error. The
+  Board coordinator retains only the previously selected Task for opening and
+  reports the typed outcome; ordinary browser/search transitions follow the
+  central close-then-optional-open contract.
 - `SidebarProvider` owns one typed route-transition contract for all
   main-window navigation. It closes on pathname changes, Board `workflowId` or
   ordinary `taskId` changes, and Workflow Editor `projectId` changes. The
-  Board selector coordinator owns only selected-Task opening and its typed
-  deletion lifecycle; it reports the deleted Task fact to `SidebarProvider`,
-  which consumes it to preserve an unrelated survivor when the deleted
-  selector clears. Board and Workflow Editor routes contain no route-close
+  Board selector coordinator owns only selected-Task opening and reports
+  deletion start/outcome to `SidebarProvider`; the provider owns the pending
+  operation and consumes it to preserve an unrelated survivor when the deleted
+  selector clears. Pending success and failure are both covered across the
+  selector transition, so a failure after selector absence still performs the
+  ordinary route close. Board and Workflow Editor routes contain no route-close
   effects. Home, Workflow Library, and standalone Task routes have no search
   contract; native-dialog routes are separate windows. This covers every
   current main-window search-bearing route without pathname/search-string
@@ -687,16 +691,14 @@
   typed navigation failure while surfacing the error. Focused regression tests
   cover the virtual range/load-more behavior and deletion confirmation
   settlement. Latest remediation routes mutation-driven and subscription-driven
-  selected-Task deletion through the same operation-scoped coordinator. The
-  single Board-owned reducer retains the committed selector and deletion cause,
-  defers selector consumption until the typed route outcome settles, and
-  reconciles success/failure without a parallel revision or active-attempt
-  authority. Product-boundary tests cover selector-before-navigation-outcome
-  success/failure and unrelated-survivor preservation. Final verification
-  passed after this round: `pnpm install --frozen-lockfile`, full Apps lint
-  (0 errors; 4 existing warnings), Apps typecheck,
-  `./scripts/test.sh desktop` (83 files / 373 tests), and
-  `./scripts/build.sh desktop`.
+  selected-Task deletion through the same provider-owned typed operation.
+  `SidebarProvider` keeps the pending operation through selector absence,
+  defers reconciliation, and preserves or closes only after the matching
+  completed/failed outcome. Product-boundary tests cover parsed Board
+  selectors, selector-before-outcome delayed success/failure, and
+  unrelated-survivor preservation without literal-text control flow.
+  Focused route and deletion-coordinator tests pass; full verification is
+  recorded below after the final remediation round.
   Progress (August 5, 2026): Remediated the compliance boundary by making
   Project `taskId` optional and non-empty when present, omitting it from
   project navigation and route restoration when absent, and carrying
@@ -705,9 +707,9 @@
   workflow selector; the redundant workflow fallback was removed. Product
   boundary tests cover omitted task selectors, rejection of empty selectors,
   and success/failure after selector absence commits without empty-string
-  absence values. Final verification passed again: frozen Apps install, full
-  Apps lint (0 errors; 4 existing warnings), Apps typecheck,
-  `./scripts/test.sh desktop` (83 files / 373 tests), and
+  absence values. Final remediation verification passed: full Apps lint
+  (0 errors; 4 existing warnings), Apps typecheck,
+  `./scripts/test.sh desktop` (82 files / 375 tests), and
   `./scripts/build.sh desktop`. Browser/manual QA remains excluded.
 
 - [x] **Close the complete sidebar from one router transition owner.**
@@ -715,22 +717,25 @@
   normal links, browser history, View Transition updates, Board workflow/task
   search changes, and Workflow Editor project changes. Sidebar-local Push/Back
   never changes the router location and remains independent. The Board
-  selector coordinator reports selected-Task deletion through the provider's
-  typed deletion lifecycle; the provider preserves an unrelated survivor only
-  for that deletion transition and closes ordinary route changes. Regression
-  coverage uses real router transitions for every route case, including the
-  AppChrome Home View Transition path and the deletion-survivor exception.
+  selector coordinator reports selected-Task deletion start/outcome through
+  the provider's typed pending operation; the provider preserves an unrelated
+  survivor only for a matching completed deletion transition and closes
+  ordinary or failed route changes. Regression coverage uses real router
+  transitions for every route case, including delayed success/failure after
+  selector absence, the AppChrome Home View Transition path, and the
+  deletion-survivor exception.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,623 additions plus 329
-  deletions: **1,952 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,669 additions plus 328
+  deletions: **1,997 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
   seam, and consolidates generic currentness/rebase logic. Approved behavior,
   ownership, and guarantees are unchanged.
-  Progress (August 5, 2026): Re-measured after full route-owner centralization:
-  frozen Apps install, Apps lint (0 errors; 4 existing warnings), Apps
-  typecheck, Desktop build, and `./scripts/test.sh desktop` (82 files / 373
-  tests) all passed.
+  Progress (August 5, 2026): Re-measured after deferred typed deletion
+  reconciliation: Apps lint (0 errors; 4 existing warnings), Apps typecheck,
+  Desktop build, and `./scripts/test.sh desktop` (82 files / 375 tests) all
+  passed. The final non-test Desktop diff is 1,669 additions plus 328
+  deletions, totaling 1,997 changed lines.
