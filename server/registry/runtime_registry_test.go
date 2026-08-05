@@ -119,6 +119,80 @@ func TestSubscribeSessionTranscriptFailsExecutionTargetResolution(t *testing.T) 
 	}
 }
 
+func TestPublishMalformedLiveLocatorClosesTranscriptFeedWithContractError(t *testing.T) {
+	registry := NewRuntimeRegistry().WithTranscriptContractViolationPanic(false)
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	defer closeRuntime(registry, engine.SessionID(), engine)
+
+	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("subscribe transcript: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+	if hydration := nextTranscriptMessage(t, subscription); hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("first message = %+v, want hydration", hydration)
+	}
+
+	err = registry.PublishAuthorityRuntimeEvent(
+		registryTestResourceRef(engine.SessionID()),
+		runtime.Event{
+			Kind:                runtime.EventUserMessageFlushed,
+			StepID:              registryTestStepID,
+			UserMessage:         "malformed live row",
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{},
+		},
+	)
+	if err == nil {
+		t.Fatal("malformed live locator returned nil error")
+	}
+	reason, ok := serverapi.TranscriptCloseReasonOf(err)
+	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
+		t.Fatalf("publish error close reason = %q ok=%t, want contract violation", reason, ok)
+	}
+	_, err = subscription.Next(context.Background())
+	if err == nil {
+		t.Fatal("subscription remained open after malformed live locator")
+	}
+	reason, ok = serverapi.TranscriptCloseReasonOf(err)
+	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
+		t.Fatalf("subscription close reason = %q ok=%t, want contract violation", reason, ok)
+	}
+}
+
+func TestPublishMalformedLiveLocatorPanicsInContractMode(t *testing.T) {
+	registry := NewRuntimeRegistry().WithTranscriptContractViolationPanic(true)
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	defer closeRuntime(registry, engine.SessionID(), engine)
+
+	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("subscribe transcript: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+	_ = nextTranscriptMessage(t, subscription)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("malformed live locator did not panic in contract mode")
+		}
+	}()
+	_ = registry.PublishAuthorityRuntimeEvent(
+		registryTestResourceRef(engine.SessionID()),
+		runtime.Event{
+			Kind:                runtime.EventUserMessageFlushed,
+			StepID:              registryTestStepID,
+			UserMessage:         "malformed live row",
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{},
+		},
+	)
+}
+
 func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)

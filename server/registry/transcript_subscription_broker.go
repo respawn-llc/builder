@@ -179,6 +179,13 @@ func transcriptPublishError(err error) error {
 	return serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReasonContractViolation, err)
 }
 
+func transcriptProjectionContractError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return transcriptPublishError(errTranscriptContractViolation(err.Error()))
+}
+
 type transcriptSubscriptionContract struct {
 	hydrated                 bool
 	activeStream             *runtimeids.AssistantStreamID

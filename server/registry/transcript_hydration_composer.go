@@ -17,7 +17,9 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 ) (clientui.TranscriptHydration, error) {
 	hydration, err := runtimeview.TranscriptHydrationFromSnapshotChecked(snapshot)
 	if err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("project transcript hydration: %w", err)
+		return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{
+			cause: fmt.Errorf("project transcript hydration: %w", err),
+		}
 	}
 	readModel, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID, nil)
 	if err != nil {
@@ -46,7 +48,9 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript background activities: %w", err)
 	}
 	if err := hydration.Validate(); err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("validate canonical transcript hydration: %w", err)
+		return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{
+			cause: fmt.Errorf("validate canonical transcript hydration: %w", err),
+		}
 	}
 	return hydration, nil
 }

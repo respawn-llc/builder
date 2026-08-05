@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -10,6 +11,21 @@ import (
 type sessionFeedSequencer struct {
 	mu     sync.Mutex
 	broker *transcriptSubscriptionBroker
+}
+
+type transcriptHydrationProjectionError struct {
+	cause error
+}
+
+func (e transcriptHydrationProjectionError) Error() string {
+	if e.cause == nil {
+		return "transcript hydration projection failed"
+	}
+	return e.cause.Error()
+}
+
+func (e transcriptHydrationProjectionError) Unwrap() error {
+	return e.cause
 }
 
 func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedSequencer {
@@ -33,6 +49,10 @@ func (s *sessionFeedSequencer) Subscribe(
 	}
 	hydration, err := build()
 	if err != nil {
+		var projectionErr transcriptHydrationProjectionError
+		if errors.As(err, &projectionErr) {
+			return nil, transcriptProjectionContractError(projectionErr)
+		}
 		return nil, err
 	}
 	event := clientui.NewTranscriptEvent(hydration)
@@ -99,6 +119,20 @@ func (s *sessionFeedSequencer) Close(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.broker.Close(err)
+}
+
+func (s *sessionFeedSequencer) CloseContractViolation(err error) error {
+	if err == nil {
+		return nil
+	}
+	if s == nil {
+		return transcriptProjectionContractError(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	contractErr := transcriptProjectionContractError(err)
+	s.broker.Close(contractErr)
+	return contractErr
 }
 
 func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.RuntimeReadModelUpdate) {

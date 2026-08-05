@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/runtime"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -216,6 +217,70 @@ func TestSessionFeedSequencerBuildsHydrationWithoutPriorRuntimeReadModel(t *test
 	if message := nextTranscriptMessage(t, sub); message.Sequence != 1 || message.Kind() != clientui.TranscriptMessageHydration {
 		t.Fatalf("first message = %+v, want sequence 1 hydration", message)
 	}
+}
+
+func TestSessionFeedSequencerHydrationProjectionUsesContractFailurePolicy(t *testing.T) {
+	t.Run("production returns contract error", func(t *testing.T) {
+		restore := withTranscriptContractViolationPanic(false)
+		defer restore()
+		_, err := newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
+			return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{cause: errors.New("malformed hydration locator")}
+		})
+		if err == nil {
+			t.Fatal("malformed hydration projection returned nil error")
+		}
+		reason, ok := serverapi.TranscriptCloseReasonOf(err)
+		if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
+			t.Fatalf("hydration error close reason = %q ok=%t, want contract violation", reason, ok)
+		}
+	})
+	t.Run("development panics with contract diagnostic", func(t *testing.T) {
+		restore := withTranscriptContractViolationPanic(true)
+		defer restore()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("malformed hydration projection did not panic")
+			}
+		}()
+		_, _ = newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
+			return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{cause: errors.New("malformed hydration locator")}
+		})
+	})
+}
+
+func TestRegistryHydrationCompositionUsesContractFailurePolicy(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	snapshot := runtime.TranscriptHydrationSnapshot{
+		CommittedRows: []runtime.TranscriptCommittedRowFact{{
+			Locator: transcript.CommittedRowLocator{},
+		}},
+	}
+	t.Run("production returns contract error", func(t *testing.T) {
+		restore := withTranscriptContractViolationPanic(false)
+		defer restore()
+		_, err := newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
+			return registry.composeTranscriptHydration(context.Background(), "", nil, snapshot)
+		})
+		if err == nil {
+			t.Fatal("malformed hydration composition returned nil error")
+		}
+		reason, ok := serverapi.TranscriptCloseReasonOf(err)
+		if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
+			t.Fatalf("hydration composition close reason = %q ok=%t, want contract violation", reason, ok)
+		}
+	})
+	t.Run("development panics with contract diagnostic", func(t *testing.T) {
+		restore := withTranscriptContractViolationPanic(true)
+		defer restore()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("malformed hydration composition did not panic")
+			}
+		}()
+		_, _ = newSessionFeedSequencer(newTranscriptSubscriptionBroker()).Subscribe(func() (clientui.TranscriptHydration, error) {
+			return registry.composeTranscriptHydration(context.Background(), "", nil, snapshot)
+		})
+	})
 }
 
 func TestTranscriptBrokerRejectsUninitializedEventWithoutSequenceOrDelivery(t *testing.T) {
