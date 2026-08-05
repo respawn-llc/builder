@@ -104,31 +104,25 @@ func (b *transcriptSubscriptionBroker) Publish(events []clientui.TranscriptEvent
 }
 
 func (b *transcriptSubscriptionBroker) Close(err error) {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return
-	}
-	b.closed = true
-	subs := make([]*transcriptSubscription, 0, len(b.subscribers))
-	for id, sub := range b.subscribers {
-		subs = append(subs, sub)
-		delete(b.subscribers, id)
-	}
-	b.mu.Unlock()
-	for _, sub := range subs {
-		sub.closeWithError(err)
-	}
+	b.closeSubscribers(err, true)
 }
 
 func (b *transcriptSubscriptionBroker) CloseSubscribers(err error) {
+	b.closeSubscribers(err, false)
+}
+
+func (b *transcriptSubscriptionBroker) closeSubscribers(err error, terminal bool) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
+	if terminal {
+		if b.closed {
+			b.mu.Unlock()
+			return
+		}
+		b.closed = true
+	}
 	subs := make([]*transcriptSubscription, 0, len(b.subscribers))
 	for id, sub := range b.subscribers {
 		subs = append(subs, sub)
