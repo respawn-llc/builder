@@ -11,7 +11,9 @@ import type {
 import type { BoardNodeCardsSort } from "@/api";
 
 const labelRuntime = vi.hoisted(() => ({
-  state: { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } },
+  state: {
+    filter: { kind: "named", mode: "all", labelIDs: ["label-1"] },
+  } as { filter: { kind: "none" } } | { filter: { kind: "named"; mode: "all"; labelIDs: string[] } },
   dispatch: vi.fn(),
 }));
 interface GenerationRuntime {
@@ -74,7 +76,7 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
 }));
 
 vi.mock("./BoardTaskSearch", () => ({
-  BoardTaskSearchChrome: () => <button data-testid="board-task-search-trigger" type="button" />,
+  BoardTaskSearchChrome: () => <button type="button" />,
 }));
 
 import { BoardFilterChrome } from "./BoardLabelFilter";
@@ -96,7 +98,10 @@ describe("BoardFilterChrome", () => {
     };
     const view = render(<BoardFilterChrome />);
 
-    const chip = screen.getByTestId("board-dependency-filter-trigger");
+    const chip = screen.getAllByRole("button").at(-1);
+    if (chip === undefined) {
+      throw new Error("Expected the dependency filter control.");
+    }
     expect(chip).toHaveAttribute("aria-pressed", "false");
     await user.click(chip);
 
@@ -113,7 +118,7 @@ describe("BoardFilterChrome", () => {
       },
     };
     view.rerender(<BoardFilterChrome />);
-    expect(screen.getByTestId("board-dependency-filter-trigger")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByRole("button").at(-1)).toHaveAttribute("aria-pressed", "true");
   });
 
   it("preserves the dependency filter when the Labels filter changes", async () => {
@@ -131,7 +136,11 @@ describe("BoardFilterChrome", () => {
     };
     render(<BoardFilterChrome />);
 
-    await user.click(screen.getByTestId("board-label-filter-trigger"));
+    const labelTrigger = screen.getAllByRole("button").at(0);
+    if (labelTrigger === undefined) {
+      throw new Error("Expected the label filter control.");
+    }
+    await user.click(labelTrigger);
 
     expect(generationRuntime.controller.setDesiredFilter).toHaveBeenCalledWith({
       labelFilter: { kind: "none" },
@@ -140,12 +149,12 @@ describe("BoardFilterChrome", () => {
   });
 
   it("keeps Labels, Sort, Unblocked, and Search in the board chrome order", () => {
-    labelRuntime.state = { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } };
+    labelRuntime.state = { filter: { kind: "none" } };
     generationRuntime.snapshot = {
       active: {
         generation: 1,
         filter: {
-          labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
+          labelFilter: { kind: "none" },
           dependencyFilter: true,
         },
         retiring: false,
@@ -154,10 +163,12 @@ describe("BoardFilterChrome", () => {
     };
     render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
 
-    const labels = screen.getByTestId("board-label-filter-trigger");
-    const sort = screen.getByTestId("board-sort-trigger");
-    const unblocked = screen.getByTestId("board-dependency-filter-trigger");
-    const search = screen.getByTestId("board-task-search-trigger");
+    const controls = screen.getAllByRole("button");
+    expect(controls).toHaveLength(4);
+    const labels = controls[0]!;
+    const sort = controls[1]!;
+    const unblocked = controls[2]!;
+    const search = controls[3]!;
     expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);

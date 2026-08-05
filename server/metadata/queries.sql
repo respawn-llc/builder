@@ -3868,6 +3868,41 @@ board_sort AS (
         CAST(sqlc.arg(sort_field) AS TEXT) AS sort_field,
         CAST(sqlc.arg(sort_direction) AS TEXT) AS sort_direction
 ),
+board_sort_keys AS (
+    SELECT
+        t.*,
+        CASE WHEN sort.sort_field = 'labels' AND t.label_ordinals IS NULL THEN 1 ELSE 0 END AS sort_null_labels,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN t.updated_at_unix_ms END AS sort_updated_ascending,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN t.updated_at_unix_ms END AS sort_updated_descending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN t.created_at_unix_ms END AS sort_created_ascending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN t.created_at_unix_ms END AS sort_created_descending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN t.label_ordinals END AS sort_labels_ascending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN t.label_ordinals END AS sort_labels_descending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN t.task_seq END AS sort_short_id_ascending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN t.task_seq END AS sort_short_id_descending,
+        CASE WHEN sort.sort_direction = 'asc' THEN t.task_seq END AS sort_tiebreak_ascending,
+        CASE WHEN sort.sort_direction = 'desc' THEN t.task_seq END AS sort_tiebreak_descending
+    FROM board_node_tasks t
+    CROSS JOIN board_sort sort
+),
+paged_board_tasks AS (
+    SELECT *
+    FROM board_sort_keys
+    ORDER BY
+        sort_null_labels ASC,
+        sort_updated_ascending ASC,
+        sort_updated_descending DESC,
+        sort_created_ascending ASC,
+        sort_created_descending DESC,
+        sort_labels_ascending ASC,
+        sort_labels_descending DESC,
+        sort_short_id_ascending ASC,
+        sort_short_id_descending DESC,
+        sort_tiebreak_ascending ASC,
+        sort_tiebreak_descending DESC
+    LIMIT sqlc.arg(limit_rows) + 1
+    OFFSET sqlc.arg(offset_rows)
+),
 dependency_progress AS (
     SELECT
         td.blocked_task_id AS task_id,
@@ -3880,7 +3915,7 @@ dependency_progress AS (
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
     FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
     WHERE td.blocked_task_id IN (
-        SELECT id FROM board_node_tasks
+        SELECT id FROM paged_board_tasks
     )
     GROUP BY td.blocked_task_id
 )
@@ -3907,23 +3942,21 @@ SELECT
     page.metadata_json,
     dependency_progress.dependency_satisfied_count,
     dependency_progress.dependency_total_count
-FROM board_node_tasks page
+FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
 CROSS JOIN board_sort sort
 ORDER BY
-    CASE WHEN sort.sort_field = 'labels' AND page.label_ordinals IS NULL THEN 1 ELSE 0 END ASC,
-    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN page.updated_at_unix_ms END ASC,
-    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN page.updated_at_unix_ms END DESC,
-    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN page.created_at_unix_ms END ASC,
-    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN page.created_at_unix_ms END DESC,
-    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN page.label_ordinals END ASC,
-    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN page.label_ordinals END DESC,
-    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN page.task_seq END ASC,
-    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN page.task_seq END DESC,
-    CASE WHEN sort.sort_direction = 'asc' THEN page.task_seq END ASC,
-    CASE WHEN sort.sort_direction = 'desc' THEN page.task_seq END DESC
-LIMIT sqlc.arg(limit_rows) + 1
-OFFSET sqlc.arg(offset_rows);
+    page.sort_null_labels ASC,
+    page.sort_updated_ascending ASC,
+    page.sort_updated_descending DESC,
+    page.sort_created_ascending ASC,
+    page.sort_created_descending DESC,
+    page.sort_labels_ascending ASC,
+    page.sort_labels_descending DESC,
+    page.sort_short_id_ascending ASC,
+    page.sort_short_id_descending DESC,
+    page.sort_tiebreak_ascending ASC,
+    page.sort_tiebreak_descending DESC;
 
 
 -- name: CountWorktreesByWorkspace :one

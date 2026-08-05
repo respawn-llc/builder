@@ -89,7 +89,6 @@ export function BoardFilterChrome() {
           trigger={
             <InteractiveChip
               className="board-label-filter-trigger"
-              data-testid="board-label-filter-trigger"
               selected={active}
               style={{
                 paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
@@ -127,7 +126,6 @@ export function BoardFilterChrome() {
       <BoardSortChrome />
       <InteractiveChip
         aria-pressed={unblocked}
-        data-testid="board-dependency-filter-trigger"
         onClick={toggleDependencyFilter}
         selected={unblocked}
         style={{ paddingInline: "var(--space-3)" }}

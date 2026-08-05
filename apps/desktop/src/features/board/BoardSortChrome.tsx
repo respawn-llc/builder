@@ -3,7 +3,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { BoardNodeCardsSort } from "@/api";
-import { InteractiveChip, Popover, PopoverContent, PopoverTrigger, RadioGroup, RadioGroupItem, SegmentedControl } from "@/ui";
+import {
+  InteractiveChip,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  RadioGroup,
+  RadioGroupItem,
+  SegmentedControl,
+} from "@/ui";
 import { AnimatedBoardChipSummary } from "./BoardChipSummary";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 
@@ -45,19 +53,12 @@ export function BoardSortChrome() {
   return (
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
-        <InteractiveChip
-          aria-label={summary}
-          data-testid="board-sort-trigger"
-          selected={!isDefault}
-          tone={!isDefault ? "primary" : "neutral"}
-        >
+        <InteractiveChip aria-label={summary} selected={!isDefault} tone={!isDefault ? "primary" : "neutral"}>
           <ArrowDownUpIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-          <span data-testid="board-sort-summary">
-            <AnimatedBoardChipSummary text={summary} />
-          </span>
+          <AnimatedBoardChipSummary text={summary} />
         </InteractiveChip>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64" data-testid="board-sort-popover" level={4}>
+      <PopoverContent align="start" className="w-64" level={4}>
         <RadioGroup
           aria-label={t("board.sort.fields.label")}
           onValueChange={(value) => {

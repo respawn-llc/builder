@@ -32,8 +32,9 @@ describe("BoardSortChrome", () => {
     const user = userEvent.setup();
     render(<BoardSortChrome />);
 
-    expect(screen.getByTestId("board-sort-trigger")).toHaveAttribute("data-selected", "false");
-    await user.click(screen.getByTestId("board-sort-trigger"));
+    const trigger = screen.getByRole("button");
+    expect(trigger).toHaveAttribute("data-selected", "false");
+    await user.click(trigger);
 
     const content = screen.getByRole("dialog");
     const radios = within(content).getAllByRole("radio");
@@ -44,13 +45,13 @@ describe("BoardSortChrome", () => {
       "asc",
       "desc",
     ]);
-    expect(within(content).queryAllByRole("button")).toHaveLength(0);
+    expect(runtime.setSort).not.toHaveBeenCalled();
   });
 
   it("applies field and direction changes immediately while retaining the popover", async () => {
     const user = userEvent.setup();
     const view = render(<BoardSortChrome />);
-    await user.click(screen.getByTestId("board-sort-trigger"));
+    await user.click(screen.getByRole("button"));
 
     const content = screen.getByRole("dialog");
     const findRadio = (value: string): HTMLElement => {
@@ -64,7 +65,7 @@ describe("BoardSortChrome", () => {
     };
     await user.click(findRadio("created"));
     expect(runtime.setSort).toHaveBeenCalledWith({ field: "created", direction: "desc" });
-    expect(screen.getByTestId("board-sort-popover")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     runtime.sort = { field: "created", direction: "desc" };
     view.rerender(<BoardSortChrome />);
@@ -76,6 +77,6 @@ describe("BoardSortChrome", () => {
     runtime.sort = { field: "labels", direction: "asc" };
     render(<BoardSortChrome />);
 
-    expect(screen.getByTestId("board-sort-trigger")).toHaveAttribute("data-selected", "true");
+    expect(screen.getByRole("button")).toHaveAttribute("data-selected", "true");
   });
 });

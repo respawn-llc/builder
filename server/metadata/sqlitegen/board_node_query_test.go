@@ -119,11 +119,19 @@ INSERT INTO tasks (
 			}
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO task_dependencies (blocker_task_id, blocked_task_id) VALUES (?, ?)`, "blocker-1", "task-1"); err != nil {
+	if _, err := db.Exec(`
+INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
+VALUES (?, ?), (?, ?)`,
+		"blocker-1", "task-1", "blocker-2", "task-3",
+	); err != nil {
 		t.Fatalf("insert dependency: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO workflow_task_status_records (task_id, is_done) VALUES (?, ?)`, "blocker-1", 0); err != nil {
-		t.Fatalf("insert blocker status: %v", err)
+	if _, err := db.Exec(`
+INSERT INTO workflow_task_status_records (task_id, is_done)
+VALUES (?, ?), (?, ?)`,
+		"blocker-1", 0, "blocker-2", 1,
+	); err != nil {
+		t.Fatalf("insert blocker statuses: %v", err)
 	}
 
 	queries := New(db)
@@ -176,6 +184,13 @@ INSERT INTO tasks (
 	}
 	if got := boardTaskIDs(rows); !slices.Equal(got, []string{"task-3", "task-4", "task-5"}) {
 		t.Fatalf("middle page = %v, want [task-3 task-4 task-5]", got)
+	}
+	if rows[0].DependencySatisfiedCount.Int64 != 1 || rows[0].DependencyTotalCount.Int64 != 1 {
+		t.Fatalf(
+			"middle-page dependency progress = (%d/%d), want (1/1)",
+			rows[0].DependencySatisfiedCount.Int64,
+			rows[0].DependencyTotalCount.Int64,
+		)
 	}
 	rows, err = queries.ListBoardNodeTasks(context.Background(), boardNodeTasksQueryParams(
 		workflowID,
