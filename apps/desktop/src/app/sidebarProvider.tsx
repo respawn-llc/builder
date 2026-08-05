@@ -40,6 +40,7 @@ import { SidebarHostContext, type SidebarHostState, type SidebarScopedActions } 
 import { createSidebarHistory, type SidebarHistory, type SidebarHistorySnapshot } from "./sidebarStack";
 import {
   classifySidebarRouteTransition,
+  sidebarRouteSearchFromQuery,
   sidebarRouteLocationFromMatches,
   type SidebarRouteTransition,
 } from "./sidebarRouteTransition";
@@ -85,7 +86,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closingHistoryRef = useRef<History | null>(null);
   const router = useRouter();
   const previousLocationRef = useRef(
-    sidebarRouteLocationFromMatches(router.state.location.pathname, router.state.matches),
+    sidebarRouteLocationFromMatches(
+      router.state.location.pathname,
+      router.state.matches,
+      sidebarRouteSearchFromQuery(router.history.location.search),
+    ),
   );
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
@@ -203,10 +208,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
   useLayoutEffect(
     () =>
-      router.subscribe("onBeforeNavigate", ({ toLocation }) => {
+      router.history.subscribe(({ location }) => {
+        const parsedLocation = router.parseLocation(location);
         const nextLocation = sidebarRouteLocationFromMatches(
-          toLocation.pathname,
-          router.matchRoutes(toLocation.pathname, toLocation.search),
+          parsedLocation.pathname,
+          router.matchRoutes(parsedLocation.pathname),
+          sidebarRouteSearchFromQuery(parsedLocation.searchStr),
         );
         const transition = classifySidebarRouteTransition(previousLocationRef.current, nextLocation);
         previousLocationRef.current = nextLocation;

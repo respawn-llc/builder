@@ -727,8 +727,8 @@
   selector coordinator reports selected-Task deletion start/outcome through
   the provider's typed pending operation; the provider preserves an unrelated
   survivor only for a matching completed deletion transition and closes
-  ordinary or failed route changes. Pathname closure is subscribed at the
-  provider's `onBeforeNavigate` lifecycle boundary before route loading; that
+  ordinary or failed route changes. Pathname closure is subscribed to the
+  provider's router-history lifecycle boundary before route loading; that
   same callback derives the typed search transitions. Regression coverage
   uses real router transitions for every route case, including delayed
   success/failure after selector absence, the AppChrome Home View Transition
@@ -784,11 +784,25 @@
   one-off outlet boolean remains. The route helper now accepts one coherent
   root-composition callback for placing the public route probe inside
   AppChrome.
+  Progress (August 5, 2026): QA's browser evidence isolated the remaining
+  ordering defect to the Router Transitioner boundary: `onBeforeNavigate`
+  callbacks ran inside route loading, after the browser View Transition could
+  retain the old sidebar shell. The provider now subscribes directly to
+  `router.history` from a layout effect, before the Router Transitioner load
+  subscriber. It parses the history location once, matches only the target
+  pathname for structural route identity, and adapts the target query through
+  `URLSearchParams` into the existing typed Board/Workflow Editor location
+  model. This keeps pathname, search, deletion reconciliation, and closure in
+  one provider dispatch without deprecated Router overloads or separate route
+  observers. Focused route-transition coverage remains 12/12, including
+  Home/View Transition ordering, browser Back, search-only changes, Board
+  workflow/task changes, Workflow Editor project changes, and deletion
+  survivors.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,667 additions plus 332
-  deletions: **1,999 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,668 additions plus 332
+  deletions: **2,000 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -809,3 +823,10 @@
   presentation refactor: 1,667 additions plus 332 deletions, totaling 1,999
   changed production lines. Full Desktop tests passed 82 files / 377 tests;
   lint, typecheck, and build remain passing.
+  Progress (August 5, 2026): The history-boundary remediation and typed query
+  adapter measure 1,668 additions plus 332 deletions, totaling 2,000 changed
+  production lines, within the approved cap. Final remediation verification
+  passed: `./scripts/test.sh desktop` completed with 82 test files and 377
+  tests, Apps lint completed with 0 errors and 4 existing warnings, Apps
+  typecheck passed, `./scripts/build.sh desktop` passed, and `git diff
+  --check` passed. Browser/manual QA remains excluded.
