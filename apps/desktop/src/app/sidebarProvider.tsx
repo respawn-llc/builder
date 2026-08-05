@@ -58,7 +58,6 @@ type History = SidebarHistory<SidebarDestination, SidebarDestinationSnapshot>;
 type HistorySnapshot = SidebarHistorySnapshot<SidebarDestination, SidebarDestinationSnapshot>;
 type PendingSidebar = Readonly<{ history: History; resolve: (result: SidebarResult) => void }>;
 type VisibleSidebar = Readonly<{ destination: SidebarDestination; snapshot: SidebarDestinationSnapshot | null; key: string }>;
-type CompletedSidebarResult = Exclude<SidebarResult, SidebarCanceledResult>;
 type SidebarActivation = Readonly<{ history: History; key: string }>;
 type TaskDeletionOperation = Readonly<{ activation: SidebarActivation | null; taskID: string; state: "pending" | "deferred" | "completed" }>;
 
@@ -234,11 +233,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     previousLocationRef.current = location;
     const transition = classifySidebarRouteTransition(previousLocation, location);
     const deletionOperation = taskDeletionRef.current;
-    const deletionActivationIsCurrent =
-      deletionOperation !== null &&
-      (deletionOperation.activation === null
-        ? currentHistoryRef.current === null && pendingRef.current === null
-        : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
+    const deletionActivationIsCurrent = deletionOperation !== null && (deletionOperation.activation === null ? currentHistoryRef.current === null && pendingRef.current === null : isCurrent(deletionOperation.activation.history, deletionOperation.activation.key));
     const deletedTaskRouteCleared =
       transition.kind === "boardTask" &&
       transition.to === undefined &&
@@ -362,7 +357,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   );
 
   const resolveSidebar = useCallback(
-    (result: CompletedSidebarResult) => {
+    (result: Exclude<SidebarResult, SidebarCanceledResult>) => {
       const history = currentHistoryRef.current;
       if (history !== null) settleAndClose(history, result);
       else pendingRef.current?.resolve(result);
