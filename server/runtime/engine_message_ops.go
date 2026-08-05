@@ -472,10 +472,10 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 	}
 	event := Event{
 		Kind:                       EventConversationUpdated,
-		StepID:                    stepID,
+		StepID:                     stepID,
 		CommittedTranscriptChanged: true,
-		Message:                   msg,
-		CommittedProvenance:       &provenance,
+		Message:                    msg,
+		CommittedProvenance:        &provenance,
 	}
 	if msg.Role == llm.RoleUser {
 		event = Event{
