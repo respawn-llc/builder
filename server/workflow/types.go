@@ -44,6 +44,14 @@ func CanonicalAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
 	return AssigneeSelection(strings.TrimSpace(string(selection)))
 }
 
+func DefaultAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	canonical := CanonicalAssigneeSelection(selection)
+	if canonical == "" {
+		return AssigneeSelectionConfigured
+	}
+	return canonical
+}
+
 type ThinkingSelection string
 
 const (
@@ -53,6 +61,14 @@ const (
 
 func CanonicalThinkingSelection(selection ThinkingSelection) ThinkingSelection {
 	return ThinkingSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	canonical := CanonicalThinkingSelection(selection)
+	if canonical == "" {
+		return ThinkingSelectionConfigured
+	}
+	return canonical
 }
 
 type ContextSourceKind string

@@ -997,7 +997,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	return serverapi.WorkflowTaskStartResponse{
 		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskStartApplied{
-			CurrentNodes: workflowCurrentNodes(started.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(started.Mutation.Created),
 		},
 	}, nil
 }
@@ -1354,23 +1354,6 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	return serverapi.WorkflowTaskInterruptResponse{}, nil
 }
 
-func workflowCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
-	out := make([]serverapi.WorkflowTaskCurrentNode, 0, len(nodes))
-	for _, currentNode := range nodes {
-		item := serverapi.WorkflowTaskCurrentNode{NodeID: string(currentNode.Reference.NodeID)}
-		if branchKey, branchScoped := currentNode.Reference.TransitionBranchKey(); branchScoped {
-			value := string(branchKey)
-			item.TransitionBranchKey = &value
-		}
-		if currentNode.SessionID != nil {
-			value := currentNode.SessionID.String()
-			item.SessionID = &value
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	return s.resumeWorkflowTask(ctx, req)
 }
@@ -1454,7 +1437,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowTaskResumeResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskResumeApplied{
-			CurrentNodes: workflowCurrentNodes(resumed),
+			CurrentNodes: workflowview.ProjectCurrentNodes(resumed),
 		},
 	}, nil
 }
@@ -1496,7 +1479,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskApproveApplied{
 			TaskID:       taskID,
-			CurrentNodes: workflowCurrentNodes(approved.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(approved.Mutation.Created),
 		},
 	}, nil
 }
@@ -1523,7 +1506,7 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
-				CurrentNodes: workflowCurrentNodes(preview.CurrentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(preview.CurrentNodes),
 			},
 		}, nil
 	}
@@ -1634,7 +1617,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(prepared.CurrentNodes()),
+				CurrentNodes: workflowview.ProjectCurrentNodes(prepared.CurrentNodes()),
 			},
 		}, nil
 	}
@@ -1694,7 +1677,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
 			},
 		}, nil
 	}
@@ -1726,7 +1709,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(moved.CurrentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(moved.CurrentNodes),
 			},
 		}, nil
 	}
@@ -1737,7 +1720,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
-			CurrentNodes: workflowCurrentNodes(moved.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(moved.Mutation.Created),
 		},
 	}, nil
 }
@@ -1838,7 +1821,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 	}
 	response := serverapi.WorkflowTaskCompleteResponse{
 		TaskID:       string(taskID),
-		CurrentNodes: workflowCurrentNodes(completed.Mutation.Created),
+		CurrentNodes: workflowview.ProjectCurrentNodes(completed.Mutation.Created),
 		Handoff: serverapi.WorkflowTaskCompletionHandoff{
 			SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
 			DestinationDisplayName: completed.Handoff.DestinationDisplayName,

@@ -804,13 +804,15 @@ func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeReco
 	if edge.RequiresApproval {
 		requiresApproval = 1
 	}
+	assigneeSelection := workflow.DefaultAssigneeSelection(edge.AssigneeSelection)
+	thinkingSelection := workflow.DefaultThinkingSelection(edge.ThinkingSelection)
 	updated, err := q.UpsertWorkflowEdge(ctx, sqlitegen.UpsertWorkflowEdgeParams{
 		ID:                     string(edge.ID),
 		TransitionGroupID:      string(edge.TransitionGroupID),
 		EdgeKey:                string(edge.Key),
 		TargetNodeID:           string(edge.TargetNodeID),
-		AssigneeSelection:      string(workflow.CanonicalAssigneeSelection(edge.AssigneeSelection)),
-		ThinkingSelection:      string(workflow.CanonicalThinkingSelection(edge.ThinkingSelection)),
+		AssigneeSelection:      string(assigneeSelection),
+		ThinkingSelection:      string(thinkingSelection),
 		RequiresApproval:       requiresApproval,
 		ContextMode:            string(edge.ContextMode),
 		ContextSourceKind:      string(contextSource.Kind),

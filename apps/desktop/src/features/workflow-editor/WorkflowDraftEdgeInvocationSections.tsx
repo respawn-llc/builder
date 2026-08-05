@@ -87,13 +87,15 @@ function EdgeAgentSelectionControls({
     derivedEdge.thinkingSelectionApplicability.reason,
     t,
   );
+  const assigneeCanReset = edge.assigneeSelection === "previous_node";
+  const thinkingCanReset = edge.thinkingSelection === "previous_node";
   return (
     <DetailSection
       title={t("workflowEditor.edgeAssigneeSelection")}
       titleHelp={t("workflowEditor.edgeAssigneeSelectionHelp")}
     >
       <SelectField
-        disabled={!assigneeAvailable}
+        disabled={!assigneeAvailable && !assigneeCanReset}
         disabledReason={assigneeDisabledReason}
         label={t("workflowEditor.edgeAssigneeSelection")}
         onValueChange={(value) => {
@@ -117,10 +119,10 @@ function EdgeAgentSelectionControls({
         ]}
         value={edge.assigneeSelection}
       />
-      <DisabledInteractionGuard disabled={!thinkingAvailable} reason={thinkingDisabledReason}>
+      <DisabledInteractionGuard disabled={!thinkingAvailable && !thinkingCanReset} reason={thinkingDisabledReason}>
         <ApprovalToggle
           checked={edge.thinkingSelection === "previous_node"}
-          disabled={!thinkingAvailable}
+          disabled={!thinkingAvailable && !thinkingCanReset}
           label={t("workflowEditor.previousNodeThinking")}
           labelHelp={t("workflowEditor.previousNodeThinkingHelp")}
           onCheckedChange={(checked) => {

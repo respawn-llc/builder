@@ -88,7 +88,7 @@ func (*TaskProjector) ProjectComment(comment sqlitegen.TaskComment) serverapi.Wo
 	}
 }
 
-func workflowCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
+func ProjectCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
 	projected := make([]serverapi.WorkflowTaskCurrentNode, 0, len(nodes))
 	for _, currentNode := range nodes {
 		projected = append(projected, workflowCurrentNode(currentNode))

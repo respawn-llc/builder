@@ -180,6 +180,12 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetDefinition after fixture save: %v", err)
 	}
+	for _, edge := range def.Edges {
+		if edge.AssigneeSelection != workflow.AssigneeSelectionConfigured ||
+			edge.ThinkingSelection != workflow.ThinkingSelectionConfigured {
+			t.Fatalf("reloaded edge selectors = %+v, want configured defaults", edge)
+		}
+	}
 	noop := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
 	preview, err := store.PreviewWorkflowGraphSave(context.Background(), noop)
 	if err != nil {

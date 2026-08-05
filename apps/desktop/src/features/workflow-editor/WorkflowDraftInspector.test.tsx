@@ -17,9 +17,16 @@ beforeAll(async () => {
 function renderEdgeInspector(
   available: boolean,
   reason: WorkflowSelectorApplicabilityReason = available ? "eligible" : "topology",
+  assigneeSelection: "configured" | "previous_node" = "configured",
+  thinkingSelection: "configured" | "previous_node" = "configured",
 ) {
   const edgeID = "edge-source-agent";
-  const state = initializeWorkflowEditorDraft(groupableWorkflowDefinition);
+  const state = initializeWorkflowEditorDraft({
+    ...groupableWorkflowDefinition,
+    edges: groupableWorkflowDefinition.edges.map((edge) =>
+      edge.id === edgeID ? { ...edge, assigneeSelection, thinkingSelection } : edge,
+    ),
+  });
   const dispatch = vi.fn();
   const controller: WorkflowEditorDraftController = {
     dispatch,
@@ -118,6 +125,37 @@ describe("WorkflowDraftInspector edge selectors", () => {
     expect(
       screen.getByRole("checkbox", { name: appI18n.t("workflowEditor.previousNodeThinking") }),
     ).toBeDisabled();
+  });
+
+  it("keeps existing previous-node selectors clearable when applicability is unavailable", async () => {
+    const user = userEvent.setup();
+    const { dispatch, edgeID } = renderEdgeInspector(false, "topology", "previous_node", "previous_node");
+    const selectionRegion = screen.getByRole("region", {
+      name: appI18n.t("workflowEditor.edgeAssigneeSelection"),
+    });
+    const assignee = within(selectionRegion).getByRole("button", {
+      name: appI18n.t("workflowEditor.edgeAssigneeSelection"),
+    });
+    const thinking = screen.getByRole("checkbox", {
+      name: appI18n.t("workflowEditor.previousNodeThinking"),
+    });
+    expect(assignee).not.toBeDisabled();
+    expect(thinking).not.toBeDisabled();
+
+    await user.click(assignee);
+    await user.click(screen.getByRole("menuitemradio", { name: appI18n.t("workflowEditor.edgeAssigneeConfigured") }));
+    await user.click(thinking);
+
+    expect(dispatch).toHaveBeenNthCalledWith(1, {
+      edgeID,
+      selection: "configured",
+      type: "setEdgeAssigneeSelection",
+    });
+    expect(dispatch).toHaveBeenNthCalledWith(2, {
+      edgeID,
+      selection: "configured",
+      type: "setEdgeThinkingSelection",
+    });
   });
 
   it("localizes configuration unavailability from the server reason code", async () => {
