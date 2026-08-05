@@ -759,12 +759,13 @@
   tests), and `./scripts/build.sh desktop`.
 
 - [x] **Keep the complete production diff within the approved cap.**
-  The non-test Desktop TypeScript/TSX diff from `origin/main...HEAD` is now
-  1,679 additions plus 320 deletions: **1,999 changed lines**, under the
-  2,000-line Design boundary. The final scope reduction only compresses
-  behavior-preserving helper/route-owner expressions; no approved behavior,
-  owner, or guarantee changed.
+  The complete non-test Desktop source/resource diff from
+  `origin/main...HEAD`, including styles, is now 1,680 additions plus 320
+  deletions: **2,000 changed lines**, exactly within the Design boundary. The
+  final scope reduction only compresses behavior-preserving helper,
+  route-owner, and animation declarations; no approved behavior, owner, or
+  guarantee changed.
   Progress (August 5, 2026): Re-measured after the cap remediation and reran
   current-head verification: frozen Apps install, Apps lint (0 errors; 4
-  existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
-  376 tests), and `./scripts/build.sh desktop` all passed.
+  existing warnings), Apps typecheck, Desktop build, and
+  `./scripts/test.sh desktop` (84 files / 376 tests) all passed.
