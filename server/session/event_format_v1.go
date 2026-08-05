@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/shared/invariant"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -53,13 +54,15 @@ func decodeEventLogHeader(line []byte) (EventLogHeader, error) {
 type EventKind string
 
 const (
-	EventKindMessage        EventKind = "message"
-	EventKindToolCompletion EventKind = "tool_completed"
-	EventKindLocalEntry     EventKind = "local_entry"
-	EventKindHistoryReplace EventKind = "history_replaced"
-	EventKindCacheRequest   EventKind = "cache_request_observed"
-	EventKindCacheResponse  EventKind = "cache_response_observed"
-	EventKindCacheWarning   EventKind = "cache_warning"
+	EventKindMessage          EventKind = "message"
+	EventKindToolCompletion   EventKind = "tool_completed"
+	EventKindLocalEntry       EventKind = "local_entry"
+	EventKindHistoryReplace   EventKind = "history_replaced"
+	EventKindCacheRequest     EventKind = "cache_request_observed"
+	EventKindCacheResponse    EventKind = "cache_response_observed"
+	EventKindCacheWarning     EventKind = "cache_warning"
+	EventKindReviewerFeedback EventKind = "reviewer_feedback"
+	EventKindReviewerError    EventKind = "reviewer_error"
 )
 
 type MessageRole string
@@ -94,6 +97,12 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 	if payload == nil {
 		return EventRecord{}, fmt.Errorf("event payload is required")
 	}
+	switch payload.(type) {
+	case ReviewerFeedbackRecord, ReviewerErrorRecord:
+		if stepID == nil || strings.TrimSpace(*stepID) == "" {
+			return EventRecord{}, fmt.Errorf("%s payload requires an enclosing step identity", payload.eventKind())
+		}
+	}
 	if err := payload.validate(); err != nil {
 		return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), err)
 	}
@@ -126,6 +135,11 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 		if typed.AfterToolCallID, normalizeErr = normalizeOptionalEventIdentity("after-tool call identity", typed.AfterToolCallID); normalizeErr != nil {
 			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
 		}
+		payload = typed
+	case ReviewerFeedbackRecord:
+		typed.Suggestions = append([]string(nil), typed.Suggestions...)
+		payload = typed
+	case ReviewerErrorRecord:
 		payload = typed
 	case HistoryReplacementRecord:
 		normalized, normalizeErr := normalizeHistoryReplacementRecord(typed)
@@ -220,6 +234,17 @@ type LocalEntryRecord struct {
 	DiagnosticKey   *string         `json:"diagnostic_key,omitempty"`
 	NoticeID        *string         `json:"notice_id,omitempty"`
 	AfterToolCallID *string         `json:"after_tool_call_id,omitempty"`
+}
+
+type ReviewerFeedbackRecord struct {
+	ID          runtimeids.ReviewerFeedbackID `json:"id"`
+	Suggestions []string                      `json:"suggestions"`
+	Visibility  EntryVisibility               `json:"visibility"`
+}
+
+type ReviewerErrorRecord struct {
+	ID     runtimeids.ReviewerErrorID `json:"id"`
+	Detail string                     `json:"detail"`
 }
 
 type CompactionMode string
@@ -368,6 +393,44 @@ func (r LocalEntryRecord) validate() error {
 	return nil
 }
 
+func (ReviewerFeedbackRecord) eventKind() EventKind {
+	return EventKindReviewerFeedback
+}
+
+func (r ReviewerFeedbackRecord) validate() error {
+	if r.ID.IsZero() {
+		return fmt.Errorf("reviewer feedback identity is required")
+	}
+	if len(r.Suggestions) == 0 {
+		return fmt.Errorf("reviewer feedback suggestions are required")
+	}
+	for index, suggestion := range r.Suggestions {
+		if strings.TrimSpace(suggestion) == "" {
+			return fmt.Errorf("reviewer feedback suggestion %d is required", index)
+		}
+	}
+	switch r.Visibility {
+	case EntryVisibilityOngoing, EntryVisibilityOngoingCollapsed:
+		return nil
+	default:
+		return fmt.Errorf("reviewer feedback visibility must be ongoing or ongoing_collapsed, got %q", r.Visibility)
+	}
+}
+
+func (ReviewerErrorRecord) eventKind() EventKind {
+	return EventKindReviewerError
+}
+
+func (r ReviewerErrorRecord) validate() error {
+	if r.ID.IsZero() {
+		return fmt.Errorf("reviewer error identity is required")
+	}
+	if strings.TrimSpace(r.Detail) == "" {
+		return fmt.Errorf("reviewer error detail is required")
+	}
+	return nil
+}
+
 type eventRecordV1Envelope struct {
 	Seq     int64           `json:"seq"`
 	Kind    EventKind       `json:"kind"`
@@ -475,6 +538,18 @@ func decodeEventRecordPayloadV1(
 			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
 		}
 		payload = entry
+	case EventKindReviewerFeedback:
+		var feedback ReviewerFeedbackRecord
+		if err := decode(&feedback); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = feedback
+	case EventKindReviewerError:
+		var reviewerError ReviewerErrorRecord
+		if err := decode(&reviewerError); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = reviewerError
 	case EventKindHistoryReplace:
 		var replacement HistoryReplacementRecord
 		if err := decode(&replacement); err != nil {

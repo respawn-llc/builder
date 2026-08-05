@@ -130,6 +130,20 @@ func renderCommittedRow(
 			Group: group,
 			Lines: renderTextBlockWithOptions(role, text, "", width, mode, meta, options),
 		}
+	case clientui.TranscriptRowReviewerFeedback:
+		if row.ReviewerFeedback == nil {
+			return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, "invalid Reviewer feedback", width, mode)}
+		}
+		text := fmt.Sprintf("%d suggestions", row.ReviewerFeedback.SuggestionCount)
+		if mode == ModeOngoing || mode == ModeOngoingFull || mode == ModeDetailExpanded {
+			text = strings.Join(row.ReviewerFeedback.Suggestions, "\n\n")
+		}
+		return Row{Group: row.Kind, Lines: renderMarkdownTextBlock(StyleRoleNoticeReviewer, text, width, mode, toolMeta{}, textBlockOptions{}, linkPresentation)}
+	case clientui.TranscriptRowReviewerError:
+		if row.ReviewerError == nil {
+			return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, "invalid Reviewer error", width, mode)}
+		}
+		return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, row.ReviewerError.Detail, width, mode)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}

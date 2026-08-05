@@ -4,6 +4,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/textutil"
 	"core/shared/transcript"
+	"slices"
 )
 
 func TranscriptCommittedRowEqual(left, right clientui.TranscriptCommittedRow) bool {
@@ -16,7 +17,25 @@ func TranscriptCommittedRowEqual(left, right clientui.TranscriptCommittedRow) bo
 	return transcriptUserRowEqual(left.User, right.User) &&
 		transcriptAssistantRowEqual(left.Assistant, right.Assistant) &&
 		transcriptToolRowEqual(left.Tool, right.Tool) &&
-		transcriptNoticeRowEqual(left.Notice, right.Notice)
+		transcriptNoticeRowEqual(left.Notice, right.Notice) &&
+		transcriptReviewerFeedbackRowEqual(left.ReviewerFeedback, right.ReviewerFeedback) &&
+		transcriptReviewerErrorRowEqual(left.ReviewerError, right.ReviewerError)
+}
+
+func transcriptReviewerFeedbackRowEqual(left, right *clientui.TranscriptReviewerFeedbackRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.ID == right.ID && left.StepID == right.StepID &&
+		left.SuggestionCount == right.SuggestionCount &&
+		slices.Equal(left.Suggestions, right.Suggestions)
+}
+
+func transcriptReviewerErrorRowEqual(left, right *clientui.TranscriptReviewerErrorRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.ID == right.ID && left.StepID == right.StepID && left.Detail == right.Detail
 }
 
 func transcriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {

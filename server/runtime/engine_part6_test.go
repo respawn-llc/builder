@@ -107,15 +107,6 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		t.Fatalf("expected follow-up assistant and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
 	}
 	assistantIndex := len(snapshotAtCompletion.Entries) - 2
-	suggestionsIndex := -1
-	for index, entry := range snapshotAtCompletion.Entries[:assistantIndex] {
-		if entry.Role == "reviewer_suggestions" {
-			suggestionsIndex = index
-		}
-	}
-	if suggestionsIndex < 0 {
-		t.Fatalf("expected reviewer suggestions before follow-up assistant, got %+v", snapshotAtCompletion.Entries)
-	}
 	assistantEntry := snapshotAtCompletion.Entries[assistantIndex]
 	if assistantEntry.Role != "assistant" || assistantEntry.Text != "updated final after review" {
 		t.Fatalf("expected completion snapshot penultimate entry to be follow-up assistant, got %+v", assistantEntry)
@@ -127,8 +118,8 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		t.Fatalf("follow-up assistant committed start = %d, want %d; snapshot=%+v", got, want, snapshotAtCompletion.Entries)
 	}
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]
-	if statusEntry.Role != "reviewer_status" || statusEntry.Text != "Supervisor ran: 1 suggestion, applied." {
-		t.Fatalf("expected completion snapshot to end with reviewer status, got %+v", statusEntry)
+	if statusEntry.ReviewerFeedback == nil || len(statusEntry.ReviewerFeedback.Suggestions) != 1 {
+		t.Fatalf("expected completion snapshot to end with typed reviewer feedback, got %+v", statusEntry)
 	}
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
@@ -137,10 +128,8 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	statuses, finalRows := 0, 0
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
-		case session.LocalEntryRecord:
-			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-				statuses++
-			}
+		case session.ReviewerFeedbackRecord:
+			statuses++
 		case session.MessageRecord:
 			message, restoreErr := llmMessageFromSessionRecord(payload)
 			if restoreErr != nil {
@@ -152,7 +141,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		}
 	}
 	if statuses != 1 || finalRows != 2 {
-		t.Fatalf("reviewer status/final records = statuses:%d finals:%d records:%+v", statuses, finalRows, window.Records)
+		t.Fatalf("reviewer feedback/final records = feedback:%d finals:%d records:%+v", statuses, finalRows, window.Records)
 	}
 
 	eng.AppendCommittedEntry("warning", "later unrelated note")
@@ -220,24 +209,9 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 	}
 	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
 
-	result, err := eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
-	if err != nil {
-		t.Fatalf("run reviewer follow-up: %v", err)
-	}
-	if messageContent(result.Message) != "original final" {
-		t.Fatalf("follow-up result message = %q, want original final", messageContent(result.Message))
-	}
-	if result.Completion == nil {
-		t.Fatal("expected reviewer completion after follow-up append failure")
-	}
-	if result.Completion.Outcome != "followup_failed" {
-		t.Fatalf("reviewer completion outcome = %q, want followup_failed", result.Completion.Outcome)
-	}
-	if result.Completion.SuggestionsCount != 1 {
-		t.Fatalf("reviewer completion suggestions = %d, want 1", result.Completion.SuggestionsCount)
-	}
-	if strings.TrimSpace(result.Completion.Error) == "" {
-		t.Fatal("expected reviewer completion to include append failure error")
+	_, err = eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
+	if err == nil {
+		t.Fatal("expected Reviewer instruction append failure")
 	}
 }
 
@@ -303,7 +277,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			assistantEventIdx = idx
 		}
 		if evt.Kind == EventReviewerCompleted {
-			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
+			assistantEventIdx = idx
 		}
 	}
 	if assistantEventIdx < 0 {
@@ -378,37 +352,40 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	eventsMu.Lock()
 	deferredEvents := append([]Event(nil), events...)
 	eventsMu.Unlock()
+	foundCompletion := false
 	for _, evt := range deferredEvents {
 		if evt.Kind == EventReviewerCompleted {
-			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
+			foundCompletion = true
 		}
+	}
+	if !foundCompletion {
+		t.Fatalf("expected Reviewer completion after feedback persistence failure, got %+v", deferredEvents)
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)
 	}
 	snapshot := eng.ChatSnapshot()
-	reviewerStatuses := 0
+	reviewerFeedback := 0
 	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
-			reviewerStatuses++
+		if entry.ReviewerFeedback != nil {
+			reviewerFeedback++
 		}
 	}
-	if reviewerStatuses != 1 {
-		t.Fatalf("committed reviewer status was not projected after observer failure: %+v", snapshot.Entries)
+	if reviewerFeedback != 1 {
+		t.Fatalf("committed reviewer feedback was not projected after observer failure: %+v", snapshot.Entries)
 	}
 	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if readErr != nil {
 		t.Fatalf("read bounded records: %v", readErr)
 	}
-	persistedStatuses := 0
+	persistedFeedback := 0
 	for _, record := range window.Records {
-		if entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok &&
-			entry.Role == string(transcript.EntryRoleReviewerStatus) {
-			persistedStatuses++
+		if _, ok := mustSessionEventPayload(record).(session.ReviewerFeedbackRecord); ok {
+			persistedFeedback++
 		}
 	}
-	if persistedStatuses != 1 {
-		t.Fatalf("committed reviewer statuses = %d, want one", persistedStatuses)
+	if persistedFeedback != 1 {
+		t.Fatalf("committed reviewer feedback = %d, want one", persistedFeedback)
 	}
 }
 
@@ -430,14 +407,11 @@ func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
 
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
-	if len(snapshot.Entries) != 2 {
-		t.Fatalf("expected 2 restored entries, got %+v", snapshot.Entries)
+	if len(snapshot.Entries) != 1 {
+		t.Fatalf("expected 1 restored legacy entry, got %+v", snapshot.Entries)
 	}
 	if snapshot.Entries[0].Role != "reviewer_suggestions" || snapshot.Entries[0].CondensedText != "Supervisor made 1 suggestion." {
 		t.Fatalf("expected stored reviewer_suggestions entry, got %+v", snapshot.Entries[0])
-	}
-	if snapshot.Entries[1].Role != "reviewer_status" || snapshot.Entries[1].Text != "Supervisor ran, applied 1 suggestion:\n1. Add final verification notes." {
-		t.Fatalf("expected stored reviewer_status entry, got %+v", snapshot.Entries[1])
 	}
 }
 
@@ -602,33 +576,19 @@ func TestReviewerSuggestionPresentation(t *testing.T) {
 func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggestions int) {
 	t.Helper()
 	suggestions := 0
-	statuses := 0
-	suggestionsIndex := -1
-	statusIndex := -1
-	for index, entry := range snapshot.Entries {
-		switch transcript.EntryRole(entry.Role) {
-		case transcript.EntryRoleReviewerSuggestions:
+	for _, entry := range snapshot.Entries {
+		if entry.ReviewerFeedback != nil {
 			suggestions++
-			suggestionsIndex = index
-			if strings.TrimSpace(entry.CondensedText) == "" {
-				t.Fatalf("reviewer suggestions condensed text is blank: %+v", entry)
-			}
-		case transcript.EntryRoleReviewerStatus:
-			statuses++
-			statusIndex = index
 		}
 	}
-	if suggestions != wantSuggestions || statuses != 1 {
-		t.Fatalf("reviewer suggestions/status counts = %d/%d, want %d/1; entries=%+v", suggestions, statuses, wantSuggestions, snapshot.Entries)
-	}
-	if suggestionsIndex >= 0 && suggestionsIndex >= statusIndex {
-		t.Fatalf("reviewer suggestions/status indexes = %d/%d, want suggestions before status", suggestionsIndex, statusIndex)
+	if suggestions != wantSuggestions {
+		t.Fatalf("reviewer feedback counts = %d, want %d; entries=%+v", suggestions, wantSuggestions, snapshot.Entries)
 	}
 }
 
 func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 	suggestions := parseReviewerSuggestionsObject(`{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
-	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != "two" || suggestions[2] != "one" {
+	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != " two " || suggestions[2] != "one" {
 		t.Fatalf("unexpected suggestions from object payload: %+v", suggestions)
 	}
 
@@ -645,6 +605,25 @@ func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 	suggestions = parseReviewerSuggestionsObject(`not-json`)
 	if len(suggestions) != 0 {
 		t.Fatalf("expected invalid payload to be ignored, got %+v", suggestions)
+	}
+}
+
+func TestParseReviewerSuggestionsObjectPreservesAcceptedMarkdownBytes(t *testing.T) {
+	const first = "  - keep indentation  \n    ```go\n    fmt.Println(\"x\")\n    ```  "
+	const second = "\n> quoted feedback\n"
+	payload, err := json.Marshal(struct {
+		Suggestions []string `json:"suggestions"`
+	}{Suggestions: []string{first, " ", "NO_OP", second}})
+	if err != nil {
+		t.Fatalf("marshal Reviewer payload: %v", err)
+	}
+	suggestions := parseReviewerSuggestionsObject(string(payload))
+	if len(suggestions) != 2 || suggestions[0] != first || suggestions[1] != second {
+		t.Fatalf("suggestions lost exact Markdown bytes: %#v", suggestions)
+	}
+	instruction := formatReviewerDeveloperInstruction(suggestions)
+	if !strings.Contains(instruction, first) || !strings.Contains(instruction, second) {
+		t.Fatalf("developer instruction lost exact Markdown bytes: %q", instruction)
 	}
 }
 

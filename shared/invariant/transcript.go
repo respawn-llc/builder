@@ -31,6 +31,12 @@ func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
 	if row.Tool != nil && strings.TrimSpace(string(row.Tool.ToolCallID)) == "" {
 		return fmt.Errorf("committed tool row has empty tool_call_id")
 	}
+	switch row.Kind {
+	case clientui.TranscriptRowReviewerFeedback, clientui.TranscriptRowReviewerError:
+		if err := row.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -350,12 +350,9 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		},
 	})
 
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(msg) != "original final" {
-		t.Fatalf("assistant content = %q, want original final", messageContent(msg))
+	_, err := eng.SubmitUserMessage(context.Background(), "do task")
+	if err == nil {
+		t.Fatal("expected explicit Reviewer NO_OP follow-up failure")
 	}
 	if reviewerClient.StreamCalls() != 1 {
 		t.Fatalf("reviewer stream calls = %d, want 1", reviewerClient.StreamCalls())
@@ -385,12 +382,15 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 			statuses++
 		}
 	}
-	if statuses != 1 {
-		t.Fatalf("reviewer status entries = %d, want 1; entries=%+v", statuses, snapshot.Entries)
+	if statuses != 0 {
+		t.Fatalf("reviewer status entries = %d, want none; entries=%+v", statuses, snapshot.Entries)
 	}
-	assertReviewerPresentation(t, snapshot, 0)
 	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	assertReviewerPresentation(t, restored.ChatSnapshot(), 0)
+	for _, restoredEntry := range restored.ChatSnapshot().Entries {
+		if transcript.IsReviewerEntryRole(restoredEntry.Role) {
+			t.Fatalf("application failure persisted a Reviewer row: %+v", restoredEntry)
+		}
+	}
 }
 
 func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
