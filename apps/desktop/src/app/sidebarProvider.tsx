@@ -85,10 +85,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const closingHistoryRef = useRef<History | null>(null);
   const router = useRouter();
   const previousLocationRef = useRef(
-    sidebarRouteLocationFromMatches(
-      router.state.location.pathname,
-      router.state.matches,
-    ),
+    sidebarRouteLocationFromMatches(router.state.location.pathname, router.state.matches),
   );
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
@@ -147,8 +144,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearMutationAdmission(history);
       history.destroy();
       closingHistoryRef.current = history;
-      flushSync(() => {
-        setLifecycle({ kind: "closing", visible: current });
+      queueMicrotask(() => {
+        if (closingHistoryRef.current === history)
+          flushSync(() => {
+            setLifecycle({ kind: "closing", visible: current });
+          });
       });
       pending.resolve(result);
       clearCloseTimeout();

@@ -807,6 +807,15 @@
   the current worktree's route callback was not in the served source. The user
   chose to record the source mismatch and request fresh QA against this
   worktree. No production workaround or scope expansion was authorized.
+  Progress (August 5, 2026): Fresh QA later verified the current worktree
+  source and reproduced the blocker, so the prior source-mismatch disposition
+  is superseded. Manual instrumentation on the current worktree showed the
+  history callback does run for Home (`transition.kind = pathname`) with both
+  current history and pending lifecycle present, but the mounted sidebar
+  remained `data-state="open"` after `setLifecycle({ kind: "closing" })`.
+  Temporary browser instrumentation was removed; the remaining root boundary
+  is lifecycle state ownership/remount or transition scheduling after the
+  callback, not history subscription registration.
   Progress (August 5, 2026): Compliance review correctly rejected the
   temporary raw-query adapter. The root cause was type erasure in
   `createNativeDialogRoutes(rootRoute: AnyRootRoute)`, which made the
@@ -817,6 +826,15 @@
   projecting only the typed Board/Workflow search fields. The raw query
   parser and duplicate query authority are removed; pathname, validated
   search, deletion reconciliation, and closure remain one dispatch.
+  Progress (August 5, 2026): The valid current-worktree QA reproduction
+  showed that the history callback reaches the provider with the active
+  history and pending lifecycle, but React can retain the open lifecycle when
+  the callback runs inside the browser View Transition scheduling boundary.
+  Route closure now schedules its one guarded lifecycle commit in the next
+  microtask, after that boundary's synchronous work, while preserving the
+  existing single provider-owned dispatch and replacement guard. Focused route
+  coverage remains green; a fresh browser acceptance rerun is still required
+  before completion.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
