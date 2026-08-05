@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { ActivityItem, TaskComment } from "@/api";
 import { errorMessage } from "@/api";
 import { formatRelativeTime, useStatusController, useTextFieldSubmitShortcut } from "@/app-facade";
-import { Button, homeListCardMaxWidthClassName, IslandSurface, MarkdownText } from "@/ui";
+import { Button, homeListCardMaxWidthClassName, IslandSurface, StaticMarkdown } from "@/ui";
 import { cx, fieldIslandInputClassName } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -108,14 +108,12 @@ export function CommentRow({
   editing,
   mutations,
   onEdit,
-  openLink,
 }: Readonly<{
   comment: TaskComment;
   disabled: boolean;
   editing: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
   onEdit: (comment: TaskComment) => void;
-  openLink: (url: string) => void;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -182,7 +180,7 @@ export function CommentRow({
         </button>
       </header>
       <div className="min-w-0 text-[var(--color-on-island)]">
-        <MarkdownText onOpenLink={openLink} value={comment.body} />
+        <StaticMarkdown value={comment.body} />
       </div>
     </IslandSurface>
   );

@@ -59,7 +59,6 @@ export function TaskDetailList({
   onEditingCommentChange,
   onQuestionSelectionChange,
   onSaveDraft,
-  openLink,
   questionSelections,
   selectedTab,
   setTab,
@@ -86,7 +85,6 @@ export function TaskDetailList({
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
@@ -201,7 +199,6 @@ export function TaskDetailList({
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
           onSaveDraft={onSaveDraft}
-          openLink={openLink}
           questionSelections={questionSelections}
           selectedTab={selectedTab}
           setTab={setTab}
@@ -243,7 +240,6 @@ type TaskDetailListRowProps = Readonly<{
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
@@ -430,7 +426,6 @@ function CommentItemRow({
   item,
   mutations,
   onEditingCommentChange,
-  openLink,
 }: TaskDetailListRowProps): ReactNode {
   const comment = item.kind === "comment" ? item.comment : undefined;
   return comment === undefined ? null : (
@@ -442,7 +437,6 @@ function CommentItemRow({
       onEdit={(nextComment) => {
         onEditingCommentChange({ id: nextComment.id, body: nextComment.body });
       }}
-      openLink={openLink}
     />
   );
 }

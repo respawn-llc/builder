@@ -11,7 +11,7 @@ import { taskStatusTone } from "@/shared/task-status";
 import {
   Button,
   Island,
-  MarkdownText,
+  StaticMarkdown,
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
@@ -238,7 +238,6 @@ function DescriptionReadView({
   value: string;
 }>) {
   const { t } = useTranslation();
-  const openExternalLink = useOpenExternalLink();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const overflows = useDescriptionOverflow({ contentRef, enabled: !expanded, viewportRef });
@@ -265,13 +264,13 @@ function DescriptionReadView({
       >
         <div ref={contentRef}>
           {value.trim().length > 0 ? (
-            <MarkdownText
-              onOpenLink={openExternalLink}
+            <StaticMarkdown
+              disabled={disabled}
+              onTaskListChange={onChange}
               taskListItemToggleLabel={(checked) =>
                 checked ? t("markdown.markIncomplete") : t("markdown.markComplete")
               }
               value={value}
-              {...(disabled ? {} : { onChange })}
             />
           ) : (
             <span className="text-[var(--color-muted)]">{t("task.bodyPlaceholder")}</span>

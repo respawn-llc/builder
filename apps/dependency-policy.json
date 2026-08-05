@@ -38,13 +38,15 @@
         "react-dom",
         "react-hook-form",
         "react-i18next",
-        "react-markdown",
-        "rehype-sanitize",
         "remark-gfm",
+        "remark-parse",
+        "shiki",
         "shadcn",
         "sonner",
+        "streamdown",
         "tailwind-merge",
         "tw-animate-css",
+        "unified",
         "zod"
       ],
       "devDependencies": [

@@ -35,11 +35,6 @@ vi.mock("@/app-facade", async (importOriginal) => {
     useAppServices: () => ({
       api: { listPendingAsks },
     }),
-    useOpenExternalLink: () => {
-      return () => {
-        return;
-      };
-    },
   };
 });
 
@@ -151,6 +146,26 @@ describe("questionPresentation", () => {
       kind: "ordinary",
       selectedOptionNumber: 2,
     });
+  });
+
+  it("activates an option but not Streamdown link descendants", async () => {
+    const attention = ordinaryAttention(["ordinary option", "[safe](https://example.com)"], 0);
+    const presentation = questionPresentation(attention, undefined, false);
+    const user = userEvent.setup();
+
+    renderQuestionForm(
+      attention,
+      presentation,
+      emptyQuestionSelection(attention.questionID),
+      recordingQuestionAnswerMutation([]),
+    );
+
+    const plainOption = screen.getByRole("radio", { name: "ordinary option" });
+    await user.click(plainOption);
+    expect(plainOption).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "safe" }));
+    expect(screen.getAllByRole("radio")[1]).not.toBeChecked();
   });
 
   it.each([0, 3, 1.5, -1])(
@@ -575,9 +590,6 @@ function QuestionFormHarness({
       answerQuestion={answerQuestion}
       attention={attention}
       disabled={false}
-      onOpenLink={() => {
-        return;
-      }}
       onSelectionStateChange={setSelection}
       presentation={presentation}
       selectionState={selection}

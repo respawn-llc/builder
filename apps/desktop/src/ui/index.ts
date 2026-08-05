@@ -53,8 +53,8 @@ export {
   homeListCardMaxWidthClassName,
   homeListCardShellClassName,
 } from "./HomeListCard";
-export { MarkdownText } from "./MarkdownText";
-export { MarkdownPlainText } from "./MarkdownPlainText";
+export { StaticMarkdown, StreamingMarkdown, TaskBodyMarkdown } from "./MarkdownText";
+export type { StaticMarkdownProps, StreamingMarkdownProps, TaskBodyMarkdownProps } from "./MarkdownText";
 export { compactExternalUrlLabel, safeExternalUrl } from "./externalLinks";
 export { readEffectiveTheme, type AppTheme } from "./theme";
 export { cx } from "./classes";

@@ -1,10 +1,10 @@
-import { type ReactNode, useId } from "react";
+import { type MouseEvent, type ReactNode, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from "@/api";
 import type { QuestionAnswerInput } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
-import { Button, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
+import { Button, RadioGroup, RadioGroupItem, showStatusToast, StaticMarkdown } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import {
@@ -21,7 +21,6 @@ export function QuestionFormView({
   answerQuestion,
   attention,
   disabled,
-  onOpenLink,
   onSelectionStateChange,
   presentation,
   selectionState,
@@ -30,7 +29,6 @@ export function QuestionFormView({
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
   disabled: boolean;
-  onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   presentation: QuestionPresentation;
   selectionState: QuestionSelectionState;
@@ -45,7 +43,6 @@ export function QuestionFormView({
         approvalDecisions={approvalDecisions}
         attention={attention}
         disabled={disabled}
-        onOpenLink={onOpenLink}
         onSelectionStateChange={onSelectionStateChange}
         question={presentation.question}
         selectionState={selectionState}
@@ -58,7 +55,6 @@ export function QuestionFormView({
       answerQuestion={answerQuestion}
       attention={attention}
       disabled={disabled}
-      onOpenLink={onOpenLink}
       onSelectionStateChange={onSelectionStateChange}
       question={presentation.question}
       recommendedOption={presentation.recommendedOption}
@@ -73,7 +69,6 @@ function OrdinaryQuestionForm({
   answerQuestion,
   attention,
   disabled,
-  onOpenLink,
   onSelectionStateChange,
   question,
   recommendedOption,
@@ -84,7 +79,6 @@ function OrdinaryQuestionForm({
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
   disabled: boolean;
-  onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   question: string | undefined;
   recommendedOption: number | null;
@@ -132,7 +126,6 @@ function OrdinaryQuestionForm({
       answerID={answerID}
       canSubmit={canSubmit}
       interactionDisabled={interactionDisabled}
-      onOpenLink={onOpenLink}
       onAnswerChange={(nextAnswer) => {
         onSelectionStateChange(withQuestionCommentary(selection, nextAnswer));
       }}
@@ -149,7 +142,6 @@ function OrdinaryQuestionForm({
               <QuestionOption
                 disabled={interactionDisabled}
                 key={`${optionIndex.toString()}:${suggestion}`}
-                onOpenLink={onOpenLink}
                 recommended={recommendedOption === optionIndex + 1}
                 text={suggestion}
                 value={suggestionRadioValue(optionIndex + 1)}
@@ -157,7 +149,6 @@ function OrdinaryQuestionForm({
             ))}
             <QuestionOption
               disabled={interactionDisabled}
-              onOpenLink={onOpenLink}
               recommended={false}
               text={t("task.neitherOption")}
               value={neitherRadioValue}
@@ -194,7 +185,6 @@ function ApprovalQuestionForm({
   approvalDecisions,
   attention,
   disabled,
-  onOpenLink,
   onSelectionStateChange,
   question,
   selectionState,
@@ -204,7 +194,6 @@ function ApprovalQuestionForm({
   approvalDecisions: readonly ApprovalDecision[];
   attention: QuestionAttentionItem;
   disabled: boolean;
-  onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   question: string | undefined;
   selectionState: QuestionSelectionState;
@@ -245,7 +234,6 @@ function ApprovalQuestionForm({
       answerID={answerID}
       canSubmit={canSubmit}
       interactionDisabled={interactionDisabled}
-      onOpenLink={onOpenLink}
       onAnswerChange={(nextAnswer) => {
         onSelectionStateChange(withQuestionCommentary(selection, nextAnswer));
       }}
@@ -259,7 +247,6 @@ function ApprovalQuestionForm({
         <QuestionOption
           disabled={interactionDisabled}
           key={decision}
-          onOpenLink={onOpenLink}
           recommended={false}
           text={approvalDecisionLabel(decision, t)}
           value={decision}
@@ -277,7 +264,6 @@ function QuestionFormFrame({
   answerID,
   canSubmit,
   interactionDisabled,
-  onOpenLink,
   onAnswerChange,
   onRadioValueChange,
   onSubmit,
@@ -290,7 +276,6 @@ function QuestionFormFrame({
   answerID: string;
   canSubmit: boolean;
   interactionDisabled: boolean;
-  onOpenLink: (url: string) => void;
   onAnswerChange: (answer: string) => void;
   onRadioValueChange: (value: string) => void;
   onSubmit: () => Promise<void>;
@@ -318,7 +303,7 @@ function QuestionFormFrame({
     >
       {question !== undefined && question.length > 0 ? (
         <div className="min-w-0 text-[var(--color-on-island)]">
-          <MarkdownText onOpenLink={onOpenLink} value={question} />
+          <StaticMarkdown value={question} />
         </div>
       ) : null}
       {optionGroup === undefined ? null : (
@@ -355,41 +340,69 @@ function QuestionFormFrame({
 
 function QuestionOption({
   disabled,
-  onOpenLink,
   recommended,
   text,
   value,
 }: Readonly<{
   disabled: boolean;
-  onOpenLink: (url: string) => void;
   recommended: boolean;
   text: string;
   value: string;
 }>) {
   const { t } = useTranslation();
   const id = useId();
+  const radioRef = useRef<HTMLButtonElement | null>(null);
+  const labelID = `${id}-label`;
   return (
     <div
       className={cx(
         "flex items-start gap-[var(--space-2)] text-left text-[var(--color-on-island)]",
         disabled && "opacity-60",
       )}
+      onClick={(event) => {
+        if (!disabled) activateRadioFromOption(event, radioRef);
+      }}
     >
-      <RadioGroupItem className="mt-1" disabled={disabled} id={id} value={value} />
-      <label
+      <RadioGroupItem
+        aria-labelledby={labelID}
+        className="mt-1"
+        disabled={disabled}
+        id={id}
+        ref={radioRef}
+        value={value}
+      />
+      <div
         className={cx(
           "min-w-0 flex-1 cursor-pointer",
           recommended && "font-bold text-[var(--color-primary)]",
         )}
-        htmlFor={id}
+        id={labelID}
       >
-        <MarkdownText inline onOpenLink={onOpenLink} value={text} />
+        <StaticMarkdown value={text} />
         {recommended ? (
           <span className="ml-[var(--space-2)] text-xs font-bold">({t("task.recommended")})</span>
         ) : null}
-      </label>
+      </div>
     </div>
   );
+}
+
+function activateRadioFromOption(
+  event: MouseEvent<HTMLDivElement>,
+  radioRef: Readonly<{ current: HTMLButtonElement | null }>,
+): void {
+  let element = event.target instanceof Element ? event.target : null;
+  while (element !== null && element !== event.currentTarget) {
+    if (
+      element instanceof HTMLAnchorElement ||
+      element instanceof HTMLButtonElement ||
+      element.getAttribute("role") === "link"
+    ) {
+      return;
+    }
+    element = element.parentElement;
+  }
+  radioRef.current?.click();
 }
 
 function questionClientRequestID(askID: string): string {
