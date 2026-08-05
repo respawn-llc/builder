@@ -762,5 +762,6 @@
   Progress (August 5, 2026): Re-measured after unified typed dispatch
   remediation: 1,668 additions plus 331 deletions, totaling 1,999 changed
   production lines, still within the 2,000-line cap. The full Desktop suite
-  passed 82 files / 377 tests; final lint, typecheck, and build evidence is
-  recorded after the last code commit.
+  passed 82 files / 377 tests. Final verification passed with Apps lint at
+  0 errors and 4 existing warnings, Apps typecheck, and
+  `./scripts/build.sh desktop`; browser/manual QA remains excluded.
