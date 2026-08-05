@@ -43,28 +43,27 @@ export function TranscriptDisclosureShowcase() {
 
   useEffect(() => {
     const originalMatchMedia = window.matchMedia;
-    const rootStyle = document.documentElement.style;
-    const previousMotionFast = rootStyle.getPropertyValue("--motion-fast");
-    const previousMotionFastPriority = rootStyle.getPropertyPriority("--motion-fast");
-    window.matchMedia = (query) =>
+    const controlledMatchMedia = (query: string) =>
       query === "(prefers-reduced-motion: reduce)"
         ? createMediaQueryList(query, reducedMotion)
-        : originalMatchMedia(query);
-    if (reducedMotion) {
-      rootStyle.setProperty("--motion-fast", "0ms ease");
-    }
+        : originalMatchMedia.call(window, query);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: controlledMatchMedia,
+    });
     return () => {
-      window.matchMedia = originalMatchMedia;
-      if (previousMotionFast.length === 0) {
-        rootStyle.removeProperty("--motion-fast");
-      } else {
-        rootStyle.setProperty("--motion-fast", previousMotionFast, previousMotionFastPriority);
-      }
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
     };
   }, [reducedMotion]);
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--color-background)] px-[var(--space-4)] py-[var(--space-5)] text-[var(--color-on-background)]">
+    <div
+      className="transcript-disclosure-showcase h-full overflow-y-auto bg-[var(--color-background)] px-[var(--space-4)] py-[var(--space-5)] text-[var(--color-on-background)]"
+      data-reduced-motion={reducedMotion}
+    >
       <div className="mx-auto grid w-full max-w-[1120px] gap-[var(--space-5)]">
         <header className="grid gap-[var(--space-3)]">
           <div>
