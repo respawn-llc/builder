@@ -94,6 +94,69 @@ func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
 	}
 }
 
+func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Command: ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("start script execution: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = handle.Stop(context.Background())
+	})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	operationDone := make(chan error, 1)
+	go func() {
+		operationDone <- authority.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("exact execution operation did not start")
+	}
+
+	observationDone := make(chan error, 1)
+	go func() {
+		observationDone <- authority.WithWorkflowTaskExecutionSnapshots(func(map[workflow.TaskID]TaskExecutionSnapshot) error {
+			return nil
+		})
+	}()
+	var observationBlocked bool
+	select {
+	case err := <-observationDone:
+		if err != nil {
+			t.Fatalf("observe workflow task executions: %v", err)
+		}
+	case <-time.After(time.Second):
+		observationBlocked = true
+	}
+
+	close(release)
+	if err := <-operationDone; err != nil {
+		t.Fatalf("exact execution operation: %v", err)
+	}
+	if observationBlocked {
+		<-observationDone
+		t.Fatal("exact execution operation blocked workflow task execution observation")
+	}
+}
+
 func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
