@@ -39,7 +39,6 @@ import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
 import { useBoardResumeAction } from "./useBoardResumeAction";
-import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
@@ -49,7 +48,6 @@ import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
-import { boardTaskDeletionCauseMatches, boardTaskDeletionCauseShouldDefer, type BoardTaskDeletionCause } from "./boardTaskDeletionCause";
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
@@ -168,9 +166,11 @@ function BoardRouteData({
   const board = boardQuery.data;
   const selectedWorkflowID = board?.selectedWorkflow?.id;
   const deletionCoordinator = useBoardSelectedTaskDeletion({
+    enabled: board !== undefined && hasSelectedWorkflow(board),
     onNavigationError: reportBoardNavigationError,
     projectId,
     selectedTaskId,
+    selectedWorkflowID,
     workflowId,
   });
   useProjectBoardSubscription(projectId, workflowId, {
@@ -207,10 +207,8 @@ function BoardRouteData({
       onBoardRefreshRetry={() => {
         void boardQuery.refetch().catch(reportBoardLoadError);
       }}
-      deletionCauseVersion={deletionCoordinator.deletionCauseVersion}
       onSelectedTaskDeletionRequested={deletionCoordinator.request}
       selectedTaskId={selectedTaskId}
-      deletionCauseRef={deletionCoordinator.deletionCauseRef}
     />
   );
 }
@@ -219,8 +217,6 @@ function BoardContent({
   board,
   boardQueryWorkflowID,
   boardRefreshError,
-  deletionCauseVersion,
-  deletionCauseRef,
   onBoardRefreshRetry,
   onSelectedTaskDeletionRequested,
   selectedTaskId,
@@ -228,8 +224,6 @@ function BoardContent({
   board: SelectedWorkflowBoard;
   boardQueryWorkflowID: string | undefined;
   boardRefreshError: Error | null;
-  deletionCauseVersion: number;
-  deletionCauseRef: { current: BoardTaskDeletionCause | null };
   onBoardRefreshRetry(): void;
   onSelectedTaskDeletionRequested(): void;
   selectedTaskId: string;
@@ -251,7 +245,7 @@ function BoardContent({
     stopDragAutoScroll();
     setActiveDrag(null);
   }, [stopDragAutoScroll]);
-  const { activeDestination, closeSidebar, openSidebar, replaceSidebar } = useSidebar();
+  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
@@ -343,49 +337,6 @@ function BoardContent({
     },
     [reportActionError, t],
   );
-
-  const selectorRef = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    const next = selectedTaskId.length === 0 ? null : selectedTaskId;
-    if (selectorRef.current === next) return;
-    const previous = selectorRef.current;
-    const deletionCause = deletionCauseRef.current;
-    if (boardTaskDeletionCauseShouldDefer(deletionCause, previous, next)) {
-      return;
-    }
-    selectorRef.current = next;
-    deletionCauseRef.current = null;
-    if (boardTaskDeletionCauseMatches(deletionCause, previous, next)) {
-      return;
-    }
-    if (previous !== null || next === null) {
-      closeSidebar("route_change");
-    }
-    if (next !== null) {
-      void openSidebar({
-        kind: "taskDetail",
-        mode: "overlay",
-        projectID: board.projectID,
-        taskID: next,
-      }).then((result) => {
-        if (taskDetailRouteShouldClose(result)) {
-          void navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id).then((result) => {
-            if (result.status === "failed") reportNavigationError(result.error);
-          });
-        }
-      });
-    }
-  }, [
-    board.projectID,
-    board.selectedWorkflow.id,
-    closeSidebar,
-    deletionCauseVersion,
-    deletionCauseRef,
-    navigation,
-    openSidebar,
-    reportNavigationError,
-    selectedTaskId,
-  ]);
 
   useEffect(() => {
     const handleDocumentDrop = (event: Event): void => {

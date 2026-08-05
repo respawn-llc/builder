@@ -1,5 +1,4 @@
 import {
-  boardTaskDeletionCauseHasActiveAttempt,
   boardTaskDeletionCauseMatches,
   boardTaskDeletionCauseShouldDefer,
   recordBoardTaskDeletionAttempt,
@@ -72,7 +71,6 @@ describe("board task deletion causes", () => {
     const attempt = { taskID: "task-1" };
     const pending = recordBoardTaskDeletionAttempt(null, attempt);
 
-    expect(boardTaskDeletionCauseHasActiveAttempt(pending, "task-1")).toBe(true);
     expect(boardTaskDeletionCauseShouldDefer(pending, "task-1", null)).toBe(true);
 
     const succeeded = settleBoardTaskDeletionAttempt(pending, attempt, "succeeded");
