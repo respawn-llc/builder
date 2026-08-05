@@ -723,36 +723,43 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
 		if err := r.publishTaskQuestionWaitingForScope(scope, snapshot); err != nil {
-			r.rollbackPromptScope(scope, snapshot.Request.ID)
-			return err
+			return errors.Join(err, r.rollbackPromptScope(scope, snapshot))
 		}
 		r.publishCurrentRuntimeActivity(id)
 	}
 	return nil
 }
 
-func (r *RuntimeRegistry) rollbackPromptScope(scope sessionruntime.ExecutionScope, requestID string) {
+func (r *RuntimeRegistry) rollbackPromptScope(scope sessionruntime.ExecutionScope, snapshot PendingPromptSnapshot) error {
 	if r == nil {
-		return
+		return nil
 	}
 	resource, ok := scope.Resource()
 	if !ok {
-		return
+		return nil
 	}
 	id := resource.SessionID().String()
-	var snapshot PendingPromptSnapshot
+	var resolvedSnapshot PendingPromptSnapshot
 	resolved := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var ok bool
-		snapshot, ok = r.pendingPrompts.Complete(id, resource, scope.ID(), requestID)
+		resolvedSnapshot, ok = r.pendingPrompts.Complete(id, resource, scope.ID(), snapshot.Request.ID)
 		return ok
 	})
 	if !resolved {
-		return
+		return nil
+	}
+	var rollbackErr error
+	if snapshot.Request.QuestionBatch != nil && snapshot.Request.AttentionTarget != nil &&
+		snapshot.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask && r.questionBatches != nil {
+		rollbackErr = r.questionBatches.Abort(
+			questionBatchUUID(*snapshot.Request.QuestionBatch),
+			[]string{snapshot.Request.ID},
+		)
 	}
 	if entry := r.authorityEntryByRef(resource); entry != nil {
-		r.publishPromptResolution(entry, id, snapshot)
+		r.publishPromptResolution(entry, id, resolvedSnapshot)
 	}
-	_ = r.publishCurrentRuntimeActivity(id)
+	return errors.Join(rollbackErr, r.publishCurrentRuntimeActivity(id))
 }
 
 func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) error {

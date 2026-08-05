@@ -506,17 +506,6 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 		if err != nil {
 			return nil, fmt.Errorf("pending question %q session name: %w", item.ID, err)
 		}
-		index, exists := candidateBySession[sessionID]
-		if !exists {
-			index = len(candidates)
-			candidateBySession[sessionID] = index
-			candidates = append(candidates, taskQuestionSessionCandidate{
-				SessionID:   sessionID,
-				SessionName: sessionName,
-			})
-		} else if !textutil.EqualOptional(candidates[index].SessionName, sessionName) {
-			return nil, fmt.Errorf("pending questions for session %s disagree on the session name", sessionID)
-		}
 		question := questionCommandPendingQuestion{AskID: *questionID}
 		if item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
 			if item.Message == nil {
@@ -546,6 +535,17 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 			}
 		} else {
 			continue
+		}
+		index, exists := candidateBySession[sessionID]
+		if !exists {
+			index = len(candidates)
+			candidateBySession[sessionID] = index
+			candidates = append(candidates, taskQuestionSessionCandidate{
+				SessionID:   sessionID,
+				SessionName: sessionName,
+			})
+		} else if !textutil.EqualOptional(candidates[index].SessionName, sessionName) {
+			return nil, fmt.Errorf("pending questions for session %s disagree on the session name", sessionID)
 		}
 		candidates[index].Questions = append(candidates[index].Questions, question)
 	}

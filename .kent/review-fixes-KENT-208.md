@@ -19,3 +19,10 @@
 - [x] Add owner-boundary coverage for committed completion errors, aggregate interruption wakes, publication identity/errors, and transition-approval filtering.
 - [x] Keep pre-commit completion failures from mutating controller lifecycle state.
 - [x] Cover initial Run-watch Question arbitration and Exact-Scope prompt publication rejection.
+
+## Fourth-round review
+
+- [x] Omit stale live access approvals before creating Task question candidates, covering show and answer paths.
+- [x] Add tracker-owned abort handling for materialized multi-ask Question Batches during Exact-Scope rollback.
+- [x] Surface rollback tracker and runtime-activity publication errors.
+- [x] Amend the approved production ceiling to 1,700 lines for the required tracker-owned rollback contract.

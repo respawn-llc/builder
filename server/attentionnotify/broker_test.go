@@ -182,6 +182,27 @@ func TestQuestionBatchTrackerResolvesWithoutRepublishingWhenAskSkipped(t *testin
 	}
 }
 
+func TestQuestionBatchTrackerAbortClearsMaterializedMultiAskBatch(t *testing.T) {
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
+	tracker, batch := fixture.questionBatch()
+	fixture.noError("Prepare", tracker.Prepare(batch))
+	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.ID, "ask-1"))
+	_ = fixture.next(sub)
+	fixture.noError("Abort ask-1", tracker.Abort(batch.ID, []string{"ask-1"}))
+	update := fixture.next(sub)
+	if update.Pending == nil || len(update.Pending.Question.CurrentUnresolvedAskIDs) != 0 ||
+		update.Pending.Question.DisplayCount != 1 {
+		t.Fatalf("abort update = %+v", update)
+	}
+	fixture.noError("Abort ask-2", tracker.Abort(batch.ID, []string{"ask-2"}))
+	resolved := fixture.next(sub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved ||
+		!attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
+		t.Fatalf("abort resolution = %+v", resolved)
+	}
+}
+
 type brokerFixture struct {
 	*testing.T
 	*Broker
