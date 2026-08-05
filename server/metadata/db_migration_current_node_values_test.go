@@ -258,6 +258,17 @@ func (metadataTestRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
 	return true
 }
 
+func (metadataTestRoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
+	return workflow.TargetAgentRole{Identity: role, QuestionsEnabled: true, ExplicitAgentCallable: true}, true
+}
+
+func (metadataTestRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return []workflow.TargetAgentRole{
+		{Identity: workflow.DefaultAgentRole, QuestionsEnabled: true, ExplicitAgentCallable: true},
+		{Identity: "coder", QuestionsEnabled: true, ExplicitAgentCallable: true},
+	}
+}
+
 func TestOpenProjectsMigratesPendingApprovalFrozenTargetPriorValues(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

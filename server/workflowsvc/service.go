@@ -449,8 +449,13 @@ func (s *Service) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdg
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
 	}
+	edge := workflowEdgeRecordFromValues(
+		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
+		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
+		req.ContextSource, req.PromptTemplate, req.Parameters,
+	)
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(req.EdgeID), WorkflowID: req.WorkflowID, TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID), Key: workflow.ModelKey(req.Key), TargetNodeID: workflow.NodeID(req.TargetNodeID), RequiresApproval: req.RequiresApproval, ContextMode: workflow.ContextMode(req.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}), PromptTemplate: req.PromptTemplate, Parameters: domainParameters(req.Parameters)})
+		return s.store.AddEdge(ctx, edge)
 	})
 	if err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
@@ -463,14 +468,52 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
+	edge := workflowEdgeRecordFromValues(
+		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
+		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
+		req.ContextSource, req.PromptTemplate, req.Parameters,
+	)
 	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(req.EdgeID), WorkflowID: req.WorkflowID, TransitionGroupID: workflow.TransitionGroupID(req.TransitionGroupID), Key: workflow.ModelKey(req.Key), TargetNodeID: workflow.NodeID(req.TargetNodeID), RequiresApproval: req.RequiresApproval, ContextMode: workflow.ContextMode(req.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(req.ContextSource.Kind), NodeKey: workflow.ModelKey(req.ContextSource.NodeKey)}), PromptTemplate: req.PromptTemplate, Parameters: domainParameters(req.Parameters)})
+		return s.store.UpdateEdge(ctx, edge)
 	})
 	if err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeUpdated, req.EdgeID)
 	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
+}
+
+func workflowEdgeRecordFromValues(
+	edgeID string,
+	workflowID runtimeids.WorkflowID,
+	transitionGroupID string,
+	key string,
+	targetNodeID string,
+	assigneeSelection string,
+	thinkingSelection string,
+	requiresApproval bool,
+	contextMode string,
+	contextSource serverapi.WorkflowContextSource,
+	promptTemplate string,
+	parameters []serverapi.WorkflowParameter,
+) workflowstore.EdgeRecord {
+	return workflowstore.EdgeRecord{
+		ID:                workflow.EdgeID(edgeID),
+		WorkflowID:        workflowID,
+		TransitionGroupID: workflow.TransitionGroupID(transitionGroupID),
+		Key:               workflow.ModelKey(key),
+		TargetNodeID:      workflow.NodeID(targetNodeID),
+		AssigneeSelection: workflow.AssigneeSelection(assigneeSelection),
+		ThinkingSelection: workflow.ThinkingSelection(thinkingSelection),
+		RequiresApproval:  requiresApproval,
+		ContextMode:       workflow.ContextMode(contextMode),
+		ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{
+			Kind:    workflow.ContextSourceKind(contextSource.Kind),
+			NodeKey: workflow.ModelKey(contextSource.NodeKey),
+		}),
+		PromptTemplate: promptTemplate,
+		Parameters:     domainParameters(parameters),
+	}
 }
 
 func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
@@ -655,7 +698,7 @@ func (s *Service) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.
 	}
 	return serverapi.WorkflowGraphValidateDraftResponse{
 		Results:       s.workflowGraphValidationResultsForDefinition(def, req.Modes),
-		DerivedWiring: workflowview.DerivedWiring(def),
+		DerivedWiring: workflowview.DerivedWiring(def, s.roleResolver),
 	}, nil
 }
 
@@ -668,7 +711,7 @@ func (s *Service) DeriveWorkflowGraphWiring(ctx context.Context, req serverapi.W
 		return serverapi.WorkflowGraphDeriveWiringResponse{}, err
 	}
 	return serverapi.WorkflowGraphDeriveWiringResponse{
-		DerivedWiring: workflowview.DerivedWiring(def),
+		DerivedWiring: workflowview.DerivedWiring(def, s.roleResolver),
 	}, nil
 }
 
@@ -697,7 +740,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	if !result.Saved {
 		return resp, nil
 	}
-	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record)
+	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
 	resp.Definition = &definition
 	resp.CurrentVersion = result.Record.Version
 	if result.Changed {
@@ -954,7 +997,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	return serverapi.WorkflowTaskStartResponse{
 		Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskStartApplied{
-			CurrentNodes: workflowCurrentNodes(started.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(started.Mutation.Created),
 		},
 	}, nil
 }
@@ -1311,23 +1354,6 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	return serverapi.WorkflowTaskInterruptResponse{}, nil
 }
 
-func workflowCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
-	out := make([]serverapi.WorkflowTaskCurrentNode, 0, len(nodes))
-	for _, currentNode := range nodes {
-		item := serverapi.WorkflowTaskCurrentNode{NodeID: string(currentNode.Reference.NodeID)}
-		if branchKey, branchScoped := currentNode.Reference.TransitionBranchKey(); branchScoped {
-			value := string(branchKey)
-			item.TransitionBranchKey = &value
-		}
-		if currentNode.SessionID != nil {
-			value := currentNode.SessionID.String()
-			item.SessionID = &value
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	return s.resumeWorkflowTask(ctx, req)
 }
@@ -1411,7 +1437,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowTaskResumeResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskResumeApplied{
-			CurrentNodes: workflowCurrentNodes(resumed),
+			CurrentNodes: workflowview.ProjectCurrentNodes(resumed),
 		},
 	}, nil
 }
@@ -1453,7 +1479,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskApproveApplied{
 			TaskID:       taskID,
-			CurrentNodes: workflowCurrentNodes(approved.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(approved.Mutation.Created),
 		},
 	}, nil
 }
@@ -1480,7 +1506,7 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
-				CurrentNodes: workflowCurrentNodes(preview.CurrentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(preview.CurrentNodes),
 			},
 		}, nil
 	}
@@ -1591,7 +1617,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(prepared.CurrentNodes()),
+				CurrentNodes: workflowview.ProjectCurrentNodes(prepared.CurrentNodes()),
 			},
 		}, nil
 	}
@@ -1651,7 +1677,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
 			},
 		}, nil
 	}
@@ -1683,7 +1709,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowCurrentNodes(moved.CurrentNodes),
+				CurrentNodes: workflowview.ProjectCurrentNodes(moved.CurrentNodes),
 			},
 		}, nil
 	}
@@ -1694,7 +1720,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
-			CurrentNodes: workflowCurrentNodes(moved.Mutation.Created),
+			CurrentNodes: workflowview.ProjectCurrentNodes(moved.Mutation.Created),
 		},
 	}, nil
 }
@@ -1795,7 +1821,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 	}
 	response := serverapi.WorkflowTaskCompleteResponse{
 		TaskID:       string(taskID),
-		CurrentNodes: workflowCurrentNodes(completed.Mutation.Created),
+		CurrentNodes: workflowview.ProjectCurrentNodes(completed.Mutation.Created),
 		Handoff: serverapi.WorkflowTaskCompletionHandoff{
 			SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
 			DestinationDisplayName: completed.Handoff.DestinationDisplayName,
@@ -2307,6 +2333,8 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 			Key:               workflow.ModelKey(edge.Key),
 			TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID),
 			TargetNodeID:      workflow.NodeID(edge.TargetNodeID),
+			AssigneeSelection: workflow.AssigneeSelection(edge.AssigneeSelection),
+			ThinkingSelection: workflow.ThinkingSelection(edge.ThinkingSelection),
 			ContextMode:       workflow.ContextMode(edge.ContextMode),
 			ContextSource:     workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}),
 			RequiresApproval:  edge.RequiresApproval,
@@ -2363,7 +2391,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for _, edge := range graph.Edges {
-		req.Edges = append(req.Edges, workflowstore.EdgeRecord{ID: workflow.EdgeID(edge.ID), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), Key: workflow.ModelKey(edge.Key), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: domainParameters(edge.Parameters)})
+		req.Edges = append(req.Edges, workflowstore.EdgeRecord{ID: workflow.EdgeID(edge.ID), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), Key: workflow.ModelKey(edge.Key), TargetNodeID: workflow.NodeID(edge.TargetNodeID), AssigneeSelection: workflow.AssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.ThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: domainParameters(edge.Parameters)})
 	}
 	return req
 }
@@ -2461,7 +2489,7 @@ func joinInputProviders(in []serverapi.WorkflowJoinInputProvider) []workflow.Joi
 func domainParameters(in []serverapi.WorkflowParameter) []workflow.Parameter {
 	out := make([]workflow.Parameter, 0, len(in))
 	for _, parameter := range in {
-		out = append(out, workflow.Parameter{Key: parameter.Key, Description: parameter.Description})
+		out = append(out, workflow.Parameter{Key: parameter.Key, Description: parameter.Description, Purpose: workflow.ParameterPurpose(parameter.Purpose)})
 	}
 	return out
 }

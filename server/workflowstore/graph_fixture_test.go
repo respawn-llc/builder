@@ -110,12 +110,14 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		TransitionGroupID:  "transition-review",
 		Key:                "review",
 		TargetNodeID:       scriptID,
+		AssigneeSelection:  workflow.AssigneeSelectionConfigured,
+		ThinkingSelection:  workflow.ThinkingSelectionConfigured,
 		RequiresApproval:   true,
 		ContextMode:        workflow.ContextModeContinueSession,
 		ContextSource:      workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "agent"},
 		InputBindings:      []workflow.InputBinding{{Name: "summary", Source: workflow.BindingSourceTransitionOutput, Field: "summary"}},
 		PromptTemplate:     "Review {{.Params.summary}}.",
-		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary."}},
+		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary.", Purpose: workflow.ParameterPurposeOrdinary}},
 		OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 	}) {
 		t.Fatalf("edges = %+v, want invocation contract preserved", req.Edges)
@@ -177,6 +179,12 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 	def, record, err := store.GetDefinition(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetDefinition after fixture save: %v", err)
+	}
+	for _, edge := range def.Edges {
+		if edge.AssigneeSelection != workflow.AssigneeSelectionConfigured ||
+			edge.ThinkingSelection != workflow.ThinkingSelectionConfigured {
+			t.Fatalf("reloaded edge selectors = %+v, want configured defaults", edge)
+		}
 	}
 	noop := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
 	preview, err := store.PreviewWorkflowGraphSave(context.Background(), noop)

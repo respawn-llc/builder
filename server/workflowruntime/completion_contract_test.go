@@ -158,6 +158,20 @@ func TestDecodeCompletionInfersSingleTransitionAndRequiresParameters(t *testing.
 	}
 }
 
+func TestDecodeCompletionUsesUnavailableRoleIssueForMissingProtectedRole(t *testing.T) {
+	contract := CompletionContract{Transitions: []CompletionTransition{{
+		ID: "done",
+		Parameters: []workflow.Parameter{{
+			Key:     "agent_role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}},
+	}}}
+	validation := requireValidationError(t, decodeCompletionError(`{"commentary":"done"}`, contract))
+	if !hasIssue(validation, "workflow.target_agent.unavailable_role", "agent_role") {
+		t.Fatalf("validation issues = %+v, want unavailable-role issue", validation.Issues)
+	}
+}
+
 func TestDecodeCompletionAcceptsOptionalCommentary(t *testing.T) {
 	contract := CompletionContract{Transitions: []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}}}}
 	for _, test := range []struct {

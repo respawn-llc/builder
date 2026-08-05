@@ -10,6 +10,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func completeCurrentNodeJoinArrival(
@@ -19,6 +20,8 @@ func completeCurrentNodeJoinArrival(
 	source workflow.CurrentNode,
 	edge workflow.Edge,
 	outputValues map[string]string,
+	catalog workflow.TargetAgentCatalog,
+	resolveRetainedSessionSelection func(context.Context, runtimeids.SessionID) (*workflow.AgentExecutionSelection, error),
 ) (CurrentNodeCompletionResult, error) {
 	branchKey, branchScoped := source.Reference.TransitionBranchKey()
 	if !branchScoped {
@@ -88,6 +91,8 @@ func completeCurrentNodeJoinArrival(
 		target.Edge,
 		resolution.Join,
 		target.Node,
+		catalog,
+		resolveRetainedSessionSelection,
 		joinSource,
 		joinValues,
 		"",

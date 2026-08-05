@@ -245,6 +245,17 @@ func (cutoverRoleResolver) RoleExists(string) bool { return true }
 
 func (cutoverRoleResolver) RoleToolEnabled(string, toolspec.ID) bool { return true }
 
+func (cutoverRoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
+	return workflow.TargetAgentRole{Identity: role, QuestionsEnabled: true, ExplicitAgentCallable: true}, true
+}
+
+func (cutoverRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return []workflow.TargetAgentRole{
+		{Identity: workflow.DefaultAgentRole, QuestionsEnabled: true, ExplicitAgentCallable: true},
+		{Identity: "coder", QuestionsEnabled: true, ExplicitAgentCallable: true},
+	}
+}
+
 func findWorkflowEdge(t *testing.T, definition workflow.Definition, id workflow.EdgeID) workflow.Edge {
 	t.Helper()
 	for _, edge := range definition.Edges {

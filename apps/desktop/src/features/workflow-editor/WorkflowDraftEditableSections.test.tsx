@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -38,13 +38,15 @@ const edge: DraftWorkflowEdge = {
   transitionGroupID: "group-1",
   key: "start",
   targetNodeID: "node-1",
+  assigneeSelection: "configured",
+  thinkingSelection: "configured",
   requiresApproval: false,
   contextMode: "new_session",
   contextSource: { kind: "none", nodeKey: "" },
   promptTemplate: "",
   parameters: [
-    { rowID: "parameter-first", key: "first", description: "First parameter" },
-    { rowID: "parameter-second", key: "second", description: "Second parameter" },
+    { rowID: "parameter-first", key: "first", description: "First parameter", purpose: "ordinary" },
+    { rowID: "parameter-second", key: "second", description: "Second parameter", purpose: "ordinary" },
   ],
   inputBindings: [],
   outputRequirements: [],
@@ -156,5 +158,120 @@ describe("EditableEdgeParameters", () => {
       parameterRowID: "parameter-first",
       type: "deleteEdgeParameter",
     });
+  });
+
+  it("keeps protected rows editable and reorderable without exposing delete", () => {
+    const dispatchMock = vi.fn();
+    const source: WorkflowDefinition = {
+      derivedWiring: emptyWorkflowDerivedWiring,
+      edges: [],
+      nodeGroups: [],
+      nodes: [],
+      transitionGroups: [],
+      workflow: {
+        description: "",
+        executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Workflow",
+        version: 1,
+      },
+    };
+    const state = initializeWorkflowEditorDraft(source);
+    const controller: WorkflowEditorDraftController = {
+      dispatch(action) {
+        dispatchMock(action);
+      },
+      dirty: { dirty: false, graphDirty: false, metadataDirty: false },
+      draft: state.draft,
+      derivedWiring: emptyWorkflowDerivedWiring,
+      draftValidation: null,
+      executionValidation: null,
+      save() {
+        return;
+      },
+      saveBlockers: [],
+      saveError: "",
+      saveValidation: null,
+      saving: false,
+      state,
+      workflowID: source.workflow.id,
+    };
+    const protectedEdge: DraftWorkflowEdge = {
+      ...edge,
+      assigneeSelection: "previous_node",
+      parameters: [
+        { rowID: "protected", key: "agent_role", description: "", purpose: "target_assignee" },
+        { rowID: "ordinary", key: "ordinary", description: "ordinary", purpose: "ordinary" },
+      ],
+    };
+
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <EditableEdgeParameters controller={controller} edge={protectedEdge} />
+      </I18nextProvider>,
+    );
+
+    const rows = screen.getAllByTestId("workflow-parameter");
+    const protectedRow = rows[0];
+    const ordinaryRow = rows[1];
+    if (protectedRow === undefined || ordinaryRow === undefined) {
+      throw new Error("protected parameter rows are missing");
+    }
+    expect(within(protectedRow).queryByRole("button", { name: "Delete parameter" })).toBeNull();
+    expect(within(ordinaryRow).getByRole("button", { name: "Delete parameter" })).toBeTruthy();
+    expect(within(protectedRow).getAllByRole("textbox")).toHaveLength(2);
+  });
+
+  it("hides dormant protected rows while retaining ordinary parameters", () => {
+    const state = initializeWorkflowEditorDraft({
+      derivedWiring: emptyWorkflowDerivedWiring,
+      edges: [],
+      nodeGroups: [],
+      nodes: [],
+      transitionGroups: [],
+      workflow: {
+        description: "",
+        executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Workflow",
+        version: 1,
+      },
+    });
+    const controller: WorkflowEditorDraftController = {
+      dispatch: vi.fn(),
+      dirty: { dirty: false, graphDirty: false, metadataDirty: false },
+      draft: state.draft,
+      derivedWiring: emptyWorkflowDerivedWiring,
+      draftValidation: null,
+      executionValidation: null,
+      save() {
+        return;
+      },
+      saveBlockers: [],
+      saveError: "",
+      saveValidation: null,
+      saving: false,
+      state,
+      workflowID: state.draft.workflow.id,
+    };
+
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <EditableEdgeParameters
+          controller={controller}
+          edge={{
+            ...edge,
+            parameters: [
+              { rowID: "dormant", key: "agent_role", description: "", purpose: "target_assignee" },
+              { rowID: "ordinary", key: "ordinary", description: "ordinary", purpose: "ordinary" },
+            ],
+          }}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getAllByTestId("workflow-parameter")).toHaveLength(1);
+    expect(screen.getAllByDisplayValue("ordinary")).toHaveLength(2);
+    expect(screen.queryByDisplayValue("agent_role")).toBeNull();
   });
 });

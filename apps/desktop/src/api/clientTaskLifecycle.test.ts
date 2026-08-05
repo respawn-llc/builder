@@ -150,7 +150,17 @@ describe("task lifecycle client", () => {
       }),
     ).toEqual({
       outcome: "no_op",
-      noOp: { currentNodes: [{ nodeID: "node-1", transitionBranchKey: null, sessionID: null }] },
+      noOp: {
+        currentNodes: [
+          {
+            effectiveAssignee: null,
+            effectiveThinking: null,
+            nodeID: "node-1",
+            transitionBranchKey: null,
+            sessionID: null,
+          },
+        ],
+      },
     });
     expect(taskMovePreviewResponseSchema.parse({ outcome: "direct", direct: {} })).toEqual({
       outcome: "direct",

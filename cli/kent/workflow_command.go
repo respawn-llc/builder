@@ -512,6 +512,10 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	requiresApproval := fs.Bool("requires-approval", false, "wait for user approval before starting the target")
 	prompt := fs.String("prompt", "", "prompt template applied when the target is an agent node")
 	transitionDescription := fs.String("transition-description", "", "guidance that tells an agent when to select this transition")
+	assigneeSelection := fs.String("assignee-selection", "configured", "target assignee selection: configured|previous_node")
+	thinkingSelection := fs.String("thinking-selection", "configured", "target thinking selection: configured|previous_node")
+	targetAssigneeParam := fs.String("target-assignee-param", "", "protected target-assignee parameter as key=description")
+	targetThinkingParam := fs.String("target-thinking-param", "", "protected target-thinking parameter as key=description")
 	var params repeatedStringFlag
 	fs.Var(&params, "param", "required transition value as key=description; repeatable")
 	jsonOut := fs.Bool("json", false, "write the added branch as JSON")
@@ -529,6 +533,31 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		return 2
 	}
 	parsedParameters, err := parseWorkflowParameters(params)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	parsedAssigneeSelection, err := parseWorkflowSelectionMode("assignee-selection", *assigneeSelection)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	parsedThinkingSelection, err := parseWorkflowSelectionMode("thinking-selection", *thinkingSelection)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	parsedAssigneeParam, err := parseWorkflowProtectedParameterFlag(fs, "target-assignee-param", *targetAssigneeParam, "target_assignee")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	parsedThinkingParam, err := parseWorkflowProtectedParameterFlag(fs, "target-thinking-param", *targetThinkingParam, "target_thinking")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	parsedParameters, err = workflowEdgeParametersForAdd(parsedParameters, parsedAssigneeSelection, parsedThinkingSelection, parsedAssigneeParam, parsedThinkingParam)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -600,7 +629,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		edgeID := "edge-" + uuid.NewString()
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		resp, err := remote.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: def.Workflow.ID, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TargetNodeID: target.ID, ContextMode: *contextMode, ContextSource: parsedContextSource, RequiresApproval: *requiresApproval, PromptTemplate: *prompt, Parameters: parsedParameters})
+		resp, err := remote.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: def.Workflow.ID, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TargetNodeID: target.ID, AssigneeSelection: parsedAssigneeSelection, ThinkingSelection: parsedThinkingSelection, ContextMode: *contextMode, ContextSource: parsedContextSource, RequiresApproval: *requiresApproval, PromptTemplate: *prompt, Parameters: parsedParameters})
 		cancel()
 		if err != nil {
 			descriptionRollback()
@@ -626,6 +655,10 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	contextSource := fs.String("context-source", "", "source session: immediate_source|previous_target|previous_target_or_new|node:<node-key>")
 	requiresApproval := fs.Bool("requires-approval", false, "wait for user approval; pass false to disable")
 	prompt := fs.String("prompt", "", "replace the target agent prompt; pass an empty value to clear")
+	assigneeSelection := fs.String("assignee-selection", "", "target assignee selection: configured|previous_node")
+	thinkingSelection := fs.String("thinking-selection", "", "target thinking selection: configured|previous_node")
+	targetAssigneeParam := fs.String("target-assignee-param", "", "protected target-assignee parameter as key=description")
+	targetThinkingParam := fs.String("target-thinking-param", "", "protected target-thinking parameter as key=description")
 	var params repeatedStringFlag
 	fs.Var(&params, "param", "required transition value as key=description; repeatable and replaces all existing values")
 	clearParams := fs.Bool("clear-params", false, "remove all transition parameters")
@@ -668,6 +701,53 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			updatedGroup.Description = strings.TrimSpace(*transitionDescription)
 		}
 		updatedEdge := edge
+		updatedEdge.AssigneeSelection = edge.AssigneeSelection
+		updatedEdge.ThinkingSelection = edge.ThinkingSelection
+		if flagExplicit(fs, "assignee-selection") {
+			updatedEdge.AssigneeSelection, err = parseWorkflowSelectionMode("assignee-selection", *assigneeSelection)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+		}
+		if flagExplicit(fs, "thinking-selection") {
+			updatedEdge.ThinkingSelection, err = parseWorkflowSelectionMode("thinking-selection", *thinkingSelection)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+		}
+		assigneeParam, paramErr := parseWorkflowProtectedParameterFlag(fs, "target-assignee-param", *targetAssigneeParam, "target_assignee")
+		if paramErr != nil {
+			fmt.Fprintln(stderr, paramErr)
+			return 2
+		}
+		thinkingParam, paramErr := parseWorkflowProtectedParameterFlag(fs, "target-thinking-param", *targetThinkingParam, "target_thinking")
+		if paramErr != nil {
+			fmt.Fprintln(stderr, paramErr)
+			return 2
+		}
+		if assigneeParam != nil && updatedEdge.AssigneeSelection != "previous_node" {
+			fmt.Fprintln(stderr, "target-assignee-param requires assignee selection previous_node")
+			return 2
+		}
+		if thinkingParam != nil && updatedEdge.ThinkingSelection != "previous_node" {
+			fmt.Fprintln(stderr, "target-thinking-param requires thinking selection previous_node")
+			return 2
+		}
+		updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
+			edge.Parameters,
+			updatedEdge.AssigneeSelection,
+			updatedEdge.ThinkingSelection,
+			assigneeParam,
+			thinkingParam,
+			nil,
+			false,
+		)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
 		if strings.TrimSpace(*edgeKey) != "" {
 			updatedEdge.Key = strings.TrimSpace(*edgeKey)
 		}
@@ -701,14 +781,38 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 			return 2
 		}
 		if *clearParams {
-			updatedEdge.Parameters = nil
+			updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
+				updatedEdge.Parameters,
+				updatedEdge.AssigneeSelection,
+				updatedEdge.ThinkingSelection,
+				nil,
+				nil,
+				nil,
+				true,
+			)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
 		} else if flagExplicit(fs, "param") {
 			parsedParameters, parseErr := parseWorkflowParameters(params)
 			if parseErr != nil {
 				fmt.Fprintln(stderr, parseErr)
 				return 2
 			}
-			updatedEdge.Parameters = parsedParameters
+			updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
+				updatedEdge.Parameters,
+				updatedEdge.AssigneeSelection,
+				updatedEdge.ThinkingSelection,
+				nil,
+				nil,
+				parsedParameters,
+				false,
+			)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
 		}
 		// Commit the transition group change only after every edge flag has parsed, so
 		// a malformed --param or --context-source can never leave the group mutated
@@ -725,7 +829,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{WorkflowID: def.Workflow.ID, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TargetNodeID: updatedEdge.TargetNodeID, ContextMode: updatedEdge.ContextMode, ContextSource: updatedEdge.ContextSource, RequiresApproval: updatedEdge.RequiresApproval, PromptTemplate: updatedEdge.PromptTemplate, Parameters: updatedEdge.Parameters})
+		resp, err := remote.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{WorkflowID: def.Workflow.ID, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TargetNodeID: updatedEdge.TargetNodeID, AssigneeSelection: updatedEdge.AssigneeSelection, ThinkingSelection: updatedEdge.ThinkingSelection, ContextMode: updatedEdge.ContextMode, ContextSource: updatedEdge.ContextSource, RequiresApproval: updatedEdge.RequiresApproval, PromptTemplate: updatedEdge.PromptTemplate, Parameters: updatedEdge.Parameters})
 		if err != nil {
 			if updatedGroup != group {
 				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
@@ -1089,11 +1193,13 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 			TransitionGroupID: edge.TransitionGroupID,
 			Key:               edge.Key,
 			TargetNodeID:      edge.TargetNodeID,
+			AssigneeSelection: edge.AssigneeSelection,
+			ThinkingSelection: edge.ThinkingSelection,
 			RequiresApproval:  edge.RequiresApproval,
 			ContextMode:       edge.ContextMode,
 			ContextSource:     edge.ContextSource,
 			PromptTemplate:    edge.PromptTemplate,
-			Parameters:        edge.Parameters,
+			Parameters:        cloneWorkflowParameters(edge.Parameters),
 		})
 	}
 	return graph
@@ -1156,12 +1262,14 @@ func writeWorkflowEdgeLine(stdout io.Writer, prefix string, edge serverapi.Workf
 	targetKey := workflowNodeKeyOrID(nodeKeyByID, edge.TargetNodeID)
 	detail := workflowEdgeContextDetail(edge.ContextMode, edge.RequiresApproval, edge.ContextSource)
 	fmt.Fprintf(stdout, "%s%s  (edge `%s` %s, %s)\n", prefix, targetKey, edge.Key, edge.ID, detail)
+	fmt.Fprintf(stdout, "    assignee selection: %s; thinking selection: %s\n", edge.AssigneeSelection, edge.ThinkingSelection)
 	if len(edge.Parameters) > 0 {
-		keys := make([]string, 0, len(edge.Parameters))
+		parameters := make([]string, 0, len(edge.Parameters))
 		for _, param := range edge.Parameters {
-			keys = append(keys, param.Key)
+			purpose := workflowParameterPurpose(param)
+			parameters = append(parameters, fmt.Sprintf("%s (%s)", param.Key, purpose))
 		}
-		fmt.Fprintf(stdout, "    params: %s\n", strings.Join(keys, ", "))
+		fmt.Fprintf(stdout, "    params: %s\n", strings.Join(parameters, ", "))
 	}
 }
 
@@ -1248,9 +1356,149 @@ func parseWorkflowParameters(raw []string) ([]serverapi.WorkflowParameter, error
 			return nil, fmt.Errorf("parameter key %q is declared more than once", key)
 		}
 		seen[key] = true
-		parameters = append(parameters, serverapi.WorkflowParameter{Key: key, Description: description})
+		parameters = append(parameters, serverapi.WorkflowParameter{Key: key, Description: description, Purpose: "ordinary"})
 	}
 	return parameters, nil
+}
+
+func parseWorkflowSelectionMode(field, raw string) (string, error) {
+	mode := strings.TrimSpace(raw)
+	switch mode {
+	case "configured", "previous_node":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("--%s must be configured or previous_node", field)
+	}
+}
+
+func parseWorkflowProtectedParameterFlag(fs *flag.FlagSet, name, raw, purpose string) (*serverapi.WorkflowParameter, error) {
+	if !flagExplicit(fs, name) {
+		return nil, nil
+	}
+	key, description, found := strings.Cut(raw, "=")
+	key = strings.TrimSpace(key)
+	description = strings.TrimSpace(description)
+	if !found || key == "" {
+		return nil, fmt.Errorf("--%s must be key=description with a non-empty key", name)
+	}
+	if !workflowkey.Valid(key) {
+		return nil, fmt.Errorf("parameter key %q is invalid; it must %s", key, workflowkey.Description)
+	}
+	if workflowkey.ReservedParameter(key) {
+		return nil, fmt.Errorf("parameter key %q is reserved and cannot be declared", key)
+	}
+	return &serverapi.WorkflowParameter{Key: key, Description: description, Purpose: purpose}, nil
+}
+
+func cloneWorkflowParameters(parameters []serverapi.WorkflowParameter) []serverapi.WorkflowParameter {
+	if len(parameters) == 0 {
+		return nil
+	}
+	return append([]serverapi.WorkflowParameter(nil), parameters...)
+}
+
+func workflowParameterPurpose(parameter serverapi.WorkflowParameter) string {
+	return strings.TrimSpace(parameter.Purpose)
+}
+
+func workflowParameterIsProtected(parameter serverapi.WorkflowParameter) bool {
+	switch workflowParameterPurpose(parameter) {
+	case "target_assignee", "target_thinking":
+		return true
+	default:
+		return false
+	}
+}
+
+func workflowParameterForPurpose(parameters []serverapi.WorkflowParameter, purpose string) (int, bool) {
+	for index, parameter := range parameters {
+		if workflowParameterPurpose(parameter) == purpose {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func workflowParametersWithProtectedDefaults(parameters []serverapi.WorkflowParameter, assigneeSelection, thinkingSelection string, assignee, thinking *serverapi.WorkflowParameter) ([]serverapi.WorkflowParameter, error) {
+	result := cloneWorkflowParameters(parameters)
+	for _, item := range []struct {
+		selection string
+		purpose   string
+		key       string
+		custom    *serverapi.WorkflowParameter
+	}{
+		{selection: assigneeSelection, purpose: "target_assignee", key: "agent_role", custom: assignee},
+		{selection: thinkingSelection, purpose: "target_thinking", key: "thinking_level", custom: thinking},
+	} {
+		if item.selection != "previous_node" {
+			if item.custom != nil {
+				label := "assignee"
+				if item.purpose == "target_thinking" {
+					label = "thinking"
+				}
+				return nil, fmt.Errorf("target-%s-param requires %s selection previous_node", label, label)
+			}
+			continue
+		}
+		if index, exists := workflowParameterForPurpose(result, item.purpose); exists {
+			if item.custom != nil {
+				result[index] = *item.custom
+			}
+			continue
+		}
+		parameter := serverapi.WorkflowParameter{Key: item.key, Purpose: item.purpose}
+		if item.custom != nil {
+			parameter = *item.custom
+		}
+		for _, existing := range result {
+			if existing.Key == parameter.Key {
+				return nil, fmt.Errorf("parameter key %q is declared more than once", parameter.Key)
+			}
+		}
+		result = append(result, parameter)
+	}
+	return result, nil
+}
+
+func workflowEdgeParametersForAdd(parameters []serverapi.WorkflowParameter, assigneeSelection, thinkingSelection string, assignee, thinking *serverapi.WorkflowParameter) ([]serverapi.WorkflowParameter, error) {
+	return workflowParametersWithProtectedDefaults(parameters, assigneeSelection, thinkingSelection, assignee, thinking)
+}
+
+func workflowReplaceOrdinaryParameters(existing, replacement []serverapi.WorkflowParameter) []serverapi.WorkflowParameter {
+	result := make([]serverapi.WorkflowParameter, 0, len(existing)+len(replacement))
+	replacementIndex := 0
+	for _, parameter := range existing {
+		if workflowParameterIsProtected(parameter) {
+			result = append(result, parameter)
+			continue
+		}
+		if replacementIndex < len(replacement) {
+			result = append(result, replacement[replacementIndex])
+			replacementIndex++
+		}
+	}
+	result = append(result, replacement[replacementIndex:]...)
+	return result
+}
+
+func workflowClearOrdinaryParameters(existing []serverapi.WorkflowParameter) []serverapi.WorkflowParameter {
+	result := make([]serverapi.WorkflowParameter, 0, len(existing))
+	for _, parameter := range existing {
+		if workflowParameterIsProtected(parameter) {
+			result = append(result, parameter)
+		}
+	}
+	return result
+}
+
+func workflowEdgeParametersForUpdate(existing []serverapi.WorkflowParameter, assigneeSelection, thinkingSelection string, assignee, thinking *serverapi.WorkflowParameter, ordinary []serverapi.WorkflowParameter, clearOrdinary bool) ([]serverapi.WorkflowParameter, error) {
+	parameters := cloneWorkflowParameters(existing)
+	if clearOrdinary {
+		parameters = workflowClearOrdinaryParameters(parameters)
+	} else if ordinary != nil {
+		parameters = workflowReplaceOrdinaryParameters(parameters, ordinary)
+	}
+	return workflowParametersWithProtectedDefaults(parameters, assigneeSelection, thinkingSelection, assignee, thinking)
 }
 
 func canonicalAPIContextSource(source serverapi.WorkflowContextSource) serverapi.WorkflowContextSource {

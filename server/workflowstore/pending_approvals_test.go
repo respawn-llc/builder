@@ -65,6 +65,102 @@ func TestPendingApprovalReloadDefaultsMissingCommentaryToEmpty(t *testing.T) {
 	if reloaded.Commentary != "" {
 		t.Fatalf("legacy pending Approval commentary = %q, want empty", reloaded.Commentary)
 	}
+	if len(reloaded.Branches) != 1 {
+		t.Fatalf("reloaded pending Approval branches = %d, want one", len(reloaded.Branches))
+	}
+	target := reloaded.Branches[0].Target
+	if target.NodeKind != workflow.NodeKindAgent {
+		t.Fatalf("pending Approval target kind = %q, want agent", target.NodeKind)
+	}
+	if target.CurrentNode.AgentExecutionSelection == nil {
+		t.Fatal("pending Approval Agent target omitted frozen execution selection")
+	}
+	branchRow, err := store.queries.ListTaskPendingApprovalBranches(ctx, completed.PendingApproval.ID.String())
+	if err != nil {
+		t.Fatalf("ListTaskPendingApprovalBranches: %v", err)
+	}
+	var targetSnapshot map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(branchRow[0].TargetSnapshotJson), &targetSnapshot); err != nil {
+		t.Fatalf("decode target snapshot: %v", err)
+	}
+	delete(targetSnapshot, "agent_execution_selection")
+	malformedTargetSnapshot, err := json.Marshal(targetSnapshot)
+	if err != nil {
+		t.Fatalf("encode malformed target snapshot: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_pending_approval_branches
+SET target_snapshot_json = ?
+WHERE approval_id = ?`, string(malformedTargetSnapshot), completed.PendingApproval.ID.String()); err != nil {
+		t.Fatalf("write malformed target snapshot: %v", err)
+	}
+	if _, err := store.PendingApproval(ctx, completed.PendingApproval.ID); err == nil {
+		t.Fatal("PendingApproval accepted Agent target without execution selection")
+	}
+}
+
+func TestPendingApprovalFreezesSelectedAgentExecutionWithoutCatalogResolution(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.RequiresApproval = true
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("complete plan: %v", err)
+	}
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "audit",
+		OutputValues: map[string]string{"role": "reviewer"},
+	})
+	if err != nil {
+		t.Fatalf("complete review: %v", err)
+	}
+	if completed.PendingApproval == nil || len(completed.PendingApproval.Branches) != 1 {
+		t.Fatalf("pending approval = %+v, want one frozen branch", completed.PendingApproval)
+	}
+	frozen := completed.PendingApproval.Branches[0].Target.CurrentNode.AgentExecutionSelection
+	if frozen == nil || frozen.Assignee != "reviewer" || frozen.Origin != workflow.AssigneeOriginTransitionSelected {
+		t.Fatalf("frozen target selection = %+v, want selected reviewer", frozen)
+	}
+
+	store.roleResolver = emptyTargetAgentCatalog{}
+	applied, err := store.ApplyPendingApproval(ctx, completed.PendingApproval.ID)
+	if err != nil {
+		t.Fatalf("ApplyPendingApproval without catalog: %v", err)
+	}
+	if len(applied.Mutation.Created) != 1 {
+		t.Fatalf("applied mutation = %+v, want one frozen target", applied.Mutation)
+	}
+	appliedSelection := applied.Mutation.Created[0].AgentExecutionSelection
+	if appliedSelection == nil || appliedSelection.Assignee != "reviewer" ||
+		appliedSelection.Origin != workflow.AssigneeOriginTransitionSelected {
+		t.Fatalf("applied target selection = %+v, want frozen reviewer", appliedSelection)
+	}
+}
+
+type emptyTargetAgentCatalog struct{}
+
+func (emptyTargetAgentCatalog) ResolveConfiguredRole(string) (workflow.TargetAgentRole, bool) {
+	return workflow.TargetAgentRole{}, false
+}
+
+func (emptyTargetAgentCatalog) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return nil
 }
 
 func TestListPendingApprovalsKeepsParallelSourcesIndependent(t *testing.T) {
@@ -229,6 +325,10 @@ WHERE task_id = ?
 		if !present {
 			t.Fatalf("parallel source %v has no branch key", branch.Reference)
 		}
+		var subagentRole string
+		if err := tx.QueryRowContext(ctx, `SELECT subagent_role FROM workflow_nodes WHERE id = ?`, string(branch.Reference.NodeID)).Scan(&subagentRole); err != nil {
+			t.Fatalf("resolve branch Agent fallback %q: %v", branchKey, err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO task_active_fanout_branches (
     task_id,
@@ -249,11 +349,14 @@ INSERT INTO task_current_nodes (
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
-    interrupted_at_unix_ms
-) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', NULL, 'ready', NULL, NULL, NULL)`,
+    interrupted_at_unix_ms,
+    effective_assignee,
+    assignee_origin
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', NULL, 'ready', NULL, NULL, NULL, ?, 'configured_fallback')`,
 			string(branch.Reference.TaskID),
 			string(branch.Reference.NodeID),
 			string(branchKey),
+			subagentRole,
 		); err != nil {
 			t.Fatalf("insert branch current node %q: %v", branchKey, err)
 		}

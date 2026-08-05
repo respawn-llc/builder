@@ -520,6 +520,8 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentNodeID,
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
 		PromptTemplate:    "Do work.",
 	}); err != nil {
@@ -543,6 +545,8 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      terminalNodeID,
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
 		RequiresApproval:  requiresApproval,
 	}); err != nil {

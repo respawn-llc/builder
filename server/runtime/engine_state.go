@@ -10,6 +10,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
@@ -283,8 +284,28 @@ func (e *Engine) SetThinkingLevel(level string) error {
 	if !ok {
 		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(level))
 	}
+	return e.setThinkingValue(normalized)
+}
+
+// SetWorkflowThinkingValue applies a workflow-owned thinking value. Workflow
+// values may be standard Kent levels or provider-specific values, so they do
+// not use the operator-config normalization contract.
+func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	return e.setThinkingValue(string(value))
+}
+
+// ClearWorkflowThinkingValue removes a workflow-owned thinking override while
+// preserving the current prompt-cache lineage and contract generation.
+func (e *Engine) ClearWorkflowThinkingValue() error {
+	return e.setThinkingValue("")
+}
+
+func (e *Engine) setThinkingValue(value string) error {
 	e.mu.Lock()
-	e.cfg.ThinkingLevel = normalized
+	e.cfg.ThinkingLevel = strings.TrimSpace(value)
 	e.mu.Unlock()
 	e.markCurrentRequestShapeDirty()
 	return nil

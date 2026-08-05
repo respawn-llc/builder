@@ -284,6 +284,281 @@ func TestManualMovePreviewRejectsFieldsForDirectDestinations(t *testing.T) {
 	}
 }
 
+func TestManualMovePlansNewSessionSelectorValuesWithoutCurrentNode(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	edge := edgeByKey(t, definition, "audit")
+	group, err := transitionGroupForEdge(definition, edge)
+	if err != nil {
+		t.Fatalf("transitionGroupForEdge: %v", err)
+	}
+	source, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
+	if err != nil {
+		t.Fatalf("source node: %v", err)
+	}
+	target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+	if err != nil {
+		t.Fatalf("target node: %v", err)
+	}
+	planned, err := store.planTransitionParameterContract(
+		ctx,
+		store.queries,
+		definition,
+		edge,
+		source,
+		target,
+		nil,
+		nil,
+		true,
+		true,
+		transitionContractContextResolutionRequired,
+	)
+	if err != nil {
+		t.Fatalf("planTransitionParameterContract: %v", err)
+	}
+	if len(planned.Parameters) != 1 ||
+		planned.Parameters[0].Key != "role" ||
+		planned.Parameters[0].Purpose != workflow.ParameterPurposeTargetAssignee {
+		t.Fatalf("planned parameters = %+v, want exposed target role", planned.Parameters)
+	}
+}
+
+func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"coder": {Identity: "coder", QuestionsEnabled: true},
+		},
+		selectable: []workflow.TargetAgentRole{
+			{Identity: "reviewer", ExplicitAgentCallable: true},
+		},
+	}
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("complete plan: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(nodeByKey(t, definition, "audit")),
+		TransitionKey: func() *workflow.TransitionID {
+			value := workflow.TransitionID("audit")
+			return &value
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("PreviewManualMove: %v", err)
+	}
+	if len(preview.Choices) != 1 || len(preview.Choices[0].RequiredValues) != 1 ||
+		preview.Choices[0].RequiredValues[0].OutputName != "summary" {
+		t.Fatalf("manual move preview = %+v, want only ordinary summary", preview)
+	}
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(nodeByKey(t, definition, "audit")),
+		TransitionKey: func() *workflow.TransitionID {
+			value := workflow.TransitionID("audit")
+			return &value
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].AgentExecutionSelection == nil ||
+		moved.Mutation.Created[0].AgentExecutionSelection.Assignee != "reviewer" {
+		t.Fatalf("manual move target = %+v, want sole reviewer", moved.Mutation.Created)
+	}
+	_ = review
+}
+
+func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"coder": {Identity: "coder", QuestionsEnabled: true},
+		},
+		selectable: []workflow.TargetAgentRole{
+			{Identity: "reviewer", ExplicitAgentCallable: true},
+		},
+	}
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("complete plan: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	targetID := workflow.NodeIDOf(nodeByKey(t, definition, "audit"))
+	transition := workflow.TransitionID("audit")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  targetID,
+		TransitionKey: &transition,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 {
+		t.Fatalf("manual move mutation = %+v, want one target", moved.Mutation)
+	}
+	selection := moved.Mutation.Created[0].AgentExecutionSelection
+	if selection == nil || selection.Assignee != "reviewer" ||
+		selection.Origin != workflow.AssigneeOriginTransitionSelected {
+		t.Fatalf("manual move selection = %+v, want automatic reviewer", selection)
+	}
+	_ = review
+}
+
+func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("complete plan: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	targetID := workflow.NodeIDOf(nodeByKey(t, definition, "audit"))
+	transition := workflow.TransitionID("audit")
+	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  targetID,
+		TransitionKey: &transition,
+	})
+	if err != nil {
+		t.Fatalf("PreviewManualMove: %v", err)
+	}
+	foundRole := false
+	for _, required := range preview.Choices[0].RequiredValues {
+		if required.NodeKey == "review" && required.OutputName == "role" {
+			foundRole = true
+		}
+	}
+	if !foundRole {
+		t.Fatalf("manual move required values = %+v, want role", preview.Choices[0].RequiredValues)
+	}
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  targetID,
+		TransitionKey: &transition,
+		Values:        map[workflow.ModelKey]map[string]string{"review": {"role": "reviewer"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	selection := moved.Mutation.Created[0].AgentExecutionSelection
+	if selection == nil || selection.Assignee != "reviewer" ||
+		selection.Origin != workflow.AssigneeOriginTransitionSelected {
+		t.Fatalf("manual move many-role selection = %+v, want reviewer", selection)
+	}
+	_ = review
+}
+
 func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

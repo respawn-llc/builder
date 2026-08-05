@@ -1448,6 +1448,26 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 		t.Fatal("replacement reused the retired resource generation")
 	}
 
+	var staleCallbackCalls int
+	staleErr := authority.WithRuntime(context.Background(), first.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+		staleCallbackCalls++
+		thinking, err := workflow.NewThinkingValue("max")
+		if err != nil {
+			return err
+		}
+		if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
+			return err
+		}
+		_, err = engine.SteerWorkflowAssignment(runtime.WorkflowAssignment{})
+		return err
+	})
+	if staleErr == nil {
+		t.Fatal("stale assignment callback unexpectedly succeeded")
+	}
+	if staleCallbackCalls != 0 {
+		t.Fatalf("stale assignment callback calls = %d, want 0", staleCallbackCalls)
+	}
+
 	if _, err := first.Release(context.Background(), RuntimeReleaseDetach); err != nil {
 		t.Fatalf("release stale attachment: %v", err)
 	}

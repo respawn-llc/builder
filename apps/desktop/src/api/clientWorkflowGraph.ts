@@ -46,6 +46,8 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         transition_group_id: edge.transitionGroupID,
         key: edge.key,
         target_node_id: edge.targetNodeID,
+        assignee_selection: edge.assigneeSelection,
+        thinking_selection: edge.thinkingSelection,
         requires_approval: edge.requiresApproval,
         context_mode: edge.contextMode,
         context_source: {
@@ -56,6 +58,7 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         parameters: edge.parameters.map((parameter) => ({
           key: parameter.key,
           description: parameter.description,
+          purpose: parameter.purpose,
         })),
       }),
     ),

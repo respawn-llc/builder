@@ -26,6 +26,45 @@ const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
 const migrationWorkflowRunHistoryCutoverIrreversibleFunction = "kent_workflow_run_history_cutover_is_irreversible"
 const migrationCurrentNodePriorValuesIrreversibleFunction = "kent_current_node_prior_transition_parameters_are_irreversible"
 const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_session_agent_role_backfill_is_irreversible"
+const migrationCurrentNodeAgentExecutionFunction = "kent_migration_current_node_agent_execution_v1"
+const migrationCurrentNodeAgentExecutionValidationFunction = "kent_migration_current_node_agent_execution_validation_v1"
+const migrationPendingApprovalAgentExecutionValidationFunction = "kent_migration_pending_approval_agent_execution_validation_v1"
+
+func migrationAgentExecutionSelection(
+	contextMode workflow.ContextMode,
+	contextSource workflow.ContextSource,
+	targetSessionResolved bool,
+	targetBound bool,
+	fallbackRole string,
+	sessionRole string,
+) (workflow.AgentExecutionSelection, error) {
+	fallbackRole = strings.TrimSpace(fallbackRole)
+	if fallbackRole == "" {
+		return workflow.AgentExecutionSelection{}, errors.New("current node Agent fallback role is required")
+	}
+	policy, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
+		ContextMode:           contextMode,
+		ContextSource:         contextSource,
+		TargetSessionResolved: targetSessionResolved,
+	})
+	if err != nil {
+		return workflow.AgentExecutionSelection{}, fmt.Errorf("resolve current node Agent session policy: %w", err)
+	}
+	origin := workflow.AssigneeOriginConfiguredFallback
+	role := fallbackRole
+	if targetBound || policy == workflow.AssigneeSessionPolicyPreserve {
+		role = strings.TrimSpace(sessionRole)
+		if role == "" {
+			role = workflow.DefaultAgentRole
+		}
+		origin = workflow.AssigneeOriginRetainedSession
+	}
+	selection, err := workflow.NewAgentExecutionSelection(role, nil, origin)
+	if err != nil {
+		return workflow.AgentExecutionSelection{}, fmt.Errorf("materialize current node Agent execution selection: %w", err)
+	}
+	return selection, nil
+}
 
 var registerMetadataSQLiteFunctionsOnce sync.Once
 var registerMetadataSQLiteFunctionsErr error
@@ -64,6 +103,30 @@ func registerMetadataSQLiteFunctions() error {
 		if registerMetadataSQLiteFunctionsErr != nil {
 			return
 		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationCurrentNodeAgentExecutionFunction,
+			6,
+			migrationCurrentNodeAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationCurrentNodeAgentExecutionValidationFunction,
+			4,
+			migrationValidateCurrentNodeAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationPendingApprovalAgentExecutionValidationFunction,
+			1,
+			migrationValidatePendingApprovalAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
 		for _, functionName := range [...]string{
 			migrationWorkflowRunHistoryCutoverIrreversibleFunction,
 			migrationCurrentNodePriorValuesIrreversibleFunction,
@@ -83,6 +146,108 @@ func registerMetadataSQLiteFunctions() error {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 6 {
+		return nil, fmt.Errorf("%s requires 6 arguments", migrationCurrentNodeAgentExecutionFunction)
+	}
+	modeRaw, err := migrationStringArgument(args[0], "context mode")
+	if err != nil {
+		return nil, err
+	}
+	sourceRaw, err := migrationStringArgument(args[1], "context source")
+	if err != nil {
+		return nil, err
+	}
+	targetResolved, err := migrationBooleanArgument(args[2], "target session resolution")
+	if err != nil {
+		return nil, err
+	}
+	targetBound, err := migrationBooleanArgument(args[3], "target binding")
+	if err != nil {
+		return nil, err
+	}
+	selection, err := migrationAgentExecutionSelection(
+		workflow.ContextMode(strings.TrimSpace(modeRaw)),
+		workflow.ContextSource{Kind: workflow.ContextSourceKind(strings.TrimSpace(sourceRaw))},
+		targetResolved,
+		targetBound,
+		migrationOptionalStringArgument(args[4]),
+		migrationOptionalStringArgument(args[5]),
+	)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(selection)
+	if err != nil {
+		return nil, fmt.Errorf("encode migrated Agent execution selection: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func migrationValidateCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 4 {
+		return nil, fmt.Errorf("%s requires 4 arguments", migrationCurrentNodeAgentExecutionValidationFunction)
+	}
+	kind, err := migrationStringArgument(args[0], "current node kind")
+	if err != nil {
+		return nil, err
+	}
+	assignee := strings.TrimSpace(migrationOptionalStringArgument(args[1]))
+	thinking := strings.TrimSpace(migrationOptionalStringArgument(args[2]))
+	origin := strings.TrimSpace(migrationOptionalStringArgument(args[3]))
+	switch workflow.NodeKind(strings.TrimSpace(kind)) {
+	case workflow.NodeKindAgent:
+		if assignee == "" || origin == "" {
+			return nil, errors.New("Agent current node selection is incomplete")
+		}
+		switch workflow.AssigneeOrigin(origin) {
+		case workflow.AssigneeOriginConfiguredFallback, workflow.AssigneeOriginTransitionSelected, workflow.AssigneeOriginRetainedSession:
+		default:
+			return nil, fmt.Errorf("Agent current node selection origin %q is invalid", origin)
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if assignee != "" || thinking != "" || origin != "" {
+			return nil, fmt.Errorf("%s current node contains Agent selection fields", kind)
+		}
+	default:
+		return nil, fmt.Errorf("current node kind %q is invalid", kind)
+	}
+	return int64(1), nil
+}
+
+func migrationValidatePendingApprovalAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("%s requires 1 argument", migrationPendingApprovalAgentExecutionValidationFunction)
+	}
+	raw, err := migrationStringArgument(args[0], "pending approval target snapshot")
+	if err != nil {
+		return nil, err
+	}
+	var snapshot struct {
+		NodeKind                workflow.NodeKind                 `json:"node_kind"`
+		AgentExecutionSelection *workflow.AgentExecutionSelection `json:"agent_execution_selection,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return nil, fmt.Errorf("decode pending approval target snapshot: %w", err)
+	}
+	switch snapshot.NodeKind {
+	case workflow.NodeKindAgent:
+		if snapshot.AgentExecutionSelection == nil {
+			return nil, errors.New("pending approval Agent target selection is missing")
+		}
+		if err := snapshot.AgentExecutionSelection.Validate(); err != nil {
+			return nil, fmt.Errorf("pending approval Agent target selection: %w", err)
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if snapshot.AgentExecutionSelection != nil {
+			return nil, fmt.Errorf("pending approval %s target contains Agent selection", snapshot.NodeKind)
+		}
+	default:
+		return nil, fmt.Errorf("pending approval target kind %q is invalid", snapshot.NodeKind)
+	}
+	return int64(1), nil
 }
 
 func migrationIrreversibleMarker(
@@ -821,5 +986,30 @@ func migrationOptionalStringArgument(value driver.Value) string {
 		return string(typed)
 	default:
 		return ""
+	}
+}
+
+func migrationBooleanArgument(value driver.Value, label string) (bool, error) {
+	switch typed := value.(type) {
+	case int64:
+		switch typed {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("%s must be 0 or 1", label)
+		}
+	case int:
+		switch typed {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("%s must be 0 or 1", label)
+		}
+	default:
+		return false, fmt.Errorf("%s must be an integer", label)
 	}
 }

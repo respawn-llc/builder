@@ -115,6 +115,8 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentID,
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
 		PromptTemplate:    "Do work.",
 	}); err != nil {
@@ -136,6 +138,8 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      workflow.NodeIDOf(terminal),
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
 	}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)

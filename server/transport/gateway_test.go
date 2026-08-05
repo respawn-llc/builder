@@ -782,6 +782,8 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
 		PromptTemplate:    "Search work.",
 	}); err != nil {
@@ -802,6 +804,8 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      terminalID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)

@@ -52,6 +52,45 @@ func TestAssociateTaskSessionBindsFreshSessionToCurrentNode(t *testing.T) {
 	}
 }
 
+func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"coder": {
+				Identity:         "coder",
+				QuestionsEnabled: true,
+				Thinking: workflow.ThinkingCapability{
+					ReasoningCapable: true,
+					Finite:           true,
+					Levels:           []string{"low", "high"},
+				},
+			},
+		},
+	}
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, definition, "review").ID)
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+		edge.Parameters = append(edge.Parameters, workflow.Parameter{
+			Key:     "thinking",
+			Purpose: workflow.ParameterPurposeTargetThinking,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	if _, err := store.ResolveCurrentNodeStartContext(ctx, started.Reference); err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+	}
+}
+
 func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
@@ -135,13 +174,16 @@ INSERT INTO task_active_fanout_branches (
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, transition_branch_key, current_input_values_json,
-    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id
-) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?)`,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, ?, ?)`,
 		string(task.ID),
 		string(started.Reference.NodeID),
 		string(branchKey),
 		sourceSessionID.String(),
 		string(*started.EnteredByEdgeID),
+		started.AgentExecutionSelection.Assignee,
+		string(started.AgentExecutionSelection.Origin),
 	); err != nil {
 		t.Fatalf("insert retained fan-out Current Node: %v", err)
 	}

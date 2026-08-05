@@ -78,6 +78,8 @@ function edgesEqual(left: readonly WorkflowEdge[], right: readonly WorkflowEdge[
       a.transitionGroupID === b.transitionGroupID &&
       a.key === b.key &&
       a.targetNodeID === b.targetNodeID &&
+      a.assigneeSelection === b.assigneeSelection &&
+      a.thinkingSelection === b.thinkingSelection &&
       a.requiresApproval === b.requiresApproval &&
       a.contextMode === b.contextMode &&
       contextSourceEqual(a.contextSource, b.contextSource) &&
@@ -90,7 +92,11 @@ function parametersEqual(
   left: readonly WorkflowDefinition["edges"][number]["parameters"][number][],
   right: readonly WorkflowDefinition["edges"][number]["parameters"][number][],
 ): boolean {
-  return sameLengthAndEvery(left, right, (a, b) => a.key === b.key && a.description === b.description);
+  return sameLengthAndEvery(
+    left,
+    right,
+    (a, b) => a.key === b.key && a.description === b.description && a.purpose === b.purpose,
+  );
 }
 
 function joinInputProvidersEqual(

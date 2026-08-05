@@ -168,12 +168,13 @@ func (v *MaterializedPriorValues) SetTransitionParameter(transitionKey ModelKey,
 }
 
 type CurrentNode struct {
-	Reference          CurrentNodeReference
-	EnteredByEdgeID    *EdgeID
-	CurrentInputValues map[string]string
-	PriorValues        MaterializedPriorValues
-	SessionID          *runtimeids.SessionID
-	Scheduling         *CurrentNodeScheduling
+	Reference               CurrentNodeReference
+	EnteredByEdgeID         *EdgeID
+	CurrentInputValues      map[string]string
+	PriorValues             MaterializedPriorValues
+	SessionID               *runtimeids.SessionID
+	Scheduling              *CurrentNodeScheduling
+	AgentExecutionSelection *AgentExecutionSelection
 }
 
 func NewCurrentNode(reference CurrentNodeReference, sessionID *runtimeids.SessionID, scheduling *CurrentNodeScheduling) (CurrentNode, error) {
@@ -187,6 +188,17 @@ func NewCurrentNodeWithMaterializedValues(
 	sessionID *runtimeids.SessionID,
 	scheduling *CurrentNodeScheduling,
 ) (CurrentNode, error) {
+	return NewCurrentNodeWithExecutionSelection(reference, currentInputValues, priorValues, sessionID, scheduling, nil)
+}
+
+func NewCurrentNodeWithExecutionSelection(
+	reference CurrentNodeReference,
+	currentInputValues map[string]string,
+	priorValues MaterializedPriorValues,
+	sessionID *runtimeids.SessionID,
+	scheduling *CurrentNodeScheduling,
+	selection *AgentExecutionSelection,
+) (CurrentNode, error) {
 	if err := reference.Validate(); err != nil {
 		return CurrentNode{}, err
 	}
@@ -199,12 +211,21 @@ func NewCurrentNodeWithMaterializedValues(
 	if err := validateCurrentNodeScheduling(scheduling); err != nil {
 		return CurrentNode{}, err
 	}
+	var clonedSelection *AgentExecutionSelection
+	if selection != nil {
+		if err := selection.Validate(); err != nil {
+			return CurrentNode{}, fmt.Errorf("current node Agent execution selection: %w", err)
+		}
+		value := selection.Clone()
+		clonedSelection = &value
+	}
 	node := CurrentNode{
-		Reference:          reference,
-		CurrentInputValues: cloneMaterializedInputValues(currentInputValues),
-		PriorValues:        cloneMaterializedPriorValues(priorValues),
-		SessionID:          cloneCurrentNodeSessionID(sessionID),
-		Scheduling:         cloneCurrentNodeScheduling(scheduling),
+		Reference:               reference,
+		CurrentInputValues:      cloneMaterializedInputValues(currentInputValues),
+		PriorValues:             cloneMaterializedPriorValues(priorValues),
+		SessionID:               cloneCurrentNodeSessionID(sessionID),
+		Scheduling:              cloneCurrentNodeScheduling(scheduling),
+		AgentExecutionSelection: clonedSelection,
 	}
 	return node, nil
 }
@@ -405,6 +426,7 @@ type PendingApprovalBranch struct {
 type PendingApprovalTarget struct {
 	CurrentNode CurrentNode
 	DisplayName string
+	NodeKind    NodeKind
 }
 
 type PendingApprovalContextSourceResolution struct {

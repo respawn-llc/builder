@@ -1,36 +1,75 @@
 package core
 
 import (
+	"sort"
 	"strings"
 
+	"core/server/launch"
+	"core/server/llm"
 	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
 
-type configRoleResolver struct {
+type configTargetAgentCatalog struct {
 	settings config.Settings
 }
 
-func (r configRoleResolver) RoleExists(role string) bool {
+type configRoleResolver = configTargetAgentCatalog
+
+func (r configTargetAgentCatalog) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
 	trimmed := strings.TrimSpace(role)
 	if trimmed == "" {
-		return false
+		return workflow.TargetAgentRole{}, false
 	}
 	if workflow.IsDefaultAgentRole(trimmed) {
-		return true
-	}
-	return config.LookupSubagentRole(r.settings, trimmed).Status == config.SubagentRoleLookupPresent
-}
-
-func (r configRoleResolver) RoleToolEnabled(role string, tool toolspec.ID) bool {
-	trimmed := strings.TrimSpace(role)
-	if workflow.IsDefaultAgentRole(trimmed) {
-		return r.settings.EnabledTools[tool]
+		return targetAgentRoleFromSettings(workflow.DefaultAgentRole, r.settings, false), true
 	}
 	lookup := config.LookupSubagentRole(r.settings, trimmed)
-	if lookup.Status != config.SubagentRoleLookupPresent {
-		return false
+	if lookup.Status != config.SubagentRoleLookupPresent || lookup.NormalizedSelector == nil {
+		return workflow.TargetAgentRole{}, false
 	}
-	return config.EffectiveSubagentRoleTools(r.settings.EnabledTools, lookup.Role)[tool]
+	effective, err := launch.ResolveConfiguredSubagentSettings(r.settings, *lookup.NormalizedSelector)
+	if err != nil {
+		return workflow.TargetAgentRole{}, false
+	}
+	targetRole := targetAgentRoleFromSettings(*lookup.NormalizedSelector, effective, lookup.Role.AgentCallableSet && lookup.Role.AgentCallable)
+	return targetRole, true
+}
+
+func (r configTargetAgentCatalog) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	roles := make([]workflow.TargetAgentRole, 0, len(r.settings.Subagents))
+	for name, role := range r.settings.Subagents {
+		if !role.AgentCallableSet || !role.AgentCallable {
+			continue
+		}
+		resolved, ok := r.ResolveConfiguredRole(name)
+		if ok {
+			roles = append(roles, resolved)
+		}
+	}
+	sort.Slice(roles, func(left, right int) bool {
+		return roles[left].Identity < roles[right].Identity
+	})
+	return roles
+}
+
+func targetAgentRoleFromSettings(identity string, settings config.Settings, explicitCallable bool) workflow.TargetAgentRole {
+	model := strings.TrimSpace(settings.Model)
+	_, known := llm.LookupModelCapabilityContract(model)
+	capability := workflow.ThinkingCapability{
+		ReasoningCapable: llm.SupportsReasoningEffortModel(model),
+		Finite:           known,
+	}
+	if known {
+		capability.Levels = llm.SupportedThinkingLevelsModel(model)
+	}
+	return workflow.TargetAgentRole{
+		Identity:              identity,
+		QuestionsEnabled:      settings.EnabledTools[toolspec.ToolAskQuestion],
+		ExplicitAgentCallable: explicitCallable,
+		Model:                 model,
+		ConfiguredThinking:    strings.TrimSpace(settings.ThinkingLevel),
+		Thinking:              capability,
+	}
 }

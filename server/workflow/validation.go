@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -468,6 +469,12 @@ func (s *validationState) validateEdges() {
 		if !validContextMode(edge.ContextMode) {
 			s.addHard(CodeInvalidContextMode, "edge context mode is invalid", ref)
 		}
+		if selection := CanonicalAssigneeSelection(edge.AssigneeSelection); selection != AssigneeSelectionConfigured && selection != AssigneeSelectionPreviousNode {
+			s.addHard(CodeInvalidAssigneeSelection, "edge assignee selection is invalid", ref)
+		}
+		if selection := CanonicalThinkingSelection(edge.ThinkingSelection); selection != ThinkingSelectionConfigured && selection != ThinkingSelectionPreviousNode {
+			s.addHard(CodeInvalidThinkingSelection, "edge thinking selection is invalid", ref)
+		}
 		s.validateEdgeInvocationContract(edge, ref)
 	}
 }
@@ -509,11 +516,24 @@ func (s *validationState) edgeSource(edge Edge) (Node, bool) {
 
 func (s *validationState) validateParameters(edge Edge, ref ValidationError) {
 	seen := map[string]bool{}
+	seenPurposes := map[ParameterPurpose]bool{}
 	for index, parameter := range edge.Parameters {
 		ordinal := index + 1
 		key := strings.TrimSpace(parameter.Key)
 		parameterRef := ref
 		parameterRef.FieldName = key
+		purpose := CanonicalParameterPurpose(parameter.Purpose)
+		switch purpose {
+		case ParameterPurposeOrdinary, ParameterPurposeTargetAssignee, ParameterPurposeTargetThinking:
+		default:
+			s.addHard(CodeInvalidParameterPurpose, fmt.Sprintf("%s: parameter #%d purpose is invalid", edgeMessageSubject(edge), ordinal), parameterRef)
+		}
+		if purpose != ParameterPurposeOrdinary {
+			if seenPurposes[purpose] {
+				s.addHard(CodeDuplicateProtectedParameter, fmt.Sprintf("%s: parameter #%d protected purpose must be unique", edgeMessageSubject(edge), ordinal), parameterRef)
+			}
+			seenPurposes[purpose] = true
+		}
 		if key == "" || !workflowkey.Valid(key) || len(key) > MaxParameterKeyChars || workflowkey.ReservedParameter(key) {
 			s.addHard(CodeInvalidParameter, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "key is invalid"), parameterRef)
 		}
@@ -522,11 +542,17 @@ func (s *validationState) validateParameters(edge Edge, ref ValidationError) {
 		}
 		seen[key] = true
 		description := strings.TrimSpace(parameter.Description)
-		if description == "" {
+		if purpose == ParameterPurposeOrdinary && description == "" {
 			s.addHard(CodeParameterDescriptionRequired, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "description is required"), parameterRef)
 		} else if len(description) > MaxParameterDescriptionChars {
 			s.addHard(CodeParameterSchemaTooLarge, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "description is too large"), parameterRef)
 		}
+	}
+	if CanonicalAssigneeSelection(edge.AssigneeSelection) == AssigneeSelectionPreviousNode && !seenPurposes[ParameterPurposeTargetAssignee] {
+		s.addHard(CodeMissingProtectedParameter, "edge assignee selection requires a target-assignee protected parameter", ref)
+	}
+	if CanonicalThinkingSelection(edge.ThinkingSelection) == ThinkingSelectionPreviousNode && !seenPurposes[ParameterPurposeTargetThinking] {
+		s.addHard(CodeMissingProtectedParameter, "edge thinking selection requires a target-thinking protected parameter", ref)
 	}
 }
 
@@ -584,7 +610,7 @@ func (s *validationState) validateKindConstraints() {
 	}
 }
 
-func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, requiredTool toolspec.ID, resolver RoleResolver) (ValidationError, bool) {
+func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, requiredTool toolspec.ID, catalog TargetAgentCatalog) (ValidationError, bool) {
 	ref := ValidationError{WorkflowID: WorkflowIDPointer(workflowID), NodeID: NodeIDOf(node)}
 	role := strings.TrimSpace(NodeSubagentRole(node))
 	if role == "" {
@@ -596,17 +622,31 @@ func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, r
 		}, true
 	}
 	ref.AgentRole = &role
-	if resolver == nil || !resolver.RoleExists(role) {
+	if catalog == nil {
 		ref.Code = CodeAgentRoleMissing
 		ref.Message = fmt.Sprintf("Agent node %s references missing subagent role %s", nodeDisplayName(node), role)
 		return ref, true
 	}
-	if resolver.RoleToolEnabled(role, requiredTool) {
+	_, err := PlanTargetAgentSelection(catalog, TargetAgentSelectionRequest{FallbackRole: role})
+	if err == nil {
 		return ValidationError{}, false
 	}
-	ref.RequiredTool = &requiredTool
-	ref.Code = CodeAgentRoleRequiredToolDisabled
-	ref.Message = fmt.Sprintf("Agent node %s uses role %s without required tool %s; enable it in the role's effective configuration", nodeDisplayName(node), role, requiredTool)
+	var selectionErr TargetAgentSelectionError
+	if errors.As(err, &selectionErr) {
+		switch selectionErr.Code {
+		case TargetAgentSelectionErrorUnavailableRole:
+			ref.Code = CodeAgentRoleMissing
+			ref.Message = fmt.Sprintf("Agent node %s references missing subagent role %s", nodeDisplayName(node), role)
+			return ref, true
+		case TargetAgentSelectionErrorQuestionsDisabled:
+			ref.RequiredTool = &requiredTool
+			ref.Code = CodeAgentRoleRequiredToolDisabled
+			ref.Message = fmt.Sprintf("Agent node %s uses role %s without required tool %s; enable it in the role's effective configuration", nodeDisplayName(node), role, requiredTool)
+			return ref, true
+		}
+	}
+	ref.Code = CodeAgentRoleMissing
+	ref.Message = fmt.Sprintf("Agent node %s references unavailable subagent role %s", nodeDisplayName(node), role)
 	return ref, true
 }
 
@@ -631,6 +671,7 @@ func (s *validationState) validateRuntimeSupport() {
 			sourceKind = source.Kind()
 		}
 		contextSource, contextSourceValid := s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
+		s.validateSelectorApplicability(edge, source, sourceExists, target, targetExists, contextSource, ref)
 		if edge.ContextMode == ContextModeContinueSession && contextSourceValid {
 			selectedSource, selectedSourceExists := s.contextSourceNode(contextSource, source, sourceExists, target, targetExists)
 			if selectedSourceExists && targetExists &&
@@ -641,6 +682,61 @@ func (s *validationState) validateRuntimeSupport() {
 		}
 		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{SourceKind: sourceKind, ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
 			s.addSemantic(issue.Code, issue.Message, ref)
+		}
+	}
+}
+
+func (s *validationState) validateSelectorApplicability(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, contextSource ContextSource, ref ValidationError) {
+	assigneeSelection := CanonicalAssigneeSelection(edge.AssigneeSelection)
+	thinkingSelection := CanonicalThinkingSelection(edge.ThinkingSelection)
+	sourceKind := NodeKind("")
+	if sourceExists {
+		sourceKind = source.Kind()
+	}
+	targetKind := NodeKind("")
+	targetRole := ""
+	if targetExists {
+		targetKind = target.Kind()
+		targetRole = NodeSubagentRole(target)
+	}
+	plan, planErr := PlanTransitionSelection(TransitionParameterContractRequest{
+		Edge:                         edge,
+		SourceKind:                   sourceKind,
+		TargetKind:                   targetKind,
+		TargetRole:                   targetRole,
+		FanOut:                       len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		TargetSessionPolicy:          AssigneeSessionPolicyEstablishTarget,
+		Catalog:                      s.opts.RoleResolver,
+		RequireExecutionDescriptions: s.context == ValidationContextExecution,
+	})
+	applicability := plan.Applicability
+	if assigneeSelection == AssigneeSelectionPreviousNode {
+		if applicability.Assignee.Reason == SelectorApplicabilityTopology ||
+			applicability.Assignee.Reason == SelectorApplicabilityContextSource {
+			s.addSemantic(CodeAssigneeSelectionInapplicable, "edge Assignee selection is not applicable to this serial Agent transition", ref)
+		} else if !applicability.Assignee.Available {
+			s.addSemantic(CodeAssigneeSelectionUnavailable, "edge Assignee selection is unavailable for the current role configuration", ref)
+		}
+	}
+	if thinkingSelection != ThinkingSelectionPreviousNode {
+		return
+	}
+	if applicability.Thinking.Reason == SelectorApplicabilityTopology {
+		s.addSemantic(CodeThinkingSelectionInapplicable, "edge thinking selection is not applicable to this serial Agent transition", ref)
+		return
+	}
+	if !applicability.Thinking.Available {
+		s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection is unavailable for the applicable target models", ref)
+	}
+	if s.context == ValidationContextExecution &&
+		thinkingSelection == ThinkingSelectionPreviousNode &&
+		sourceExists &&
+		targetExists {
+		err := planErr
+		var selectionErr TargetAgentSelectionError
+		if errors.As(err, &selectionErr) &&
+			selectionErr.Code == TargetAgentSelectionErrorThinkingDescriptionRequired {
+			s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection requires an authored description for the open thinking catalog", ref)
 		}
 	}
 }
@@ -790,7 +886,7 @@ func (s *validationState) validateStartOutgoingShape() {
 }
 
 func (s *validationState) validatePromptPlaceholders() {
-	derived := DeriveWiring(s.def)
+	derived := DeriveWiringWithCatalog(s.def, s.opts.RoleResolver)
 	for _, edge := range s.def.Edges {
 		prompt := strings.TrimSpace(edge.PromptTemplate)
 		if prompt == "" {
@@ -807,10 +903,13 @@ func (s *validationState) validatePromptPlaceholders() {
 			invalidRef.Placeholder = invalid.Placeholder
 			s.addHard(CodeInvalidTemplatePlaceholder, invalid.Message, invalidRef)
 		}
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
 		currentParams := edgeParameterNameSet(edge)
 		source, sourceExists := s.edgeSource(edge)
 		if sourceExists && source.Kind() == NodeKindJoin {
 			currentParams = outputFieldNameSet(derived.JoinOutputFieldsForNode(NodeIDOf(source)))
+		} else if sourceExists && targetExists {
+			currentParams = s.promptParameterNameSet(edge, source, target)
 		}
 		for _, param := range refs.Params {
 			name := strings.TrimSpace(param.Name)
@@ -828,6 +927,37 @@ func (s *validationState) validatePromptPlaceholders() {
 			s.validatePriorParameterReference(edge, priorParam, ref, derived)
 		}
 	}
+}
+
+func (s *validationState) promptParameterNameSet(edge Edge, source Node, target Node) map[string]bool {
+	names := edgeParameterNameSet(edge)
+	consumption := PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
+		Edge:                edge,
+		SourceKind:          source.Kind(),
+		TargetKind:          target.Kind(),
+		TargetRole:          NodeSubagentRole(target),
+		FanOut:              len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		Catalog:             s.opts.RoleResolver,
+		TargetSessionPolicy: AssigneeSessionPolicyEstablishTarget,
+	})
+	contextSourceKind := CanonicalContextSource(edge.ContextSource).Kind
+	retainedSessionPossible := edge.ContextMode == ContextModeContinueSession &&
+		(contextSourceKind == ContextSourcePreviousTarget || contextSourceKind == ContextSourcePreviousTargetOrNew)
+	for _, parameter := range edge.Parameters {
+		var policy ProtectedParameterConsumptionPolicy
+		switch CanonicalParameterPurpose(parameter.Purpose) {
+		case ParameterPurposeTargetAssignee:
+			policy = consumption.Assignee
+		case ParameterPurposeTargetThinking:
+			policy = consumption.Thinking
+		default:
+			continue
+		}
+		if retainedSessionPossible || policy != ProtectedParameterConsumptionRequiredValidate {
+			delete(names, strings.TrimSpace(parameter.Key))
+		}
+	}
+	return names
 }
 
 func edgeParameterNameSet(edge Edge) map[string]bool {
@@ -924,9 +1054,17 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 		}
 	}
 	for _, edge := range s.edgesByGroup[groupID] {
+		group := s.groupsByID[groupID]
+		source, sourceExists := s.nodesByID[group.SourceNodeID]
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
+		if sourceExists && targetExists {
+			for key := range s.promptParameterNameSet(edge, source, target) {
+				out[key] = true
+			}
+			continue
+		}
 		for _, parameter := range edge.Parameters {
-			key := strings.TrimSpace(parameter.Key)
-			if key != "" {
+			if key := strings.TrimSpace(parameter.Key); key != "" {
 				out[key] = true
 			}
 		}

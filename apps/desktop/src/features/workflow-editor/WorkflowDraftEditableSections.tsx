@@ -24,6 +24,7 @@ import {
   workflowPromptTemplatePlaceholders,
   type PromptTemplatePlaceholder,
 } from "./workflowPromptTemplatePlaceholders";
+import { isProtectedWorkflowParameter, visibleWorkflowEdgeParameters } from "./workflowEditorEdgeSelection";
 import { derivedNodeWiring, joinProviderOptions } from "./workflowInspectorWiring";
 
 export function PromptTemplateEditor({
@@ -187,12 +188,17 @@ function PromptPlaceholderChip({
 export function EditableEdgeParameters({
   controller,
   edge,
+  protectedParameterVisibility,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
   edge: DraftWorkflowEdge;
+  protectedParameterVisibility?: Readonly<{
+    target_assignee?: boolean;
+    target_thinking?: boolean;
+  }>;
 }>) {
   const { t } = useTranslation();
-  const parameters = edge.parameters.map((parameter, index) => ({
+  const parameters = visibleWorkflowEdgeParameters(edge, protectedParameterVisibility).map((parameter, index) => ({
     ...parameter,
     rowID: parameter.rowID ?? [edge.id, "parameter", "fallback", index.toString()].join(":"),
   }));
@@ -207,7 +213,7 @@ export function EditableEdgeParameters({
         >
           {t("workflowEditor.addParameter")}
         </Button>
-        {edge.parameters.length === 0 ? (
+        {parameters.length === 0 ? (
           <p className="m-0 text-sm text-[var(--color-muted)]">{t("workflowEditor.none")}</p>
         ) : null}
         <div className="grid gap-[var(--space-3)]">
@@ -315,16 +321,18 @@ function SortableEdgeParameter({
               value={parameter.key}
             />
           </div>
-          <Button
-            aria-label={t("workflowEditor.deleteParameter")}
-            className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full !border-transparent !bg-transparent !p-0"
-            onClick={() => {
-              controller.dispatch({ edgeID, parameterRowID: parameter.rowID, type: "deleteEdgeParameter" });
-            }}
-            variant="danger"
-          >
-            <Trash2 aria-hidden="true" size={17} strokeWidth={1.9} />
-          </Button>
+          {isProtectedWorkflowParameter(parameter) ? null : (
+            <Button
+              aria-label={t("workflowEditor.deleteParameter")}
+              className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full !border-transparent !bg-transparent !p-0"
+              onClick={() => {
+                controller.dispatch({ edgeID, parameterRowID: parameter.rowID, type: "deleteEdgeParameter" });
+              }}
+              variant="danger"
+            >
+              <Trash2 aria-hidden="true" size={17} strokeWidth={1.9} />
+            </Button>
+          )}
         </div>
         <div className="pointer-events-auto">
           <label className="sr-only" htmlFor={descriptionID}>

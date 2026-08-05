@@ -164,6 +164,12 @@ export type {
   WorkspaceUnlinkResponse,
 } from "./models";
 export type {
+  WorkflowEdgeSelectionMode,
+  WorkflowParameterPurpose,
+  WorkflowSelectorApplicability,
+  WorkflowSelectorApplicabilityReason,
+} from "./workflowSelectionModels";
+export type {
   BoardNodeCardsSort,
   WorkflowTaskListSort,
   WorkflowTaskListSortDirection,

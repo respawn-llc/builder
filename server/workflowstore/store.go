@@ -38,6 +38,13 @@ func WithRoleResolver(resolver workflow.RoleResolver) Option {
 	}
 }
 
+func (s *Store) TargetAgentCatalog() workflow.TargetAgentCatalog {
+	if s == nil {
+		return nil
+	}
+	return s.roleResolver
+}
+
 func WithNow(now func() time.Time) Option {
 	return func(s *Store) {
 		if now != nil {
@@ -211,6 +218,8 @@ type EdgeRecord struct {
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
+	AssigneeSelection  workflow.AssigneeSelection
+	ThinkingSelection  workflow.ThinkingSelection
 	RequiresApproval   bool
 	ContextMode        workflow.ContextMode
 	ContextSource      workflow.ContextSource
@@ -768,6 +777,9 @@ func (s *Store) AddEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
 	if edge.ID == "" {
 		edge.ID = workflow.EdgeID(prefixedID("edge"))
 	}
+	if err := s.validateDirectEdgeSelection(ctx, edge, false); err != nil {
+		return 0, err
+	}
 	edge.SortOrder = 100
 	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		if _, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID }); exists {
@@ -792,6 +804,9 @@ func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) 
 	if edge.WorkflowID.IsZero() {
 		return 0, ErrWorkflowIDRequired
 	}
+	if err := s.validateDirectEdgeSelection(ctx, edge, true); err != nil {
+		return 0, err
+	}
 	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		current, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID })
 		if !exists {
@@ -808,6 +823,48 @@ func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) 
 		}
 		return upsertWorkflowEdge(ctx, q, edge, edge.SortOrder, "update workflow edge")
 	})
+}
+
+func (s *Store) validateDirectEdgeSelection(ctx context.Context, candidate EdgeRecord, updating bool) error {
+	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode &&
+		workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) != workflow.ThinkingSelectionPreviousNode {
+		return nil
+	}
+	definition, _, err := s.GetDefinition(ctx, candidate.WorkflowID)
+	if err != nil {
+		return err
+	}
+	candidateValue := workflowEdgeFromRecord(candidate)
+	replaced := false
+	for index, edge := range definition.Edges {
+		if edge.ID != candidate.ID {
+			continue
+		}
+		if updating {
+			definition.Edges[index] = candidateValue
+			replaced = true
+		}
+	}
+	if updating && !replaced {
+		return nil
+	}
+	if !updating {
+		definition.Edges = append(definition.Edges, candidateValue)
+	}
+	planned, err := workflow.PlanDefinitionTransitionSelection(definition, candidateValue, s.roleResolver, false)
+	if err != nil {
+		return err
+	}
+	applicability := planned.Applicability
+	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode &&
+		!applicability.Assignee.Available {
+		return fmt.Errorf("edge Assignee selection is inapplicable: %s", applicability.Assignee.Reason)
+	}
+	if workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode &&
+		!applicability.Thinking.Available {
+		return fmt.Errorf("edge thinking selection is inapplicable: %s", applicability.Thinking.Reason)
+	}
+	return nil
 }
 
 func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {

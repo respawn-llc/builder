@@ -563,7 +563,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	if !ok {
 		return []currentNodeStructureFinding{{kind: findingSerializedExecutionAuthority, position: namedTypePosition(index, dto)}}
 	}
-	const expectedCurrentNodeWireFingerprint = "node_id:string;session_id,omitempty:*string;transition_branch_key,omitempty:*string"
+	const expectedCurrentNodeWireFingerprint = "effective_assignee,omitempty:*string;effective_thinking,omitempty:*string;node_id:string;session_id,omitempty:*string;transition_branch_key,omitempty:*string"
 	if got := jsonStructFingerprint(structure); got != expectedCurrentNodeWireFingerprint {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,
@@ -593,7 +593,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	}
 	sort.Strings(serializedShapes)
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "812b0810988d4268ba3252602097c16424cdd40f413709e08ef9705f8e57110f"
+	const expectedWorkflowCurrentNodeWireDigest = "cc5192d0491b24b722192c88d4c9eb21e872a976910afb0fad080ce567b31a6c"
 	if digest != expectedWorkflowCurrentNodeWireDigest {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,
