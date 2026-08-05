@@ -72,9 +72,7 @@ export function createSidebarHistory<T, R>(
     hash: "",
     state,
   });
-  const currentLocation = (): HistoryLocation => {
-    return entryAt(entries, currentIndex).location;
-  };
+  const currentLocation = (): HistoryLocation => entryAt(entries, currentIndex).location;
   const currentKey = (): string => {
     const key = currentLocation().state.__TSR_key;
     if (key === undefined) throw new Error("Sidebar history location has no TanStack key.");
@@ -138,9 +136,7 @@ export function createSidebarHistory<T, R>(
   seed.destroy();
   notify(null);
 
-  const refreshCurrent = (
-    entry: Readonly<{ destination: T; retainedState: R | null }>,
-  ): void => {
+  const refreshCurrent = (entry: Readonly<{ destination: T; retainedState: R | null }>): void => {
     pending = entry;
     history.replace("/", undefined);
   };

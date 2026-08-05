@@ -44,15 +44,11 @@ export function SidebarRouteChangeCloser() {
   const { closeSidebar } = useSidebar();
   const previousPathRef = useRef(router.state.location.pathname);
 
-  useLayoutEffect(() => {
-    return router.history.subscribe(({ location }) => {
-      if (previousPathRef.current === location.pathname) {
-        return;
-      }
-      previousPathRef.current = location.pathname;
-      closeSidebar("route_change");
-    });
-  }, [closeSidebar, router.history]);
+  useLayoutEffect(() => router.history.subscribe(({ location }) => {
+    if (previousPathRef.current === location.pathname) return;
+    previousPathRef.current = location.pathname;
+    closeSidebar("route_change");
+  }), [closeSidebar, router.history]);
 
   return null;
 }
