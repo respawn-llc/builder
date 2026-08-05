@@ -760,12 +760,14 @@
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,680 additions plus 320
-  deletions: **2,000 changed lines**, exactly within the Design boundary. The
-  final scope reduction only compresses behavior-preserving helper,
-  route-owner, and animation declarations; no approved behavior, owner, or
-  guarantee changed.
+  `origin/main...HEAD`, including styles, is now 1,673 additions plus 320
+  deletions: **1,993 changed lines**, within the Design boundary. The final
+  remediation restores readable CSS and stack formatting, consolidates the
+  two directional animations into one parameterized motion path, removes
+  dead adapter-only identity/narrowing helpers and an unused production test
+  seam, and consolidates generic currentness/rebase logic. Approved behavior,
+  ownership, and guarantees are unchanged.
   Progress (August 5, 2026): Re-measured after the cap remediation and reran
   current-head verification: frozen Apps install, Apps lint (0 errors; 4
   existing warnings), Apps typecheck, Desktop build, and
-  `./scripts/test.sh desktop` (84 files / 376 tests) all passed.
+  `./scripts/test.sh desktop` (84 files / 375 tests) all passed.
