@@ -28,3 +28,17 @@
 - [x] Remove inferred committed-result authority and partial-success continuation after the user rejected that hardening.
 - [x] Keep wake publication errors surfaced at the existing operation boundary; accept ghost prompt/batch projections per the user decision.
 - [x] Keep the production ceiling at the previously authorized 1,650 lines; follow-up design approval is required for any stronger coordination.
+
+## Fifth-round review
+
+- [x] Record the authoritative August 5, 2026 User decision in the Design:
+  keep post-commit wake errors surfaced, accept stale or ghost prompt and
+  Question-Batch projections, preserve durable Current-Node mutations while
+  returning existing operation errors/empty results, and do not add
+  compensation, aggregate transactions, inferred partial-success semantics,
+  successor continuation, retries, or cross-authority recovery.
+- [x] Add blocked Run-watch arbitration coverage for prompt wake, terminal
+  completion, attention-stream loss, and caller cancellation.
+- [x] Add Registry owner-boundary coverage proving Task wake publication comes
+  from immutable Workflow Exact Execution Scope identity and is excluded for
+  non-Workflow scopes.
