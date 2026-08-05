@@ -798,6 +798,15 @@
   Home/View Transition ordering, browser Back, search-only changes, Board
   workflow/task changes, Workflow Editor project changes, and deletion
   survivors.
+  Progress (August 5, 2026): QA's repeated browser finding was adjudicated
+  invalid after auditing the harness source. Its `cmd_browser` starts Vite
+  from the harness `REPO_ROOT` (`/Users/nek/Dev/kent`), whose checkout was
+  `b335f635`, while this task worktree was `161f2594c` and contained the
+  history-boundary implementation under review. A manual reproduction through
+  that same harness served the main checkout and reproduced the stale sidebar;
+  the current worktree's route callback was not in the served source. The user
+  chose to record the source mismatch and request fresh QA against this
+  worktree. No production workaround or scope expansion was authorized.
   Progress (August 5, 2026): Compliance review correctly rejected the
   temporary raw-query adapter. The root cause was type erasure in
   `createNativeDialogRoutes(rootRoute: AnyRootRoute)`, which made the
