@@ -728,8 +728,8 @@
   the provider's typed pending operation; the provider preserves an unrelated
   survivor only for a matching completed deletion transition and closes
   ordinary or failed route changes. Pathname closure is subscribed at the
-  provider's router lifecycle boundary before route loading; the structured
-  observer remains responsible for search transitions. Regression coverage
+  provider's router lifecycle boundary before route loading; that same
+  callback derives the typed search transitions. Regression coverage
   uses real router transitions for every route case, including delayed
   success/failure after selector absence, the AppChrome Home View Transition
   path, and the deletion-survivor exception.
@@ -737,11 +737,18 @@
   navigation. Restored the provider-owned `onBeforeLoad` pathname close
   subscription and retained structured search-transition reconciliation.
   Full Desktop verification passed again: 82 files / 377 tests.
+  Progress (August 5, 2026): Completed the compliance remediation by making
+  the provider's single `onBeforeLoad` dispatch derive both pathname and
+  validated Board/Workflow Editor search locations through one typed
+  `SidebarRouteTransition` model. The same callback owns deletion-operation
+  reconciliation and sidebar closure; no React location observer or separate
+  pathname writer remains. The structural router-match adapter preserves
+  typed optional search values without parsing route strings.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,667 additions plus 330
-  deletions: **1,997 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,668 additions plus 331
+  deletions: **1,999 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -752,3 +759,8 @@
   Desktop build, and `./scripts/test.sh desktop` (82 files / 377 tests) all
   passed. The final non-test Desktop diff is 1,667 additions plus 330
   deletions, totaling 1,997 changed lines.
+  Progress (August 5, 2026): Re-measured after unified typed dispatch
+  remediation: 1,668 additions plus 331 deletions, totaling 1,999 changed
+  production lines, still within the 2,000-line cap. The full Desktop suite
+  passed 82 files / 377 tests; final lint, typecheck, and build evidence is
+  recorded after the last code commit.
