@@ -63,10 +63,10 @@ func PlanDefinitionTransitionSelection(
 		return TransitionSelectionPlan{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
 	}
 	for _, candidate := range definition.Nodes {
-		switch NodeIDOf(candidate) {
-		case group.SourceNodeID:
+		if NodeIDOf(candidate) == group.SourceNodeID {
 			source = candidate
-		case edge.TargetNodeID:
+		}
+		if NodeIDOf(candidate) == edge.TargetNodeID {
 			target = candidate
 		}
 	}

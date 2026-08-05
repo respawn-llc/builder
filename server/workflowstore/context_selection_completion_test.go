@@ -191,7 +191,7 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 				Thinking: workflow.ThinkingCapability{
 					ReasoningCapable: true,
 					Finite:           true,
-					Levels:           []string{"low", "high"},
+					Levels:           []string{"low"},
 				},
 			},
 			"reviewer": {
@@ -200,13 +200,13 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 				Thinking: workflow.ThinkingCapability{
 					ReasoningCapable: true,
 					Finite:           true,
-					Levels:           []string{"low", "high"},
+					Levels:           []string{"low", "high", "xhigh"},
 				},
 			},
 		},
 		selectable: []workflow.TargetAgentRole{
-			{Identity: "coder", ExplicitAgentCallable: true, QuestionsEnabled: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: true, Levels: []string{"low", "high"}}},
-			{Identity: "reviewer", ExplicitAgentCallable: true, QuestionsEnabled: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: true, Levels: []string{"low", "high"}}},
+			{Identity: "coder", ExplicitAgentCallable: true, QuestionsEnabled: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: true, Levels: []string{"low"}}},
+			{Identity: "reviewer", ExplicitAgentCallable: true, QuestionsEnabled: true, Thinking: workflow.ThinkingCapability{ReasoningCapable: true, Finite: true, Levels: []string{"low", "high", "xhigh"}}},
 		},
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
@@ -219,12 +219,9 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
-		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.AssigneeSelection = workflow.AssigneeSelectionConfigured
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
-		edge.Parameters = []workflow.Parameter{
-			{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee},
-			{Key: "effort", Description: "Choose an effort.", Purpose: workflow.ParameterPurposeTargetThinking},
-		}
+		edge.Parameters = []workflow.Parameter{{Key: "effort", Purpose: workflow.ParameterPurposeTargetThinking}}
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -242,6 +239,22 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 	})
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
+	}
+	startContext, err := store.ResolveCurrentNodeStartContext(ctx, review.Mutation.Created[0].Reference)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext retained thinking contract: %v", err)
+	}
+	var thinkingParameterPresent bool
+	for _, option := range startContext.TransitionOptions {
+		if option.ID != "audit" {
+			continue
+		}
+		for _, parameter := range option.Parameters {
+			thinkingParameterPresent = thinkingParameterPresent || parameter.Key == "effort"
+		}
+	}
+	if !thinkingParameterPresent {
+		t.Fatalf("retained target thinking contract omitted effort parameter: %+v", startContext.TransitionOptions)
 	}
 	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,

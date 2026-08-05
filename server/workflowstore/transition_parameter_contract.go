@@ -122,8 +122,13 @@ func (s *Store) planTransitionParameterContract(
 
 func transitionContractTargetSessionPolicyModeForEdge(edge workflow.Edge) transitionContractTargetSessionPolicyMode {
 	for _, parameter := range edge.Parameters {
-		if workflow.CanonicalParameterPurpose(parameter.Purpose) != workflow.ParameterPurposeTargetAssignee ||
-			workflow.CanonicalAssigneeSelection(edge.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode {
+		purpose := workflow.CanonicalParameterPurpose(parameter.Purpose)
+		if (purpose == workflow.ParameterPurposeTargetAssignee &&
+			workflow.CanonicalAssigneeSelection(edge.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode) ||
+			(purpose == workflow.ParameterPurposeTargetThinking &&
+				workflow.CanonicalThinkingSelection(edge.ThinkingSelection) != workflow.ThinkingSelectionPreviousNode) ||
+			(purpose != workflow.ParameterPurposeTargetAssignee &&
+				purpose != workflow.ParameterPurposeTargetThinking) {
 			continue
 		}
 		contextSourceKind := workflow.CanonicalContextSource(edge.ContextSource).Kind
