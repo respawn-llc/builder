@@ -42,9 +42,9 @@ func (b ProjectWorkspaceBoundary) Normalize() (ProjectWorkspaceBoundary, error) 
 		workspace.CanonicalRoot = root
 		workspace.AttachmentOrdinal = len(normalized.Workspaces)
 		normalized.Workspaces = append(normalized.Workspaces, workspace)
-		if len(normalized.Workspaces) == ProjectWorkspaceCollectionLimit {
-			break
-		}
+	}
+	if len(normalized.Workspaces) > ProjectWorkspaceCollectionLimit {
+		return ProjectWorkspaceBoundary{}, errors.New("project workspace boundary exceeds collection limit")
 	}
 	return normalized, nil
 }

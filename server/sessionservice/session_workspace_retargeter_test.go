@@ -417,10 +417,13 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 				WorkspaceRoot: sharedRoot,
 			}
 			wantProjectID := fixture.sourceBinding.ProjectID
+			targetProjectID := fixture.targetProject.ProjectID
 			if test.crossProject {
-				targetProjectID := fixture.targetProject.ProjectID
 				req.ProjectID = &targetProjectID
 				wantProjectID = targetProjectID
+			}
+			if test.crossProject {
+				fixture.openRuntime(t)
 			}
 
 			result, err := fixture.retargeter(fixture.metadata, retargetProcessSource{}).RetargetWorkspace(context.Background(), req)
@@ -429,6 +432,26 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 			}
 			if result.Binding.ProjectID != wantProjectID {
 				t.Fatalf("binding project = %q, want %q", result.Binding.ProjectID, wantProjectID)
+			}
+			if test.crossProject {
+				var rebound tools.FilesystemContext
+				if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+					rebound = maintenance.PreviousFilesystemContext.Clone()
+					return nil
+				}); err != nil {
+					t.Fatalf("inspect cross-project filesystem context: %v", err)
+				}
+				if rebound.Access.ProjectWorkspace.ProjectID != targetProjectID {
+					t.Fatalf("rebound Project ID = %q, want %q", rebound.Access.ProjectWorkspace.ProjectID, targetProjectID)
+				}
+				if len(rebound.Access.ProjectWorkspace.Roots) != 2 {
+					t.Fatalf("rebound Project Workspace roots = %+v, want target project roots", rebound.Access.ProjectWorkspace.Roots)
+				}
+				for _, root := range rebound.Access.ProjectWorkspace.Roots {
+					if root.LexicalPath == fixture.sourceBinding.CanonicalRoot {
+						t.Fatalf("rebound context retained source-only root %q", root.LexicalPath)
+					}
+				}
 			}
 			descriptor, err := session.NewOpenSessionDescriptor(fixture.childID)
 			if err != nil {
@@ -646,6 +669,13 @@ func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAft
 	}
 	fixture.openRuntime(t)
 	beforeWorkdir := fixture.runtimeWorkdir(t)
+	var beforeContext tools.FilesystemContext
+	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		beforeContext = maintenance.PreviousFilesystemContext.Clone()
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect pre-failure filesystem context: %v", err)
+	}
 	commitErr := errors.New("commit failed")
 	metadataSource := failingSessionRetargetCommit{Store: fixture.metadata, err: commitErr}
 
@@ -661,6 +691,16 @@ func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAft
 	}
 	if afterWorkdir := fixture.runtimeWorkdir(t); afterWorkdir != beforeWorkdir {
 		t.Fatalf("runtime workdir = %q, want rollback to %q", afterWorkdir, beforeWorkdir)
+	}
+	var afterContext tools.FilesystemContext
+	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		afterContext = maintenance.PreviousFilesystemContext.Clone()
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect post-failure filesystem context: %v", err)
+	}
+	if !afterContext.Equal(beforeContext) {
+		t.Fatalf("filesystem context changed after failed retarget: before=%+v after=%+v", beforeContext, afterContext)
 	}
 	childInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, fixture.sourceBinding.ProjectID)
 	if err != nil {

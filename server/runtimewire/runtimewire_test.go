@@ -891,6 +891,40 @@ func TestNewFilesystemContextRequiresAvailableMandatoryRootsAndSurfacesSecondary
 	}
 }
 
+func TestFilesystemContextRejectsOverLimitBoundaryAndReplacement(t *testing.T) {
+	executionRoot := t.TempDir()
+	workspaces := make([]metadata.ProjectWorkspace, metadata.ProjectWorkspaceCollectionLimit+1)
+	for index := range workspaces {
+		workspaces[index] = metadata.ProjectWorkspace{
+			CanonicalRoot: filepath.Join(t.TempDir(), fmt.Sprintf("workspace-%d", index)),
+		}
+	}
+	_, err := NewFilesystemContext(executionRoot, executionRoot, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "test",
+		Workspaces: workspaces,
+	})
+	if err == nil {
+		t.Fatal("NewFilesystemContext accepted an over-limit boundary")
+	}
+
+	binding := newRuntimeWireBinding(t, executionRoot, toolspec.ToolExecCommand)
+	next := binding.FilesystemContext()
+	root := next.Access.WorkingDirectory
+	next.Access.ProjectWorkspace.Roots = make([]tools.ProjectWorkspaceRoot, metadata.ProjectWorkspaceCollectionLimit+1)
+	for index := range next.Access.ProjectWorkspace.Roots {
+		next.Access.ProjectWorkspace.Roots[index] = tools.ProjectWorkspaceRoot{FilesystemRoot: root}
+	}
+	if err := binding.ReplaceFilesystemContext(next); err == nil {
+		t.Fatal("ReplaceFilesystemContext accepted an over-limit materialized scope")
+	}
+
+	next = binding.FilesystemContext()
+	next.Access.ProjectWorkspace.ProjectID = ""
+	if err := binding.ReplaceFilesystemContext(next); err == nil {
+		t.Fatal("ReplaceFilesystemContext accepted an empty Project ID")
+	}
+}
+
 func TestMissingSecondaryWorkspaceIdentityTrustsItsLaterMaterializedRoot(t *testing.T) {
 	executionRoot := t.TempDir()
 	secondaryParent := t.TempDir()

@@ -556,6 +556,38 @@ func writeWorkflowContextFixture(t *testing.T, f *currentNodeRunnerFixture) {
 	}
 }
 
+func TestCurrentNodeAgentWritesToSiblingWorkspaceThroughCreatedRuntime(t *testing.T) {
+	sibling := t.TempDir()
+	target := filepath.Join(sibling, "workflow.txt")
+	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write workflow sibling fixture: %v", err)
+	}
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch("write sibling", llm.ToolCall{
+			ID:    "sibling-patch",
+			Name:  string(toolspec.ToolEdit),
+			Input: json.RawMessage(`{"path":"` + target + `","old_string":"before","new_string":"workflow sibling"}`),
+		}),
+		ScriptedToolBatch("complete", llm.ToolCall{
+			ID:    "complete-sibling",
+			Name:  string(toolspec.ToolCompleteNode),
+			Input: json.RawMessage(`{"transition":"done","commentary":"done"}`),
+		}),
+		ScriptedFinalAnswer("done"),
+	)
+	if _, err := f.metadata.AttachWorkspaceToProject(context.Background(), f.projectID, sibling); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
+	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(t, f.store, string(config.WorkflowCompletionModeTool))
+	task := f.createTask(t, workflowID)
+	currentNode := f.startTask(t, task)
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	if data, err := os.ReadFile(target); err != nil || string(data) != "workflow sibling\n" {
+		t.Fatalf("workflow sibling file = %q, error = %v", data, err)
+	}
+}
+
 func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,

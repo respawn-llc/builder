@@ -393,6 +393,16 @@ func validateFilesystemContext(context tools.FilesystemContext) error {
 		strings.TrimSpace(context.Access.ExecutionTargetRoot.LexicalPath) == "" {
 		return errWorkspaceRootRequired
 	}
+	if strings.TrimSpace(context.Access.ProjectWorkspace.ProjectID) == "" {
+		return errors.New("project workspace project id is required")
+	}
+	if len(context.Access.ProjectWorkspace.Roots) > metadata.ProjectWorkspaceCollectionLimit {
+		return fmt.Errorf(
+			"project workspace boundary contains %d roots, maximum is %d",
+			len(context.Access.ProjectWorkspace.Roots),
+			metadata.ProjectWorkspaceCollectionLimit,
+		)
+	}
 	if strings.TrimSpace(context.Access.WorkingDirectory.RealPath) == "" ||
 		strings.TrimSpace(context.Access.ExecutionTargetRoot.RealPath) == "" {
 		return errWorkspaceRootRequired

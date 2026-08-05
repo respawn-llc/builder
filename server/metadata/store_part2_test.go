@@ -318,6 +318,80 @@ func TestResolveProjectWorkspaceBoundaryPreservesRowIDOrderOnTimestampTies(t *te
 	}
 }
 
+func TestProjectWorkspaceCollectionRetainsExactlyNewest500AndExactLookupReachesOmittedWorkspace(t *testing.T) {
+	store, _, source := newMetadataTestStore(t)
+	ctx := context.Background()
+	roots := make([]string, 0, ProjectWorkspaceCollectionLimit+1)
+	roots = append(roots, source.CanonicalRoot)
+	for index := 1; index <= ProjectWorkspaceCollectionLimit; index++ {
+		binding, err := store.AttachWorkspaceToProject(ctx, source.ProjectID, t.TempDir())
+		if err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+		roots = append(roots, binding.CanonicalRoot)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		"UPDATE workspaces SET created_at_unix_ms = ? WHERE project_id = ?",
+		int64(123), source.ProjectID,
+	); err != nil {
+		t.Fatalf("set tied workspace timestamps: %v", err)
+	}
+
+	boundary, err := store.ResolveProjectWorkspaceBoundary(ctx, source.ProjectID)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceBoundary: %v", err)
+	}
+	if len(boundary.Workspaces) != ProjectWorkspaceCollectionLimit {
+		t.Fatalf("boundary count = %d, want %d", len(boundary.Workspaces), ProjectWorkspaceCollectionLimit)
+	}
+	if boundary.Workspaces[0].CanonicalRoot != roots[ProjectWorkspaceCollectionLimit] {
+		t.Fatalf("boundary newest root = %q, want %q", boundary.Workspaces[0].CanonicalRoot, roots[ProjectWorkspaceCollectionLimit])
+	}
+	if boundary.Workspaces[ProjectWorkspaceCollectionLimit-1].CanonicalRoot != roots[1] {
+		t.Fatalf("boundary oldest retained root = %q, want %q", boundary.Workspaces[ProjectWorkspaceCollectionLimit-1].CanonicalRoot, roots[1])
+	}
+	for _, workspace := range boundary.Workspaces {
+		if workspace.CanonicalRoot == source.CanonicalRoot {
+			t.Fatal("boundary included omitted oldest Workspace")
+		}
+	}
+
+	unpaged, err := store.ListProjectWorkspaces(ctx, source.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectWorkspaces: %v", err)
+	}
+	if len(unpaged) != ProjectWorkspaceCollectionLimit {
+		t.Fatalf("unpaged workspace count = %d, want %d", len(unpaged), ProjectWorkspaceCollectionLimit)
+	}
+	paged, err := store.ListProjectWorkspacesPage(ctx, source.ProjectID, ProjectWorkspaceCollectionLimit+1, 0)
+	if err != nil {
+		t.Fatalf("ListProjectWorkspacesPage: %v", err)
+	}
+	if len(paged) != ProjectWorkspaceCollectionLimit {
+		t.Fatalf("paged workspace count = %d, want %d", len(paged), ProjectWorkspaceCollectionLimit)
+	}
+	attached, err := store.ProjectWorkspaceAttached(ctx, source.ProjectID, source.CanonicalRoot)
+	if err != nil {
+		t.Fatalf("ProjectWorkspaceAttached omitted oldest: %v", err)
+	}
+	if !attached {
+		t.Fatal("exact Workspace lookup failed for omitted oldest Workspace")
+	}
+
+	target := t.TempDir()
+	retargeted, added, err := boundary.WithWorkspace(ProjectWorkspace{CanonicalRoot: target})
+	if err != nil {
+		t.Fatalf("WithWorkspace: %v", err)
+	}
+	if !added || len(retargeted.Workspaces) != ProjectWorkspaceCollectionLimit {
+		t.Fatalf("retargeted count = %d, added=%t, want %d/true", len(retargeted.Workspaces), added, ProjectWorkspaceCollectionLimit)
+	}
+	if retargeted.Workspaces[0].CanonicalRoot != target ||
+		retargeted.Workspaces[ProjectWorkspaceCollectionLimit-1].CanonicalRoot != roots[2] {
+		t.Fatalf("retargeted boundary first=%q last=%q, want %q/%q", retargeted.Workspaces[0].CanonicalRoot, retargeted.Workspaces[ProjectWorkspaceCollectionLimit-1].CanonicalRoot, target, roots[2])
+	}
+}
+
 func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
