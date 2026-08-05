@@ -703,11 +703,21 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if evt.StepID == "" {
 			evt.StepID = stepID
 		}
-		switch evt.Kind {
-		case EventReviewerStarted:
+		if evt.Kind == EventReviewerStarted {
+			if err := e.emitRaw(evt); err != nil {
+				return err
+			}
 			e.reviewerRuntimeState().SetActiveStep(evt.StepID)
-		case EventReviewerCompleted:
+			return nil
+		}
+		if evt.Kind == EventReviewerCompleted {
+			if err := e.emitRaw(evt); err != nil {
+				return err
+			}
 			e.reviewerRuntimeState().ClearActiveStep(evt.StepID)
+			return nil
+		}
+		switch evt.Kind {
 		case EventCompactionStarted:
 			if evt.Compaction != nil {
 				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)

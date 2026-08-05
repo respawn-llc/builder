@@ -478,6 +478,10 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 
 func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
+	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
+	if visibility == transcript.EntryVisibilityHidden {
+		return TranscriptCommittedRowFact{}, false
+	}
 	if role == transcript.EntryRoleReviewerStatus {
 		return TranscriptCommittedRowFact{}, false
 	}

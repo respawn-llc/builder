@@ -41,7 +41,13 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 			Kind: runtime.EventLocalEntryAdded, StepID: stepID,
 			LocalEntry: &entries[index], LocalEntryProjected: true,
 		}
-		liveRows := transcriptRowsFromFacts(runtime.TranscriptCommittedRowFactsFromEvent(event))
+		liveMessages := TranscriptMessagesFromRuntimeEvent(event)
+		if len(liveMessages) != 1 {
+			t.Fatalf("live Reviewer subscription messages %d, want one", len(liveMessages))
+		}
+		liveRows := []clientui.TranscriptCommittedRow{
+			transcriptPayload[clientui.TranscriptCommittedRow](t, liveMessages[0]),
+		}
 		if len(liveRows) != 1 || !reflect.DeepEqual(liveRows[0], hydration.CommittedRows[index]) {
 			t.Fatalf("live Reviewer row %d differs: live=%+v hydration=%+v", index, liveRows, hydration.CommittedRows[index])
 		}

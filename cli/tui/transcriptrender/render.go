@@ -16,6 +16,8 @@ import (
 const (
 	backgroundedShellStatus = "backgrounded"
 	BackgroundedShellSuffix = "· " + backgroundedShellStatus
+	reviewerFeedbackGlyph   = "§"
+	reviewerErrorGlyph      = "!"
 )
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
@@ -659,7 +661,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 		return "⇄"
 	}
 	if meta.IsError && role != StyleRoleToolShell {
-		return "!"
+		return reviewerErrorGlyph
 	}
 	symbol := "•"
 	switch role {
@@ -677,11 +679,11 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
 	case StyleRoleNoticeReviewer:
-		symbol = "§"
+		symbol = reviewerFeedbackGlyph
 	case StyleRoleWarning:
 		symbol = "⚠"
 	case StyleRoleError, StyleRoleToolError:
-		symbol = "!"
+		symbol = reviewerErrorGlyph
 	}
 	return symbol
 }

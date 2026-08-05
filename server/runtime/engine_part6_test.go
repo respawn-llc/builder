@@ -390,6 +390,7 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 }
 
 func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
+	// TODO(KENT-405): delete this compatibility fixture with the legacy reader in 2.7.0.
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role:          "reviewer_suggestions",
@@ -404,14 +405,23 @@ func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append legacy reviewer_status: %v", err)
 	}
+	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
+		Role: "reviewer_error",
+		Text: "legacy Reviewer error",
+	}); err != nil {
+		t.Fatalf("append legacy reviewer_error: %v", err)
+	}
 
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
-	if len(snapshot.Entries) != 1 {
-		t.Fatalf("expected 1 restored legacy entry, got %+v", snapshot.Entries)
+	if len(snapshot.Entries) != 2 {
+		t.Fatalf("expected 2 restored legacy entries, got %+v", snapshot.Entries)
 	}
 	if snapshot.Entries[0].Role != "reviewer_suggestions" || snapshot.Entries[0].CondensedText != "Supervisor made 1 suggestion." {
 		t.Fatalf("expected stored reviewer_suggestions entry, got %+v", snapshot.Entries[0])
+	}
+	if snapshot.Entries[1].Role != "reviewer_error" || snapshot.Entries[1].Text != "legacy Reviewer error" {
+		t.Fatalf("expected stored reviewer_error entry, got %+v", snapshot.Entries[1])
 	}
 }
 

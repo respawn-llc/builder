@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,14 +34,32 @@ func TestTypedReviewerFeedbackRendersCountCollapsedAndMarkdownExpanded(t *testin
 	if expanded.Group != clientui.TranscriptRowReviewerFeedback {
 		t.Fatalf("typed feedback group = %q", expanded.Group)
 	}
-	if !linesContainText(collapsed.Lines, "2 suggestions") || linesContainText(collapsed.Lines, "**first**") {
-		t.Fatalf("collapsed feedback did not use structured count: %+v", collapsed.Lines)
+	if reflect.DeepEqual(collapsed.Lines, RenderCommittedRow(row, 80, "dark", ModeDetailExpanded).Lines) {
+		t.Fatal("collapsed feedback unexpectedly rendered the full source")
 	}
-	if !linesContainText(expanded.Lines, "first") || !linesContainText(expanded.Lines, "second") ||
-		!linesContainText(expanded.Lines, "line") ||
-		!linesHaveSymbol(expanded.Lines, "§") {
+	if expanded.Lines[0].LeadingSymbol == nil ||
+		expanded.Lines[0].LeadingSymbol.Text != reviewerFeedbackGlyph ||
+		expanded.Lines[0].LeadingSymbol.Style.SemanticRole != StyleRoleNoticeReviewer {
 		t.Fatalf("expanded feedback lost source or success glyph: %+v", expanded.Lines)
 	}
+	countChanged := row
+	countChanged.ReviewerFeedback = cloneReviewerFeedbackForRender(row.ReviewerFeedback)
+	countChanged.ReviewerFeedback.SuggestionCount++
+	if reflect.DeepEqual(collapsed.Lines, RenderCommittedRow(countChanged, 80, "dark", ModeOngoingCollapsed).Lines) {
+		t.Fatal("collapsed feedback ignored the structured suggestion count")
+	}
+	sourceChanged := row
+	sourceChanged.ReviewerFeedback = cloneReviewerFeedbackForRender(row.ReviewerFeedback)
+	sourceChanged.ReviewerFeedback.Suggestions[0] = "different source"
+	if reflect.DeepEqual(expanded.Lines, RenderCommittedRow(sourceChanged, 80, "dark", ModeDetailExpanded).Lines) {
+		t.Fatal("expanded feedback ignored the persisted suggestion source")
+	}
+}
+
+func cloneReviewerFeedbackForRender(row *clientui.TranscriptReviewerFeedbackRow) *clientui.TranscriptReviewerFeedbackRow {
+	cloned := *row
+	cloned.Suggestions = append([]string(nil), row.Suggestions...)
+	return &cloned
 }
 
 func TestTypedReviewerErrorRendersExpandedDiagnostic(t *testing.T) {
@@ -56,34 +75,18 @@ func TestTypedReviewerErrorRendersExpandedDiagnostic(t *testing.T) {
 	if len(rendered.Lines) == 0 || rendered.Group != clientui.TranscriptRowReviewerError {
 		t.Fatalf("typed Reviewer error presentation = %+v", rendered)
 	}
-	if !linesContainText(rendered.Lines, "raw failure detail") || !linesHaveSymbol(rendered.Lines, "!") {
-		t.Fatalf("Reviewer error detail/glyph missing: %+v", rendered.Lines)
+	if rendered.Lines[0].LeadingSymbol == nil ||
+		rendered.Lines[0].LeadingSymbol.Text != reviewerErrorGlyph ||
+		rendered.Lines[0].LeadingSymbol.Style.SemanticRole != StyleRoleError {
+		t.Fatalf("Reviewer error semantic presentation missing: %+v", rendered.Lines)
 	}
-}
-
-func linesContainText(lines []Line, want string) bool {
-	for _, line := range lines {
-		var text strings.Builder
-		if line.LeadingSymbol != nil {
-			text.WriteString(line.LeadingSymbol.Text)
-		}
-		for _, span := range line.Spans {
-			text.WriteString(span.Text)
-		}
-		if strings.Contains(text.String(), want) {
-			return true
-		}
+	var renderedDetail string
+	for _, span := range rendered.Lines[0].Spans {
+		renderedDetail += span.Text
 	}
-	return false
-}
-
-func linesHaveSymbol(lines []Line, want string) bool {
-	for _, line := range lines {
-		if line.LeadingSymbol != nil && line.LeadingSymbol.Text == want {
-			return true
-		}
+	if strings.TrimSpace(renderedDetail) != strings.TrimSpace(row.ReviewerError.Detail) {
+		t.Fatalf("Reviewer error detail was not preserved: got %q", renderedDetail)
 	}
-	return false
 }
 
 func mustReviewerStepID(t *testing.T) runtimeids.StepID {

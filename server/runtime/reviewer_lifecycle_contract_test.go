@@ -3,11 +3,15 @@ package runtime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *testing.T) {
@@ -75,6 +79,202 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 	if completedIndex <= startIndex {
 		t.Fatalf("Reviewer completion did not follow start: events=%+v", events)
 	}
+}
+
+func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	var events []Event
+	engine.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	engine.eventLog = session.MaterializedEventLog{}
+
+	err := engine.steer("11111111-1111-4111-8111-111111111111", steerEventIntent(Event{
+		Kind: EventReviewerStarted, StepID: "11111111-1111-4111-8111-111111111111",
+	}))
+	if err == nil {
+		t.Fatal("Reviewer start publication unexpectedly succeeded")
+	}
+	if engine.reviewerRuntimeState().ActiveStepSnapshot() != nil {
+		t.Fatal("failed Reviewer start left active runtime state")
+	}
+	for _, event := range events {
+		if event.Kind == EventReviewerCompleted {
+			t.Fatalf("failed Reviewer start emitted unmatched completion: %+v", events)
+		}
+	}
+}
+
+func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
+	tests := []struct {
+		name       string
+		intent     func() steeringIntent
+		assertFact func(t *testing.T, event Event, rows []TranscriptCommittedRowFact)
+	}{
+		{
+			name: "feedback",
+			intent: func() steeringIntent {
+				return steerReviewerFeedbackIntent([]string{"preserve source"}, transcript.EntryVisibilityOngoingCollapsed)
+			},
+			assertFact: func(t *testing.T, event Event, rows []TranscriptCommittedRowFact) {
+				if event.LocalEntry == nil || event.LocalEntry.ReviewerFeedback == nil || len(rows) != 1 || rows[0].ReviewerFeedback == nil {
+					t.Fatalf("feedback publication = event:%+v rows:%+v", event, rows)
+				}
+				if event.LocalEntry.ReviewerFeedback.ID != rows[0].ReviewerFeedback.ID {
+					t.Fatalf("feedback identity diverged: event=%+v rows=%+v", event.LocalEntry, rows[0])
+				}
+			},
+		},
+		{
+			name: "error",
+			intent: func() steeringIntent {
+				return steerReviewerErrorIntent("preserve raw detail")
+			},
+			assertFact: func(t *testing.T, event Event, rows []TranscriptCommittedRowFact) {
+				if event.LocalEntry == nil || event.LocalEntry.ReviewerError == nil || len(rows) != 1 || rows[0].ReviewerError == nil {
+					t.Fatalf("error publication = event:%+v rows:%+v", event, rows)
+				}
+				if event.LocalEntry.ReviewerError.ID != rows[0].ReviewerError.ID {
+					t.Fatalf("error identity diverged: event=%+v rows=%+v", event.LocalEntry, rows[0])
+				}
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			for _, committed := range []bool{false, true} {
+				t.Run(map[bool]string{false: "uncommitted", true: "committed observer error"}[committed], func(t *testing.T) {
+					var (
+						events  []Event
+						blocker *testEventLogAppendBlocker
+						gate    *sessiontest.PersistenceGate
+					)
+					store := mustCreateTestSession(t)
+					if committed {
+						gate = sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+						store = mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+					}
+					engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
+						Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("answer")},
+						Usage:     llm.Usage{WindowTokens: 200000},
+					}}}, tools.NewRegistry(), Config{
+						Model:   "gpt-5",
+						OnEvent: func(event Event) { events = append(events, event) },
+					})
+					pipeline := &reviewerFactSteeringStub{
+						engine: engine,
+						intent: testCase.intent,
+						before: func() {
+							if committed {
+								gate.FailNext(errors.New("observer failure"))
+							} else {
+								blocker = mustBlockTestEventLogAppends(t, store)
+							}
+						},
+					}
+					engine.stepFlow = &defaultStepExecutor{
+						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
+						messages: engine.messageFlow, tools: engine.toolFlow,
+					}
+					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
+					if blocker != nil {
+						if err := blocker.Restore(); err != nil {
+							t.Fatalf("restore append blocker: %v", err)
+						}
+					}
+					started, completed := 0, 0
+					factEvents := 0
+					var factEvent *Event
+					for index := range events {
+						switch events[index].Kind {
+						case EventReviewerStarted:
+							started++
+						case EventReviewerCompleted:
+							completed++
+						case EventLocalEntryAdded:
+							if events[index].LocalEntry != nil && (events[index].LocalEntry.ReviewerFeedback != nil || events[index].LocalEntry.ReviewerError != nil) {
+								copyEvent := events[index]
+								factEvent = &copyEvent
+								factEvents++
+							}
+						}
+					}
+					if started != 1 || completed != 1 || engine.reviewerRuntimeState().ActiveStepSnapshot() != nil {
+						t.Fatalf("lifecycle = started:%d completed:%d active:%+v events:%+v", started, completed, engine.reviewerRuntimeState().ActiveStepSnapshot(), events)
+					}
+					allRows := TranscriptCommittedRowFactsFromSnapshot(engine.ChatSnapshot())
+					rows := make([]TranscriptCommittedRowFact, 0, 1)
+					for _, row := range allRows {
+						if row.ReviewerFeedback != nil || row.ReviewerError != nil {
+							rows = append(rows, row)
+						}
+					}
+					if !committed {
+						if runErr == nil || factEvents != 0 || len(rows) != 0 {
+							t.Fatalf("uncommitted Reviewer fact = err:%v events:%d rows:%+v", runErr, factEvents, rows)
+						}
+					} else {
+						if runErr == nil || factEvent == nil || factEvents != 1 {
+							t.Fatalf("committed observer error lost or duplicated Reviewer fact: err=%v events:%d event=%+v", runErr, factEvents, factEvent)
+						}
+						testCase.assertFact(t, *factEvent, rows)
+						window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+						if readErr != nil {
+							t.Fatalf("read committed Reviewer fact: %v", readErr)
+						}
+						var persistedID any
+						for _, record := range window.Records {
+							switch payload := mustSessionEventPayload(record).(type) {
+							case session.ReviewerFeedbackRecord:
+								persistedID = payload.ID
+							case session.ReviewerErrorRecord:
+								persistedID = payload.ID
+							}
+						}
+						if persistedID == "" {
+							t.Fatal("committed Reviewer fact was not persisted")
+						}
+						if factEvent.LocalEntry.ReviewerFeedback != nil && !reflect.DeepEqual(persistedID, factEvent.LocalEntry.ReviewerFeedback.ID) {
+							t.Fatalf("persisted/live Reviewer feedback identity diverged: persisted=%v event=%v", persistedID, factEvent.LocalEntry.ReviewerFeedback.ID)
+						}
+						if factEvent.LocalEntry.ReviewerError != nil && !reflect.DeepEqual(persistedID, factEvent.LocalEntry.ReviewerError.ID) {
+							t.Fatalf("persisted/live Reviewer error identity diverged: persisted=%v event=%v", persistedID, factEvent.LocalEntry.ReviewerError.ID)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+type reviewerFactSteeringStub struct {
+	engine *Engine
+	intent func() steeringIntent
+	before func()
+}
+
+func (s *reviewerFactSteeringStub) ShouldRunTurn(string, llm.Client, bool) bool { return true }
+
+func (s *reviewerFactSteeringStub) RunFollowUp(
+	_ context.Context,
+	stepID string,
+	original llm.Message,
+	_ int,
+	_ bool,
+	_ llm.Client,
+) (reviewerFollowUpResult, error) {
+	s.before()
+	if err := s.engine.steer(stepID, s.intent()); err != nil {
+		return reviewerFollowUpResult{}, err
+	}
+	return reviewerFollowUpResult{
+		Message:    original,
+		Completion: &ReviewerStatus{Outcome: "applied"},
+	}, nil
+}
+
+func (*reviewerFactSteeringStub) RunSuggestions(context.Context, string, llm.Client) (reviewerSuggestionsResult, error) {
+	return reviewerSuggestionsResult{}, nil
 }
 
 type reviewerPipelineStub struct {

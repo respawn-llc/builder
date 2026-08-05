@@ -330,9 +330,6 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
 				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
 				if startErr != nil {
-					if active := e.reviewerRuntimeState().ActiveStepSnapshot(); active != nil && active.StepID == stepID {
-						startErr = errors.Join(startErr, s.terminalizeReviewerLifecycle(stepID, nil))
-					}
 					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
 				}
 				if !assistantEventEmitted {
@@ -401,9 +398,6 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status
 		StepID:   stepID,
 		Reviewer: status,
 	}))
-	if active := s.engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil && active.StepID == stepID {
-		s.engine.reviewerRuntimeState().ClearActiveStep(stepID)
-	}
 	return err
 }
 

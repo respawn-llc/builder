@@ -4,10 +4,13 @@ import (
 	"errors"
 	"testing"
 
+	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -98,6 +101,94 @@ func TestReopenedEngineHydratesTypedReviewerFacts(t *testing.T) {
 	}
 }
 
+func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
+	store := mustCreateTestSession(t)
+	stepID := "11111111-1111-4111-8111-111111111111"
+	for index := 0; index < 24; index++ {
+		if _, _, err := appendTestEvent(t, store, stepID, llm.Message{
+			Role: llm.RoleAssistant, Content: textutil.Value("history"),
+		}); err != nil {
+			t.Fatalf("append history %d: %v", index, err)
+		}
+		if index == 5 {
+			if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerFeedbackRecord{
+				ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"paged feedback"},
+				Visibility: session.EntryVisibilityOngoingCollapsed,
+			}); err != nil {
+				t.Fatalf("append paged feedback: %v", err)
+			}
+		}
+		if index == 18 {
+			if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerErrorRecord{
+				ID: runtimeids.NewReviewerErrorID(), Detail: "paged error",
+			}); err != nil {
+				t.Fatalf("append paged error: %v", err)
+			}
+		}
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	newest := mustEngineNewestSegmentPage(t, engine)
+	var pages []TranscriptSegmentPage
+	for page := newest; ; {
+		pages = append(pages, page)
+		if !page.HasMoreAbove {
+			break
+		}
+		page = mustEngineSegmentPage(t, engine, page.OlderCursor)
+	}
+	foundFeedback, foundError := false, false
+	for _, page := range pages {
+		for _, entry := range page.Snapshot.Entries {
+			foundFeedback = foundFeedback || entry.ReviewerFeedback != nil
+			foundError = foundError || entry.ReviewerError != nil
+		}
+	}
+	if !foundFeedback || !foundError {
+		t.Fatalf("adjacent pages lost typed Reviewer facts: feedback=%t error=%t", foundFeedback, foundError)
+	}
+	if len(pages) > 1 {
+		for index := len(pages) - 1; index > 0; index-- {
+			forward := mustEngineSegmentPageForward(t, engine, pages[index].NewerCursor)
+			if len(forward.Snapshot.Entries) == 0 {
+				t.Fatalf("newer cursor page %d was empty", index)
+			}
+		}
+	}
+	reopened := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
+	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot)
+	if len(reopenedFacts) == 0 {
+		t.Fatal("reopened newest page lost committed Reviewer facts")
+	}
+}
+
+func TestReviewerFactsSurviveSessionCloneReplay(t *testing.T) {
+	parent := mustCreateTestSession(t)
+	stepID := "11111111-1111-4111-8111-111111111111"
+	if _, _, err := appendTestEvent(t, parent, stepID, session.ReviewerFeedbackRecord{
+		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"cloned feedback"},
+		Visibility: session.EntryVisibilityOngoingCollapsed,
+	}); err != nil {
+		t.Fatalf("append clone feedback: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, parent, stepID, session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "cloned error",
+	}); err != nil {
+		t.Fatalf("append clone error: %v", err)
+	}
+	parentLog := mustMaterializeTestEventLog(t, parent)
+	child, err := session.CloneSession(parentLog, "reviewer-clone", sessioncontract.SessionCategoryMain)
+	if err != nil {
+		t.Fatalf("clone session: %v", err)
+	}
+	t.Cleanup(func() { _ = child.RemoveDurable() })
+	engine := mustNewTestEngine(t, child, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
+	if len(rows) != 2 || rows[0].ReviewerFeedback == nil || rows[1].ReviewerError == nil {
+		t.Fatalf("cloned Reviewer rows = %+v", rows)
+	}
+}
+
 func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -172,6 +263,11 @@ func TestPersistedTranscriptScanKeepsHistoricalReviewerLocalEntriesGeneric(t *te
 			Role:       "reviewer_error",
 			Text:       "legacy error detail",
 		}),
+		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{
+			Visibility: transcript.EntryVisibilityHidden,
+			Role:       "reviewer_error",
+			Text:       "hidden legacy error",
+		}),
 	}
 	for _, event := range events {
 		if err := scan.ApplyPersistedEvent(event); err != nil {
@@ -179,9 +275,13 @@ func TestPersistedTranscriptScanKeepsHistoricalReviewerLocalEntriesGeneric(t *te
 		}
 	}
 	entries := scan.CollectedPageSnapshot().Entries
-	if len(entries) != 2 || entries[0].Role != "reviewer_suggestions" || entries[0].Text != "legacy Markdown\n\n- item" ||
+	if len(entries) != 3 || entries[0].Role != "reviewer_suggestions" || entries[0].Text != "legacy Markdown\n\n- item" ||
 		entries[1].Role != "reviewer_error" || entries[1].Text != "legacy error detail" {
 		t.Fatalf("historical Reviewer local entry = %+v", entries)
+	}
+	facts := TranscriptCommittedRowFactsFromSnapshot(scan.CollectedPageSnapshot())
+	if len(facts) != 2 {
+		t.Fatalf("hidden historical Reviewer entry reached committed-row facts: %+v", facts)
 	}
 }
 
