@@ -751,6 +751,14 @@
   mounting can replace the route shell. This keeps pathname, Board search,
   Workflow Editor search, deletion reconciliation, and closure in the same
   typed path while covering the real top-level Home navigation timing.
+  Progress (August 5, 2026): Added a product-boundary guard that mounts a
+  Home route probe during View Transition navigation and observes the sidebar
+  `data-state` as `closing` at destination mount. Sidebar closure commits
+  synchronously at this lifecycle boundary so the test reproduces the
+  pre-mount ordering defect rather than asserting router event names. Focused
+  route-transition coverage passes 13/13; the full Desktop suite passes 82
+  files / 378 tests after adding the guard. Apps lint remains 0 errors with
+  4 existing warnings, Apps typecheck passes, and the Desktop build passes.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from

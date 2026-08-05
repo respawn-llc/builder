@@ -4,11 +4,12 @@ import {
   createRoute,
   createRouter,
   RouterProvider,
+  Outlet,
   useMatch,
 } from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
@@ -458,15 +459,83 @@ describe("Sidebar route transition ownership", () => {
       }
     }
   });
+
+  it("begins closing before the Home route mounts during View Transition navigation", async () => {
+    const services = createTestServices([]);
+    const routeStates: (string | null)[] = [];
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <AppChrome>
+          <OpenSidebar />
+        </AppChrome>
+      </TestAppProviders>,
+      ["/projects/project-1"],
+      {
+        home: () => <RouteMountProbe onMount={(state) => routeStates.push(state)} />,
+      },
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"));
+    const nativeStartViewTransitionDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      "startViewTransition",
+    );
+    Object.defineProperty(document, "startViewTransition", {
+      configurable: true,
+      value: (update: () => void | Promise<void>) => {
+        const updateCallbackDone = Promise.resolve().then(update);
+        return {
+          finished: updateCallbackDone,
+          ready: Promise.resolve(),
+          updateCallbackDone,
+        };
+      },
+    });
+    try {
+      const homeLabel = appI18n.t.bind(appI18n)("app.home");
+      await userEvent.click(screen.getByRole("link", { name: homeLabel }));
+
+      await waitFor(() => {
+        expect(routeStates).toHaveLength(1);
+      });
+      expect(routeStates).toEqual(["closing"]);
+    } finally {
+      if (nativeStartViewTransitionDescriptor === undefined) {
+        Reflect.deleteProperty(document, "startViewTransition");
+      } else {
+        Object.defineProperty(document, "startViewTransition", nativeStartViewTransitionDescriptor);
+      }
+    }
+  });
 });
+
+type RouteLifecycle = Readonly<{
+  home?: () => ReactElement;
+}>;
+
+function RouteMountProbe({ onMount }: Readonly<{ onMount(state: string | null): void }>) {
+  useLayoutEffect(() => {
+    onMount(screen.queryByTestId("app-sidebar-host")?.getAttribute("data-state") ?? null);
+  }, [onMount]);
+  return null;
+}
 
 function createTestRouter(
   children: ReactElement,
   initialEntries: readonly string[] = ["/projects/project-1"],
+  lifecycle: RouteLifecycle = {},
 ) {
-  const rootRoute = createRootRoute({ component: () => children });
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        {children}
+        <Outlet />
+      </>
+    ),
+  });
   const homeRoute = createRoute({
-    component: () => null,
+    component: lifecycle.home ?? (() => null),
     getParentRoute: () => rootRoute,
     path: "/",
   });

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "@tanstack/react-router";
+import { flushSync } from "react-dom";
 
 import {
   SidebarContext,
@@ -138,9 +139,11 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearMutationAdmission(history);
       history.destroy();
       closingHistoryRef.current = history;
-      setCurrentHistory(null);
-      setOutgoing(current);
-      setPhase("closing");
+      flushSync(() => {
+        setCurrentHistory(null);
+        setOutgoing(current);
+        setPhase("closing");
+      });
       pending.resolve(result);
       clearCloseTimeout();
       closeTimeoutRef.current = setTimeout(() => {
