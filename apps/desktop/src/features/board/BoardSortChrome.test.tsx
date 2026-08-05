@@ -2,11 +2,13 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-const runtime = vi.hoisted(() => ({
-  sort: { field: "updated", direction: "desc" } as {
-    field: "created" | "updated" | "labels" | "short_id";
-    direction: "asc" | "desc";
-  },
+type SortState = Readonly<{
+  field: "created" | "updated" | "labels" | "short_id";
+  direction: "asc" | "desc";
+}>;
+
+const runtime = vi.hoisted((): { sort: SortState; setSort: ReturnType<typeof vi.fn> } => ({
+  sort: { field: "updated", direction: "desc" },
   setSort: vi.fn(),
 }));
 

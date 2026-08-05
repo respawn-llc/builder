@@ -57,7 +57,7 @@ export function useProjectLabelCatalogMutations() {
         if (context?.previous !== undefined) authority.installCatalog(context.previous, context.generation);
         authority.requestRefresh();
       },
-      onSuccess(catalog, _labelIDs, context) {
+      async onSuccess(catalog, _labelIDs, context) {
         return effects.applyLocalReorder(catalog, context.generation);
       },
     }),

@@ -62,7 +62,13 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
   const { api } = useAppServices();
   const { queriesEnabled, requestAdapter, snapshot, sort } = useBoardFilterGeneration();
   const { active } = snapshot;
-  const queryKey = queryKeys.boardNodeCards(projectID, workflowID, nodeID, active.filter, sort);
+  const queryKey = queryKeys.boardNodeCards({
+    filter: active.filter,
+    nodeID,
+    projectID,
+    sort,
+    workflowID,
+  });
   const query = useInfiniteQuery<
     BoardNodeCardsPage,
     Error,

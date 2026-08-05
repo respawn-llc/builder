@@ -31,12 +31,11 @@ export type {
   AttentionNotificationWorkflowTaskTarget,
 } from "./attentionNotifications";
 export {
-  boardNodeCardsPageSize,
-  defaultBoardNodeCardsSort,
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
 } from "./models";
+export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
   ContractError,
   ProtocolMismatchError,
@@ -79,7 +78,6 @@ export type {
   BoardColumn,
   BoardGroup,
   BoardNodeCardsPage,
-  BoardNodeCardsSort,
   MarkdownPreview,
   PendingAsk,
   ProjectBinding,
@@ -137,9 +135,6 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
-  WorkflowTaskListSort,
-  WorkflowTaskListSortDirection,
-  WorkflowTaskListSortField,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,
@@ -168,6 +163,12 @@ export type {
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";
+export type {
+  BoardNodeCardsSort,
+  WorkflowTaskListSort,
+  WorkflowTaskListSortDirection,
+  WorkflowTaskListSortField,
+} from "./boardNodeCardsSorting";
 export type {
   CanonicalTaskLabelFilter,
   ProjectLabel,

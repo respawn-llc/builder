@@ -5,9 +5,11 @@ import { afterEach, vi } from "vitest";
 
 import type { BoardNodeCardsPage, BoardNodeCardsSort } from "@/api";
 
-const testState = vi.hoisted(() => ({
-  requests: [] as Array<{ offset: number; sort: { field: string; direction: string } }>,
-  sort: { field: "updated", direction: "desc" } as BoardNodeCardsSort,
+type BoardRequest = Readonly<{ offset: number; sort: BoardNodeCardsSort }>;
+
+const testState = vi.hoisted((): { requests: BoardRequest[]; sort: BoardNodeCardsSort } => ({
+  requests: [],
+  sort: { field: "updated", direction: "desc" },
 }));
 
 vi.mock("@/app-facade", () => ({
@@ -15,10 +17,11 @@ vi.mock("@/app-facade", () => ({
     api: {
       listBoardNodeCards: async (input: {
         offset?: number;
-        sort?: { field: string; direction: string };
+        sort?: BoardNodeCardsSort;
       }): Promise<BoardNodeCardsPage> => {
         const offset = input.offset ?? 0;
-        const sort = input.sort ?? { field: "updated", direction: "desc" };
+        const sort =
+          input.sort ?? ({ field: "updated", direction: "desc" } satisfies BoardNodeCardsSort);
         testState.requests.push({ offset, sort });
         return {
           projectID: "project-1",
@@ -40,7 +43,7 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
   useBoardFilterGeneration: () => ({
     queriesEnabled: true,
     requestAdapter: {
-      requestCards: ({ transport }: { transport: () => Promise<BoardNodeCardsPage> }) => transport(),
+      requestCards: async ({ transport }: { transport: () => Promise<BoardNodeCardsPage> }) => transport(),
     },
     snapshot: {
       active: {
@@ -64,12 +67,13 @@ describe("useBoardNodeCards pagination", () => {
 
   it("starts at offset zero, preserves server sort, and walks back to zero without duplicates", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { result } = renderHook(
-      () => useBoardNodeCards("project-1", "workflow-1", "node-1", true),
-      { wrapper: queryWrapper(queryClient) },
-    );
+    const { result } = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), {
+      wrapper: queryWrapper(queryClient),
+    });
 
-    await waitFor(() => expect(testState.requests).toHaveLength(1));
+    await waitFor(() => {
+      expect(testState.requests).toHaveLength(1);
+    });
     expect(testState.requests[0]).toEqual({
       offset: 0,
       sort: { field: "updated", direction: "desc" },
@@ -82,7 +86,9 @@ describe("useBoardNodeCards pagination", () => {
       await result.current.fetchNextPage();
       await result.current.fetchNextPage();
     });
-    await waitFor(() => expect(result.current.data?.pageParams).toEqual([50, 75, 100]));
+    await waitFor(() => {
+      expect(result.current.data?.pageParams).toEqual([50, 75, 100]);
+    });
     expect(testState.requests.map((request) => request.offset)).toEqual([0, 25, 50, 75, 100]);
     expect(result.current.hasPreviousPage).toBe(true);
 
@@ -90,7 +96,9 @@ describe("useBoardNodeCards pagination", () => {
       await result.current.fetchPreviousPage();
       await result.current.fetchPreviousPage();
     });
-    await waitFor(() => expect(result.current.data?.pageParams).toEqual([0, 25, 50]));
+    await waitFor(() => {
+      expect(result.current.data?.pageParams).toEqual([0, 25, 50]);
+    });
     expect(testState.requests.map((request) => request.offset)).toEqual([0, 25, 50, 75, 100, 25, 0]);
     expect(result.current.hasPreviousPage).toBe(false);
 
@@ -107,10 +115,14 @@ describe("useBoardNodeCards pagination", () => {
       { wrapper: queryWrapper(queryClient) },
     );
 
-    await waitFor(() => expect(testState.requests).toHaveLength(1));
+    await waitFor(() => {
+      expect(testState.requests).toHaveLength(1);
+    });
     testState.sort = { field: "created", direction: "desc" };
     rerender();
-    await waitFor(() => expect(testState.requests).toHaveLength(2));
+    await waitFor(() => {
+      expect(testState.requests).toHaveLength(2);
+    });
     expect(testState.requests).toEqual([
       { offset: 0, sort: { field: "updated", direction: "desc" } },
       { offset: 0, sort: { field: "created", direction: "desc" } },
@@ -118,7 +130,9 @@ describe("useBoardNodeCards pagination", () => {
 
     testState.sort = { field: "labels", direction: "asc" };
     rerender();
-    await waitFor(() => expect(testState.requests).toHaveLength(3));
+    await waitFor(() => {
+      expect(testState.requests).toHaveLength(3);
+    });
     expect(testState.requests[2]).toEqual({
       offset: 0,
       sort: { field: "labels", direction: "asc" },

@@ -6,9 +6,8 @@ import type {
   WorkflowGraphSaveConfirmation,
   TaskStatusKind,
   WorkflowValidationMode,
-  BoardNodeCardsSort,
-  WorkflowTaskListSort,
 } from "./models";
+import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
 import type { TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";

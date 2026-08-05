@@ -10,12 +10,21 @@ import type {
 } from "./BoardFilterGenerationController";
 import type { BoardNodeCardsSort } from "@/api";
 
-const labelRuntime = vi.hoisted(() => ({
-  state: {
-    filter: { kind: "named", mode: "all", labelIDs: ["label-1"] },
-  } as { filter: { kind: "none" } } | { filter: { kind: "named"; mode: "all"; labelIDs: string[] } },
-  dispatch: vi.fn(),
-}));
+type LabelRuntimeState =
+  | Readonly<{ filter: { kind: "none" } }>
+  | Readonly<{ filter: { kind: "named"; mode: "all"; labelIDs: string[] } }>;
+
+const labelRuntime = vi.hoisted(
+  (): {
+    state: LabelRuntimeState;
+    dispatch: ReturnType<typeof vi.fn>;
+  } => ({
+    state: {
+      filter: { kind: "named", mode: "all", labelIDs: ["label-1"] },
+    },
+    dispatch: vi.fn(),
+  }),
+);
 interface GenerationRuntime {
   snapshot: BoardFilterGenerationSnapshot;
   controller: Pick<BoardFilterGenerationController, "getSnapshot" | "setDesiredFilter">;
@@ -165,12 +174,20 @@ describe("BoardFilterChrome", () => {
 
     const controls = screen.getAllByRole("button");
     expect(controls).toHaveLength(4);
-    const labels = controls[0]!;
-    const sort = controls[1]!;
-    const unblocked = controls[2]!;
-    const search = controls[3]!;
+    const labels = controlAt(controls, 0);
+    const sort = controlAt(controls, 1);
+    const unblocked = controlAt(controls, 2);
+    const search = controlAt(controls, 3);
     expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 });
+
+function controlAt(controls: readonly HTMLElement[], index: number): HTMLElement {
+  const control = controls[index];
+  if (control === undefined) {
+    throw new Error(`Expected board chrome control at index ${String(index)}.`);
+  }
+  return control;
+}

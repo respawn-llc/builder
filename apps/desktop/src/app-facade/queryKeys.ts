@@ -1,4 +1,9 @@
-import { canonicalBoardFilter, defaultBoardNodeCardsSort, type BoardFilterInput, type BoardNodeCardsSort } from "@/api";
+import {
+  canonicalBoardFilter,
+  defaultBoardNodeCardsSort,
+  type BoardFilterInput,
+  type BoardNodeCardsSort,
+} from "@/api";
 
 const attentionKey = ["attention"] as const;
 
@@ -103,13 +108,19 @@ export const queryKeys = {
     workflowID,
     ...boardFilterKey(filter),
   ],
-  boardNodeCards: (
-    projectID: string,
-    workflowID: string,
-    nodeID: string,
-    filter: BoardFilterInput,
-    sort: BoardNodeCardsSort = defaultBoardNodeCardsSort,
-  ) => [
+  boardNodeCards: ({
+    projectID,
+    workflowID,
+    nodeID,
+    filter,
+    sort = defaultBoardNodeCardsSort,
+  }: Readonly<{
+    projectID: string;
+    workflowID: string;
+    nodeID: string;
+    filter: BoardFilterInput;
+    sort?: BoardNodeCardsSort;
+  }>) => [
     "board-node-cards",
     projectID,
     workflowID,

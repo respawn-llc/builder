@@ -140,9 +140,9 @@ describe("Project label event effects", () => {
       queryClient,
       listCatalog: async () => ({ projectID: "project-1", labels: [] }),
     });
-    const refresh = deferred<void>();
+    const refresh = deferred<undefined>();
     const reportBackgroundError = vi.fn();
-    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(() => refresh.promise);
+    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async () => refresh.promise);
     const effects = createProjectLabelEffects({
       authority,
       onBackgroundError: reportBackgroundError,
@@ -166,7 +166,7 @@ describe("Project label event effects", () => {
     await waitFor(() => {
       expect(reportBackgroundError).toHaveBeenCalledWith(refreshFailure);
     });
-    refresh.resolve();
+    refresh.resolve(undefined);
   });
 
   it("invalidates active board card queries after a subscribed reorder event", async () => {
