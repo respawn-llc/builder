@@ -3,11 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  transcriptDisclosureIconToneClassName,
-  type TranscriptDisclosureIconTone,
-} from "./TranscriptDisclosureTone";
-import { TranscriptDisclosure } from "./index";
+import { TranscriptDisclosure, type TranscriptDisclosureIconTone } from "./index";
 
 type FixtureProps = Readonly<{
   actions?: ReactNode;
@@ -57,6 +53,16 @@ function renderDisclosure(props: FixtureProps = {}) {
 
 function RemountFixture({ mounted }: Readonly<{ mounted: boolean }>) {
   return mounted ? <DisclosureFixture /> : null;
+}
+
+function getControlledBody(disclosure: HTMLElement): HTMLElement {
+  const bodyID = disclosure.getAttribute("aria-controls");
+  if (bodyID === null) {
+    throw new Error("Disclosure is missing aria-controls.");
+  }
+  return screen.getByText((_, element) => element?.id === bodyID, {
+    selector: "[id]",
+  });
 }
 
 afterEach(() => {
@@ -132,12 +138,34 @@ describe("TranscriptDisclosure", () => {
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 
-  it.each(["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[])(
-    "maps the %s leading icon tone to its semantic presentation class",
-    (iconTone) => {
-      expect(transcriptDisclosureIconToneClassName(iconTone)).toBe(`transcript-disclosure-icon--${iconTone}`);
-    },
-  );
+  it("renders distinct semantic leading-icon presentation for every tone", () => {
+    const iconTones = ["neutral", "warning", "error", "success"] satisfies TranscriptDisclosureIconTone[];
+
+    render(
+      <div>
+        {iconTones.map((iconTone) => (
+          <TranscriptDisclosure
+            body={`${iconTone} body`}
+            collapseLabel={`Collapse ${iconTone}`}
+            defaultExpanded={false}
+            expandLabel={`Expand ${iconTone}`}
+            icon={<span>{`${iconTone} leading icon`}</span>}
+            iconTone={iconTone}
+            key={iconTone}
+            summary={`${iconTone} summary`}
+          />
+        ))}
+      </div>,
+    );
+
+    const leadingIconClasses = iconTones.map(
+      (iconTone) =>
+        screen.getByText((_, element) => element?.textContent === `${iconTone} leading icon`, {
+          selector: "span[class]",
+        }).className,
+    );
+    expect(new Set(leadingIconClasses)).toHaveLength(iconTones.length);
+  });
 
   it("reveals the body through the disclosure button and connects it for accessibility", async () => {
     const user = userEvent.setup();
@@ -149,7 +177,7 @@ describe("TranscriptDisclosure", () => {
 
     await user.click(header);
 
-    const body = screen.getByRole("region");
+    const body = getControlledBody(header);
     expect(header).toHaveAttribute("aria-expanded", "true");
     expect(body).toHaveAttribute("id", header.getAttribute("aria-controls"));
   });
@@ -161,7 +189,7 @@ describe("TranscriptDisclosure", () => {
     const disclosure = screen.getByRole("button", { name: "Collapse transcript item" });
     fireEvent.click(disclosure);
 
-    const body = screen.getByRole("region", { hidden: true });
+    const body = getControlledBody(disclosure);
     expect(body).toHaveAttribute("aria-hidden", "true");
 
     act(() => {

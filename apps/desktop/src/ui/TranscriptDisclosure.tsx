@@ -3,13 +3,9 @@ import { useId, useState, type ReactNode } from "react";
 
 import { cx } from "./classes";
 import { useOpacityExit } from "./motion";
-import {
-  transcriptDisclosureIconToneClassName,
-  type TranscriptDisclosureIconTone,
-} from "./TranscriptDisclosureTone";
 import "./TranscriptDisclosure.css";
 
-export type { TranscriptDisclosureIconTone } from "./TranscriptDisclosureTone";
+export type TranscriptDisclosureIconTone = "neutral" | "warning" | "error" | "success";
 
 export type TranscriptDisclosureProps = Readonly<{
   actions?: ReactNode;
@@ -24,6 +20,13 @@ export type TranscriptDisclosureProps = Readonly<{
   typeLabel?: ReactNode;
 }>;
 
+const iconToneClassNames: Readonly<Record<TranscriptDisclosureIconTone, string>> = {
+  neutral: "transcript-disclosure-icon--neutral",
+  warning: "transcript-disclosure-icon--warning",
+  error: "transcript-disclosure-icon--error",
+  success: "transcript-disclosure-icon--success",
+};
+
 export function TranscriptDisclosure({
   actions,
   body,
@@ -36,9 +39,7 @@ export function TranscriptDisclosure({
   summary,
   typeLabel,
 }: TranscriptDisclosureProps) {
-  const instanceId = useId();
-  const disclosureId = `transcript-disclosure-toggle-${instanceId}`;
-  const bodyId = `transcript-disclosure-body-${instanceId}`;
+  const bodyId = `transcript-disclosure-body-${useId()}`;
   const [expanded, setExpanded] = useState(defaultExpanded);
   const bodyPhase = useOpacityExit(expanded);
 
@@ -48,7 +49,6 @@ export function TranscriptDisclosure({
         actions={actions}
         bodyId={bodyId}
         collapseLabel={collapseLabel}
-        disclosureId={disclosureId}
         expanded={expanded}
         expandLabel={expandLabel}
         icon={icon}
@@ -67,10 +67,8 @@ export function TranscriptDisclosure({
             "transcript-disclosure-body grid overflow-hidden",
             bodyPhase === "visible" ? "transcript-disclosure-body--visible" : "transcript-disclosure-body--exiting",
           )}
-          aria-labelledby={disclosureId}
           id={bodyId}
           inert={bodyPhase === "exiting" ? true : undefined}
-          role="region"
         >
           <div className="min-h-0 min-w-0 px-[var(--space-2)] pb-[var(--space-2)] text-sm text-[var(--color-on-background)]">
             {body}
@@ -85,7 +83,6 @@ function TranscriptDisclosureHeader({
   actions,
   bodyId,
   collapseLabel,
-  disclosureId,
   expanded,
   expandLabel,
   icon,
@@ -98,7 +95,6 @@ function TranscriptDisclosureHeader({
   actions?: ReactNode;
   bodyId: string;
   collapseLabel: string;
-  disclosureId: string;
   expanded: boolean;
   expandLabel: string;
   icon: ReactNode;
@@ -115,7 +111,6 @@ function TranscriptDisclosureHeader({
         aria-expanded={expanded}
         aria-label={expanded ? collapseLabel : expandLabel}
         className="absolute inset-0 z-0 rounded-[var(--radius-s)] bg-transparent text-left outline-none focus-visible:ring-[2px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_55%,transparent)] focus-visible:ring-offset-[-1px]"
-        id={disclosureId}
         onClick={onToggle}
         type="button"
       />
@@ -123,7 +118,7 @@ function TranscriptDisclosureHeader({
         aria-hidden="true"
         className={cx(
           "pointer-events-none relative z-0 grid size-5 shrink-0 place-items-center",
-          transcriptDisclosureIconToneClassName(iconTone),
+          iconToneClassNames[iconTone],
         )}
       >
         {icon}
