@@ -3,6 +3,7 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -234,14 +235,14 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		for {
 			if _, err := sub.Next(watchCtx); err != nil {
 				if watchCtx.Err() == nil {
-					attentionErrCh <- serverapi.NormalizeStreamError(err)
+					attentionErrCh <- liveWatchAttentionStreamError(err)
 				}
 				return
 			}
 			question, err := s.pendingWatchQuestion(watchCtx, id.String())
 			if err != nil {
 				if watchCtx.Err() == nil {
-					attentionErrCh <- serverapi.NormalizeStreamError(err)
+					attentionErrCh <- liveWatchAttentionStreamError(err)
 				}
 				return
 			}
@@ -280,6 +281,16 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		wg.Wait()
 		return serverapi.RuntimeLiveWatchResponse{}, ctx.Err()
 	}
+}
+
+func liveWatchAttentionStreamError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, err)
+	}
+	return serverapi.NormalizeStreamError(err)
 }
 
 type liveRunTerminal struct {

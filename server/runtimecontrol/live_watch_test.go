@@ -411,7 +411,7 @@ func TestLiveWatchSurfacesCanceledAttentionStreamWhileRunIsBlocked(t *testing.T)
 	<-observed.subscribed
 
 	broker.Close(context.Canceled)
-	if err := <-watchErr; !errors.Is(err, context.Canceled) {
+	if err := <-watchErr; !errors.Is(err, serverapi.ErrStreamFailed) || errors.Is(err, context.Canceled) {
 		t.Fatalf("LiveWatch error = %v, want canceled attention stream", err)
 	}
 	if err := engine.Interrupt(); err != nil {

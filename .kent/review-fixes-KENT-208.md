@@ -54,3 +54,12 @@
 - [x] Render typed interruption reason and diagnostic, with exit code 130, and
   cover the CLI and runtime-control regressions for both interruption and
   blocked stream loss.
+
+## Latest compliance remediation
+
+- [x] Convert canceled attention-stream shutdowns into non-cancellation
+  `ErrStreamFailed` errors carrying the original cancellation text, so the
+  gateway/client preserve stream-failure semantics while caller cancellation
+  remains exit 130.
+- [x] Add service, gateway, and CLI boundary coverage for canceled stream
+  failure versus caller cancellation.

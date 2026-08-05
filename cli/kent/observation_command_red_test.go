@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"core/cli/app"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -26,6 +30,28 @@ func TestRunWatchMalformedSessionStillUsesWatchRoute(t *testing.T) {
 	legacy := "legacy-session"
 	if got, err := parseCLILiveSessionID(legacy); err != nil || got.String() != legacy {
 		t.Fatalf("parseCLILiveSessionID legacy selector = %q, err=%v", got.String(), err)
+	}
+}
+
+func TestRunWatchStreamFailureDoesNotUseInterruptExitCode(t *testing.T) {
+	original := runLiveWatchApp
+	t.Cleanup(func() { runLiveWatchApp = original })
+	runLiveWatchApp = func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)
+	}
+	if code := runLiveWatchSubcommand([]string{runtimeids.NewSessionID().String()}); code != 1 {
+		t.Fatalf("runLiveWatchSubcommand stream failure exit code = %d, want 1", code)
+	}
+}
+
+func TestRunWatchCallerCancellationKeepsInterruptExitCode(t *testing.T) {
+	original := runLiveWatchApp
+	t.Cleanup(func() { runLiveWatchApp = original })
+	runLiveWatchApp = func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+		return serverapi.RuntimeLiveWatchResponse{}, context.Canceled
+	}
+	if code := runLiveWatchSubcommand([]string{runtimeids.NewSessionID().String()}); code != 130 {
+		t.Fatalf("runLiveWatchSubcommand cancellation exit code = %d, want 130", code)
 	}
 }
 
