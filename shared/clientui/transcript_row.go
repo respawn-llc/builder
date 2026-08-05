@@ -231,6 +231,12 @@ func (r TranscriptCommittedRow) ValidateStructure() error {
 	if r.Notice != nil {
 		expectedKind = TranscriptRowNotice
 	}
+	if r.ReviewerFeedback != nil {
+		expectedKind = TranscriptRowReviewerFeedback
+	}
+	if r.ReviewerError != nil {
+		expectedKind = TranscriptRowReviewerError
+	}
 	if r.Kind != expectedKind {
 		return fmt.Errorf("transcript committed row kind %q does not match payload kind %q", r.Kind, expectedKind)
 	}
