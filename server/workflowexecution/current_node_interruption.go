@@ -49,10 +49,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 			c.store.InterruptCurrentNode,
 			state.references,
 			workflow.CurrentNodeInterruptionReasonUserInterrupt,
-			workflow.NewCurrentNodeInterruptionDetail(
-				string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
-				nil,
-			),
+			workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil),
 		)
 		return err
 	})

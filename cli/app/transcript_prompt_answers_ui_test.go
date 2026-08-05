@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"core/server/runtime"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -36,73 +34,6 @@ type deadlineThenSuccessApprovalControl struct {
 	approvalRequests []serverapi.ApprovalAnswerRequest
 	firstStarted     chan struct{}
 	firstRelease     chan struct{}
-}
-
-type approvalCommentaryRuntimeControl struct {
-	apicontract.RuntimeControlService
-	submitCalls int
-	submitErr   error
-	requests    []serverapi.RuntimeSubmitUserTurnRequest
-}
-
-func (c *approvalCommentaryRuntimeControl) SubmitUserTurn(_ context.Context, request serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	c.submitCalls++
-	c.requests = append(c.requests, request)
-	if c.submitErr != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, c.submitErr
-	}
-	return serverapi.RuntimeSubmitUserTurnResponse{}, nil
-}
-
-type retryingApprovalPromptControl struct {
-	approvalCalls int
-}
-
-func (c *retryingApprovalPromptControl) AnswerAsk(context.Context, serverapi.AskAnswerRequest) error {
-	return errors.New("unexpected ask answer")
-}
-
-func (c *retryingApprovalPromptControl) AnswerApproval(context.Context, serverapi.ApprovalAnswerRequest) error {
-	c.approvalCalls++
-	if c.approvalCalls == 1 {
-		return errors.New("transient approval failure")
-	}
-	return nil
-}
-
-func TestAllowCommentaryRetryReusesRuntimeSubmissionRequest(t *testing.T) {
-	control := &retryingApprovalPromptControl{}
-	runtimeControl := &approvalCommentaryRuntimeControl{}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control, runtimeControl)
-	submit, err := answerer.submitter(
-		testApprovalPrompt(
-			"allow-commentary-retry",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-		clientui.PromptAnswer{Approval: &clientui.ApprovalPromptAnswer{
-			Decision:   clientui.ApprovalDecisionAllowOnce,
-			Commentary: "context",
-		}},
-		nil,
-		runtimeids.NewRuntimeClientRequestID(),
-	)
-	if err != nil {
-		t.Fatalf("submitter: %v", err)
-	}
-	if err := submit(context.Background()); err == nil {
-		t.Fatal("first submission unexpectedly succeeded")
-	}
-	if err := submit(context.Background()); err != nil {
-		t.Fatalf("retry submission: %v", err)
-	}
-	if len(runtimeControl.requests) != 2 || !reflect.DeepEqual(runtimeControl.requests[0], runtimeControl.requests[1]) {
-		t.Fatalf("runtime requests = %+v, want identical requests across retry", runtimeControl.requests)
-	}
-	if control.approvalCalls != 2 {
-		t.Fatalf("approval calls = %d, want two attempts", control.approvalCalls)
-	}
 }
 
 func newDeadlineThenSuccessApprovalControl() *deadlineThenSuccessApprovalControl {
@@ -804,9 +735,8 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
-	runtimeControl := &approvalCommentaryRuntimeControl{}
 	model := newProjectedTestUIModel(runtimeClient)
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control, runtimeControl)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
 	model.setRuntimeActivityBusyForTest(true)
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
 		testApprovalPrompt(
@@ -852,7 +782,7 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	if len(requests) != 2 {
 		t.Fatalf("approval requests = %d, want original allow plus cancellation", len(requests))
 	}
-	if requests[0].Decision != clientui.ApprovalDecisionAllowOnce || requests[0].Commentary != "" {
+	if requests[0].Decision != clientui.ApprovalDecisionAllowOnce || requests[0].Commentary != "safe operation" {
 		t.Fatalf("original immutable approval request = %+v", requests[0])
 	}
 	if requests[1].ErrorMessage == "" {
@@ -898,9 +828,8 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
-	runtimeControl := &approvalCommentaryRuntimeControl{}
 	model := newProjectedTestUIModel(runtimeClient)
-	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control, runtimeControl)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
 	model.setRuntimeActivityBusyForTest(true)
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
 		testApprovalPrompt(
@@ -942,14 +871,14 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	if len(requests) != 2 {
 		t.Fatalf("allow requests = %d, want deadline plus user resubmission", len(requests))
 	}
-	if requests[0].Commentary != "" || requests[1].Commentary != "" {
+	if requests[0].Commentary != "original allow" || requests[1].Commentary != "original allow edited" {
 		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", requests[0].Commentary, requests[1].Commentary)
 	}
 	if requests[0].ClientRequestID == requests[1].ClientRequestID {
 		t.Fatalf("allow resubmission reused request ID %q", requests[0].ClientRequestID)
 	}
-	if runtimeControl.submitCalls != 2 {
-		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeControl.submitCalls)
+	if runtimeClient.submitCalls != 2 {
+		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeClient.submitCalls)
 	}
 	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
 		t.Fatal("successful allow resubmission did not remain active with the queue-stage lock released")

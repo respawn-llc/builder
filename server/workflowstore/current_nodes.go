@@ -23,6 +23,24 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 	return listTaskCurrentNodes(ctx, s.queries, taskID)
 }
 
+func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		slog.Warn("read task for current node event failed", "task_id", taskID, "action", action, "error", err)
+		return
+	}
+	workflowID := task.WorkflowID
+	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       &task.ProjectID,
+		WorkflowID:      &workflowID,
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          action,
+		PrimaryEntityID: string(taskID),
+	}); err != nil {
+		slog.Warn("publish current node task event failed", "task_id", taskID, "action", action, "error", err)
+	}
+}
+
 // ListCurrentNodesByTask returns the exact durable Current Nodes for each
 // requested Task. It preserves the store's canonical Current Node decoding so
 // read models never infer workflow state from SQL row shapes.
@@ -477,7 +495,7 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	s.publishCurrentNodeInterruptionEvent(ctx, reference.TaskID)
+	s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 	return nil
 }
 
@@ -527,25 +545,8 @@ func (s *Store) InterruptCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	s.publishCurrentNodeInterruptionEvent(ctx, reference.TaskID)
+	s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 	return nil
-}
-
-func (s *Store) publishCurrentNodeInterruptionEvent(ctx context.Context, taskID workflow.TaskID) {
-	task, err := s.queries.GetTask(ctx, string(taskID))
-	if err != nil {
-		slog.Warn("read interrupted task for workflow event failed", "task_id", taskID, "error", err)
-		return
-	}
-	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
-		ProjectID:       &task.ProjectID,
-		WorkflowID:      &task.WorkflowID,
-		Resource:        serverapi.WorkflowProjectEventResourceTask,
-		Action:          serverapi.WorkflowProjectEventActionInterrupted,
-		PrimaryEntityID: string(taskID),
-	}); err != nil {
-		slog.Warn("publish interrupted current node task event failed", "task_id", taskID, "error", err)
-	}
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -572,7 +573,6 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		return nil, err
 	}
 	references := make([]workflow.CurrentNodeReference, 0, len(rows))
-	seenTasks := make(map[workflow.TaskID]struct{}, len(rows))
 	for _, row := range rows {
 		var branchKey *workflow.TransitionBranchKey
 		if row.TransitionBranchKey.Valid {
@@ -584,10 +584,14 @@ func (s *Store) RecoverExecutableCurrentNodes(
 			return nil, err
 		}
 		references = append(references, reference)
-		seenTasks[reference.TaskID] = struct{}{}
 	}
-	for taskID := range seenTasks {
-		s.publishCurrentNodeInterruptionEvent(ctx, taskID)
+	seenTasks := make(map[workflow.TaskID]struct{}, len(references))
+	for _, reference := range references {
+		if _, seen := seenTasks[reference.TaskID]; seen {
+			continue
+		}
+		seenTasks[reference.TaskID] = struct{}{}
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 	}
 	return references, nil
 }

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"core/server/tools"
-	"core/server/workflow"
 	"core/shared/runtimeids"
 )
 
@@ -302,69 +301,6 @@ type gatedPromptFeed struct {
 	pendingPublished  chan struct{}
 	resolutionStarted chan struct{}
 	allowResolution   chan struct{}
-}
-
-type scopedPromptFeed struct {
-	pending  chan ExecutionScope
-	resolved chan ExecutionScope
-}
-
-func (f *scopedPromptFeed) PromptPendingScope(scope ExecutionScope, _ tools.AskQuestionRequest, _ time.Time) {
-	f.pending <- scope
-}
-
-func (f *scopedPromptFeed) PromptResolvedScope(scope ExecutionScope, _ string) {
-	f.resolved <- scope
-}
-
-func TestExecutionPromptStorePublishesImmutableWorkflowScope(t *testing.T) {
-	sessionID := runtimeids.NewSessionID()
-	resource, err := runtimeids.NewSessionResourceRef(sessionID, 1)
-	if err != nil {
-		t.Fatalf("NewSessionResourceRef: %v", err)
-	}
-	currentNode, err := workflow.NewCurrentNodeReference("task-1", "node-agent", nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference: %v", err)
-	}
-	scope := newAgentExecutionScope(
-		runtimeids.NewExecutionScopeID(),
-		1,
-		resource,
-		&WorkflowExecutionRef{
-			ProjectID:   "project-1",
-			WorkflowID:  runtimeids.NewWorkflowID(),
-			CurrentNode: currentNode,
-		},
-	)
-	feed := &scopedPromptFeed{
-		pending:  make(chan ExecutionScope, 1),
-		resolved: make(chan ExecutionScope, 1),
-	}
-	store := newExecutionPromptStore(&Authority{}, scope, feed)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		_, err := store.Await(ctx, tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
-		done <- err
-	}()
-	published := <-feed.pending
-	if published.ID() != scope.ID() {
-		t.Fatalf("published scope id = %s, want %s", published.ID(), scope.ID())
-	}
-	ref, ok := published.Workflow()
-	if !ok || ref.ProjectID != "project-1" || ref.CurrentNode.TaskID != "task-1" {
-		t.Fatalf("published workflow scope = %+v, want exact task scope", ref)
-	}
-	cancel()
-	if err := <-done; err == nil {
-		t.Fatal("prompt wait returned nil after cancellation")
-	}
-	resolved := <-feed.resolved
-	if resolved.ID() != scope.ID() {
-		t.Fatalf("resolved scope id = %s, want %s", resolved.ID(), scope.ID())
-	}
 }
 
 func newGatedPromptFeed() *gatedPromptFeed {

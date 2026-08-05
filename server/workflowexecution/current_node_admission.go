@@ -916,7 +916,7 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 		interrupt,
 		references,
 		reasonCurrentNodeRuntimeStartFailed,
-		workflow.NewCurrentNodeInterruptionDetail(string(reasonCurrentNodeRuntimeStartFailed), cause),
+		detail,
 	)
 	for _, reference := range interrupted {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)

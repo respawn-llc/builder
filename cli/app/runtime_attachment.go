@@ -146,7 +146,7 @@ func prepareSharedRuntimeWiring(
 	wiring := &runtimeWiring{
 		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
-		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl, clients.RuntimeControls),
+		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
 		promptAttention:       notificationHooks,
 		turnQueueHook:         queueHook,
 		terminalFocus:         terminalFocus,

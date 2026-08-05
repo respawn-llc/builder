@@ -642,7 +642,8 @@ func (c *Remote) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTask
 }
 
 func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	return callDedicatedRPC[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](c, ctx, "workflow-task-observe", protocol.MethodWorkflowTaskObserve, req)
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](c, ctx, protocol.MethodWorkflowTaskObserve, req)
+	return response, err
 }
 
 func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {

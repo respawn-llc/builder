@@ -17,14 +17,9 @@ import (
 )
 
 type stubQuestionCommandRemote struct {
-	apicontract.RuntimeControlService
-	listResponses     []serverapi.AskListPendingBySessionResponse
-	listRequests      []serverapi.AskListPendingBySessionRequest
-	answerRequests    []serverapi.AskAnswerRequest
-	approvalResponses []serverapi.ApprovalListPendingBySessionResponse
-	approvalRequests  []serverapi.ApprovalAnswerRequest
-	userTurnRequests  []serverapi.RuntimeSubmitUserTurnRequest
-	callOrder         []string
+	listResponses  []serverapi.AskListPendingBySessionResponse
+	listRequests   []serverapi.AskListPendingBySessionRequest
+	answerRequests []serverapi.AskAnswerRequest
 }
 
 type stubQuestionTaskRemote struct {
@@ -93,32 +88,7 @@ func (r *stubQuestionCommandRemote) ListPendingAsksBySession(
 
 func (r *stubQuestionCommandRemote) AnswerAsk(_ context.Context, req serverapi.AskAnswerRequest) error {
 	r.answerRequests = append(r.answerRequests, req)
-	r.callOrder = append(r.callOrder, "ask")
 	return nil
-}
-
-func (r *stubQuestionCommandRemote) ListPendingApprovalsBySession(
-	_ context.Context,
-	_ serverapi.ApprovalListPendingBySessionRequest,
-) (serverapi.ApprovalListPendingBySessionResponse, error) {
-	if len(r.approvalResponses) == 0 {
-		return serverapi.ApprovalListPendingBySessionResponse{}, nil
-	}
-	response := r.approvalResponses[0]
-	r.approvalResponses = r.approvalResponses[1:]
-	return response, nil
-}
-
-func (r *stubQuestionCommandRemote) AnswerApproval(_ context.Context, req serverapi.ApprovalAnswerRequest) error {
-	r.approvalRequests = append(r.approvalRequests, req)
-	r.callOrder = append(r.callOrder, "approval")
-	return nil
-}
-
-func (r *stubQuestionCommandRemote) SubmitUserTurn(_ context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	r.userTurnRequests = append(r.userTurnRequests, req)
-	r.callOrder = append(r.callOrder, "runtime_input")
-	return serverapi.RuntimeSubmitUserTurnResponse{}, nil
 }
 
 func (r *stubQuestionCommandRemote) Close() error {
@@ -207,69 +177,6 @@ func TestQuestionShowsFirstPendingQuestion(t *testing.T) {
 	}
 	if len(remote.answerRequests) != 0 {
 		t.Fatalf("answer requests = %+v, want none", remote.answerRequests)
-	}
-}
-
-func TestQuestionShowsAndAnswersAuthoritativeAccessOptions(t *testing.T) {
-	unsetSessionIDEnvironmentForTest(t)
-	sessionID := uuid.NewString()
-	remote := &stubQuestionCommandRemote{
-		listResponses: []serverapi.AskListPendingBySessionResponse{{}},
-		approvalResponses: []serverapi.ApprovalListPendingBySessionResponse{
-			{Approvals: []clientui.PendingApproval{{
-				ApprovalID: "approval-1",
-				SessionID:  sessionID,
-				Question:   "Permit the operation?",
-				Options: []clientui.ApprovalOption{
-					{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Use the unusual label"},
-					{Decision: clientui.ApprovalDecisionDeny, Label: "Keep it blocked"},
-				},
-			}}},
-			{},
-		},
-	}
-	command, _ := questionCommandWithRemote(remote)
-
-	var output bytes.Buffer
-	if exitCode := command.run([]string{"--session", sessionID}, &output, io.Discard); exitCode != 0 {
-		t.Fatalf("show exit = %d", exitCode)
-	}
-	if !bytes.Contains(output.Bytes(), []byte(questionSuggestionsHeading)) ||
-		!bytes.Contains(output.Bytes(), []byte("Use the unusual label")) ||
-		!bytes.Contains(output.Bytes(), []byte("Keep it blocked")) {
-		t.Fatalf("access output = %q", output.String())
-	}
-
-	remote.listResponses = []serverapi.AskListPendingBySessionResponse{{}}
-	remote.approvalResponses = []serverapi.ApprovalListPendingBySessionResponse{
-		{Approvals: []clientui.PendingApproval{{
-			ApprovalID: "approval-1",
-			SessionID:  sessionID,
-			Question:   "Permit the operation?",
-			Options: []clientui.ApprovalOption{
-				{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Use the unusual label"},
-				{Decision: clientui.ApprovalDecisionDeny, Label: "Keep it blocked"},
-			},
-		}}},
-		{},
-	}
-	remote.callOrder = nil
-	var answerStderr bytes.Buffer
-	exitCode := command.run([]string{
-		"answer", "--session", sessionID, "--option", "1", "--commentary", "context",
-	}, io.Discard, &answerStderr)
-	if exitCode != 0 {
-		t.Fatalf("answer exit = %d stderr = %q", exitCode, answerStderr.String())
-	}
-	if len(remote.userTurnRequests) != 1 || len(remote.approvalRequests) != 1 {
-		t.Fatalf("runtime inputs = %+v approvals = %+v", remote.userTurnRequests, remote.approvalRequests)
-	}
-	if len(remote.callOrder) < 2 || remote.callOrder[0] != "runtime_input" || remote.callOrder[1] != "approval" {
-		t.Fatalf("call order = %v", remote.callOrder)
-	}
-	if remote.approvalRequests[0].Decision != clientui.ApprovalDecisionAllowOnce ||
-		remote.approvalRequests[0].Commentary != "" {
-		t.Fatalf("approval request = %+v", remote.approvalRequests[0])
 	}
 }
 

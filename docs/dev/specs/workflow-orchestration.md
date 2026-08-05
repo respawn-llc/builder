@@ -502,35 +502,6 @@
 - Workflow-relative column recovery offers project workflow discovery and a task-list retry with an explicit workflow while preserving the parsed filters.
 - Task-list status sorting follows primary typed-status precedence; workflow-narrowed column sorting follows workflow column position.
 
-## Task Waiting And Watching
-
-- `kent task wait <task>` and `kent task watch <task>` resolve their Task through the existing Project-scoped Task selector and follow the same Task across Current Node, Session, and Script changes.
-- Both commands are one-shot observations and use the server-owned wait/watch notification contract defined in `core-runtime-tools.md`.
-- If the selected Task is already `done`, both commands return immediately.
-- Task wait returns when the Task reaches terminal `done` status or a current Session or Script reports an authoritative execution error.
-- Task wait stays blocked through a regular Question or access request, interruption or stop, pending Workflow Transition Approval, successful intermediate Session or Node completion, and Current Node changes.
-- Task watch returns for a regular Question or access request belonging to the Task, interruption or stop of current Task work, authoritative current Session or Script execution error, or terminal Task `done`.
-- Task watch ignores pending Workflow Transition Approvals and successful intermediate Session or Node completion while the Task continues.
-- Script Nodes can produce execution-error and interruption outcomes. Script Nodes cannot produce Questions.
-- If an initial Task snapshot contains several eligible Current Node outcomes, the command reports every outcome eligible for that command. Task wait includes current execution errors. Task watch also includes Questions and interruptions.
-- The order of simultaneously reported parallel Task outcomes is unspecified and is not a compatibility contract.
-- After waiting begins, a relevant event triggers one authoritative Task snapshot evaluation, and the command reports every outcome eligible in that snapshot. Events are wake-up hints and are not attributed to individual outcomes. There is no concurrency guarantee: an outcome that disappears before evaluation is not reported, while parallel outcomes visible in the same evaluation may be reported together.
-- Terminal Task `done` is not a parallel outcome. Human output is exactly `Task <task-short-id> entered Done status`.
-- Human output identifies a Session outcome with `Session <session-id> (Node <node-key>):` and a Script outcome with `Script <path> (Node <node-key>):`. The existing outcome body follows on the next line. One blank line separates parallel outcomes.
-- A parallel report exits with code 1 if any execution error is present. Otherwise it exits with code 130 if any interruption or stop is present. Otherwise it exits with code 0.
-- Each Task Question uses the same text, option numbering, and recommendation presentation as `kent question --task`. A live internal access Approval is presented as an access-request Question using the authoritative ordered `{decision,label}` options from the live Session prompt; Task projection never reconstructs labels from decisions. Durable Workflow Transition Approvals remain excluded. Each Session contributes only its first pending ordinary Question or access request.
-- If exactly one Session has a pending Task Question, the answer template targets the Task Short ID and includes `--project` only when Project qualification is required.
-- If several parallel Sessions have pending Questions, each Question block uses a directly runnable Session-targeted answer template instead of an ambiguous Task-targeted template.
-- A suggested Task Question uses `Answer with: kent question answer --task <task-short-id> --option <number>`. Its parallel Session-targeted form is `Answer with: kent question answer --session <session-id> --option <number>`.
-- A freeform Task Question uses `Answer with: kent question answer --task <task-short-id> --commentary "<answer>"`. Its parallel Session-targeted form is `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
-- An access request always uses the numbered-option form. Denial commentary remains attached only to the denial. For allow-once or allow-session, non-blank commentary is submitted as ordinary input to the selected Session before the Approval answer; failed input submission prevents the Approval answer. Commentary alone is invalid.
-- When Project qualification is required, the Task-targeted template includes `--project <project>` after `--task <task-short-id>`.
-- Task wait/watch prints authoritative reason and diagnostic text for execution errors and interruptions. It does not add a Task error status.
-- If the selected Task is deleted while waiting, the command fails with the authoritative not-found or deleted error.
-- If the server connection or event stream is lost, Task wait/watch fails with the typed operational error and does not reconnect automatically.
-- A reported Question is not guaranteed to remain answerable while another actor changes Question state.
-- Runtime prompt creation routes a Task wake-up from the prompt's Exact Execution Scope identity. Persisted Session targeting and prompt labels do not authorize Task ownership.
-
 ## Task Search
 
 - Task search reuses the authoritative Task status defined above.
@@ -661,6 +632,9 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
+- `kent task wait <task>` and `kent task watch <task>` resolve a Project-scoped Task and observe it through server-owned event notification. They never poll read commands or mutate the Task.
+- Task wait ignores Questions, access requests, interruptions, transition approvals, and successful intermediate node completion. It returns for Task `done` or a current Session or Script execution error.
+- Task watch returns for a Task Question or access request, current-work interruption, current Session or Script execution error, or Task `done`. It ignores Workflow Transition Approvals and successful intermediate completion.
 - Task Search pagination is defined exclusively by the owning Task Search specification.
 - Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
 - An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.

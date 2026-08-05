@@ -2686,6 +2686,7 @@ func newWorkflowServiceReadModels(
 		TaskDependencies: dependencies,
 		Activity:         activity,
 		Attention:        attention,
+		Approvals:        emptyWorkflowApprovalView{},
 	}
 }
 
@@ -2724,6 +2725,12 @@ func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.Tas
 }
 
 type emptyWorkflowPendingPromptSource struct{}
+
+type emptyWorkflowApprovalView struct{}
+
+func (emptyWorkflowApprovalView) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return serverapi.ApprovalListPendingBySessionResponse{}, nil
+}
 
 func (emptyWorkflowPendingPromptSource) ListPendingPrompts(string) ([]workflowview.PendingPromptSnapshot, error) {
 	return nil, nil

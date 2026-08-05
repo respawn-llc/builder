@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"core/server/workflow"
 	"core/shared/clientui"
@@ -16,344 +19,241 @@ func (s *Service) ObserveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
-	subscription, err := s.events.subscribe(req.ProjectID, nil)
+	sub, err := s.events.subscribe(req.ProjectID, nil)
 	if err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
-	defer func() { _ = subscription.Close() }()
+	defer func() { _ = sub.Close() }()
 
 	for {
-		response, ready, err := s.observeWorkflowTaskSnapshot(ctx, req)
-		if err != nil {
-			return serverapi.WorkflowTaskObservationResponse{}, err
+		response, ready, err := s.observeWorkflowTask(ctx, req)
+		if err != nil || ready {
+			return response, err
 		}
-		if ready {
-			return response, nil
-		}
-		event, err := subscription.Next(ctx)
-		if err != nil {
-			return serverapi.WorkflowTaskObservationResponse{}, err
-		}
-		if !workflowTaskObservationEventMatches(event, req.TaskID) {
-			continue
+		for {
+			event, err := sub.Next(ctx)
+			if err != nil {
+				return serverapi.WorkflowTaskObservationResponse{}, normalizeTaskObservationError(err)
+			}
+			if event.Resource == serverapi.WorkflowProjectEventResourceTask &&
+				(event.PrimaryEntityID == req.TaskID || slices.Contains(event.RelatedIDs, req.TaskID)) {
+				break
+			}
 		}
 	}
 }
 
-func (s *Service) observeWorkflowTaskSnapshot(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, bool, error) {
+func normalizeTaskObservationError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return serverapi.ErrWorkflowTaskNotFound
+	}
+	return err
+}
+
+func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, bool, error) {
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, req.TaskID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			err = serverapi.ErrWorkflowTaskNotFound
-		}
-		return serverapi.WorkflowTaskObservationResponse{}, false, err
+		return serverapi.WorkflowTaskObservationResponse{}, false, normalizeTaskObservationError(err)
 	}
 	if detail.Summary.ProjectID != req.ProjectID {
 		return serverapi.WorkflowTaskObservationResponse{}, false, errors.New("workflow task does not belong to project")
 	}
-	response := serverapi.WorkflowTaskObservationResponse{
-		Target: serverapi.NewRuntimeObservationTaskTarget(
-			detail.Summary.ID,
-			detail.Summary.ShortID,
-			detail.Summary.ProjectID,
-		),
-	}
-	approvalCache := make(map[string][]clientui.PendingApproval)
+	response := serverapi.WorkflowTaskObservationResponse{TaskID: detail.Summary.ID, TaskShortID: detail.Summary.ShortID}
 	if detail.Status.Kind == serverapi.WorkflowTaskStatusKindDone {
-		response.Outcomes = []serverapi.RuntimeObservationOutcome{{
-			Kind:     serverapi.RuntimeObservationOutcomeTaskDone,
-			TaskDone: &serverapi.RuntimeObservationTaskDone{},
-		}}
+		response.Outcomes = []serverapi.WorkflowTaskObservationOutcome{{Kind: serverapi.WorkflowTaskObservationDone}}
 		return response, true, nil
 	}
-	nodeKeys := map[string]string{}
-	scriptPaths := map[string]string{}
-	if s.readModels.Definitions != nil {
-		definition, _, err := s.readModels.Definitions.GetDefinition(ctx, detail.Summary.WorkflowID)
+
+	definition, _, err := s.readModels.Definitions.GetDefinition(ctx, detail.Summary.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, false, err
+	}
+	nodeKeys := make(map[string]string, len(definition.Nodes))
+	nodes := make(map[string]serverapi.WorkflowNode, len(definition.Nodes))
+	for _, node := range definition.Nodes {
+		nodeKeys[node.ID] = node.Key
+		nodes[node.ID] = node
+	}
+	currentNodes, err := s.readModels.TaskDetail.ListCurrentNodes(ctx, req.TaskID)
+	if err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, false, normalizeTaskObservationError(err)
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.Scheduling == nil || currentNode.Scheduling.Interruption == nil {
+			continue
+		}
+		outcome, err := taskCurrentNodeFailure(currentNode, nodes, nodeKeys)
 		if err != nil {
 			return serverapi.WorkflowTaskObservationResponse{}, false, err
 		}
-		nodeKeys = make(map[string]string, len(definition.Nodes))
-		for _, node := range definition.Nodes {
-			nodeKeys[node.ID] = node.Key
-			if node.ScriptPath != nil {
-				scriptPaths[node.ID] = *node.ScriptPath
-			}
+		if req.Mode == serverapi.WorkflowTaskObservationWatch || outcome.Kind == serverapi.WorkflowTaskObservationExecutionError {
+			response.Outcomes = append(response.Outcomes, outcome)
 		}
 	}
 
 	attention, err := s.readModels.Attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: req.TaskID})
 	if err != nil {
-		return serverapi.RuntimeObservationResponse{}, false, err
+		return serverapi.WorkflowTaskObservationResponse{}, false, normalizeTaskObservationError(err)
 	}
-	for _, item := range attention.Items {
-		switch item.Kind {
-		case string(serverapi.WorkflowTaskAttentionKindQuestion):
-			if req.Mode != serverapi.WorkflowTaskObservationModeWatch {
+	if req.Mode == serverapi.WorkflowTaskObservationWatch {
+		approvalCache := make(map[string][]clientui.PendingApproval)
+		for _, item := range attention.Items {
+			if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) &&
+				item.Kind != "approval" {
 				continue
 			}
-			outcome, ok, err := s.taskQuestionOutcome(ctx, item, nodeKeys, approvalCache)
+			outcome, ok, err := s.taskQuestion(ctx, item, nodeKeys, approvalCache)
 			if err != nil {
-				return serverapi.RuntimeObservationResponse{}, false, err
+				return serverapi.WorkflowTaskObservationResponse{}, false, err
 			}
 			if ok {
 				response.Outcomes = append(response.Outcomes, outcome)
 			}
-		case string(serverapi.WorkflowTaskAttentionKindInterrupted),
-			string(serverapi.WorkflowTaskAttentionKindInterruptedCurrentNode):
-			outcome, err := taskInterruptionOutcome(item, detail, nodeKeys, scriptPaths)
-			if err != nil {
-				return serverapi.RuntimeObservationResponse{}, false, err
-			}
-			if req.Mode == serverapi.WorkflowTaskObservationModeWatch ||
-				outcome.Kind == serverapi.RuntimeObservationOutcomeExecutionError {
-				response.Outcomes = append(response.Outcomes, outcome)
-			}
 		}
 	}
-	if reader, ok := s.readModels.TaskDetail.(interface {
-		ListTaskCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error)
-	}); ok {
-		currentNodes, err := reader.ListTaskCurrentNodes(ctx, req.TaskID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return serverapi.RuntimeObservationResponse{}, false, serverapi.ErrWorkflowTaskNotFound
-			}
-			return serverapi.RuntimeObservationResponse{}, false, err
-		}
-		for _, currentNode := range currentNodes {
-			if currentNode.Scheduling == nil ||
-				currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted ||
-				currentNode.Scheduling.Interruption == nil {
-				continue
-			}
-			currentNodeDTO := observationCurrentNode(currentNode)
-			if currentNodeHasAttentionProjection(currentNodeDTO, attention.Items) {
-				continue
-			}
-			interruption := currentNode.Scheduling.Interruption
-			reasonOverride := workflow.CurrentNodeInterruptionReason(interruption.Reason)
-			outcome, err := taskInterruptionOutcomeFromDetail(
-				serverapi.WorkflowAttentionItem{
-					Kind:        string(serverapi.WorkflowTaskAttentionKindInterruptedCurrentNode),
-					TaskID:      req.TaskID,
-					CurrentNode: &currentNodeDTO,
-				},
-				detail,
-				interruption.Detail,
-				&reasonOverride,
-				nodeKeys,
-				scriptPaths,
-			)
-			if err != nil {
-				return serverapi.RuntimeObservationResponse{}, false, err
-			}
-			if req.Mode == serverapi.WorkflowTaskObservationModeWatch ||
-				outcome.Kind == serverapi.RuntimeObservationOutcomeExecutionError {
-				response.Outcomes = append(response.Outcomes, outcome)
-			}
-		}
-	}
-	if len(response.Outcomes) > 0 {
-		return response, true, nil
-	}
-	return response, false, nil
+	return response, len(response.Outcomes) > 0, nil
 }
 
-func observationCurrentNode(currentNode workflow.CurrentNode) serverapi.WorkflowTaskCurrentNode {
-	projected := serverapi.WorkflowTaskCurrentNode{NodeID: string(currentNode.Reference.NodeID)}
-	if branch, present := currentNode.Reference.TransitionBranchKey(); present {
-		value := string(branch)
-		projected.TransitionBranchKey = &value
-	}
-	if currentNode.SessionID != nil {
-		value := currentNode.SessionID.String()
-		projected.SessionID = &value
-	}
-	return projected
-}
-
-func currentNodeHasAttentionProjection(currentNode serverapi.WorkflowTaskCurrentNode, items []serverapi.WorkflowAttentionItem) bool {
-	for _, item := range items {
-		if item.CurrentNode == nil || item.CurrentNode.NodeID != currentNode.NodeID {
-			continue
-		}
-		switch {
-		case item.CurrentNode.TransitionBranchKey == nil && currentNode.TransitionBranchKey == nil:
-			return true
-		case item.CurrentNode.TransitionBranchKey != nil && currentNode.TransitionBranchKey != nil &&
-			*item.CurrentNode.TransitionBranchKey == *currentNode.TransitionBranchKey:
-			return true
-		}
-	}
-	return false
-}
-
-func taskInterruptionOutcome(item serverapi.WorkflowAttentionItem, taskDetail serverapi.WorkflowTaskDetail, nodeKeys, scriptPaths map[string]string) (serverapi.RuntimeObservationOutcome, error) {
-	interruptionDetail := struct {
-		Code   string            `json:"Code"`
-		Fields map[string]string `json:"Fields"`
-	}{}
-	detailJSON, _ := textutil.OptionalExact(item.DetailJSON)
-	if err := workflow.UnmarshalString(detailJSON, &interruptionDetail); err != nil {
-		return serverapi.RuntimeObservationOutcome{}, err
-	}
-	return taskInterruptionOutcomeFromDetail(
-		item,
-		taskDetail,
-		workflow.CurrentNodeInterruptionDetail{
-			Code:   interruptionDetail.Code,
-			Fields: interruptionDetail.Fields,
-		},
-		nil,
-		nodeKeys,
-		scriptPaths,
-	)
-}
-
-func taskInterruptionOutcomeFromDetail(
+func (s *Service) taskQuestion(
+	ctx context.Context,
 	item serverapi.WorkflowAttentionItem,
-	taskDetail serverapi.WorkflowTaskDetail,
-	interruptionDetail workflow.CurrentNodeInterruptionDetail,
-	reasonOverride *workflow.CurrentNodeInterruptionReason,
-	nodeKeys, scriptPaths map[string]string,
-) (serverapi.RuntimeObservationOutcome, error) {
-	reason := strings.TrimSpace(interruptionDetail.Code)
-	if reasonOverride != nil && strings.TrimSpace(string(*reasonOverride)) != "" {
-		reason = strings.TrimSpace(string(*reasonOverride))
+	keys map[string]string,
+	cache map[string][]clientui.PendingApproval,
+) (serverapi.WorkflowTaskObservationOutcome, bool, error) {
+	if item.SessionID == nil {
+		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	if reason == "" {
-		return serverapi.RuntimeObservationOutcome{}, errors.New("interruption detail has no reason")
+	sessionID := strings.TrimSpace(*item.SessionID)
+	if sessionID == "" {
+		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	diagnostic := ""
-	if value := (workflow.CurrentNodeInterruptionDetail{
-		Code:   interruptionDetail.Code,
-		Fields: interruptionDetail.Fields,
-	}).Diagnostic(); value != nil {
-		diagnostic = *value
+	questionID := item.QuestionID
+	if questionID == nil {
+		questionID = item.ApprovalID
 	}
-	var diagnosticPtr *string
-	if diagnostic != "" {
-		diagnosticPtr = &diagnostic
+	if questionID == nil || strings.TrimSpace(*questionID) == "" {
+		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	var scriptPath *string
-	var nodeKey *string
-	if item.SessionID == nil && item.CurrentNode != nil {
-		for _, script := range taskDetail.CurrentScripts {
-			if script.CurrentNode.NodeID == item.CurrentNode.NodeID {
-				path := script.Path
-				scriptPath = &path
+
+	var question serverapi.ObservationQuestion
+	questionKind := serverapi.WorkflowAttentionQuestionKindOrdinary
+	if item.Question != nil {
+		questionKind = item.Question.Kind
+	}
+	if item.Kind == "approval" {
+		questionKind = serverapi.WorkflowAttentionQuestionKindApproval
+	}
+	switch questionKind {
+	case serverapi.WorkflowAttentionQuestionKindOrdinary:
+		text, _ := textutil.OptionalExact(item.Message)
+		if strings.TrimSpace(text) == "" {
+			return serverapi.WorkflowTaskObservationOutcome{}, false, nil
+		}
+		question.Ask = &clientui.PendingAsk{
+			AskID:                  *questionID,
+			SessionID:              sessionID,
+			Question:               text,
+			Suggestions:            append([]string(nil), item.Suggestions...),
+			RecommendedOptionIndex: item.RecommendedOptionIndex,
+			CreatedAt:              time.UnixMilli(item.OccurredAtUnixMs).UTC(),
+		}
+	case serverapi.WorkflowAttentionQuestionKindApproval:
+		approvals, ok := cache[sessionID]
+		if !ok {
+			list, err := s.readModels.Approvals.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID})
+			if err != nil {
+				return serverapi.WorkflowTaskObservationOutcome{}, false, err
+			}
+			approvals = append([]clientui.PendingApproval(nil), list.Approvals...)
+			sort.SliceStable(approvals, func(i, j int) bool {
+				if approvals[i].CreatedAt.Equal(approvals[j].CreatedAt) {
+					return approvals[i].ApprovalID < approvals[j].ApprovalID
+				}
+				return approvals[i].CreatedAt.Before(approvals[j].CreatedAt)
+			})
+			cache[sessionID] = approvals
+		}
+		var approval *clientui.PendingApproval
+		for index := range approvals {
+			candidate := &approvals[index]
+			if candidate.ApprovalID == *questionID {
+				approval = candidate
 				break
 			}
 		}
-		if scriptPath == nil {
-			if path := strings.TrimSpace(scriptPaths[item.CurrentNode.NodeID]); path != "" {
-				scriptPath = &path
+		if approval == nil {
+			for index := range approvals {
+				candidate := &approvals[index]
+				if candidate.CreatedAt.UnixMilli() == item.OccurredAtUnixMs {
+					approval = candidate
+					break
+				}
 			}
 		}
-	}
-	if item.CurrentNode != nil {
-		if key := strings.TrimSpace(nodeKeys[item.CurrentNode.NodeID]); key != "" {
-			nodeKey = &key
+		if approval == nil {
+			return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 		}
-	}
-	kind := serverapi.RuntimeObservationOutcomeExecutionError
-	if reason == string(workflow.CurrentNodeInterruptionReasonUserInterrupt) ||
-		reason == string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled) {
-		kind = serverapi.RuntimeObservationOutcomeInterrupted
-	}
-	if kind == serverapi.RuntimeObservationOutcomeInterrupted {
-		return serverapi.RuntimeObservationOutcome{
-			Kind:        kind,
-			NodeKey:     nodeKey,
-			SessionID:   item.SessionID,
-			ScriptPath:  scriptPath,
-			Interrupted: &serverapi.RuntimeObservationInterrupted{Reason: reason, Diagnostic: diagnosticPtr},
-		}, nil
-	}
-	return serverapi.RuntimeObservationOutcome{
-		Kind:           kind,
-		NodeKey:        nodeKey,
-		SessionID:      item.SessionID,
-		ScriptPath:     scriptPath,
-		ExecutionError: &serverapi.RuntimeObservationExecutionError{Reason: reason, Diagnostic: diagnosticPtr},
-	}, nil
-}
-
-func (s *Service) taskQuestionOutcome(
-	ctx context.Context,
-	item serverapi.WorkflowAttentionItem,
-	nodeKeys map[string]string,
-	approvalCache map[string][]clientui.PendingApproval,
-) (serverapi.RuntimeObservationOutcome, bool, error) {
-	if item.Question == nil || item.QuestionID == nil {
-		return serverapi.RuntimeObservationOutcome{}, false, nil
-	}
-	message, _ := textutil.OptionalExact(item.Message)
-	question := &serverapi.RuntimeObservationQuestion{
-		QuestionID: *item.QuestionID,
-		Text:       strings.TrimSpace(message),
-	}
-	if question.Text == "" && item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
-		return serverapi.RuntimeObservationOutcome{}, false, nil
-	}
-	switch item.Question.Kind {
-	case serverapi.WorkflowAttentionQuestionKindOrdinary:
-		question.Kind = serverapi.RuntimeObservationQuestionOrdinary
-		question.Suggestions = append([]string(nil), item.Question.Suggestions...)
-		question.RecommendedOptionIndex = item.Question.RecommendedOptionIndex
-	case serverapi.WorkflowAttentionQuestionKindApproval:
-		if item.SessionID == nil || item.ApprovalID == nil || s.readModels.Approvals == nil {
-			return serverapi.RuntimeObservationOutcome{}, false, nil
-		}
-		sessionID := *item.SessionID
-		approvals, loaded := approvalCache[sessionID]
-		if !loaded {
-			response, err := s.readModels.Approvals.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID})
-			if err != nil {
-				return serverapi.RuntimeObservationOutcome{}, false, err
-			}
-			approvals = append([]clientui.PendingApproval(nil), response.Approvals...)
-			approvalCache[sessionID] = approvals
-		}
-		approval, ok := serverapi.FindPendingApproval(approvals, *item.ApprovalID)
-		if !ok {
-			return serverapi.RuntimeObservationOutcome{}, false, nil
-		}
-		question.Text = approval.Question
-		question.Kind = serverapi.RuntimeObservationQuestionAccessRequest
-		question.AccessOptions = append([]clientui.ApprovalOption(nil), approval.Options...)
+		question.Approval = approval
 	default:
-		return serverapi.RuntimeObservationOutcome{}, false, nil
+		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	return serverapi.RuntimeObservationOutcome{
-		Kind:      serverapi.RuntimeObservationOutcomeQuestion,
-		NodeKey:   observationNodeKey(item.CurrentNode, nodeKeys),
+	return serverapi.WorkflowTaskObservationOutcome{
+		Kind:      serverapi.WorkflowTaskObservationQuestion,
 		SessionID: item.SessionID,
-		Question:  question,
+		NodeKey:   nodeKey(item.CurrentNode, keys),
+		Question:  &question,
 	}, true, nil
 }
 
-func workflowTaskObservationEventMatches(event serverapi.WorkflowProjectEvent, taskID string) bool {
-	if event.Resource != serverapi.WorkflowProjectEventResourceTask {
-		return false
+func taskCurrentNodeFailure(
+	currentNode workflow.CurrentNode,
+	nodes map[string]serverapi.WorkflowNode,
+	keys map[string]string,
+) (serverapi.WorkflowTaskObservationOutcome, error) {
+	interruption := currentNode.Scheduling.Interruption
+	if interruption == nil {
+		return serverapi.WorkflowTaskObservationOutcome{}, errors.New("current node interruption is required")
 	}
-	if event.PrimaryEntityID == taskID {
-		return true
+	reason := strings.TrimSpace(string(interruption.Reason))
+	if reason == "" {
+		return serverapi.WorkflowTaskObservationOutcome{}, errors.New("task interruption reason is required")
 	}
-	for _, relatedID := range event.RelatedIDs {
-		if relatedID == taskID {
-			return true
+	failure := &serverapi.RuntimeLiveWatchFailure{Reason: strings.TrimSpace(interruption.Detail.Code)}
+	if failure.Reason == "" {
+		failure.Reason = reason
+	}
+	failure.Diagnostic = interruption.Detail.Diagnostic()
+	kind := serverapi.WorkflowTaskObservationExecutionError
+	if interruption.Reason == workflow.CurrentNodeInterruptionReasonUserInterrupt ||
+		interruption.Reason == workflow.CurrentNodeInterruptionReasonRuntimeCanceled {
+		kind = serverapi.WorkflowTaskObservationInterrupted
+	}
+	var sessionID *string
+	if currentNode.SessionID != nil {
+		value := currentNode.SessionID.String()
+		sessionID = &value
+	}
+	var scriptPath *string
+	if node, ok := nodes[string(currentNode.Reference.NodeID)]; ok && node.ScriptPath != nil {
+		value := *node.ScriptPath
+		if strings.TrimSpace(value) != "" {
+			scriptPath = &value
 		}
 	}
-	return false
+	return serverapi.WorkflowTaskObservationOutcome{
+		Kind:       kind,
+		SessionID:  sessionID,
+		ScriptPath: scriptPath,
+		NodeKey:    nodeKey(&serverapi.WorkflowTaskCurrentNode{NodeID: string(currentNode.Reference.NodeID)}, keys),
+		Failure:    failure,
+	}, nil
 }
 
-func observationNodeKey(node *serverapi.WorkflowTaskCurrentNode, nodeKeys map[string]string) *string {
+func nodeKey(node *serverapi.WorkflowTaskCurrentNode, keys map[string]string) *string {
 	if node == nil {
 		return nil
 	}
-	key := strings.TrimSpace(nodeKeys[node.NodeID])
+	key := strings.TrimSpace(keys[node.NodeID])
 	if key == "" {
 		return nil
 	}

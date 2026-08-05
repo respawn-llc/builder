@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 
@@ -21,26 +20,6 @@ type CurrentNodeCompletionRequest struct {
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
-}
-
-func (s *Store) publishCurrentNodeTaskEvent(
-	ctx context.Context,
-	projectID string,
-	workflowID runtimeids.WorkflowID,
-	taskID workflow.TaskID,
-	action serverapi.WorkflowProjectEventAction,
-) {
-	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
-		ProjectID:       &projectID,
-		WorkflowID:      &workflowID,
-		Resource:        serverapi.WorkflowProjectEventResourceTask,
-		Action:          action,
-		PrimaryEntityID: string(taskID),
-	}); err != nil {
-		// The mutation is already committed. Event publication is a wake hint,
-		// so retain the committed result and surface the operational failure.
-		slog.Warn("publish current node task event failed", "task_id", taskID, "action", action, "error", err)
-	}
 }
 
 // CurrentNodeAutomaticIntent is a volatile successor start produced by a
@@ -220,7 +199,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
-			s.publishCurrentNodeTaskEvent(ctx, task.ProjectID, task.WorkflowID, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 		}
 		return result, nil
 	}
@@ -246,7 +225,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
-			s.publishCurrentNodeTaskEvent(ctx, task.ProjectID, task.WorkflowID, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 		}
 		return result, nil
 	}
@@ -314,7 +293,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := tx.Commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	s.publishCurrentNodeTaskEvent(ctx, task.ProjectID, task.WorkflowID, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+	s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
 	result := CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: []workflow.CurrentNodeReference{prepared.Source},

@@ -275,17 +275,10 @@ func (s *Service) WithPersistedSessionResolver(resolver session.PersistedSession
 	return s
 }
 
-func (s *Service) WithLiveWatchPromptSources(
-	askViews servicecontract.AskViewService,
-	approvalViews servicecontract.ApprovalViewService,
-	attention servicecontract.AttentionNotificationService,
-) *Service {
-	if s == nil {
-		return nil
+func (s *Service) WithLiveWatchPromptSources(asks servicecontract.AskViewService, approvals servicecontract.ApprovalViewService, attention servicecontract.AttentionNotificationService) *Service {
+	if s != nil {
+		s.askViews, s.approvalViews, s.attention = asks, approvals, attention
 	}
-	s.askViews = askViews
-	s.approvalViews = approvalViews
-	s.attention = attention
 	return s
 }
 

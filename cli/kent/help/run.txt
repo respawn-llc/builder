@@ -19,7 +19,6 @@ Active-run controls:
   `steer` queues a message for an active run.
   `stop` interrupts an active run.
   `wait` waits for an active run to finish.
-  `watch` waits for the next active-run question or terminal outcome.
 
 Subagents:
   `--agent <role>` selects a named role from `[subagents.<role>]` section of the user configuration. For agents, available agents are the default (no flag), fast, and any listed in the developer reminder you received.

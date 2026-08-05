@@ -8,112 +8,68 @@ import (
 	"core/shared/serverapi"
 )
 
-func writeObservedOutcome(
-	stdout io.Writer,
-	outcome serverapi.RuntimeObservationOutcome,
-	answerHint string,
-) int {
-	return writeObservedOutcomeWithDiscriminator(stdout, outcome, answerHint, true)
-}
-
-func writeObservedOutcomeBody(
-	stdout io.Writer,
-	outcome serverapi.RuntimeObservationOutcome,
-	answerHint string,
-) int {
-	return writeObservedOutcomeWithDiscriminator(stdout, outcome, answerHint, false)
-}
-
-func writeObservedOutcomeWithDiscriminator(
-	stdout io.Writer,
-	outcome serverapi.RuntimeObservationOutcome,
-	answerHint string,
-	includeDiscriminator bool,
-) int {
-	if includeDiscriminator {
-		writeObservationDiscriminator(stdout, outcome)
+func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, hint string) {
+	if question.Ask != nil {
+		fmt.Fprintln(w, question.Ask.Question)
+		if len(question.Ask.Suggestions) > 0 {
+			fmt.Fprintln(w, questionSuggestionsHeading)
+			for i, option := range question.Ask.Suggestions {
+				suffix := ""
+				if question.Ask.RecommendedOptionIndex != nil && *question.Ask.RecommendedOptionIndex == i+1 {
+					suffix = recommendedSuggestionSuffix
+				}
+				fmt.Fprintf(w, "%d. %s%s\n", i+1, option, suffix)
+			}
+		}
+	} else if question.Approval != nil {
+		fmt.Fprintln(w, question.Approval.Question)
+		fmt.Fprintln(w, questionSuggestionsHeading)
+		for i, option := range question.Approval.Options {
+			fmt.Fprintf(w, "%d. %s\n", i+1, option.Label)
+		}
 	}
-	switch outcome.Kind {
-	case serverapi.RuntimeObservationOutcomeQuestion:
-		if outcome.Question == nil {
-			return 0
+	if strings.TrimSpace(hint) != "" {
+		fmt.Fprintf(w, "\nAnswer with: %s\n", hint)
+	}
+}
+
+func observationQuestionHint(sessionID string, question serverapi.ObservationQuestion) string {
+	if question.Approval != nil {
+		return "kent question answer --session " + sessionID + " --option <number>"
+	}
+	if question.Ask != nil && len(question.Ask.Suggestions) > 0 {
+		return "kent question answer --session " + sessionID + " --option <number>"
+	}
+	return "kent question answer --session " + sessionID + " --commentary \"<answer>\""
+}
+
+func writeRunWatchResponse(w io.Writer, response serverapi.RuntimeLiveWatchResponse, continueHint string) int {
+	switch response.Outcome.Kind {
+	case serverapi.RuntimeLiveWatchQuestion:
+		if response.Outcome.Question == nil {
+			return 1
 		}
-		writeObservedQuestion(stdout, *outcome.Question, answerHint)
-		return 0
-	case serverapi.RuntimeObservationOutcomeFinalAnswer:
-		if outcome.FinalAnswer != nil && outcome.FinalAnswer.Result != nil {
-			fmt.Fprintln(stdout, *outcome.FinalAnswer.Result)
-		}
-		return 0
-	case serverapi.RuntimeObservationOutcomeInterrupted:
-		if outcome.Interrupted != nil {
-			fmt.Fprintln(stdout, outcome.Interrupted.Reason)
-			if outcome.Interrupted.Diagnostic != nil {
-				fmt.Fprintln(stdout, *outcome.Interrupted.Diagnostic)
+		writeObservedQuestion(w, *response.Outcome.Question, observationQuestionHint(response.SessionID, *response.Outcome.Question))
+	case serverapi.RuntimeLiveWatchFinalAnswer:
+		if response.Outcome.FinalAnswer != nil {
+			result := ""
+			if response.Outcome.FinalAnswer.Result != nil {
+				result = *response.Outcome.FinalAnswer.Result
 			}
+			emitRunFinalText(w, nil, result, continueHint)
 		}
-		return 130
-	case serverapi.RuntimeObservationOutcomeExecutionError:
-		if outcome.ExecutionError != nil {
-			fmt.Fprintln(stdout, outcome.ExecutionError.Reason)
-			if outcome.ExecutionError.Diagnostic != nil {
-				fmt.Fprintln(stdout, *outcome.ExecutionError.Diagnostic)
-			}
+	case serverapi.RuntimeLiveWatchNoFinalResult, serverapi.RuntimeLiveWatchExecutionError, serverapi.RuntimeLiveWatchInterrupted:
+		if response.Outcome.Failure == nil {
+			return 1
+		}
+		fmt.Fprintln(w, response.Outcome.Failure.Reason)
+		if response.Outcome.Failure.Diagnostic != nil {
+			fmt.Fprintln(w, *response.Outcome.Failure.Diagnostic)
+		}
+		if response.Outcome.Kind == serverapi.RuntimeLiveWatchInterrupted {
+			return 130
 		}
 		return 1
-	case serverapi.RuntimeObservationOutcomeTaskDone:
-		return 0
-	default:
-		return 0
 	}
-}
-
-func writeObservationDiscriminator(stdout io.Writer, outcome serverapi.RuntimeObservationOutcome) {
-	switch {
-	case outcome.ScriptPath != nil:
-		fmt.Fprintf(stdout, "Script %s", *outcome.ScriptPath)
-	case outcome.SessionID != nil:
-		fmt.Fprintf(stdout, "Session %s", *outcome.SessionID)
-	default:
-		return
-	}
-	if outcome.NodeKey != nil {
-		fmt.Fprintf(stdout, " (Node %s)", *outcome.NodeKey)
-	}
-	fmt.Fprintln(stdout, ":")
-}
-
-func observationQuestionHint(response serverapi.WorkflowTaskObservationResponse, outcome serverapi.RuntimeObservationOutcome, projectRef string) string {
-	questionCount := 0
-	for _, candidate := range response.Outcomes {
-		if candidate.Kind == serverapi.RuntimeObservationOutcomeQuestion {
-			questionCount++
-		}
-	}
-	if questionCount == 1 {
-		taskShortID, _ := response.Target.TaskShortIDValue()
-		selector := "--task " + taskShortID
-		if strings.TrimSpace(projectRef) != "" {
-			projectID, _ := response.Target.ProjectIDValue()
-			if project := strings.TrimSpace(projectID); project != "" {
-				selector += " --project " + project
-			}
-		}
-		return observedQuestionAnswerHint(*outcome.Question, selector)
-	}
-	if outcome.SessionID != nil {
-		return observedQuestionAnswerHint(*outcome.Question, "--session "+*outcome.SessionID)
-	}
-	taskShortID, _ := response.Target.TaskShortIDValue()
-	return observedQuestionAnswerHint(*outcome.Question, "--task "+taskShortID)
-}
-
-func reducedObservationExitCode(current, next int) int {
-	if next == 1 {
-		return 1
-	}
-	if next == 130 && current == 0 {
-		return 130
-	}
-	return current
+	return 0
 }

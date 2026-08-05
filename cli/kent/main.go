@@ -20,7 +20,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
-	"core/shared/textutil"
 	"golang.org/x/term"
 )
 
@@ -403,69 +402,6 @@ func runSubcommand(args []string) int {
 	return 0
 }
 
-func runLiveWatchSubcommand(args []string) int {
-	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
-		config.Command+" run watch [--persistence-root <root>] <session-id>",
-		"Watch an active run for its next outcome.",
-	))
-	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	if len(fs.Args()) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: kent run watch <session-id>")
-		return 2
-	}
-	sessionID, err := parseCLILiveSessionID(fs.Args()[0])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	if err := rejectSelfTarget(sessionID, "kent run watch "+strings.Join(args, " ")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	response, err := runLiveWatchApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, runErrorMessage(err))
-		if runErrorCode(err) == "interrupted" {
-			return 130
-		}
-		return 1
-	}
-	if len(response.Outcomes) == 0 {
-		return 0
-	}
-	outcome := response.Outcomes[0]
-	switch outcome.Kind {
-	case serverapi.RuntimeObservationOutcomeQuestion:
-		if outcome.Question != nil {
-			writeObservedQuestion(os.Stdout, *outcome.Question, observedQuestionAnswerHint(*outcome.Question, "--session "+sessionID.String()))
-		}
-		return 0
-	case serverapi.RuntimeObservationOutcomeFinalAnswer:
-		if outcome.FinalAnswer == nil {
-			return 0
-		}
-		continueHint := buildRunContinueHint(sessionID.String(), continueCommandPersistenceRoot(*persistenceRoot))
-		resultText, _ := textutil.OptionalExact(outcome.FinalAnswer.Result)
-		emitRunFinalText(os.Stdout, outcome.FinalAnswer.Warnings, resultText, continueHint)
-		return 0
-	default:
-		return writeObservedOutcomeBody(os.Stdout, outcome, "")
-	}
-}
-
 func liveControlSubcommand(args []string) string {
 	if len(args) == 0 {
 		return ""
@@ -675,6 +611,41 @@ func runLiveWaitSubcommand(args []string) int {
 	}
 	emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
 	return 0
+}
+
+func runLiveWatchSubcommand(args []string) int {
+	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
+		config.Command+" run watch [--persistence-root <root>] <session-id>",
+		"Watch the next active run outcome.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
+	if err := fs.Parse(args); err != nil {
+		return runLiveFlagError(err)
+	}
+	if len(fs.Args()) != 1 {
+		return runLiveFlagError(errors.New("usage: kent run watch <session-id>"))
+	}
+	sessionID, err := parseCLILiveSessionID(fs.Args()[0])
+	if err != nil {
+		return runLiveFlagError(err)
+	}
+	if err := rejectSelfTarget(sessionID, "kent run watch "+strings.Join(args, " ")); err != nil {
+		return runLiveFlagError(err)
+	}
+	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
+		return runLiveFlagError(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	response, err := runLiveWatchApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, context.Canceled) {
+			return 130
+		}
+		return 1
+	}
+	return writeRunWatchResponse(os.Stdout, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
 }
 
 func runLiveFlagError(err error) int {

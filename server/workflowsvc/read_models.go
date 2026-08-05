@@ -31,6 +31,7 @@ type WorkflowTaskDetailReadModel interface {
 	GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 	GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error)
 	GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error)
+	ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error)
 }
 
 type WorkflowTaskDependencyReadModel interface {
@@ -78,6 +79,8 @@ func (r ReadModels) validate() error {
 		return errors.New("workflow activity read model is required")
 	case r.Attention == nil:
 		return errors.New("workflow attention read model is required")
+	case r.Approvals == nil:
+		return errors.New("workflow approval read model is required")
 	default:
 		return nil
 	}

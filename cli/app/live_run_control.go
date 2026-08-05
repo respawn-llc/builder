@@ -20,6 +20,15 @@ type RunLiveStopResult struct {
 	Status serverapi.RuntimeLiveStopStatus
 }
 
+func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	defer func() { _ = closeFn() }()
+	return liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
+}
+
 func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, text string) (RunLiveSteerResult, error) {
 	trimmedText := strings.TrimSpace(text)
 	if trimmedText == "" {
@@ -69,15 +78,6 @@ func RunLiveWait(ctx context.Context, opts Options, targetSessionID runtimeids.S
 		return result, err
 	}
 	return result, nil
-}
-
-func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
-	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
-	if err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
-	}
-	defer func() { _ = closeFn() }()
-	return liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
 }
 
 func runtimeLiveWaitResult(targetSessionID runtimeids.SessionID, resp serverapi.RuntimeLiveWaitResponse) RunPromptResult {

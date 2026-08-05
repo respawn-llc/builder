@@ -681,67 +681,6 @@ func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testi
 	}
 }
 
-func TestServiceLiveWaitStaysBlockedWhileOrdinaryQuestionIsPending(t *testing.T) {
-	toolStarted := make(chan struct{})
-	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant},
-		ToolCalls: []llm.ToolCall{{
-			ID:    "ask-wait",
-			Name:  string(toolspec.ToolAskQuestion),
-			Input: json.RawMessage(`{"question":"Continue?"}`),
-		}},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		OnEvent: func(event runtime.Event) {
-			if event.Kind == runtime.EventToolCallStarted && event.ToolCall != nil && event.ToolCall.ID == "ask-wait" {
-				select {
-				case <-toolStarted:
-				default:
-					close(toolStarted)
-				}
-			}
-		},
-	})
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "ask-wait", "ask then wait"))
-		submitDone <- err
-	}()
-	select {
-	case <-toolStarted:
-	case err := <-submitDone:
-		t.Fatalf("ordinary question ended before prompt became pending: %v", err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for ordinary question")
-	}
-
-	waitDone := make(chan error, 1)
-	go func() {
-		_, err := service.LiveWait(context.Background(), serverapi.RuntimeLiveWaitRequest{SessionID: store.Meta().SessionID})
-		waitDone <- err
-	}()
-	select {
-	case err := <-waitDone:
-		t.Fatalf("LiveWait returned while ordinary question was pending: %v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	if err := engine.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	select {
-	case <-submitDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("ordinary question did not terminate after interrupt")
-	}
-	select {
-	case <-waitDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("LiveWait did not terminate after interruption")
-	}
-}
-
 func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
