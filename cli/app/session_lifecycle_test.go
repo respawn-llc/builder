@@ -64,6 +64,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 					Access: tools.FileAccessScope{
 						WorkingDirectory:    tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
 						ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
+						ProjectWorkspace:    tools.ProjectWorkspaceScope{ProjectID: "project-1"},
 					},
 				},
 				OwnerSessionID:      plan.SessionID,
