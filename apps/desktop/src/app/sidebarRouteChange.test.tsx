@@ -553,7 +553,9 @@ function SidebarFixture({
     const nextIndex = nextIndexRef.current + 1;
     if (activeDestination === null || nextIndex >= destinations.length) return;
     nextIndexRef.current = nextIndex;
-    pushSidebar(destinations[nextIndex]);
+    const nextDestination = destinations[nextIndex];
+    if (nextDestination === undefined) return;
+    pushSidebar(nextDestination);
   }, [activeDestination, destinations, pushSidebar]);
   return null;
 }
