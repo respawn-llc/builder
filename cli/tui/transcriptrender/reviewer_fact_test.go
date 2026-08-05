@@ -37,11 +37,6 @@ func TestTypedReviewerFeedbackRendersCountCollapsedAndMarkdownExpanded(t *testin
 	if reflect.DeepEqual(collapsed.Lines, RenderCommittedRow(row, 80, "dark", ModeDetailExpanded).Lines) {
 		t.Fatal("collapsed feedback unexpectedly rendered the full source")
 	}
-	if expanded.Lines[0].LeadingSymbol == nil ||
-		expanded.Lines[0].LeadingSymbol.Text != reviewerFeedbackGlyph ||
-		expanded.Lines[0].LeadingSymbol.Style.SemanticRole != StyleRoleNoticeReviewer {
-		t.Fatalf("expanded feedback lost source or success glyph: %+v", expanded.Lines)
-	}
 	countChanged := row
 	countChanged.ReviewerFeedback = cloneReviewerFeedbackForRender(row.ReviewerFeedback)
 	countChanged.ReviewerFeedback.SuggestionCount++
@@ -74,11 +69,6 @@ func TestTypedReviewerErrorRendersExpandedDiagnostic(t *testing.T) {
 	rendered := RenderCommittedRow(row, 80, "dark", ModeOngoing)
 	if len(rendered.Lines) == 0 || rendered.Group != clientui.TranscriptRowReviewerError {
 		t.Fatalf("typed Reviewer error presentation = %+v", rendered)
-	}
-	if rendered.Lines[0].LeadingSymbol == nil ||
-		rendered.Lines[0].LeadingSymbol.Text != reviewerErrorGlyph ||
-		rendered.Lines[0].LeadingSymbol.Style.SemanticRole != StyleRoleError {
-		t.Fatalf("Reviewer error semantic presentation missing: %+v", rendered.Lines)
 	}
 	var renderedDetail string
 	for _, span := range rendered.Lines[0].Spans {

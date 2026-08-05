@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"core/server/llm"
@@ -102,6 +101,45 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 		if event.Kind == EventReviewerCompleted {
 			t.Fatalf("failed Reviewer start emitted unmatched completion: %+v", events)
 		}
+	}
+}
+
+func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	stepID := "11111111-1111-4111-8111-111111111111"
+	engine.cfg.OnEvent = func(event Event) {
+		switch event.Kind {
+		case EventReviewerStarted:
+			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active == nil || active.StepID != stepID {
+				t.Fatalf("Started callback observed Reviewer state %+v", active)
+			}
+		case EventReviewerCompleted:
+			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
+				t.Fatalf("Completed callback observed active Reviewer state %+v", active)
+			}
+		}
+	}
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
+		t.Fatalf("publish Reviewer start: %v", err)
+	}
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID})); err != nil {
+		t.Fatalf("publish Reviewer completion: %v", err)
+	}
+}
+
+func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	stepID := "11111111-1111-4111-8111-111111111111"
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
+		t.Fatalf("publish Reviewer start: %v", err)
+	}
+	engine.eventLog = session.MaterializedEventLog{}
+	executor := &defaultStepExecutor{engine: engine}
+	if err := executor.terminalizeReviewerLifecycle(stepID, nil); err == nil {
+		t.Fatal("completion publication unexpectedly succeeded")
+	}
+	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
+		t.Fatalf("completion publication failure left Reviewer active: %+v", active)
 	}
 }
 
@@ -222,23 +260,27 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 						if readErr != nil {
 							t.Fatalf("read committed Reviewer fact: %v", readErr)
 						}
-						var persistedID any
+						var persistedFeedback *session.ReviewerFeedbackRecord
+						var persistedError *session.ReviewerErrorRecord
 						for _, record := range window.Records {
 							switch payload := mustSessionEventPayload(record).(type) {
 							case session.ReviewerFeedbackRecord:
-								persistedID = payload.ID
+								copied := payload
+								persistedFeedback = &copied
 							case session.ReviewerErrorRecord:
-								persistedID = payload.ID
+								copied := payload
+								persistedError = &copied
 							}
 						}
-						if persistedID == "" {
-							t.Fatal("committed Reviewer fact was not persisted")
+						if factEvent.LocalEntry.ReviewerFeedback != nil {
+							if persistedFeedback == nil || persistedFeedback.ID != factEvent.LocalEntry.ReviewerFeedback.ID {
+								t.Fatalf("persisted/live Reviewer feedback identity diverged: persisted=%+v event=%v", persistedFeedback, factEvent.LocalEntry.ReviewerFeedback.ID)
+							}
 						}
-						if factEvent.LocalEntry.ReviewerFeedback != nil && !reflect.DeepEqual(persistedID, factEvent.LocalEntry.ReviewerFeedback.ID) {
-							t.Fatalf("persisted/live Reviewer feedback identity diverged: persisted=%v event=%v", persistedID, factEvent.LocalEntry.ReviewerFeedback.ID)
-						}
-						if factEvent.LocalEntry.ReviewerError != nil && !reflect.DeepEqual(persistedID, factEvent.LocalEntry.ReviewerError.ID) {
-							t.Fatalf("persisted/live Reviewer error identity diverged: persisted=%v event=%v", persistedID, factEvent.LocalEntry.ReviewerError.ID)
+						if factEvent.LocalEntry.ReviewerError != nil {
+							if persistedError == nil || persistedError.ID != factEvent.LocalEntry.ReviewerError.ID {
+								t.Fatalf("persisted/live Reviewer error identity diverged: persisted=%+v event=%v", persistedError, factEvent.LocalEntry.ReviewerError.ID)
+							}
 						}
 					}
 				})

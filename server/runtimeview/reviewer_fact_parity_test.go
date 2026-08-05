@@ -36,6 +36,14 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	if !reflect.DeepEqual(hydration.CommittedRows, page.Entries) {
 		t.Fatalf("hydration/page Reviewer rows differ: hydration=%+v page=%+v", hydration.CommittedRows, page.Entries)
 	}
+	for index := range hydration.CommittedRows {
+		if err := hydration.CommittedRows[index].Validate(); err != nil {
+			t.Fatalf("hydrated Reviewer row %d failed validation: %v", index, err)
+		}
+		if err := page.Entries[index].Validate(); err != nil {
+			t.Fatalf("paged Reviewer row %d failed validation: %v", index, err)
+		}
+	}
 	for index := range entries {
 		event := runtime.Event{
 			Kind: runtime.EventLocalEntryAdded, StepID: stepID,
@@ -44,6 +52,9 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 		liveMessages := TranscriptMessagesFromRuntimeEvent(event)
 		if len(liveMessages) != 1 {
 			t.Fatalf("live Reviewer subscription messages %d, want one", len(liveMessages))
+		}
+		if err := liveMessages[0].Validate(); err != nil {
+			t.Fatalf("live Reviewer subscription event %d failed validation: %v", index, err)
 		}
 		liveRows := []clientui.TranscriptCommittedRow{
 			transcriptPayload[clientui.TranscriptCommittedRow](t, liveMessages[0]),

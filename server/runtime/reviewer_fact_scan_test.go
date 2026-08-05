@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"core/server/llm"
@@ -83,27 +84,34 @@ func TestChatStoreDeliverySnapshotKeepsTypedReviewerFactsProjected(t *testing.T)
 func TestReopenedEngineHydratesTypedReviewerFacts(t *testing.T) {
 	store := mustCreateTestSession(t)
 	stepID := "11111111-1111-4111-8111-111111111111"
-	if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerFeedbackRecord{
-		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"reopened"},
+	feedback := session.ReviewerFeedbackRecord{
+		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"reopened", "preserve spacing  "},
 		Visibility: session.EntryVisibilityOngoingCollapsed,
-	}); err != nil {
+	}
+	reviewerError := session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "reopened error detail",
+	}
+	if _, _, err := appendTestEvent(t, store, stepID, feedback); err != nil {
 		t.Fatalf("append feedback: %v", err)
 	}
-	if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerErrorRecord{
-		ID: runtimeids.NewReviewerErrorID(), Detail: "reopened error",
-	}); err != nil {
+	if _, _, err := appendTestEvent(t, store, stepID, reviewerError); err != nil {
 		t.Fatalf("append error: %v", err)
 	}
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
-	if len(rows) != 2 || rows[0].ReviewerFeedback == nil || rows[1].ReviewerError == nil {
-		t.Fatalf("reopened typed Reviewer rows = %+v", rows)
-	}
+	assertReviewerRuntimeFacts(t, rows, stepID, feedback, reviewerError)
 }
 
 func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 	store := mustCreateTestSession(t)
 	stepID := "11111111-1111-4111-8111-111111111111"
+	feedback := session.ReviewerFeedbackRecord{
+		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"paged feedback", "second\nline"},
+		Visibility: session.EntryVisibilityOngoingCollapsed,
+	}
+	reviewerError := session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "paged error detail",
+	}
 	for index := 0; index < 24; index++ {
 		if _, _, err := appendTestEvent(t, store, stepID, llm.Message{
 			Role: llm.RoleAssistant, Content: textutil.Value("history"),
@@ -111,17 +119,12 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			t.Fatalf("append history %d: %v", index, err)
 		}
 		if index == 5 {
-			if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerFeedbackRecord{
-				ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"paged feedback"},
-				Visibility: session.EntryVisibilityOngoingCollapsed,
-			}); err != nil {
+			if _, _, err := appendTestEvent(t, store, stepID, feedback); err != nil {
 				t.Fatalf("append paged feedback: %v", err)
 			}
 		}
 		if index == 18 {
-			if _, _, err := appendTestEvent(t, store, stepID, session.ReviewerErrorRecord{
-				ID: runtimeids.NewReviewerErrorID(), Detail: "paged error",
-			}); err != nil {
+			if _, _, err := appendTestEvent(t, store, stepID, reviewerError); err != nil {
 				t.Fatalf("append paged error: %v", err)
 			}
 		}
@@ -136,15 +139,29 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 		}
 		page = mustEngineSegmentPage(t, engine, page.OlderCursor)
 	}
-	foundFeedback, foundError := false, false
+	feedbackEntries, errorEntries := 0, 0
 	for _, page := range pages {
 		for _, entry := range page.Snapshot.Entries {
-			foundFeedback = foundFeedback || entry.ReviewerFeedback != nil
-			foundError = foundError || entry.ReviewerError != nil
+			if entry.ReviewerFeedback != nil {
+				feedbackEntries++
+				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed ||
+					entry.ReviewerFeedback.ID != feedback.ID ||
+					!reflect.DeepEqual(entry.ReviewerFeedback.Suggestions, feedback.Suggestions) {
+					t.Fatalf("paged feedback payload changed: %+v", entry)
+				}
+			}
+			if entry.ReviewerError != nil {
+				errorEntries++
+				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoing ||
+					entry.ReviewerError.ID != reviewerError.ID ||
+					entry.ReviewerError.Detail != reviewerError.Detail {
+					t.Fatalf("paged Reviewer error payload changed: %+v", entry)
+				}
+			}
 		}
 	}
-	if !foundFeedback || !foundError {
-		t.Fatalf("adjacent pages lost typed Reviewer facts: feedback=%t error=%t", foundFeedback, foundError)
+	if feedbackEntries != 1 || errorEntries != 1 {
+		t.Fatalf("adjacent pages duplicated or lost typed Reviewer facts: feedback=%d error=%d", feedbackEntries, errorEntries)
 	}
 	if len(pages) > 1 {
 		for index := len(pages) - 1; index > 0; index-- {
@@ -155,25 +172,23 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 		}
 	}
 	reopened := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
-	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(reopenedPage.Snapshot)
-	if len(reopenedFacts) == 0 {
-		t.Fatal("reopened newest page lost committed Reviewer facts")
-	}
+	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, reopened).CommittedRows, stepID, feedback, reviewerError)
 }
 
 func TestReviewerFactsSurviveSessionCloneReplay(t *testing.T) {
 	parent := mustCreateTestSession(t)
 	stepID := "11111111-1111-4111-8111-111111111111"
-	if _, _, err := appendTestEvent(t, parent, stepID, session.ReviewerFeedbackRecord{
-		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"cloned feedback"},
+	feedback := session.ReviewerFeedbackRecord{
+		ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{"cloned feedback", "clone source"},
 		Visibility: session.EntryVisibilityOngoingCollapsed,
-	}); err != nil {
+	}
+	reviewerError := session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "cloned error detail",
+	}
+	if _, _, err := appendTestEvent(t, parent, stepID, feedback); err != nil {
 		t.Fatalf("append clone feedback: %v", err)
 	}
-	if _, _, err := appendTestEvent(t, parent, stepID, session.ReviewerErrorRecord{
-		ID: runtimeids.NewReviewerErrorID(), Detail: "cloned error",
-	}); err != nil {
+	if _, _, err := appendTestEvent(t, parent, stepID, reviewerError); err != nil {
 		t.Fatalf("append clone error: %v", err)
 	}
 	parentLog := mustMaterializeTestEventLog(t, parent)
@@ -183,9 +198,38 @@ func TestReviewerFactsSurviveSessionCloneReplay(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = child.RemoveDurable() })
 	engine := mustNewTestEngine(t, child, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
-	if len(rows) != 2 || rows[0].ReviewerFeedback == nil || rows[1].ReviewerError == nil {
-		t.Fatalf("cloned Reviewer rows = %+v", rows)
+	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, engine).CommittedRows, stepID, feedback, reviewerError)
+}
+
+func assertReviewerRuntimeFacts(
+	t *testing.T,
+	rows []TranscriptCommittedRowFact,
+	stepID string,
+	feedback session.ReviewerFeedbackRecord,
+	reviewerError session.ReviewerErrorRecord,
+) {
+	t.Helper()
+	typedRows := make([]TranscriptCommittedRowFact, 0, 2)
+	for _, row := range rows {
+		if row.ReviewerFeedback != nil || row.ReviewerError != nil {
+			typedRows = append(typedRows, row)
+		}
+	}
+	if len(typedRows) != 2 || typedRows[0].ReviewerFeedback == nil || typedRows[1].ReviewerError == nil {
+		t.Fatalf("typed Reviewer rows = %+v", typedRows)
+	}
+	gotFeedback := typedRows[0].ReviewerFeedback
+	gotError := typedRows[1].ReviewerError
+	if gotFeedback.ID != feedback.ID || typedRows[0].StepID != stepID ||
+		!reflect.DeepEqual(gotFeedback.Suggestions, feedback.Suggestions) ||
+		gotFeedback.SuggestionCount != len(feedback.Suggestions) ||
+		typedRows[0].Visibility != transcript.EntryVisibilityOngoingCollapsed {
+		t.Fatalf("feedback payload changed: %+v", typedRows[0])
+	}
+	if gotError.ID != reviewerError.ID || typedRows[1].StepID != stepID ||
+		gotError.Detail != reviewerError.Detail ||
+		typedRows[1].Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("Reviewer error payload changed: %+v", typedRows[1])
 	}
 }
 
