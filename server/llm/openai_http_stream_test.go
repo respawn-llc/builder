@@ -184,6 +184,24 @@ func TestGenerateStreamPreservesDistinctReasoningTracesWithSameText(t *testing.T
 	}
 }
 
+func TestGenerateStreamCompletedReasoningTextOverridesStreamedPartial(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"streamed partial"}`,
+		`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"reason_1","summary":[{"type":"summary_text","text":"completed final"}]}]}}`,
+		`[DONE]`,
+	)
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.Reasoning) != 1 {
+		t.Fatalf("reasoning traces = %+v, want one trace", resp.Reasoning)
+	}
+	if resp.Reasoning[0].Text != "completed final" {
+		t.Fatalf("reasoning text = %q, want completed final", resp.Reasoning[0].Text)
+	}
+}
+
 func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testing.T) {
 	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
 		`event: response.completed`,

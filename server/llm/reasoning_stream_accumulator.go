@@ -96,7 +96,9 @@ func mergeReasoningEntries(primary, secondary []ReasoningEntry) ([]ReasoningEntr
 						!ReasoningItemIdentityEqual(out[index].ItemIdentity, entry.ItemIdentity) {
 						return fmt.Errorf("reasoning source coordinate received conflicting provider item identity")
 					}
-					out[index].Text = entry.Text
+					if out[index].Text == "" {
+						out[index].Text = entry.Text
+					}
 					if out[index].ItemIdentity == nil {
 						out[index].ItemIdentity = CloneReasoningItemIdentity(entry.ItemIdentity)
 					}
