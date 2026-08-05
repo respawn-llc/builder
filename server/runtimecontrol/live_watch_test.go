@@ -28,6 +28,16 @@ func (liveWatchApprovalViewStub) ListPendingApprovalsBySession(context.Context, 
 	return serverapi.ApprovalListPendingBySessionResponse{}, nil
 }
 
+type failingLiveWatchAttention struct{ err error }
+
+func (f failingLiveWatchAttention) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, f.err
+}
+
+func (f failingLiveWatchAttention) SubscribeSessionAttentionNotifications(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, f.err
+}
+
 func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	sessionID := store.Meta().SessionID
@@ -48,6 +58,17 @@ func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 		response.Outcome.Question == nil || response.Outcome.Question.Ask == nil ||
 		response.Outcome.Question.Ask.AskID != "ask-1" {
 		t.Fatalf("LiveWatch response = %+v", response)
+	}
+}
+
+func TestLiveWatchSurfacesAttentionStreamFailureBeforeArbitration(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	streamErr := errors.New("attention stream failed")
+	service.WithLiveWatchPromptSources(liveWatchAskViewStub{}, liveWatchApprovalViewStub{}, failingLiveWatchAttention{err: streamErr})
+
+	_, err := service.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: store.Meta().SessionID})
+	if !errors.Is(err, streamErr) {
+		t.Fatalf("LiveWatch error = %v, want attention stream failure", err)
 	}
 }
 
