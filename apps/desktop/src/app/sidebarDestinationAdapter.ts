@@ -1,35 +1,20 @@
 import type {
   SidebarDestination,
-  SidebarDestinationSnapshot,
   SidebarInvalidationTarget,
-  SidebarTaskDetailSnapshot,
   TaskDetailInitialFocus,
 } from "@/app-facade";
 
-export type SidebarTaskIdentity = Readonly<{
-  taskID: string;
-  projectID: string;
-}>;
-
 export type { SidebarInvalidationTarget };
-
-export function sidebarTaskIdentity(destination: SidebarDestination): SidebarTaskIdentity | null {
-  return destination.kind === "taskDetail"
-    ? { projectID: destination.projectID, taskID: destination.taskID }
-    : null;
-}
 
 export function sameSidebarDestination(
   current: SidebarDestination,
   requested: SidebarDestination,
 ): boolean {
-  const currentTask = sidebarTaskIdentity(current);
-  const requestedTask = sidebarTaskIdentity(requested);
   return (
-    currentTask !== null &&
-    requestedTask !== null &&
-    currentTask.taskID === requestedTask.taskID &&
-    currentTask.projectID === requestedTask.projectID
+    current.kind === "taskDetail" &&
+    requested.kind === "taskDetail" &&
+    current.taskID === requested.taskID &&
+    current.projectID === requested.projectID
   );
 }
 
@@ -41,7 +26,6 @@ export function sidebarDestinationProjectID(destination: SidebarDestination): st
       return destination.projectID;
     case "taskDetail":
     case "workflowEditor":
-      return destination.projectID ?? null;
     case "workflowCreate":
       return destination.projectID ?? null;
     case "workflowInspect":
@@ -88,10 +72,4 @@ export function taskDetailSidebarDestination(
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.onMutated === undefined ? {} : { onMutated: options.onMutated }),
   };
-}
-
-export function narrowTaskDetailSnapshot(
-  snapshot: SidebarDestinationSnapshot | null,
-): SidebarTaskDetailSnapshot | null {
-  return snapshot?.kind === "taskDetail" ? snapshot : null;
 }

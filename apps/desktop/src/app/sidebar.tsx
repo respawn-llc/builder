@@ -312,7 +312,6 @@ export function SidebarHost() {
             sidebarDestinationContentClassName(activeDestination.kind),
             sidebarDestinationMotionClassName(direction),
           )}
-          data-testid="app-sidebar-destination"
         >
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView

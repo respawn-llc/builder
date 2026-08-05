@@ -1,11 +1,9 @@
 import type { SidebarDestination } from "@/app-facade";
 import {
   deactivateSidebarDestination,
-  narrowTaskDetailSnapshot,
   sameSidebarDestination,
   sidebarDestinationMatches,
   sidebarDestinationProjectID,
-  sidebarTaskIdentity,
   taskDetailSidebarDestination,
 } from "./sidebarDestinationAdapter";
 
@@ -14,10 +12,6 @@ const task = (taskID: string, projectID = "project-1"): SidebarDestination =>
 
 describe("sidebar destination adapter", () => {
   it("uses typed Task and Project identity without string-derived keys", () => {
-    expect(sidebarTaskIdentity(task("task-1"))).toEqual({
-      projectID: "project-1",
-      taskID: "task-1",
-    });
     expect(sameSidebarDestination(task("task-1"), task("task-1"))).toBe(true);
     expect(sameSidebarDestination(task("task-1"), task("task-1", "project-2"))).toBe(false);
     expect(sameSidebarDestination(task("task-1"), { kind: "newTask", projectID: "project-1", workflowID: "workflow-1", boardQueryWorkflowID: undefined })).toBe(false);
@@ -52,16 +46,5 @@ describe("sidebar destination adapter", () => {
     });
     expect(deactivateSidebarDestination(focused)).toEqual(task("task-1"));
     expect(deactivateSidebarDestination(task("task-1"))).toEqual(task("task-1"));
-  });
-
-  it("narrows retained state at the typed adapter boundary", () => {
-    const snapshot = {
-      kind: "taskDetail" as const,
-      scrollTop: 10,
-      descriptionExpanded: true,
-      selectedTab: "comments" as const,
-    };
-    expect(narrowTaskDetailSnapshot(snapshot)).toEqual(snapshot);
-    expect(narrowTaskDetailSnapshot(null)).toBeNull();
   });
 });

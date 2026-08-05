@@ -183,7 +183,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       }
       const history = createSidebarHistory<SidebarDestination, SidebarDestinationSnapshot>(
         destination,
-        null,
       );
       const promise = new Promise<SidebarResult>((resolve) => {
         pendingRef.current = { history, resolve };

@@ -54,10 +54,9 @@ function entryAt<T, R>(entries: readonly Entry<T, R>[], index: number): Entry<T,
 
 export function createSidebarHistory<T, R>(
   root: T,
-  rootRetainedState: R | null = null,
 ): SidebarHistory<T, R> {
   const seed = createMemoryHistory({ initialEntries: ["/"] });
-  let entries: Entry<T, R>[] = [{ destination: root, retainedState: rootRetainedState, location: seed.location }];
+  let entries: Entry<T, R>[] = [{ destination: root, retainedState: null, location: seed.location }];
   let currentIndex = 0;
   let destroyed = false;
   let direction: SidebarHistorySnapshot<T, R>["direction"] = null;
@@ -78,6 +77,7 @@ export function createSidebarHistory<T, R>(
     if (key === undefined) throw new Error("Sidebar history location has no TanStack key.");
     return key;
   };
+  const isCurrent = (sourceKey: string): boolean => !destroyed && sourceKey === currentKey();
   const notify = (nextDirection: SidebarHistorySnapshot<T, R>["direction"]): void => {
     direction = nextDirection;
     const entry = entries[currentIndex];
@@ -98,7 +98,7 @@ export function createSidebarHistory<T, R>(
       ...entry,
       location: location(entry.location.href, { ...entry.location.state, __TSR_index: index }),
     }));
-    if (entries.length !== 0) history.notify({ type: "REPLACE" });
+    history.notify({ type: "REPLACE" });
   };
   const history = createHistory({
     getLocation: currentLocation,
@@ -142,7 +142,7 @@ export function createSidebarHistory<T, R>(
   };
 
   const push = (request: Parameters<SidebarHistory<T, R>["push"]>[0]): boolean => {
-    if (destroyed || request.sourceKey !== currentKey()) return false;
+    if (!isCurrent(request.sourceKey)) return false;
     const current = entryAt(entries, currentIndex);
     if (request.sameDestination(current.destination)) return false;
     entries[currentIndex] = {
@@ -173,13 +173,14 @@ export function createSidebarHistory<T, R>(
     return true;
   };
   const replace = (request: Parameters<SidebarHistory<T, R>["replace"]>[0]): boolean => {
-    if (destroyed || request.sourceKey !== currentKey()) return false;
+    if (!isCurrent(request.sourceKey)) return false;
     refreshCurrent(request);
     notify("push");
     return true;
   };
+
   const back = (request: Parameters<SidebarHistory<T, R>["back"]>[0]): boolean => {
-    if (destroyed || request.sourceKey !== currentKey() || currentIndex === 0) return false;
+    if (!isCurrent(request.sourceKey) || currentIndex === 0) return false;
     entries[currentIndex] = { ...entryAt(entries, currentIndex), retainedState: request.retainedState };
     entries = entries.slice(0, currentIndex);
     currentIndex -= 1;
@@ -188,6 +189,7 @@ export function createSidebarHistory<T, R>(
     notify("back");
     return true;
   };
+
   const remove = (predicate: (destination: T) => boolean) => {
     if (destroyed) return { removedCount: 0, currentRemoved: false, empty: false };
     const matches = entries.map((entry) => predicate(entry.destination));
