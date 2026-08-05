@@ -28,7 +28,7 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	if trimmedText == "" {
 		return RunLiveSteerResult{}, errors.New("text is required")
 	}
-	callerSessionID, err := liveSteerCallerSessionID()
+	callerSessionID, err := LiveSteerCallerSessionID()
 	if err != nil {
 		return RunLiveSteerResult{}, err
 	}
@@ -49,7 +49,7 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	return RunLiveSteerResult{QueueItemID: resp.QueueItemID, Text: resp.Text, ClientRequestID: resp.ClientRequestID}, nil
 }
 
-func liveSteerCallerSessionID() (*string, error) {
+func LiveSteerCallerSessionID() (*string, error) {
 	raw, ok := sessionenv.LookupSessionID(os.LookupEnv)
 	if !ok {
 		return nil, nil
@@ -57,6 +57,9 @@ func liveSteerCallerSessionID() (*string, error) {
 	sessionID, err := runtimeids.ParseSessionID(raw)
 	if err != nil {
 		return nil, fmt.Errorf("invalid invoking Session ID %q: %w", raw, err)
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return nil, fmt.Errorf("invalid invoking Session ID %q: canonical UUIDv4 required", raw)
 	}
 	value := sessionID.String()
 	return &value, nil
