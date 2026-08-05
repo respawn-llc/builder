@@ -530,8 +530,8 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 
 type QueuedUserMessage struct {
 	ID              string
-	Text            string
 	ClientRequestID string
+	Message         llm.Message
 }
 
 func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
@@ -551,7 +551,7 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return item
 	}
-	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
+	liveItem := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), text, clientRequestID)
 	waitedForLiveRunStep := false
 	for {
 		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
@@ -662,6 +662,32 @@ func (e *Engine) SubmitUserMessageWithFlushHook(ctx context.Context, text string
 
 func (e *Engine) SubmitUserMessageWithHooks(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
 	return e.submitUserMessage(ctx, text, onActive, onFlushed)
+}
+
+func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
+	if e.closed.Load() {
+		return llm.Message{}, ErrEngineClosed
+	}
+	e.ensureOrchestrationCollaborators()
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+		if onActive != nil {
+			onActive()
+		}
+		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
+		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{steer.Message()})); err != nil {
+			return err
+		}
+		if onFlushed != nil {
+			onFlushed()
+		}
+		msg, runErr := e.runStepLoop(stepCtx, stepID)
+		assistant = msg
+		return runErr
+	})
+	e.surfaceRunError(err)
+	return assistant, err
 }
 
 func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {

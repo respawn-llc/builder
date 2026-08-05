@@ -110,8 +110,9 @@ type sessionUserTurnMemoRequest struct {
 }
 
 type liveSteerMemoRequest struct {
-	SessionID runtimeids.SessionID
-	Text      string
+	SessionID       runtimeids.SessionID
+	CallerSessionID serverapi.OptionalStringKey
+	Text            string
 }
 
 type liveStopMemoRequest struct {

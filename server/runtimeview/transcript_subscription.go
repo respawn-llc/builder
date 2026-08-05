@@ -82,7 +82,7 @@ func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) [
 			ClientRequestID: mustTranscriptClientRequestID(message.ClientRequestID, fmt.Sprintf("hydrated queued message %d", index)),
 			QueueItemID:     mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
 			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            textutil.Value(message.Text),
+			Text:            textutil.Value(message.DisplayText()),
 		})
 	}
 	return out

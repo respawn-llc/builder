@@ -432,7 +432,7 @@ func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 	if messageFlow != nil && messageFlow.queue != nil {
 		messages = messageFlow.queue.Snapshot()
 	}
-	if len(messages) != 2 || messages[0].ID != first.ID || messages[0].Text != "same" || messages[1].Text != "other" {
+	if len(messages) != 2 || messages[0].ID != first.ID || messages[0].DisplayText() != "same" || messages[1].DisplayText() != "other" {
 		t.Fatalf("unexpected pending queue after discard: %+v", messages)
 	}
 }

@@ -168,7 +168,7 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	eng.liveRun.beginStep(snapshot)
 	eng.ensureOrchestrationCollaborators()
 	queueItemID := runtimeids.NewQueueItemID()
-	eng.messageFlow.QueueUserMessageWithID(QueuedUserMessage{ID: queueItemID.String(), Text: "steer pending", ClientRequestID: liveRunTestRequestID(t).String()})
+	eng.messageFlow.QueueUserMessageWithID(queuedUserMessageWithID(queueItemID.String(), "steer pending", liveRunTestRequestID(t).String()))
 	eng.liveRun.mu.Lock()
 	eng.liveRun.current.trackQueuedItemForLiveRun(queueItemID)
 	delete(eng.liveRun.current.publishingItems, queueItemID)
@@ -327,7 +327,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 			<-releaseBefore
 			return nil
 		})
-		if err == nil && (!accepted || item.ID == "" || item.Text != "steer") {
+		if err == nil && (!accepted || item.ID == "" || item.DisplayText() != "steer") {
 			err = errors.New("unexpected accepted queue item")
 		}
 		queueDone <- err
@@ -732,7 +732,7 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 		t.Fatal("timed out waiting for active step")
 	}
 
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "race-safe steer", ClientRequestID: "req-publishing"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "race-safe steer", "req-publishing")
 	tagged := eng.liveRun.beginQueueItemPublication(mustQueueItemID(item.ID), func(queueItemID string) {
 		eng.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
@@ -776,14 +776,14 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 			}
 		},
 	})
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "stopped drained", ClientRequestID: "req-stopped"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "stopped drained", "req-stopped")
 	queueItemID := mustQueueItemID(item.ID)
 	eng.markQueuedUserInjectionForAutoDrain(item.ID)
 	eng.liveRun.mu.Lock()
 	eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 	eng.liveRun.mu.Unlock()
 
-	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserSteeringIntent{{message: item}})
+	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserMessage{{message: item}})
 	if len(remaining) != 0 {
 		t.Fatalf("remaining stopped drained items = %+v, want none", remaining)
 	}

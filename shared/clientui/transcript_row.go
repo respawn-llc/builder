@@ -122,6 +122,7 @@ const (
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
 	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
+	TranscriptMessageAgentSteer                     TranscriptMessageType = "agent_steer"
 )
 
 type NoticeID string
@@ -523,7 +524,8 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageWorktreeMode,
 		TranscriptMessageWorktreeModeExit,
 		TranscriptMessageGoal,
-		TranscriptMessageActiveGoalContinuation:
+		TranscriptMessageActiveGoalContinuation,
+		TranscriptMessageAgentSteer:
 		return nil
 	default:
 		return fmt.Errorf("unknown transcript message type %q", t)

@@ -21,6 +21,11 @@ func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate valid request: %v", err)
 	}
+	callerID := validLiveSessionID
+	req.CallerSessionID = &callerID
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate valid caller provenance: %v", err)
+	}
 
 	cases := []RuntimeLiveSteerRequest{
 		{ClientRequestID: "request-1", SessionID: validLiveSessionID, Text: "text"},
@@ -31,6 +36,20 @@ func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 	for _, tc := range cases {
 		if err := tc.Validate(); err == nil {
 			t.Fatalf("Validate accepted invalid request: %+v", tc)
+		}
+	}
+}
+
+func TestRuntimeLiveSteerRequestRejectsMalformedCallerProvenance(t *testing.T) {
+	for _, caller := range []string{"", "/invalid/session", "  " /* whitespace is not canonical */} {
+		req := RuntimeLiveSteerRequest{
+			ClientRequestID: validLiveClientRequestID,
+			SessionID:       validLiveSessionID,
+			Text:            "text",
+			CallerSessionID: &caller,
+		}
+		if err := req.Validate(); err == nil {
+			t.Fatalf("Validate accepted caller session %q", caller)
 		}
 	}
 }

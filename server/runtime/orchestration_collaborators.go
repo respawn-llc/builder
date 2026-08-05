@@ -123,7 +123,7 @@ type messageLifecycle interface {
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
-	RestorePendingUserInjections(items []queuedUserSteeringIntent)
+	RestorePendingUserInjections(items []queuedUserMessage)
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
 	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)

@@ -774,6 +774,46 @@ func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 	<-submitDone
 }
 
+func TestServiceLiveSteerAgentCallerUsesOneWrappedDeveloperMessage(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "keep-running-agent", "keep running"))
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	sourceID := runtimeids.NewSessionID()
+	steer, err := runtime.NewAgentSteer(sourceID, "steer live")
+	if err != nil {
+		t.Fatalf("NewAgentSteer: %v", err)
+	}
+	sourceText := sourceID.String()
+	resp, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		CallerSessionID: &sourceText,
+		Text:            "steer live",
+	})
+	if err != nil {
+		t.Fatalf("LiveSteer: %v", err)
+	}
+	if steer.Message().Content == nil || resp.Text != *steer.Message().Content {
+		t.Fatalf("LiveSteer response = %+v, want wrapped text", resp)
+	}
+	waitForRuntimeControlPromptHistoryCount(t, runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID), *steer.Message().Content, 1)
+	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
+		SessionID:       store.Meta().SessionID,
+	})
+	close(client.release)
+	<-submitDone
+}
+
 func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})

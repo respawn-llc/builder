@@ -106,6 +106,7 @@
 - `skills`: `D`
 - `subagents`: `D`
 - `environment`: `D`
+- `agent_steer`: `O`
 - `compaction_summary`: `O`, using compact label in ongoing/collapsed detail and full summary on expansion.
 - `interruption`: `O`
 - `error_feedback`: `O`
@@ -148,6 +149,7 @@
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- A transcript message with type `agent_steer` uses the `❯` symbol and full-strength foreground Markdown styling. Ongoing renders the complete model-visible message. Collapsed Detail uses the ordinary compact preview, and expanded Detail renders the complete model-visible message.
 - `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
 - Shell tool calls use shared syntax highlighting, faint styling, and shell syntax for the active operating system.
@@ -194,7 +196,8 @@
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
-- Multiple queued user steering messages flushed at one boundary coalesce into one user message separated by blank lines.
+- A pending steer issued from another Session shows its complete wrapped message.
+- Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
 - Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.

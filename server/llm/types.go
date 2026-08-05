@@ -59,6 +59,7 @@ const (
 	MessageTypeWorktreeModeExit               = clientui.MessageTypeWorktreeModeExit
 	MessageTypeGoal                           = clientui.MessageTypeGoal
 	MessageTypeActiveGoalContinuation         = clientui.MessageTypeActiveGoalContinuation
+	MessageTypeAgentSteer                     = clientui.MessageTypeAgentSteer
 )
 
 type Message struct {
