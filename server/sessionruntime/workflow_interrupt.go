@@ -120,13 +120,14 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	}
 	a.mu.Unlock()
 	unlocked = true
+	var publicationErr error
 	for _, item := range closures {
-		item.store.publishClosure(item.closure)
+		publicationErr = errors.Join(publicationErr, item.store.publishClosure(item.closure))
 	}
 	for _, item := range closures {
 		item.store.releaseClosure(item.closure)
 	}
-	return nil
+	return publicationErr
 }
 
 // WithWorkflowInterruptSelection linearizes Task Interrupt selection against

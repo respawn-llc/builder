@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -149,7 +148,7 @@ func (s *Service) taskQuestion(
 		if strings.TrimSpace(text) == "" {
 			return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 		}
-		question.Ask = &clientui.PendingAsk{
+		ask := clientui.PendingAsk{
 			AskID:                  *questionID,
 			SessionID:              sessionID,
 			Question:               text,
@@ -157,6 +156,7 @@ func (s *Service) taskQuestion(
 			RecommendedOptionIndex: item.RecommendedOptionIndex,
 			CreatedAt:              time.UnixMilli(item.OccurredAtUnixMs).UTC(),
 		}
+		question.Ask = &ask
 	case serverapi.WorkflowAttentionQuestionKindApproval:
 		approvals, ok := cache[sessionID]
 		if !ok {
@@ -165,12 +165,6 @@ func (s *Service) taskQuestion(
 				return serverapi.WorkflowTaskObservationOutcome{}, false, err
 			}
 			approvals = append([]clientui.PendingApproval(nil), list.Approvals...)
-			sort.SliceStable(approvals, func(i, j int) bool {
-				if approvals[i].CreatedAt.Equal(approvals[j].CreatedAt) {
-					return approvals[i].ApprovalID < approvals[j].ApprovalID
-				}
-				return approvals[i].CreatedAt.Before(approvals[j].CreatedAt)
-			})
 			cache[sessionID] = approvals
 		}
 		var approval *clientui.PendingApproval
@@ -179,15 +173,6 @@ func (s *Service) taskQuestion(
 			if candidate.ApprovalID == *questionID {
 				approval = candidate
 				break
-			}
-		}
-		if approval == nil {
-			for index := range approvals {
-				candidate := &approvals[index]
-				if candidate.CreatedAt.UnixMilli() == item.OccurredAtUnixMs {
-					approval = candidate
-					break
-				}
 			}
 		}
 		if approval == nil {
@@ -238,6 +223,7 @@ func taskCurrentNodeFailure(
 		value := *node.ScriptPath
 		if strings.TrimSpace(value) != "" {
 			scriptPath = &value
+			sessionID = nil
 		}
 	}
 	return serverapi.WorkflowTaskObservationOutcome{

@@ -44,13 +44,12 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		handle.RequestStop()
 	}
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
-		_, err := interruptCurrentNodeReferences(
-			ctx,
-			c.store.InterruptCurrentNode,
-			state.references,
-			workflow.CurrentNodeInterruptionReasonUserInterrupt,
-			workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil),
-		)
+		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
+		if state.taskFence != nil {
+			_, err := c.store.InterruptCurrentNodes(ctx, state.references, workflow.CurrentNodeInterruptionReasonUserInterrupt, detail)
+			return err
+		}
+		_, err := interruptCurrentNodeReferences(ctx, c.store.InterruptCurrentNode, state.references, workflow.CurrentNodeInterruptionReasonUserInterrupt, detail)
 		return err
 	})
 	var waitErrs []error

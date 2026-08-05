@@ -317,16 +317,18 @@ func (f *gatedPromptFeed) PromptPendingScope(
 	_ ExecutionScope,
 	_ tools.AskQuestionRequest,
 	_ time.Time,
-) {
+) error {
 	close(f.pendingStarted)
 	<-f.allowPending
 	close(f.pendingPublished)
+	return nil
 }
 
 func (f *gatedPromptFeed) PromptResolvedScope(
 	_ ExecutionScope,
 	_ string,
-) {
+) error {
 	close(f.resolutionStarted)
 	<-f.allowResolution
+	return nil
 }

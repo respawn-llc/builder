@@ -703,9 +703,9 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}}, nil
 }
 
-func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest, createdAt time.Time) {
+func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest, createdAt time.Time) error {
 	if r == nil {
-		return
+		return nil
 	}
 	resource, ok := scope.Resource()
 	if !ok {
@@ -722,14 +722,17 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if projected && entry != nil {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
-		r.publishTaskQuestionWaitingForScope(scope, snapshot)
+		if err := r.publishTaskQuestionWaitingForScope(scope, snapshot); err != nil {
+			return err
+		}
 		r.publishCurrentRuntimeActivity(id)
 	}
+	return nil
 }
 
-func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) {
+func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) error {
 	if r == nil {
-		return
+		return nil
 	}
 	resource, ok := scope.Resource()
 	if !ok {
@@ -750,6 +753,7 @@ func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScop
 		r.publishAttentionResolved(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
+	return nil
 }
 
 func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, sessionID string, snapshot PendingPromptSnapshot) {

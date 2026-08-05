@@ -3,10 +3,8 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"core/server/runtime"
 	servicecontract "core/shared/apicontract"
@@ -18,14 +16,17 @@ import (
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
 
 func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.SessionID, fn func(context.Context, *runtime.Engine) error) error {
-	return s.withRuntime(ctx, id.String(), fn)
+	if s == nil || s.execution == nil {
+		return errors.New("session runtime authority is required")
+	}
+	return s.execution.WithLiveExecutionRuntime(ctx, id, fn)
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	id, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
@@ -33,36 +34,34 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	memoReq := liveSteerMemoRequest{SessionID: id, Text: strings.TrimSpace(req.Text)}
+	memoReq := liveSteerMemoRequest{SessionID: sessionID, Text: strings.TrimSpace(req.Text)}
 	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
-		var response serverapi.RuntimeLiveSteerResponse
-		err := s.withLiveExecutionRuntime(ctx, id, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		var resp serverapi.RuntimeLiveSteerResponse
+		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 			item, accepted, err := engine.QueueUserMessageForActiveRun(callbackCtx, memoReq.Text, clientRequestID, func() error {
-				if s.promptStore == nil {
+				if s == nil || s.promptStore == nil {
 					return nil
 				}
-				record, _, err := s.recordPromptHistory(callbackCtx, id.String(), clientRequestID.String(), memoReq.Text)
-				if err == nil {
-					memoReq.Text = record.Text
+				record, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), memoReq.Text)
+				if err != nil {
+					return err
 				}
-				return err
+				memoReq.Text = record.Text
+				return nil
 			})
+			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+				return serverapi.ErrRuntimeNoActiveRun
+			}
 			if err != nil {
 				return err
 			}
 			if !accepted {
 				return serverapi.ErrRuntimeNoActiveRun
 			}
-			response = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
+			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 			return nil
 		})
-		if err != nil {
-			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				return response, serverapi.ErrRuntimeNoActiveRun
-			}
-			return response, err
-		}
-		return response, nil
+		return resp, err
 	})
 }
 
@@ -70,28 +69,34 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	id, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	response := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
-	err = s.withRuntime(ctx, id.String(), func(_ context.Context, engine *runtime.Engine) error {
-		stopped, err := engine.TryInterruptActiveRun()
-		if stopped {
-			response.Status = serverapi.RuntimeLiveStopStatusStopped
+	memoReq := liveStopMemoRequest{SessionID: sessionID}
+	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
+		resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
+		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+			stopped, err := engine.TryInterruptActiveRun()
+			if err != nil {
+				return err
+			}
+			if stopped {
+				resp.Status = serverapi.RuntimeLiveStopStatusStopped
+			}
+			return nil
+		})
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+			return resp, nil
 		}
-		return err
+		return resp, err
 	})
-	if errors.Is(err, runtime.ErrNoActiveLiveRun) || errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return response, nil
-	}
-	return response, err
 }
 
 func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (*runtime.LiveRunWaitHandle, string, error) {
 	var handle *runtime.LiveRunWaitHandle
 	var name string
-	err := s.withRuntime(ctx, id.String(), func(callbackCtx context.Context, engine *runtime.Engine) error {
+	err := s.withLiveExecutionRuntime(ctx, id, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		var err error
 		handle, err = engine.CaptureActiveRunResult(callbackCtx)
 		if err == nil {
@@ -105,48 +110,51 @@ func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (
 	return handle, name, err
 }
 
-func (s *Service) waitLiveRun(ctx context.Context, id runtimeids.SessionID) (runtime.LiveRunResult, string, error) {
-	handle, name, err := s.captureLiveRun(ctx, id)
-	if err != nil {
-		return runtime.LiveRunResult{}, "", err
-	}
-	result, err := handle.Wait()
-	return result, name, err
-}
-
 func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
-	id, err := runtimeids.ParseSessionID(req.SessionID)
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
-	result, name, err := s.waitLiveRun(ctx, id)
-	terminal := classifyLiveRun(result, err)
-	if terminal.noFinal {
-		return serverapi.RuntimeLiveWaitResponse{}, serverapi.ErrRuntimeNoFinalAnswer
+	var resp serverapi.RuntimeLiveWaitResponse
+	var waitHandle *runtime.LiveRunWaitHandle
+	var sessionName string
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		handle, err := engine.CaptureActiveRunResult(callbackCtx)
+		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+			return serverapi.ErrRuntimeNoActiveRun
+		}
+		if err != nil {
+			return err
+		}
+		waitHandle = handle
+		sessionName = strings.TrimSpace(engine.SessionName())
+		return nil
+	})
+	if err != nil {
+		return resp, err
 	}
-	if terminal.err != nil {
-		return serverapi.RuntimeLiveWaitResponse{}, terminal.err
+	result, err := waitHandle.Wait()
+	if errors.Is(err, runtime.ErrLiveRunNoFinalAnswer) {
+		return resp, serverapi.ErrRuntimeNoFinalAnswer
 	}
-	if name == "" {
-		name = id.String()
+	if err != nil {
+		return resp, err
 	}
-	return serverapi.RuntimeLiveWaitResponse{
-		SessionID: id.String(), SessionName: name,
+	if sessionName == "" {
+		sessionName = sessionID.String()
+	}
+	resp = serverapi.RuntimeLiveWaitResponse{
+		SessionID: sessionID.String(), SessionName: sessionName,
 		Result:         textutil.Pointer(result.AssistantMessage.Content),
 		DurationMillis: result.FinishedAt.Sub(result.StartedAt).Milliseconds(),
 		LiveRunGroupID: result.GroupID.String(), TerminalRunID: result.RunID.String(),
 		TerminalStepID: result.StepID.String(), TerminalStatus: string(result.Status),
 		ResultKind: serverapi.RuntimeLiveResultKindAssistantFinalAnswer,
-	}, nil
-}
-
-type liveWatchPrompt struct {
-	at time.Time
-	id string
-	q  serverapi.ObservationQuestion
+	}
+	return resp, err
 }
 
 func (s *Service) pendingWatchQuestion(ctx context.Context, sessionID string) (*serverapi.ObservationQuestion, error) {
@@ -161,28 +169,11 @@ func (s *Service) pendingWatchQuestion(ctx context.Context, sessionID string) (*
 	if err != nil {
 		return nil, err
 	}
-	prompts := make([]liveWatchPrompt, 0, len(asks.Asks)+len(approvals.Approvals))
-	for index := range asks.Asks {
-		ask := asks.Asks[index]
-		prompts = append(prompts, liveWatchPrompt{at: ask.CreatedAt, id: ask.AskID, q: serverapi.ObservationQuestion{Ask: &ask}})
-	}
-	for index := range approvals.Approvals {
-		approval := approvals.Approvals[index]
-		prompts = append(prompts, liveWatchPrompt{at: approval.CreatedAt, id: approval.ApprovalID, q: serverapi.ObservationQuestion{Approval: &approval}})
-	}
-	slices.SortStableFunc(prompts, func(left, right liveWatchPrompt) int {
-		if left.at.Before(right.at) {
-			return -1
-		}
-		if left.at.After(right.at) {
-			return 1
-		}
-		return strings.Compare(left.id, right.id)
-	})
-	if len(prompts) == 0 {
+	prompt, ok := serverapi.FirstPendingPromptObservation(asks.Asks, approvals.Approvals)
+	if !ok {
 		return nil, nil
 	}
-	return &prompts[0].q, nil
+	return &prompt.Question, nil
 }
 
 func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
@@ -288,6 +279,7 @@ type liveRunTerminal struct {
 	noFinal       bool
 	noFinalReason runtime.LiveRunNoFinalAnswerReason
 	status        runtime.RunStatus
+	reason        string
 	diagnostic    *string
 }
 
@@ -302,9 +294,18 @@ func classifyLiveRun(result runtime.LiveRunResult, err error) liveRunTerminal {
 		terminal.noFinalReason = result.NoFinalReason
 		return terminal
 	}
-	if result.Error != nil {
+	if terminal.err == nil {
+		terminal.err = result.Error
+	}
+	if terminal.err != nil {
+		terminal.reason = strings.TrimSpace(terminal.err.Error())
+	}
+	if result.Error != nil && (terminal.err == nil || result.Error.Error() != terminal.reason) {
 		value := result.Error.Error()
 		terminal.diagnostic = &value
+	}
+	if terminal.reason == "" {
+		terminal.reason = string(result.Status)
 	}
 	return terminal
 }
@@ -326,9 +327,9 @@ func liveWatchResult(id runtimeids.SessionID, name string, result runtime.LiveRu
 	}
 	if terminal.err != nil {
 		kind := serverapi.RuntimeLiveWatchExecutionError
-		reason := "execution error"
+		reason := terminal.reason
 		if terminal.status == runtime.RunStatusInterrupted {
-			kind, reason = serverapi.RuntimeLiveWatchInterrupted, "interrupted"
+			kind = serverapi.RuntimeLiveWatchInterrupted
 		}
 		return serverapi.RuntimeLiveWatchResponse{SessionID: id.String(), Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: kind, Failure: &serverapi.RuntimeLiveWatchFailure{Reason: reason, Diagnostic: terminal.diagnostic},

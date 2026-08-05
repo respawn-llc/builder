@@ -47,7 +47,7 @@ func TestTaskCurrentNodeFailureUsesDefinitionIdentityAndDiagnostic(t *testing.T)
 		t.Fatalf("task current node failure: %v", err)
 	}
 	if outcome.Kind != serverapi.WorkflowTaskObservationExecutionError ||
-		outcome.SessionID == nil || *outcome.SessionID != sessionID.String() ||
+		outcome.SessionID != nil ||
 		outcome.ScriptPath == nil || *outcome.ScriptPath != scriptPath ||
 		outcome.NodeKey == nil || *outcome.NodeKey != "check" ||
 		outcome.Failure == nil || outcome.Failure.Diagnostic == nil || *outcome.Failure.Diagnostic != "script stopped" {

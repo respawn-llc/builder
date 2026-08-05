@@ -45,7 +45,7 @@
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
 - The restored text is the exact message Kent attempted to submit. If the composer already contains a newer draft, Kent keeps that draft first, inserts one blank line, appends the failed message, and places the cursor at the end.
 - The failure appears as a transient status-line error using the ordinary submission failure detail. It does not change the activity indicator. The TUI does not create a transcript feedback row for this failure.
-- If the failed message is Allow commentary, the Approval remains pending and Kent does not submit its answer. The user must explicitly retry the restored commentary or answer again without it. Successful Allow commentary creation still precedes the Approval answer.
+- If the failed message is Allow commentary, Kent delivers the Approval answer independently while the transient notice is active. Successful Allow commentary creation still precedes the Approval answer.
 - Across interrupt recovery and a late creation result, Kent must not lose message content. Duplicate editable text is allowed.
 
 ## Interrupts And Exit

@@ -219,14 +219,16 @@ func (c *ownerlessRetirementLLMClient) callCount() int {
 	return c.calls
 }
 
-func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.AskQuestionRequest, _ time.Time) {
+func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.AskQuestionRequest, _ time.Time) error {
 	resource, _ := scope.Resource()
 	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: req.ID}
+	return nil
 }
 
-func (f authorityPromptFeed) PromptResolvedScope(scope ExecutionScope, requestID string) {
+func (f authorityPromptFeed) PromptResolvedScope(scope ExecutionScope, requestID string) error {
 	resource, _ := scope.Resource()
 	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: requestID, resolved: true}
+	return nil
 }
 
 func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {

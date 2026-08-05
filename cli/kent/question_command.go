@@ -400,36 +400,22 @@ func listPendingSessionPrompt(remote questionCommandRemote, sessionID runtimeids
 			return questionCommandPendingQuestion{}, false, err
 		}
 	}
-	sort.SliceStable(asks.Asks, func(i, j int) bool {
-		return pendingPromptBefore(asks.Asks[i].CreatedAt, asks.Asks[i].AskID, asks.Asks[j].CreatedAt, asks.Asks[j].AskID)
-	})
-	sort.SliceStable(approvals.Approvals, func(i, j int) bool {
-		return pendingPromptBefore(approvals.Approvals[i].CreatedAt, approvals.Approvals[i].ApprovalID, approvals.Approvals[j].CreatedAt, approvals.Approvals[j].ApprovalID)
-	})
-	if len(asks.Asks) == 0 && len(approvals.Approvals) == 0 {
+	prompt, ok := serverapi.FirstPendingPromptObservation(asks.Asks, approvals.Approvals)
+	if !ok {
 		return questionCommandPendingQuestion{}, false, nil
 	}
-	if len(asks.Asks) == 0 || (len(approvals.Approvals) > 0 && pendingPromptBefore(
-		approvals.Approvals[0].CreatedAt,
-		approvals.Approvals[0].ApprovalID,
-		asks.Asks[0].CreatedAt,
-		asks.Asks[0].AskID,
-	)) {
-		approval := approvals.Approvals[0]
-		return questionCommandPendingQuestion{Approval: &approval, Question: approval.Question}, true, nil
+	question := questionCommandPendingQuestion{
+		AskID:    prompt.ID,
+		Approval: prompt.Question.Approval,
 	}
-	question, err := pendingSessionQuestion(asks.Asks[0])
-	return question, err == nil, err
-}
-
-func pendingPromptBefore(leftAt time.Time, leftID string, rightAt time.Time, rightID string) bool {
-	if leftAt.Before(rightAt) {
-		return true
+	if prompt.Question.Ask != nil {
+		question.Question = prompt.Question.Ask.Question
+		question.Suggestions = append([]string(nil), prompt.Question.Ask.Suggestions...)
+		question.RecommendedOptionIndex = prompt.Question.Ask.RecommendedOptionIndex
+	} else if prompt.Question.Approval != nil {
+		question.Question = prompt.Question.Approval.Question
 	}
-	if leftAt.After(rightAt) {
-		return false
-	}
-	return leftID < rightID
+	return question, true, nil
 }
 
 func optionalQuestionCommentary(commentary *string) string {
@@ -487,7 +473,11 @@ func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQues
 func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowCommandRemote, items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
 	questions := make([]serverapi.WorkflowAttentionItem, 0, len(items))
 	for _, item := range items {
-		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) {
+		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) && item.Kind != "approval" {
+			continue
+		}
+		if item.Kind == "approval" {
+			questions = append(questions, item)
 			continue
 		}
 		if item.Question == nil {
@@ -506,8 +496,13 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 	})
 	candidates := make([]taskQuestionSessionCandidate, 0)
 	candidateBySession := make(map[runtimeids.SessionID]int)
+	approvalCache := make(map[runtimeids.SessionID][]clientui.PendingApproval)
 	for _, item := range questions {
-		if item.SessionID == nil || item.QuestionID == nil {
+		questionID := item.QuestionID
+		if questionID == nil {
+			questionID = item.ApprovalID
+		}
+		if item.SessionID == nil || questionID == nil {
 			return nil, fmt.Errorf("pending question %q has incomplete identity", item.ID)
 		}
 		sessionID, err := runtimeids.ParseSessionID(*item.SessionID)
@@ -529,21 +524,26 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 		} else if !textutil.EqualOptional(candidates[index].SessionName, sessionName) {
 			return nil, fmt.Errorf("pending questions for session %s disagree on the session name", sessionID)
 		}
-		question := questionCommandPendingQuestion{AskID: *item.QuestionID}
-		if item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
+		question := questionCommandPendingQuestion{AskID: *questionID}
+		if item.Kind != "approval" && item.Question.Kind == serverapi.WorkflowAttentionQuestionKindOrdinary {
 			if item.Message == nil {
 				return nil, fmt.Errorf("pending question %q has no content", item.ID)
 			}
 			question.Question = *item.Message
 			question.Suggestions = append([]string(nil), item.Suggestions...)
 			question.RecommendedOptionIndex = textutil.Pointer(item.RecommendedOptionIndex)
-		} else if approvalRemote, ok := remote.(questionApprovalRemote); ok && item.ApprovalID != nil {
-			approvals, err := approvalRemote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: *item.SessionID})
-			if err != nil {
-				return nil, err
+		} else if approvalRemote, ok := remote.(questionApprovalRemote); ok {
+			sessionApprovals, loaded := approvalCache[sessionID]
+			if !loaded {
+				approvals, err := approvalRemote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: *item.SessionID})
+				if err != nil {
+					return nil, err
+				}
+				sessionApprovals = approvals.Approvals
+				approvalCache[sessionID] = sessionApprovals
 			}
-			for _, approval := range approvals.Approvals {
-				if approval.ApprovalID == *item.ApprovalID {
+			for _, approval := range sessionApprovals {
+				if approval.ApprovalID == *questionID {
 					question.Question, question.Approval = approval.Question, &approval
 					break
 				}

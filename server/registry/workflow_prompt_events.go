@@ -2,7 +2,7 @@ package registry
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"strings"
 
 	"core/server/sessionruntime"
@@ -17,24 +17,24 @@ func (r *RuntimeRegistry) WithWorkflowEventPublisher(publisher func(context.Cont
 	return r
 }
 
-func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntime.ExecutionScope, snapshot PendingPromptSnapshot) {
+func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntime.ExecutionScope, snapshot PendingPromptSnapshot) error {
 	if r == nil || r.workflowEventPublisher == nil {
-		return
+		return nil
 	}
 	ref, ok := scope.Workflow()
 	if !ok {
-		return
+		return nil
 	}
 	resource, ok := scope.Resource()
 	if !ok {
-		return
+		return nil
 	}
 	projectID := strings.TrimSpace(ref.ProjectID)
 	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
 	sessionID := resource.SessionID().String()
 	askID := strings.TrimSpace(snapshot.Request.ID)
 	if projectID == "" || taskID == "" || askID == "" {
-		return
+		return nil
 	}
 	workflowID := ref.WorkflowID
 	if err := r.workflowEventPublisher(context.Background(), serverapi.WorkflowProjectEvent{
@@ -44,6 +44,7 @@ func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntim
 		PrimaryEntityID: taskID, RelatedIDs: []string{sessionID, askID},
 		OccurredAtUnixMs: snapshot.CreatedAt.UTC().UnixMilli(),
 	}); err != nil {
-		slog.Warn("publish workflow question waiting event failed", "project_id", projectID, "task_id", taskID, "session_id", sessionID, "ask_id", askID, "error", err)
+		return fmt.Errorf("publish workflow question waiting event: %w", err)
 	}
+	return nil
 }

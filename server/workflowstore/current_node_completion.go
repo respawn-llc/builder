@@ -199,7 +199,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
-			s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
 		}
 		return result, nil
 	}
@@ -225,7 +227,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
-			s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
 		}
 		return result, nil
 	}
@@ -293,7 +297,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := tx.Commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	result := CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: []workflow.CurrentNodeReference{prepared.Source},

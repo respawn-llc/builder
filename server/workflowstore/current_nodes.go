@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -23,11 +22,10 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 	return listTaskCurrentNodes(ctx, s.queries, taskID)
 }
 
-func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) {
+func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) error {
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
-		slog.Warn("read task for current node event failed", "task_id", taskID, "action", action, "error", err)
-		return
+		return fmt.Errorf("read task for current node event: %w", err)
 	}
 	workflowID := task.WorkflowID
 	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
@@ -37,8 +35,9 @@ func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow
 		Action:          action,
 		PrimaryEntityID: string(taskID),
 	}); err != nil {
-		slog.Warn("publish current node task event failed", "task_id", taskID, "action", action, "error", err)
+		return fmt.Errorf("publish current node task event: %w", err)
 	}
+	return nil
 }
 
 // ListCurrentNodesByTask returns the exact durable Current Nodes for each
@@ -49,6 +48,33 @@ func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.T
 		return nil, errors.New("workflow store is required")
 	}
 	return ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+}
+
+func interruptCurrentNodeQuery(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	reference workflow.CurrentNodeReference,
+	reason workflow.CurrentNodeInterruptionReason,
+	detailJSON string,
+	now int64,
+) (int64, error) {
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		return q.InterruptBranchCurrentNode(ctx, sqlitegen.InterruptBranchCurrentNodeParams{
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
+			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+			InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+		})
+	}
+	return q.InterruptSerialCurrentNode(ctx, sqlitegen.InterruptSerialCurrentNodeParams{
+		TaskID:                 string(reference.TaskID),
+		NodeID:                 string(reference.NodeID),
+		InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+		InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
+		InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+	})
 }
 
 // ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
@@ -495,8 +521,7 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
-	return nil
+	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
 // InterruptCurrentNode records an interruption for ready or admitted
@@ -520,33 +545,72 @@ func (s *Store) InterruptCurrentNode(
 		return fmt.Errorf("encode current node interruption detail: %w", err)
 	}
 	now := s.now().UTC().UnixMilli()
-	var interrupted int64
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		interrupted, err = s.queries.InterruptBranchCurrentNode(ctx, sqlitegen.InterruptBranchCurrentNodeParams{
-			TaskID:                 string(reference.TaskID),
-			NodeID:                 string(reference.NodeID),
-			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
-			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
-			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		})
-	} else {
-		interrupted, err = s.queries.InterruptSerialCurrentNode(ctx, sqlitegen.InterruptSerialCurrentNodeParams{
-			TaskID:                 string(reference.TaskID),
-			NodeID:                 string(reference.NodeID),
-			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
-			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		})
-	}
+	interrupted, err := interruptCurrentNodeQuery(ctx, s.queries, reference, reason, string(detailJSON), now)
 	if err != nil {
 		return err
 	}
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
-	return nil
+	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+}
+
+func (s *Store) InterruptCurrentNodes(
+	ctx context.Context,
+	references []workflow.CurrentNodeReference,
+	reason workflow.CurrentNodeInterruptionReason,
+	detail workflow.CurrentNodeInterruptionDetail,
+) ([]workflow.CurrentNodeReference, error) {
+	if len(references) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(string(reason)) == "" {
+		return nil, errors.New("current node interruption reason is required")
+	}
+	taskID := references[0].TaskID
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return nil, fmt.Errorf("encode current node interruption detail: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
+	interrupted := make([]workflow.CurrentNodeReference, 0, len(references))
+	now := s.now().UTC().UnixMilli()
+	for _, reference := range references {
+		if err := reference.Validate(); err != nil {
+			return nil, err
+		}
+		if reference.TaskID != taskID {
+			return nil, errors.New("aggregate current node interruption requires one Task")
+		}
+		key, err := reference.Key()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		changed, err := interruptCurrentNodeQuery(ctx, q, reference, reason, string(detailJSON), now)
+		if err != nil {
+			return nil, err
+		}
+		if changed == 1 {
+			interrupted = append(interrupted, reference)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if len(interrupted) == 0 {
+		return interrupted, nil
+	}
+	return interrupted, s.publishCurrentNodeTaskEvent(ctx, taskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -591,7 +655,9 @@ func (s *Store) RecoverExecutableCurrentNodes(
 			continue
 		}
 		seenTasks[reference.TaskID] = struct{}{}
-		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+		if err := s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted); err != nil {
+			return references, err
+		}
 	}
 	return references, nil
 }
