@@ -53,25 +53,32 @@ func TestReviewerRowsRejectMissingOrInconsistentFacts(t *testing.T) {
 			SuggestionCount: 1,
 		},
 	}
+	cloneValidFeedback := func() TranscriptCommittedRow {
+		row := validFeedback
+		feedback := *validFeedback.ReviewerFeedback
+		feedback.Suggestions = append([]string(nil), validFeedback.ReviewerFeedback.Suggestions...)
+		row.ReviewerFeedback = &feedback
+		return row
+	}
 	tests := []TranscriptCommittedRow{
-		{Visibility: transcript.EntryVisibilityOngoingCollapsed, Kind: TranscriptRowReviewerFeedback},
+		{Visibility: transcript.EntryVisibilityOngoingCollapsed, Locator: transcript.CommittedRowLocator{EventSequence: 5, RowOrdinal: 1}, Kind: TranscriptRowReviewerFeedback},
 		func() TranscriptCommittedRow {
-			row := validFeedback
+			row := cloneValidFeedback()
 			row.ReviewerFeedback.ID = runtimeids.ReviewerFeedbackID{}
 			return row
 		}(),
 		func() TranscriptCommittedRow {
-			row := validFeedback
+			row := cloneValidFeedback()
 			row.ReviewerFeedback.Suggestions = nil
 			return row
 		}(),
 		func() TranscriptCommittedRow {
-			row := validFeedback
+			row := cloneValidFeedback()
 			row.ReviewerFeedback.Suggestions = []string{" \t "}
 			return row
 		}(),
 		func() TranscriptCommittedRow {
-			row := validFeedback
+			row := cloneValidFeedback()
 			row.ReviewerFeedback.SuggestionCount = 2
 			return row
 		}(),

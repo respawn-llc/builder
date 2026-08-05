@@ -72,6 +72,7 @@ func TestReviewerFactRecordsRoundTripWithExactSourceContent(t *testing.T) {
 }
 
 func TestReviewerFeedbackRecordRejectsInvalidValues(t *testing.T) {
+	stepID := "11111111-1111-4111-8111-111111111111"
 	tests := []ReviewerFeedbackRecord{
 		{ID: runtimeids.NewReviewerFeedbackID(), Visibility: EntryVisibilityOngoing},
 		{ID: runtimeids.NewReviewerFeedbackID(), Suggestions: []string{""}, Visibility: EntryVisibilityOngoing},
@@ -80,13 +81,14 @@ func TestReviewerFeedbackRecordRejectsInvalidValues(t *testing.T) {
 		{Suggestions: []string{"suggestion"}, Visibility: EntryVisibilityOngoing},
 	}
 	for _, payload := range tests {
-		if _, err := NewEventRecord(1, nil, payload); err == nil {
+		if _, err := NewEventRecord(1, &stepID, payload); err == nil {
 			t.Fatalf("accepted invalid Reviewer feedback: %#v", payload)
 		}
 	}
 }
 
 func TestReviewerErrorRecordRejectsInvalidValues(t *testing.T) {
+	stepID := "11111111-1111-4111-8111-111111111111"
 	tests := []ReviewerErrorRecord{
 		{ID: runtimeids.NewReviewerErrorID()},
 		{ID: runtimeids.NewReviewerErrorID(), Detail: ""},
@@ -94,7 +96,7 @@ func TestReviewerErrorRecordRejectsInvalidValues(t *testing.T) {
 		{Detail: "failure"},
 	}
 	for _, payload := range tests {
-		if _, err := NewEventRecord(1, nil, payload); err == nil {
+		if _, err := NewEventRecord(1, &stepID, payload); err == nil {
 			t.Fatalf("accepted invalid Reviewer error: %#v", payload)
 		}
 	}
@@ -112,6 +114,28 @@ func TestReviewerFactsRequireStepIdentity(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("accepted Reviewer error without enclosing step identity")
+	}
+}
+
+func TestReviewerPointerPayloadsNormalizeToCopiedValues(t *testing.T) {
+	stepID := "11111111-1111-4111-8111-111111111111"
+	feedback := &ReviewerFeedbackRecord{
+		ID:          runtimeids.NewReviewerFeedbackID(),
+		Suggestions: []string{"original"},
+		Visibility:  EntryVisibilityOngoing,
+	}
+	record, err := NewEventRecord(1, &stepID, feedback)
+	if err != nil {
+		t.Fatalf("create pointer Reviewer feedback record: %v", err)
+	}
+	feedback.Suggestions[0] = "mutated after validation"
+	payload, err := record.Payload()
+	if err != nil {
+		t.Fatalf("read normalized pointer payload: %v", err)
+	}
+	got, ok := payload.(ReviewerFeedbackRecord)
+	if !ok || len(got.Suggestions) != 1 || got.Suggestions[0] != "original" {
+		t.Fatalf("normalized pointer payload = %#v", payload)
 	}
 }
 

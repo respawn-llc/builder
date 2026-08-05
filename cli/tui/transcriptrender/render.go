@@ -134,7 +134,7 @@ func renderCommittedRow(
 		}
 	case clientui.TranscriptRowReviewerFeedback:
 		if row.ReviewerFeedback == nil {
-			return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, "invalid Reviewer feedback", width, mode)}
+			panic(fmt.Sprintf("render reviewer feedback row missing payload at locator %+v", row.Locator))
 		}
 		text := fmt.Sprintf("%d suggestions", row.ReviewerFeedback.SuggestionCount)
 		if mode == ModeOngoing || mode == ModeOngoingFull || mode == ModeDetailExpanded {
@@ -143,7 +143,7 @@ func renderCommittedRow(
 		return Row{Group: row.Kind, Lines: renderMarkdownTextBlock(StyleRoleNoticeReviewer, text, width, mode, toolMeta{}, textBlockOptions{}, linkPresentation)}
 	case clientui.TranscriptRowReviewerError:
 		if row.ReviewerError == nil {
-			return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, "invalid Reviewer error", width, mode)}
+			panic(fmt.Sprintf("render reviewer error row missing payload at locator %+v", row.Locator))
 		}
 		return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, row.ReviewerError.Detail, width, mode)}
 	default:

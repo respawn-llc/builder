@@ -97,6 +97,21 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 	if payload == nil {
 		return EventRecord{}, fmt.Errorf("event payload is required")
 	}
+	switch typed := payload.(type) {
+	case *ReviewerFeedbackRecord:
+		if typed == nil {
+			return EventRecord{}, fmt.Errorf("event payload is required")
+		}
+		copied := *typed
+		copied.Suggestions = append([]string(nil), typed.Suggestions...)
+		payload = copied
+	case *ReviewerErrorRecord:
+		if typed == nil {
+			return EventRecord{}, fmt.Errorf("event payload is required")
+		}
+		copied := *typed
+		payload = copied
+	}
 	switch payload.(type) {
 	case ReviewerFeedbackRecord, ReviewerErrorRecord:
 		if stepID == nil || strings.TrimSpace(*stepID) == "" {
