@@ -11,48 +11,8 @@ import (
 )
 
 func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
-	if !row.Integrity.Valid() {
-		return fmt.Errorf("committed row has invalid integrity %d", row.Integrity)
-	}
-	switch row.Visibility {
-	case clientui.EntryVisibilityOngoing,
-		clientui.EntryVisibilityOngoingCollapsed,
-		clientui.EntryVisibilityDetail,
-		clientui.EntryVisibilityHidden:
-	default:
-		return fmt.Errorf("committed row has unresolved visibility %q", row.Visibility)
-	}
-
-	payloads := 0
-	expectedKind := clientui.TranscriptRowKind("")
-	if row.User != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowUser
-	}
-	if row.Assistant != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowAssistant
-	}
-	if row.Tool != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowTool
-	}
-	if row.ReasoningTrace != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowReasoningTrace
-	}
-	if row.Notice != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowNotice
-	}
-	if payloads != 1 {
-		return fmt.Errorf("committed row kind %q has %d payloads, want exactly one", row.Kind, payloads)
-	}
-	if row.Kind == "" {
-		return fmt.Errorf("committed row kind is required")
-	}
-	if row.Kind != expectedKind {
-		return fmt.Errorf("committed row kind %q does not match payload kind %q", row.Kind, expectedKind)
+	if err := row.ValidateStructure(); err != nil {
+		return err
 	}
 	if row.User != nil && row.User.RollbackTargetID != nil {
 		if _, err := rollbacktarget.DecodeUserMessageSeq(*row.User.RollbackTargetID); err != nil {
