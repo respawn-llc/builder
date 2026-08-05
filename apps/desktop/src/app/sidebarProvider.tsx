@@ -89,7 +89,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   }, [currentHistory]);
 
   const subscribe = useCallback(
-    (listener: () => void) => currentHistory?.subscribe(listener) ?? (() => {}),
+    (listener: () => void) => currentHistory?.subscribe(listener) ?? (() => undefined),
     [currentHistory],
   );
   const getSnapshot = useCallback(() => currentHistory?.snapshot() ?? null, [currentHistory]);

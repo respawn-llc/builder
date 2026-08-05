@@ -1,4 +1,6 @@
-type SidebarRouteSearch = Readonly<Partial<Record<"projectId" | "taskId" | "workflowId", string>>>;
+type SidebarRouteSearch = Readonly<
+  Partial<Record<"projectId" | "taskId" | "workflowId", string | undefined>>
+>;
 
 export type SidebarRouteLocation = Readonly<{
   pathname: string;
