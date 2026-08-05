@@ -378,7 +378,6 @@
 
 @keyframes sidebar-destination-push-new { from { opacity: 0; transform: translateX(10%); } }
 @keyframes sidebar-destination-back-new { from { opacity: 0; transform: translateX(-10%); } }
-
 @layer base {
   * {
     box-sizing: border-box;
@@ -651,7 +650,6 @@
   .view-transition-route::view-transition-new(root) {
     animation: route-fade-scale var(--motion-fast) both;
   }
-
   .app-sidebar-destination-push { animation: sidebar-destination-push-new var(--motion-fast) both; }
   .app-sidebar-destination-back { animation: sidebar-destination-back-new var(--motion-fast) both; }
 }
