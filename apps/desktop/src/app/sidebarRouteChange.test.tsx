@@ -415,14 +415,19 @@ describe("Sidebar route transition ownership", () => {
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
 
-  it("closes the sidebar through the AppChrome Home navigation", async () => {
+  it("closes before and after the Home route mounts during View Transition navigation", async () => {
     const services = createTestServices([]);
+    const routeStates: (string | null)[] = [];
     const router = createTestRouter(
       <TestAppProviders services={services}>
         <AppChrome>
           <OpenSidebar />
         </AppChrome>
       </TestAppProviders>,
+      ["/projects/project-1"],
+      {
+        home: () => <RouteMountProbe onMount={(state) => routeStates.push(state)} />,
+      },
     );
     render(<RouterProvider router={router} />);
 
@@ -449,57 +454,12 @@ describe("Sidebar route transition ownership", () => {
       await userEvent.click(screen.getByRole("link", { name: homeLabel }));
 
       await waitFor(() => {
-        expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
-      });
-    } finally {
-      if (nativeStartViewTransitionDescriptor === undefined) {
-        Reflect.deleteProperty(document, "startViewTransition");
-      } else {
-        Object.defineProperty(document, "startViewTransition", nativeStartViewTransitionDescriptor);
-      }
-    }
-  });
-
-  it("begins closing before the Home route mounts during View Transition navigation", async () => {
-    const services = createTestServices([]);
-    const routeStates: (string | null)[] = [];
-    const router = createTestRouter(
-      <TestAppProviders services={services}>
-        <AppChrome>
-          <OpenSidebar />
-        </AppChrome>
-      </TestAppProviders>,
-      ["/projects/project-1"],
-      {
-        home: () => <RouteMountProbe onMount={(state) => routeStates.push(state)} />,
-      },
-    );
-    render(<RouterProvider router={router} />);
-
-    await waitFor(() => expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"));
-    const nativeStartViewTransitionDescriptor = Object.getOwnPropertyDescriptor(
-      document,
-      "startViewTransition",
-    );
-    Object.defineProperty(document, "startViewTransition", {
-      configurable: true,
-      value: (update: () => void | Promise<void>) => {
-        const updateCallbackDone = Promise.resolve().then(update);
-        return {
-          finished: updateCallbackDone,
-          ready: Promise.resolve(),
-          updateCallbackDone,
-        };
-      },
-    });
-    try {
-      const homeLabel = appI18n.t.bind(appI18n)("app.home");
-      await userEvent.click(screen.getByRole("link", { name: homeLabel }));
-
-      await waitFor(() => {
         expect(routeStates).toHaveLength(1);
       });
       expect(routeStates).toEqual(["closing"]);
+      await waitFor(() => {
+        expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
+      });
     } finally {
       if (nativeStartViewTransitionDescriptor === undefined) {
         Reflect.deleteProperty(document, "startViewTransition");

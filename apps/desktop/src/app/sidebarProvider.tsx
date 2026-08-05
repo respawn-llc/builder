@@ -139,7 +139,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       clearMutationAdmission(history);
       history.destroy();
       closingHistoryRef.current = history;
-      flushSync(() => setPhase("closing"));
+      flushSync(() => { setPhase("closing"); });
       setCurrentHistory(null);
       setOutgoing(current);
       pending.resolve(result);

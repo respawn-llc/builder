@@ -756,8 +756,8 @@
   `data-state` as `closing` at destination mount. Sidebar closure commits
   synchronously at this lifecycle boundary so the test reproduces the
   pre-mount ordering defect rather than asserting router event names. Focused
-  route-transition coverage passes 13/13; the full Desktop suite passes 82
-  files / 378 tests after adding the guard. Apps lint remains 0 errors with
+  route-transition coverage passes 12/12; the full Desktop suite passes 82
+  files / 377 tests after adding the combined guard. Apps lint remains 0 errors with
   4 existing warnings, Apps typecheck passes, and the Desktop build passes.
 
 - [x] **Keep the complete production diff within the approved cap.**
