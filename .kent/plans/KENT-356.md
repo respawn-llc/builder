@@ -745,18 +745,20 @@
 - [x] **Bind shell route-close ownership to router lifecycle transitions.**
   The render observer and direct history subscription could both miss the live
   application navigation even though the URL changed. The shell now subscribes
-  to TanStack Router's `onBeforeNavigate` lifecycle owner and closes the
+  to TanStack Router's `onBeforeLoad` lifecycle owner and closes the
   complete sidebar when its typed `pathChanged` flag is true. Same-path search
   changes remain available to the typed Board/Workflow route owners, and
   sidebar-local Push/Back still produce no browser navigation event. Regression
   coverage uses the real `RouterProvider` and router history for
-  Project-to-Home, Project-to-Project, and search-only transitions.
+  Project-to-Home, Project-to-Project, search-only transitions, and the actual
+  AppChrome Home-link flow.
   Progress (August 5, 2026): Fresh QA reproduced the history-subscription
-  reappearance boundary on Home navigation. Replaced that observer with the
-  router lifecycle subscription and verified all three route cases in the
-  focused test. Final current-head verification passed: Apps lint (0 errors;
-  4 existing warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files /
-  375 tests), and `./scripts/build.sh desktop`.
+  reappearance boundary on Home navigation. Replaced the `onBeforeNavigate`
+  observer with the earlier `onBeforeLoad` lifecycle boundary and verified all
+  route cases plus the AppChrome Home flow in focused tests. Final
+  current-head verification passed: Apps lint (0 errors; 4 existing warnings),
+  Apps typecheck, `./scripts/test.sh desktop` (84 files / 376 tests), and
+  `./scripts/build.sh desktop`.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from

@@ -45,7 +45,7 @@ export function SidebarRouteChangeCloser() {
 
   useLayoutEffect(
     () =>
-      router.subscribe("onBeforeNavigate", ({ pathChanged }) => {
+      router.subscribe("onBeforeLoad", ({ pathChanged }) => {
         if (pathChanged) closeSidebar("route_change");
       }),
     [closeSidebar, router],

@@ -6,10 +6,12 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
+import { AppChrome } from "./AppChrome";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebar } from "@/app-facade";
@@ -75,6 +77,27 @@ describe("SidebarRouteChangeCloser", () => {
     });
 
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+  });
+
+  it("closes the sidebar through the AppChrome Home navigation", async () => {
+    const services = createTestServices([]);
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <AppChrome>
+          <OpenSidebar />
+        </AppChrome>
+      </TestAppProviders>,
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+    await userEvent.click(screen.getByRole("link", { name: "Home" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
+    });
   });
 });
 
