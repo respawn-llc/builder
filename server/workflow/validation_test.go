@@ -657,7 +657,7 @@ func validWorkflow(t *testing.T) workflow.Definition {
 		Nodes: []workflow.Node{
 			testStartNode(testsetup.WorkflowID(t, "workflow_default"), "node_start", "backlog", "Backlog"),
 			testAgentNode(testsetup.WorkflowID(t, "workflow_default"), "node_agent", "implement", "Implement", workflow.NodeFields{
-				SubagentRole:   "coder",
+				SubagentRole: "coder",
 			}),
 			testTerminalNode(testsetup.WorkflowID(t, "workflow_default"), "node_done", "done", "Done"),
 		},

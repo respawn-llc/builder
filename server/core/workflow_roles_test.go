@@ -226,7 +226,7 @@ func coreWorkflowValidationDefinition(role string) workflow.Definition {
 		Nodes: []workflow.Node{
 			coreWorkflowNode(workflowID, startNodeID, "start", "Start", workflow.NodeKindStart, workflow.NodeFields{}),
 			coreWorkflowNode(workflowID, agentNodeID, "agent", "Agent", workflow.NodeKindAgent, workflow.NodeFields{
-				SubagentRole:   role,
+				SubagentRole: role,
 			}),
 			coreWorkflowNode(workflowID, doneNodeID, "done", "Done", workflow.NodeKindTerminal, workflow.NodeFields{}),
 		},

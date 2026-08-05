@@ -48,7 +48,7 @@ function typeLiteralMembers(type: ts.TypeNode): readonly ts.TypeElement[] {
 }
 
 function propertyName(member: ts.TypeElement): string | undefined {
-  if (!ts.isPropertySignature(member) || member.name === undefined) {
+  if (!ts.isPropertySignature(member)) {
     return undefined;
   }
   return ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)
@@ -90,6 +90,48 @@ function canonicalPath(relativePath: string): string {
   return fileURLToPath(new URL(relativePath, import.meta.url));
 }
 
+function nodePayloadFromMapCall(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+): ts.ObjectLiteralExpression | undefined {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) {
+    return undefined;
+  }
+  if (node.expression.name.text !== "map") {
+    return undefined;
+  }
+  const callback = node.arguments[0];
+  if (
+    callback === undefined ||
+    !ts.isArrowFunction(callback) ||
+    callback.parameters[0]?.name.getText(sourceFile) !== "node"
+  ) {
+    return undefined;
+  }
+  if (ts.isObjectLiteralExpression(callback.body)) {
+    return callback.body;
+  }
+  if (!ts.isCallExpression(callback.body)) {
+    return undefined;
+  }
+  const payloadArgument = callback.body.arguments[0];
+  return payloadArgument !== undefined && ts.isObjectLiteralExpression(payloadArgument)
+    ? payloadArgument
+    : undefined;
+}
+
+function findNodePayload(sourceFile: ts.SourceFile): ts.ObjectLiteralExpression | undefined {
+  let payload: ts.ObjectLiteralExpression | undefined;
+  function visit(node: ts.Node): void {
+    payload ??= nodePayloadFromMapCall(node, sourceFile);
+    if (payload === undefined) {
+      ts.forEachChild(node, visit);
+    }
+  }
+  ts.forEachChild(sourceFile, visit);
+  return payload;
+}
+
 describe("workflow Node contract ownership", () => {
   it("removes legacy fields from canonical Node and draft types", () => {
     const models = source(canonicalPath("./models.ts"));
@@ -107,28 +149,7 @@ describe("workflow Node contract ownership", () => {
 
   it("does not serialize legacy fields in the graph Node payload", () => {
     const graphClient = source(canonicalPath("./clientWorkflowGraph.ts"));
-    let nodePayload: ts.ObjectLiteralExpression | undefined;
-    ts.forEachChild(graphClient, function visit(node) {
-      const callback = ts.isCallExpression(node) ? node.arguments[0] : undefined;
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "map" &&
-        callback !== undefined &&
-        ts.isArrowFunction(callback) &&
-        callback.parameters[0]?.name.getText(graphClient) === "node"
-      ) {
-        if (ts.isObjectLiteralExpression(callback.body)) {
-          nodePayload = callback.body;
-        } else if (ts.isCallExpression(callback.body)) {
-          const payloadArgument = callback.body.arguments[0];
-          if (payloadArgument !== undefined && ts.isObjectLiteralExpression(payloadArgument)) {
-            nodePayload = payloadArgument;
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
-    });
+    const nodePayload = findNodePayload(graphClient);
     if (nodePayload === undefined) {
       throw new Error("workflow Node payload map is missing");
     }
