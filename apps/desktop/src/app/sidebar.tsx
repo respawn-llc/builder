@@ -1,4 +1,4 @@
-import { useRouter } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
 import type { NativeDialogWindowOptions } from "@app/native-bridge";
 import { ChevronLeft, PictureInPicture, Plus, X } from "lucide-react";
 import {
@@ -40,16 +40,15 @@ import {
 } from "@/app-facade";
 
 export function SidebarRouteChangeCloser() {
-  const router = useRouter();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { closeSidebar } = useSidebar();
+  const previousPathRef = useRef(pathname);
 
-  useLayoutEffect(
-    () =>
-      router.subscribe("onBeforeLoad", ({ pathChanged }) => {
-        if (pathChanged) closeSidebar("route_change");
-      }),
-    [closeSidebar, router],
-  );
+  useLayoutEffect(() => {
+    if (previousPathRef.current === pathname) return;
+    previousPathRef.current = pathname;
+    closeSidebar("route_change");
+  }, [closeSidebar, pathname]);
 
   return null;
 }

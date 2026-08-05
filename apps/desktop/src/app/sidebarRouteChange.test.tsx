@@ -94,11 +94,35 @@ describe("SidebarRouteChangeCloser", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
-    await userEvent.click(screen.getByRole("link", { name: appI18n.t("app.home") }));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
+    const nativeStartViewTransitionDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      "startViewTransition",
+    );
+    Object.defineProperty(document, "startViewTransition", {
+      configurable: true,
+      value: (update: () => void | Promise<void>) => {
+        const updateCallbackDone = Promise.resolve().then(update);
+        return {
+          finished: updateCallbackDone,
+          ready: Promise.resolve(),
+          updateCallbackDone,
+        };
+      },
     });
+    try {
+      const homeLabel = appI18n.t.bind(appI18n)("app.home");
+      await userEvent.click(screen.getByRole("link", { name: homeLabel }));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
+      });
+    } finally {
+      if (nativeStartViewTransitionDescriptor === undefined) {
+        Reflect.deleteProperty(document, "startViewTransition");
+      } else {
+        Object.defineProperty(document, "startViewTransition", nativeStartViewTransitionDescriptor);
+      }
+    }
   });
 });
 
