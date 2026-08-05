@@ -22,3 +22,26 @@ func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestRunWatchRendersInterruptedReasonAndDiagnostic(t *testing.T) {
+	reason := "interrupted"
+	diagnostic := "stop detail"
+	var output bytes.Buffer
+	code := writeRunWatchResponse(&output, serverapi.RuntimeLiveWatchResponse{
+		SessionID: "session-dynamic",
+		Outcome: serverapi.RuntimeLiveWatchOutcome{
+			Kind: serverapi.RuntimeLiveWatchInterrupted,
+			Failure: &serverapi.RuntimeLiveWatchFailure{
+				Reason: reason, Diagnostic: &diagnostic,
+			},
+		},
+	}, "")
+	if code != 130 {
+		t.Fatalf("writeRunWatchResponse exit code = %d, want 130", code)
+	}
+	for _, value := range []string{reason, diagnostic} {
+		if !strings.Contains(output.String(), value) {
+			t.Fatalf("output %q does not contain %q", output.String(), value)
+		}
+	}
+}

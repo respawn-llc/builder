@@ -339,6 +339,54 @@ func TestLiveWatchTerminalCompletionWinsWhileRunIsBlocked(t *testing.T) {
 	_ = engine
 }
 
+func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
+	client := newLiveWatchBlockingClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-interrupt", "hello"))
+		runDone <- err
+	}()
+	<-client.started
+
+	broker := attentionnotify.NewBroker()
+	attention := registry.NewRuntimeRegistry().WithAttentionNotifications(broker)
+	observed := &liveWatchObservedAttention{
+		AttentionNotificationService: attention,
+		subscribed:                   make(chan struct{}),
+	}
+	service.WithLiveWatchPromptSources(liveWatchAskViewStub{}, liveWatchApprovalViewStub{}, observed)
+	watchDone := make(chan serverapi.RuntimeLiveWatchResponse, 1)
+	watchErr := make(chan error, 1)
+	go func() {
+		response, err := service.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: store.Meta().SessionID})
+		watchDone <- response
+		watchErr <- err
+	}()
+	<-observed.subscribed
+
+	broker.Close(context.Canceled)
+	stopped, err := engine.TryInterruptActiveRun()
+	if err != nil || !stopped {
+		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v", stopped, err)
+	}
+	if err := <-watchErr; err != nil {
+		t.Fatalf("LiveWatch: %v", err)
+	}
+	response := <-watchDone
+	if response.Outcome.Kind != serverapi.RuntimeLiveWatchInterrupted ||
+		response.Outcome.Failure == nil ||
+		response.Outcome.Failure.Reason != string(runtime.RunStatusInterrupted) ||
+		response.Outcome.Failure.Diagnostic == nil {
+		t.Fatalf("LiveWatch outcome = %+v, want interrupted failure", response.Outcome)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live run did not finish after interruption")
+	}
+}
+
 func TestLiveWatchSurfacesAttentionStreamFailureBeforeArbitration(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	streamErr := errors.New("attention stream failed")
@@ -361,7 +409,7 @@ func TestLiveWatchResultClassifiesTypedTerminalStates(t *testing.T) {
 		diagnostic string
 	}{
 		{"no final", runtime.LiveRunResult{NoFinalReason: runtime.LiveRunNoFinalAnswerReasonGoalLoop}, runtime.ErrLiveRunNoFinalAnswer, "no_final_result", "", ""},
-		{"interrupted", runtime.LiveRunResult{Status: runtime.RunStatusInterrupted, Error: errors.New("stop detail")}, errors.New("terminal"), "interrupted", "terminal", "stop detail"},
+		{"interrupted", runtime.LiveRunResult{Status: runtime.RunStatusInterrupted, Error: errors.New("stop detail")}, errors.New("terminal"), "interrupted", "interrupted", "stop detail"},
 		{"error", runtime.LiveRunResult{Status: runtime.RunStatusFailed, Error: errors.New("failure detail")}, errors.New("terminal"), "execution_error", "terminal", "failure detail"},
 	}
 	for _, tc := range cases {

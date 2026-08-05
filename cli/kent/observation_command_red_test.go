@@ -15,6 +15,15 @@ func TestRunWatchIsRecognizedAsLiveControl(t *testing.T) {
 	}
 }
 
+func TestRunWatchMalformedSessionStillUsesWatchRoute(t *testing.T) {
+	if got := liveControlSubcommand([]string{"watch", "invalid-session"}); got != "watch" {
+		t.Fatalf("liveControlSubcommand malformed selector = %q, want watch", got)
+	}
+	if _, err := parseCLILiveSessionID("invalid-session"); err == nil {
+		t.Fatal("parseCLILiveSessionID accepted a non-canonical selector")
+	}
+}
+
 func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testing.T) {
 	sessionID := "session-1"
 	response := serverapi.WorkflowTaskObservationResponse{

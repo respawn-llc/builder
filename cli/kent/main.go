@@ -416,21 +416,10 @@ func liveControlSubcommand(args []string) string {
 	if help || len(args) == 1 || len(positionals) == 0 {
 		return verb
 	}
-	sessionID, err := runtimeids.ParseSessionID(positionals[0])
-	if err != nil || !sessionID.IsCanonicalUUIDv4() {
+	if verb == "steer" && len(positionals) < 2 {
 		return ""
 	}
-	switch verb {
-	case "steer":
-		if len(positionals) >= 2 {
-			return verb
-		}
-	case "stop", "wait", "watch":
-		if len(positionals) == 1 {
-			return verb
-		}
-	}
-	return ""
+	return verb
 }
 
 func liveControlPositionals(verb string, args []string) ([]string, bool) {
@@ -657,7 +646,14 @@ func runLiveFlagError(err error) int {
 }
 
 func parseCLILiveSessionID(raw string) (runtimeids.SessionID, error) {
-	return runtimeids.ParseSessionID(raw)
+	sessionID, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("session_id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
 }
 
 func rejectSelfTarget(targetSessionID runtimeids.SessionID, commandText string) error {

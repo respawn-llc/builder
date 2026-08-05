@@ -263,6 +263,18 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		wg.Wait()
 		return liveWatchResult(id, name, terminal.result, terminal.err)
 	case err := <-attentionErrCh:
+		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+			select {
+			case terminal := <-terminalCh:
+				cancel()
+				wg.Wait()
+				return liveWatchResult(id, name, terminal.result, terminal.err)
+			case <-ctx.Done():
+				cancel()
+				wg.Wait()
+				return serverapi.RuntimeLiveWatchResponse{}, ctx.Err()
+			}
+		}
 		cancel()
 		wg.Wait()
 		return serverapi.RuntimeLiveWatchResponse{}, err
@@ -298,6 +310,19 @@ func classifyLiveRun(result runtime.LiveRunResult, err error) liveRunTerminal {
 		terminal.err = result.Error
 	}
 	if terminal.err != nil {
+		if terminal.status == runtime.RunStatusInterrupted {
+			reason := strings.TrimSpace(string(terminal.status))
+			terminal.reason = &reason
+			diagnosticErr := result.Error
+			if diagnosticErr == nil {
+				diagnosticErr = terminal.err
+			}
+			diagnostic := strings.TrimSpace(diagnosticErr.Error())
+			if diagnostic != "" && diagnostic != reason {
+				terminal.diagnostic = &diagnostic
+			}
+			return terminal
+		}
 		reason := strings.TrimSpace(terminal.err.Error())
 		if reason == "" {
 			reason = strings.TrimSpace(string(result.Status))

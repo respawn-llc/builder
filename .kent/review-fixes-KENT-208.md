@@ -42,3 +42,13 @@
 - [x] Add Registry owner-boundary coverage proving Task wake publication comes
   from immutable Workflow Exact Execution Scope identity and is excluded for
   non-Workflow scopes.
+
+## QA remediation round
+
+- [x] Keep malformed `run watch` selectors on the live-control route so leaf
+  validation rejects them before any ordinary Run can start.
+- [x] When the live attention path closes with `context.Canceled` while the
+  caller remains active, wait for and project the authoritative terminal
+  interruption instead of returning the stream cancellation as the outcome.
+- [x] Render typed interruption reason and diagnostic, with exit code 130, and
+  cover the CLI and runtime-control regressions.
