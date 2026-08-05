@@ -24,6 +24,16 @@ type capturedRunPromptService struct {
 	request serverapi.RunPromptRequest
 }
 
+func TestNormalizeWorkflowTaskObservationRPCErrorClassifiesConnectionEOF(t *testing.T) {
+	err := normalizeWorkflowTaskObservationRPCError(io.EOF)
+	if !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("normalized error = %v, want stream failure", err)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("normalized error = %v, must not remain raw EOF", err)
+	}
+}
+
 func (s *capturedRunPromptService) RunPrompt(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	s.request = req
 	return serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"}, nil

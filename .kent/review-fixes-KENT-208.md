@@ -71,3 +71,11 @@
   cancellation and preventing raw EOF from reaching `task wait` or `task
   watch` output.
 - [x] Add Workflow-service regression coverage for closed observation streams.
+
+## Re-QA remediation
+
+- [x] Normalize raw EOF returned by the remote Workflow Task observation RPC
+  when the server connection is lost, preserving `ErrStreamFailed` through
+  the client and CLI instead of exposing EOF.
+- [x] Add shared-client regression coverage for connection-loss EOF at the
+  Task observation RPC boundary.
