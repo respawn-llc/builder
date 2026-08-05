@@ -30,6 +30,35 @@ type deadlineThenSuccessPromptControl struct {
 	firstRelease chan struct{}
 }
 
+func TestApprovalAnswerOmitsAbsentCommentary(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	control := newRecordingPromptControl()
+	answerer := newTranscriptPromptAnswerer(ctx, control)
+	prompt := testApprovalPrompt(
+		"approval-without-commentary",
+		"Allow access?",
+		clientui.ApprovalDecisionAllowOnce,
+		clientui.ApprovalDecisionDeny,
+	)
+
+	submit, err := answerer.submitter(prompt, clientui.PromptAnswer{
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision: clientui.ApprovalDecisionAllowOnce,
+		},
+	}, nil, runtimeids.NewRuntimeClientRequestID())
+	if err != nil {
+		t.Fatalf("submitter: %v", err)
+	}
+	if err := submit(context.Background()); err != nil {
+		t.Fatalf("submit approval: %v", err)
+	}
+	request := requireApprovalRequest(t, control)
+	if request.Commentary != nil {
+		t.Fatalf("approval commentary = %q, want absent", *request.Commentary)
+	}
+}
+
 type scriptedAskPromptControl struct {
 	mu          sync.Mutex
 	results     []error

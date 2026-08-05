@@ -95,3 +95,5 @@
 - [x] Keep the approved server reason/diagnostic contract; reject the
   reviewer-proposed typed-reason API expansion as outside this ticket's
   approved scope.
+- [x] Omit blank TUI approval commentary instead of encoding it as an empty
+  string in the nullable approval request field.
