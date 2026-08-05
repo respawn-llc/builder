@@ -16,11 +16,16 @@ func TestRunWatchIsRecognizedAsLiveControl(t *testing.T) {
 }
 
 func TestRunWatchMalformedSessionStillUsesWatchRoute(t *testing.T) {
-	if got := liveControlSubcommand([]string{"watch", "invalid-session"}); got != "watch" {
+	malformed := "../invalid-session"
+	if got := liveControlSubcommand([]string{"watch", malformed}); got != "watch" {
 		t.Fatalf("liveControlSubcommand malformed selector = %q, want watch", got)
 	}
-	if _, err := parseCLILiveSessionID("invalid-session"); err == nil {
-		t.Fatal("parseCLILiveSessionID accepted a non-canonical selector")
+	if _, err := parseCLILiveSessionID(malformed); err == nil {
+		t.Fatal("parseCLILiveSessionID accepted a malformed selector")
+	}
+	legacy := "legacy-session"
+	if got, err := parseCLILiveSessionID(legacy); err != nil || got.String() != legacy {
+		t.Fatalf("parseCLILiveSessionID legacy selector = %q, err=%v", got.String(), err)
 	}
 }
 

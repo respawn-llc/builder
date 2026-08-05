@@ -646,14 +646,7 @@ func runLiveFlagError(err error) int {
 }
 
 func parseCLILiveSessionID(raw string) (runtimeids.SessionID, error) {
-	sessionID, err := runtimeids.ParseSessionID(raw)
-	if err != nil {
-		return runtimeids.SessionID{}, err
-	}
-	if !sessionID.IsCanonicalUUIDv4() {
-		return runtimeids.SessionID{}, errors.New("session_id must be a canonical UUIDv4")
-	}
-	return sessionID, nil
+	return runtimeids.ParseSessionID(raw)
 }
 
 func rejectSelfTarget(targetSessionID runtimeids.SessionID, commandText string) error {

@@ -365,7 +365,6 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	}()
 	<-observed.subscribed
 
-	broker.Close(context.Canceled)
 	stopped, err := engine.TryInterruptActiveRun()
 	if err != nil || !stopped {
 		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v", stopped, err)
@@ -384,6 +383,44 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	case <-runDone:
 	case <-time.After(3 * time.Second):
 		t.Fatal("live run did not finish after interruption")
+	}
+}
+
+func TestLiveWatchSurfacesCanceledAttentionStreamWhileRunIsBlocked(t *testing.T) {
+	client := newLiveWatchBlockingClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-stream-canceled", "hello"))
+		runDone <- err
+	}()
+	<-client.started
+
+	broker := attentionnotify.NewBroker()
+	attention := registry.NewRuntimeRegistry().WithAttentionNotifications(broker)
+	observed := &liveWatchObservedAttention{
+		AttentionNotificationService: attention,
+		subscribed:                   make(chan struct{}),
+	}
+	service.WithLiveWatchPromptSources(liveWatchAskViewStub{}, liveWatchApprovalViewStub{}, observed)
+	watchErr := make(chan error, 1)
+	go func() {
+		_, err := service.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: store.Meta().SessionID})
+		watchErr <- err
+	}()
+	<-observed.subscribed
+
+	broker.Close(context.Canceled)
+	if err := <-watchErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("LiveWatch error = %v, want canceled attention stream", err)
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live run did not stop after attention stream cancellation")
 	}
 }
 

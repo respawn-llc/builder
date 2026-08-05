@@ -269,10 +269,7 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 				cancel()
 				wg.Wait()
 				return liveWatchResult(id, name, terminal.result, terminal.err)
-			case <-ctx.Done():
-				cancel()
-				wg.Wait()
-				return serverapi.RuntimeLiveWatchResponse{}, ctx.Err()
+			default:
 			}
 		}
 		cancel()

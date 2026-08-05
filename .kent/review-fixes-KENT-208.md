@@ -46,9 +46,11 @@
 ## QA remediation round
 
 - [x] Keep malformed `run watch` selectors on the live-control route so leaf
-  validation rejects them before any ordinary Run can start.
-- [x] When the live attention path closes with `context.Canceled` while the
-  caller remains active, wait for and project the authoritative terminal
-  interruption instead of returning the stream cancellation as the outcome.
+  validation rejects them before any ordinary Run can start, while preserving
+  legacy path-safe Session IDs accepted by `runtimeids.ParseSessionID`.
+- [x] If the live attention path closes with `context.Canceled` while the
+  caller remains active, let an already-available terminal result win; return
+  the normalized stream cancellation otherwise, without reconnecting.
 - [x] Render typed interruption reason and diagnostic, with exit code 130, and
-  cover the CLI and runtime-control regressions.
+  cover the CLI and runtime-control regressions for both interruption and
+  blocked stream loss.
