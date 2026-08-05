@@ -2384,6 +2384,7 @@ SELECT
         WHERE task.workflow_id = ?1
           AND current_node.entered_by_edge_id = ?2
           AND current_node.transition_branch_key IS NOT NULL
+          AND current_node.scheduling_state = 'interrupted'
     ) AS unresolved_parallel_branch_count,
     (
         SELECT CAST(COUNT(DISTINCT approval.id) AS INTEGER)
