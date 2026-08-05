@@ -689,12 +689,14 @@
   typed navigation failure while surfacing the error. Focused regression tests
   cover the virtual range/load-more behavior and deletion confirmation
   settlement. Latest remediation routes mutation-driven and subscription-driven
-  selected-Task deletion through the same operation-scoped coordinator, which
-  coalesces duplicate close requests and permits retry after a failed outcome.
+  selected-Task deletion through the same operation-scoped coordinator. The
+  single deletion cause authority defers selector consumption until the typed
+  route outcome settles, rejects duplicate requests while that cause is active,
+  and permits retry after a failed outcome.
   Focused coordinator/cause tests cover direct-before-subscription,
   subscription-before-direct, and failure-then-success interleavings while
   preserving the typed deletion cause for unrelated sidebar survivors. Final
   verification passed after this round: `pnpm install --frozen-lockfile`,
   full Apps lint (0 errors; 4 existing warnings), Apps typecheck,
-  `./scripts/test.sh desktop` (83 files / 374 tests), and
+  `./scripts/test.sh desktop` (83 files / 376 tests), and
   `./scripts/build.sh desktop`.

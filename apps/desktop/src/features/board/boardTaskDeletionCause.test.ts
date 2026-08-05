@@ -1,5 +1,7 @@
 import {
+  boardTaskDeletionCauseHasActiveAttempt,
   boardTaskDeletionCauseMatches,
+  boardTaskDeletionCauseShouldDefer,
   recordBoardTaskDeletionAttempt,
   settleBoardTaskDeletionAttempt,
   type BoardTaskDeletionCause,
@@ -64,5 +66,17 @@ describe("board task deletion causes", () => {
 
     expect(failed).toBeNull();
     expect(boardTaskDeletionCauseMatches(failed, "task-1", null)).toBe(false);
+  });
+
+  it("defers a committed selector absence until the shared navigation settles", () => {
+    const attempt = { taskID: "task-1" };
+    const pending = recordBoardTaskDeletionAttempt(null, attempt);
+
+    expect(boardTaskDeletionCauseHasActiveAttempt(pending, "task-1")).toBe(true);
+    expect(boardTaskDeletionCauseShouldDefer(pending, "task-1", null)).toBe(true);
+
+    const succeeded = settleBoardTaskDeletionAttempt(pending, attempt, "succeeded");
+    expect(boardTaskDeletionCauseShouldDefer(succeeded, "task-1", null)).toBe(false);
+    expect(boardTaskDeletionCauseMatches(succeeded, "task-1", null)).toBe(true);
   });
 });

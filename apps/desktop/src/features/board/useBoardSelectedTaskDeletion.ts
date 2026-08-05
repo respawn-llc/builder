@@ -1,58 +1,70 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useReducer, useRef } from "react";
 
 import { useAppNavigation, useSidebar } from "@/app-facade";
-import type { BoardTaskDeletionAttempt } from "./boardTaskDeletionCause";
+import {
+  boardTaskDeletionCauseHasActiveAttempt,
+  recordBoardTaskDeletionAttempt,
+  settleBoardTaskDeletionAttempt,
+  type BoardTaskDeletionCause,
+} from "./boardTaskDeletionCause";
 
 export function useBoardSelectedTaskDeletion({
   onNavigationError,
-  onSelectedTaskDeletionNavigationSucceeded,
-  onSelectedTaskDeletionNavigationFailed,
-  onSelectedTaskDeleted,
   projectId,
   selectedTaskId,
   workflowId,
 }: Readonly<{
   onNavigationError(error: unknown): void;
-  onSelectedTaskDeletionNavigationFailed?(attempt: BoardTaskDeletionAttempt): void;
-  onSelectedTaskDeletionNavigationSucceeded?(attempt: BoardTaskDeletionAttempt): void;
-  onSelectedTaskDeleted?(attempt: BoardTaskDeletionAttempt): void;
   projectId: string;
   selectedTaskId: string;
   workflowId: string | undefined;
 }>) {
   const navigation = useAppNavigation();
   const { invalidateSidebar } = useSidebar();
-  const activeAttemptRef = useRef<BoardTaskDeletionAttempt | null>(null);
-  return useCallback(() => {
-    if (activeAttemptRef.current?.taskID === selectedTaskId) {
+  const deletionCauseRef = useRef<BoardTaskDeletionCause | null>(null);
+  const [deletionCauseVersion, refreshDeletionCause] = useReducer((version: number) => version + 1, 0);
+  const request = useCallback(() => {
+    const attempt = { taskID: selectedTaskId };
+    if (boardTaskDeletionCauseHasActiveAttempt(deletionCauseRef.current, selectedTaskId)) {
       return;
     }
-    const attempt = { taskID: selectedTaskId };
-    activeAttemptRef.current = attempt;
-    onSelectedTaskDeleted?.(attempt);
+    deletionCauseRef.current = recordBoardTaskDeletionAttempt(deletionCauseRef.current, attempt);
+    refreshDeletionCause();
     invalidateSidebar({ kind: "task", taskID: selectedTaskId });
     void navigation.closeProjectTask(projectId, workflowId).then((result) => {
       if (result.status === "completed") {
-        onSelectedTaskDeletionNavigationSucceeded?.(attempt);
+        deletionCauseRef.current = settleBoardTaskDeletionAttempt(
+          deletionCauseRef.current,
+          attempt,
+          "succeeded",
+        );
+        refreshDeletionCause();
         return;
       }
-      activeAttemptRef.current = null;
-      onSelectedTaskDeletionNavigationFailed?.(attempt);
+      deletionCauseRef.current = settleBoardTaskDeletionAttempt(
+        deletionCauseRef.current,
+        attempt,
+        "failed",
+      );
+      refreshDeletionCause();
       onNavigationError(result.error);
     }, (error: unknown) => {
-      activeAttemptRef.current = null;
-      onSelectedTaskDeletionNavigationFailed?.(attempt);
+      deletionCauseRef.current = settleBoardTaskDeletionAttempt(
+        deletionCauseRef.current,
+        attempt,
+        "failed",
+      );
+      refreshDeletionCause();
       onNavigationError(error);
     });
   }, [
+    deletionCauseRef,
     invalidateSidebar,
     navigation,
     onNavigationError,
-    onSelectedTaskDeletionNavigationSucceeded,
-    onSelectedTaskDeletionNavigationFailed,
-    onSelectedTaskDeleted,
     projectId,
     selectedTaskId,
     workflowId,
   ]);
+  return { deletionCauseRef, deletionCauseVersion, request };
 }

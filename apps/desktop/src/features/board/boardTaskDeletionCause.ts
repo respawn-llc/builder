@@ -6,6 +6,21 @@ export type BoardTaskDeletionCause = Readonly<{
   succeeded: boolean;
 }>;
 
+export function boardTaskDeletionCauseHasActiveAttempt(
+  cause: BoardTaskDeletionCause | null,
+  taskID: string,
+): boolean {
+  return cause?.taskID === taskID && (cause.pending.size > 0 || cause.succeeded);
+}
+
+export function boardTaskDeletionCauseShouldDefer(
+  cause: BoardTaskDeletionCause | null,
+  previousTaskID: string | null,
+  nextTaskID: string | null,
+): boolean {
+  return cause?.taskID === previousTaskID && nextTaskID === null && cause.pending.size > 0;
+}
+
 export function recordBoardTaskDeletionAttempt(
   cause: BoardTaskDeletionCause | null,
   attempt: BoardTaskDeletionAttempt,
