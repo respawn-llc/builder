@@ -104,7 +104,6 @@ type CurrentNodeController struct {
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		InterruptCurrentNodes(context.Context, []workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
@@ -158,7 +157,6 @@ func NewCurrentNodeController(
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		InterruptCurrentNodes(context.Context, []workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
@@ -375,7 +373,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				OutputValues: req.OutputValues,
 				Commentary:   req.Commentary,
 			})
-			if !currentNodeCompletionCommitted(completed) {
+			if completionErr != nil {
 				return completionErr
 			}
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
@@ -387,7 +385,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			c.completed[req.ScopeID] = struct{}{}
 			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
-			return completionErr
+			return nil
 		}); err != nil {
 			exactErr := err
 			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
@@ -396,7 +394,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 	if err != nil {
-		return completed, err
+		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
 	return completed, nil
 }
@@ -427,35 +425,26 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 			OutputValues: outputValues,
 			Commentary:   commentary,
 		})
-		if !currentNodeCompletionCommitted(completed) {
-			return completed, completionErr
+		if completionErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
 		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 		if intentErr != nil {
-			return completed, errors.Join(completionErr, intentErr)
+			return workflowstore.CurrentNodeCompletionResult{}, intentErr
 		}
 		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
 		if startErr != nil {
-			return completed, errors.Join(completionErr, startErr)
+			return workflowstore.CurrentNodeCompletionResult{}, startErr
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, start := range starts {
 			if err := c.queueAutomaticStartLocked(start); err != nil {
-				return completed, errors.Join(err, completionErr)
+				return workflowstore.CurrentNodeCompletionResult{}, err
 			}
 		}
-		return completed, completionErr
+		return completed, nil
 	})
-}
-
-func currentNodeCompletionCommitted(result workflowstore.CurrentNodeCompletionResult) bool {
-	mutation := result.Mutation
-	return len(mutation.Removed) > 0 ||
-		len(mutation.Created) > 0 ||
-		len(mutation.Updated) > 0 ||
-		len(result.AutomaticIntents) > 0 ||
-		result.PendingApproval != nil
 }
 
 func (c *CurrentNodeController) RecordProtocolViolation(ctx context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {

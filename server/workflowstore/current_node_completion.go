@@ -198,11 +198,12 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		var publicationErr error
 		if len(result.Mutation.Removed) > 0 {
-			publicationErr = s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
 		}
-		return result, publicationErr
+		return result, nil
 	}
 	target := targets[0]
 	if target.Node.Kind() == workflow.NodeKindJoin {
@@ -225,11 +226,12 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		var publicationErr error
 		if len(result.Mutation.Removed) > 0 {
-			publicationErr = s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
 		}
-		return result, publicationErr
+		return result, nil
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
 		ctx,
@@ -309,7 +311,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
-	return result, s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted)
+	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	return result, nil
 }
 
 func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (CurrentNodeCompletionRequest, error) {

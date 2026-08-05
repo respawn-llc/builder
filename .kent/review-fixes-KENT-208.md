@@ -23,6 +23,8 @@
 ## Fourth-round review
 
 - [x] Omit stale live access approvals before creating Task question candidates, covering show and answer paths.
-- [x] Add tracker-owned abort handling for materialized multi-ask Question Batches during Exact-Scope rollback.
-- [x] Surface rollback tracker and runtime-activity publication errors.
-- [x] Amend the approved production ceiling to 1,700 lines for the required tracker-owned rollback contract.
+- [x] Remove unapproved QuestionBatch compensation after the user rejected that hardening.
+- [x] Remove unapproved aggregate Current-Node interruption coordination after the user rejected that hardening.
+- [x] Remove inferred committed-result authority and partial-success continuation after the user rejected that hardening.
+- [x] Keep wake publication errors surfaced at the existing operation boundary; accept ghost prompt/batch projections per the user decision.
+- [x] Keep the production ceiling at the previously authorized 1,650 lines; follow-up design approval is required for any stronger coordination.

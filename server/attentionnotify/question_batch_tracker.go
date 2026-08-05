@@ -164,27 +164,6 @@ func (t *QuestionBatchTracker) MarkDurablyCleared(batchID string, askID string) 
 	return t.resolveIfComplete(batch)
 }
 
-func (t *QuestionBatchTracker) Abort(batchID string, askIDs []string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	batch, ok := t.batches[batchID]
-	if !ok {
-		return nil
-	}
-	for _, askID := range askIDs {
-		if _, ok := batch.status[askID]; !ok {
-			return fmt.Errorf("question batch %q does not contain ask %q", batchID, askID)
-		}
-		if batch.status[askID] == questionAskPending || batch.status[askID] == questionAskMaterialized {
-			batch.status[askID] = questionAskSkipped
-		}
-	}
-	if batch.emitted && !batch.complete() {
-		return t.publishBatch(batch)
-	}
-	return t.resolveIfComplete(batch)
-}
-
 func (t *QuestionBatchTracker) batch(batchID string, askID string) (*questionBatch, error) {
 	if t == nil {
 		return nil, ErrBatchNotFound

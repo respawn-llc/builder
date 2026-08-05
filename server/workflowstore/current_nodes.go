@@ -555,64 +555,6 @@ func (s *Store) InterruptCurrentNode(
 	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
-func (s *Store) InterruptCurrentNodes(
-	ctx context.Context,
-	references []workflow.CurrentNodeReference,
-	reason workflow.CurrentNodeInterruptionReason,
-	detail workflow.CurrentNodeInterruptionDetail,
-) ([]workflow.CurrentNodeReference, error) {
-	if len(references) == 0 {
-		return nil, nil
-	}
-	if strings.TrimSpace(string(reason)) == "" {
-		return nil, errors.New("current node interruption reason is required")
-	}
-	taskID := references[0].TaskID
-	detailJSON, err := json.Marshal(detail)
-	if err != nil {
-		return nil, fmt.Errorf("encode current node interruption detail: %w", err)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
-	interrupted := make([]workflow.CurrentNodeReference, 0, len(references))
-	now := s.now().UTC().UnixMilli()
-	for _, reference := range references {
-		if err := reference.Validate(); err != nil {
-			return nil, err
-		}
-		if reference.TaskID != taskID {
-			return nil, errors.New("aggregate current node interruption requires one Task")
-		}
-		key, err := reference.Key()
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		changed, err := interruptCurrentNodeQuery(ctx, q, reference, reason, string(detailJSON), now)
-		if err != nil {
-			return nil, err
-		}
-		if changed == 1 {
-			interrupted = append(interrupted, reference)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	if len(interrupted) == 0 {
-		return interrupted, nil
-	}
-	return interrupted, s.publishCurrentNodeTaskEvent(ctx, taskID, serverapi.WorkflowProjectEventActionInterrupted)
-}
-
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
 // by a previous process into resumable interruption state. Pending Approval
 // sources remain frozen and no Automatic Intent is reconstructed.
