@@ -3935,24 +3935,24 @@ WITH board_node_tasks AS (
 )
  AS label_ordinals
     FROM task_records t
-    WHERE t.project_id = ?1
-      AND t.workflow_id = ?2
+    WHERE t.project_id = ?3
+      AND t.workflow_id = ?4
       AND (
-          ?3 = 'none'
+          ?5 = 'none'
           OR (
-              ?3 = 'named'
-              AND ?4 = 'any'
+              ?5 = 'named'
+              AND ?6 = 'any'
               AND (
                   EXISTS (
                       SELECT 1
-                      FROM json_each(?5) selected_label
+                      FROM json_each(?7) selected_label
                       JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                         ON assignment.label_id = selected_label.value
                       WHERE assignment.task_id = t.id
                   )
                   OR EXISTS (
                       SELECT 1
-                      FROM json_each(?6) excluded_label
+                      FROM json_each(?8) excluded_label
                       WHERE NOT EXISTS (
                           SELECT 1
                           FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -3963,11 +3963,11 @@ WITH board_node_tasks AS (
               )
           )
           OR (
-              ?3 = 'named'
-              AND ?4 = 'all'
+              ?5 = 'named'
+              AND ?6 = 'all'
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?5) selected_label
+                  FROM json_each(?7) selected_label
                   WHERE NOT EXISTS (
                       SELECT 1
                       FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -3977,14 +3977,14 @@ WITH board_node_tasks AS (
               )
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?6) excluded_label
+                  FROM json_each(?8) excluded_label
                   JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                     ON assignment.label_id = excluded_label.value
                   WHERE assignment.task_id = t.id
               )
           )
           OR (
-              ?3 = 'unlabeled'
+              ?5 = 'unlabeled'
               AND NOT EXISTS (
                   SELECT 1
                   FROM task_label_assignments assignment
@@ -3994,8 +3994,8 @@ WITH board_node_tasks AS (
       )
       AND
           (
-              ?7 IS NULL
-              OR CAST(?7 AS INTEGER) = (
+              ?9 IS NULL
+              OR CAST(?9 AS INTEGER) = (
                   NOT EXISTS (
                       SELECT 1
                       FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
@@ -4015,40 +4015,14 @@ WITH board_node_tasks AS (
               SELECT 1
               FROM task_current_nodes current_node
               WHERE current_node.task_id = t.id
-                AND current_node.node_id = ?8
+                AND current_node.node_id = ?10
           )
       )
 ),
 board_sort AS (
     SELECT
-        CAST(?9 AS TEXT) AS sort_field,
-        CAST(?10 AS TEXT) AS sort_direction
-),
-ordered_page AS (
-    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json, label_ordinals, display_order
-    FROM (
-        SELECT
-            t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.execution_target_mode, t.execution_target_requested_ref, t.execution_target_resolved_ref, t.execution_target_commit_oid, t.execution_target_provenance, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json, t.label_ordinals,
-            ROW_NUMBER() OVER (
-                ORDER BY
-        CASE WHEN sort.sort_field = 'labels' AND t.label_ordinals IS NULL THEN 1 ELSE 0 END ASC,
-        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN t.updated_at_unix_ms END ASC,
-        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN t.updated_at_unix_ms END DESC,
-        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN t.created_at_unix_ms END ASC,
-        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN t.created_at_unix_ms END DESC,
-        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN t.label_ordinals END ASC,
-        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN t.label_ordinals END DESC,
-        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN t.task_seq END ASC,
-        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN t.task_seq END DESC,
-        CASE WHEN sort.sort_direction = 'asc' THEN t.task_seq END ASC,
-        CASE WHEN sort.sort_direction = 'desc' THEN t.task_seq END DESC
-            ) AS display_order
-        FROM board_node_tasks t
-        CROSS JOIN board_sort sort
-    )
-    ORDER BY display_order
-    LIMIT ?12 + 1
-    OFFSET ?11
+        CAST(?11 AS TEXT) AS sort_field,
+        CAST(?12 AS TEXT) AS sort_direction
 ),
 dependency_progress AS (
     SELECT
@@ -4062,7 +4036,7 @@ dependency_progress AS (
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
     FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
     WHERE td.blocked_task_id IN (
-        SELECT id FROM ordered_page
+        SELECT id FROM board_node_tasks
     )
     GROUP BY td.blocked_task_id
 )
@@ -4089,12 +4063,28 @@ SELECT
     page.metadata_json,
     dependency_progress.dependency_satisfied_count,
     dependency_progress.dependency_total_count
-FROM ordered_page page
+FROM board_node_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-ORDER BY page.display_order
+CROSS JOIN board_sort sort
+ORDER BY
+    CASE WHEN sort.sort_field = 'labels' AND page.label_ordinals IS NULL THEN 1 ELSE 0 END ASC,
+    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN page.updated_at_unix_ms END ASC,
+    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN page.updated_at_unix_ms END DESC,
+    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN page.created_at_unix_ms END ASC,
+    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN page.created_at_unix_ms END DESC,
+    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN page.label_ordinals END ASC,
+    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN page.label_ordinals END DESC,
+    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN page.task_seq END ASC,
+    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN page.task_seq END DESC,
+    CASE WHEN sort.sort_direction = 'asc' THEN page.task_seq END ASC,
+    CASE WHEN sort.sort_direction = 'desc' THEN page.task_seq END DESC
+LIMIT ?2 + 1
+OFFSET ?1
 `
 
 type ListBoardNodeTasksParams struct {
+	OffsetRows           int64
+	LimitRows            interface{}
 	ProjectID            string
 	WorkflowID           runtimeids.WorkflowID
 	LabelFilterKind      interface{}
@@ -4105,8 +4095,6 @@ type ListBoardNodeTasksParams struct {
 	NodeID               string
 	SortField            string
 	SortDirection        string
-	OffsetRows           int64
-	LimitRows            interface{}
 }
 
 type ListBoardNodeTasksRow struct {
@@ -4136,6 +4124,8 @@ type ListBoardNodeTasksRow struct {
 
 func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]ListBoardNodeTasksRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
+		arg.OffsetRows,
+		arg.LimitRows,
 		arg.ProjectID,
 		arg.WorkflowID,
 		arg.LabelFilterKind,
@@ -4146,8 +4136,6 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.NodeID,
 		arg.SortField,
 		arg.SortDirection,
-		arg.OffsetRows,
-		arg.LimitRows,
 	)
 	err = recordQueryError(ctx, err, listBoardNodeTasks, 12)
 

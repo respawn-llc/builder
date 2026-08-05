@@ -43,16 +43,14 @@ export function createProjectLabelEffects({
   authority,
   onFilterAction,
   onMembershipRefresh,
-  onBackgroundError = (error: unknown): void => {
-    throw error;
-  },
+  onBackgroundError,
   projectID,
   queryClient,
 }: Readonly<{
   authority: ProjectCatalogAuthority;
   onFilterAction?: ((action: LabelFilterAction) => void) | undefined;
   onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
-  onBackgroundError?: ((error: unknown) => void) | undefined;
+  onBackgroundError: (error: unknown) => void;
   projectID: string;
   queryClient: QueryClient;
 }>): ProjectLabelEffects {

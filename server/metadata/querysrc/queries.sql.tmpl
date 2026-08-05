@@ -3494,32 +3494,6 @@ board_sort AS (
         CAST(sqlc.arg(sort_field) AS TEXT) AS sort_field,
         CAST(sqlc.arg(sort_direction) AS TEXT) AS sort_direction
 ),
-ordered_page AS (
-    SELECT *
-    FROM (
-        SELECT
-            t.*,
-            ROW_NUMBER() OVER (
-                ORDER BY
-        CASE WHEN sort.sort_field = 'labels' AND t.label_ordinals IS NULL THEN 1 ELSE 0 END ASC,
-        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN t.updated_at_unix_ms END ASC,
-        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN t.updated_at_unix_ms END DESC,
-        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN t.created_at_unix_ms END ASC,
-        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN t.created_at_unix_ms END DESC,
-        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN t.label_ordinals END ASC,
-        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN t.label_ordinals END DESC,
-        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN t.task_seq END ASC,
-        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN t.task_seq END DESC,
-        CASE WHEN sort.sort_direction = 'asc' THEN t.task_seq END ASC,
-        CASE WHEN sort.sort_direction = 'desc' THEN t.task_seq END DESC
-            ) AS display_order
-        FROM board_node_tasks t
-        CROSS JOIN board_sort sort
-    )
-    ORDER BY display_order
-    LIMIT sqlc.arg(limit_rows) + 1
-    OFFSET sqlc.arg(offset_rows)
-),
 dependency_progress AS (
     SELECT
         td.blocked_task_id AS task_id,
@@ -3532,7 +3506,7 @@ dependency_progress AS (
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
     FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
     WHERE td.blocked_task_id IN (
-        SELECT id FROM ordered_page
+        SELECT id FROM board_node_tasks
     )
     GROUP BY td.blocked_task_id
 )
@@ -3559,9 +3533,23 @@ SELECT
     page.metadata_json,
     dependency_progress.dependency_satisfied_count,
     dependency_progress.dependency_total_count
-FROM ordered_page page
+FROM board_node_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-ORDER BY page.display_order;
+CROSS JOIN board_sort sort
+ORDER BY
+    CASE WHEN sort.sort_field = 'labels' AND page.label_ordinals IS NULL THEN 1 ELSE 0 END ASC,
+    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN page.updated_at_unix_ms END ASC,
+    CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN page.updated_at_unix_ms END DESC,
+    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN page.created_at_unix_ms END ASC,
+    CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN page.created_at_unix_ms END DESC,
+    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN page.label_ordinals END ASC,
+    CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN page.label_ordinals END DESC,
+    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN page.task_seq END ASC,
+    CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN page.task_seq END DESC,
+    CASE WHEN sort.sort_direction = 'asc' THEN page.task_seq END ASC,
+    CASE WHEN sort.sort_direction = 'desc' THEN page.task_seq END DESC
+LIMIT sqlc.arg(limit_rows) + 1
+OFFSET sqlc.arg(offset_rows);
 
 
 -- name: CountWorktreesByWorkspace :one

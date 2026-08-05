@@ -65,15 +65,7 @@ vi.mock("@/shared/labels", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => {
-      if (key === "board.unblocked") {
-        return "dependency-control";
-      }
-      if (key === "labels.filterCount") {
-        return "label-control";
-      }
-      return key;
-    },
+    t: (key: string) => key,
   }),
 }));
 
@@ -82,7 +74,7 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
 }));
 
 vi.mock("./BoardTaskSearch", () => ({
-  BoardTaskSearchChrome: () => <button type="button">Search</button>,
+  BoardTaskSearchChrome: () => <button data-testid="board-task-search-trigger" type="button" />,
 }));
 
 import { BoardFilterChrome } from "./BoardLabelFilter";
@@ -104,7 +96,7 @@ describe("BoardFilterChrome", () => {
     };
     const view = render(<BoardFilterChrome />);
 
-    const chip = screen.getByRole("button", { name: "dependency-control" });
+    const chip = screen.getByTestId("board-dependency-filter-trigger");
     expect(chip).toHaveAttribute("aria-pressed", "false");
     await user.click(chip);
 
@@ -121,10 +113,7 @@ describe("BoardFilterChrome", () => {
       },
     };
     view.rerender(<BoardFilterChrome />);
-    expect(screen.getByRole("button", { name: "dependency-control" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByTestId("board-dependency-filter-trigger")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("preserves the dependency filter when the Labels filter changes", async () => {
@@ -142,7 +131,7 @@ describe("BoardFilterChrome", () => {
     };
     render(<BoardFilterChrome />);
 
-    await user.click(screen.getByRole("button", { name: "label-control" }));
+    await user.click(screen.getByTestId("board-label-filter-trigger"));
 
     expect(generationRuntime.controller.setDesiredFilter).toHaveBeenCalledWith({
       labelFilter: { kind: "none" },
@@ -165,10 +154,10 @@ describe("BoardFilterChrome", () => {
     };
     render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
 
-    const labels = screen.getByRole("button", { name: "label-control" });
-    const sort = screen.getByRole("button", { name: "board.sort.chip" });
-    const unblocked = screen.getByRole("button", { name: "dependency-control" });
-    const search = screen.getByRole("button", { name: "Search" });
+    const labels = screen.getByTestId("board-label-filter-trigger");
+    const sort = screen.getByTestId("board-sort-trigger");
+    const unblocked = screen.getByTestId("board-dependency-filter-trigger");
+    const search = screen.getByTestId("board-task-search-trigger");
     expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);

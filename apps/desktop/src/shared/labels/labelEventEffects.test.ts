@@ -27,6 +27,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -79,6 +80,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -107,6 +109,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -175,6 +178,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -207,6 +211,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onFilterAction: (action) => {
         filterActions.push(action);
       },
@@ -276,6 +281,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: (effect) => {
         membershipEffects.push(effect);
       },
@@ -351,6 +357,7 @@ describe("Project label event effects", () => {
     admittedTransportCalls = 0;
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: () => {
         admissionClosed = true;
       },
@@ -376,6 +383,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: (effect) => {
         membershipEffects.push(effect);
       },

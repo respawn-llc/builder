@@ -32,20 +32,19 @@ describe("BoardSortChrome", () => {
     const user = userEvent.setup();
     render(<BoardSortChrome />);
 
-    expect(screen.getByTestId("board-sort-summary")).toHaveTextContent("board.sort.chip");
+    expect(screen.getByTestId("board-sort-trigger")).toHaveAttribute("data-selected", "false");
     await user.click(screen.getByTestId("board-sort-trigger"));
 
     const content = screen.getByRole("dialog");
-    expect(
-      within(content)
-        .getAllByRole("radio")
-        .slice(0, boardSortFieldOptions.length)
-        .map((radio) => radio.getAttribute("value")),
-    ).toEqual(boardSortFieldOptions.map((option) => option.value));
-    expect(within(content).getByRole("radio", { name: "board.sort.directions.asc" })).toBeInTheDocument();
-    expect(within(content).getByRole("radio", { name: "board.sort.directions.desc" })).toBeInTheDocument();
-    expect(within(content).queryByRole("button", { name: "board.sort.apply" })).not.toBeInTheDocument();
-    expect(within(content).queryByRole("button", { name: "board.sort.reset" })).not.toBeInTheDocument();
+    const radios = within(content).getAllByRole("radio");
+    expect(radios.slice(0, boardSortFieldOptions.length).map((radio) => radio.getAttribute("value"))).toEqual(
+      boardSortFieldOptions.map((option) => option.value),
+    );
+    expect(radios.slice(boardSortFieldOptions.length).map((radio) => radio.getAttribute("value"))).toEqual([
+      "asc",
+      "desc",
+    ]);
+    expect(within(content).queryAllByRole("button")).toHaveLength(0);
   });
 
   it("applies field and direction changes immediately while retaining the popover", async () => {
@@ -54,13 +53,22 @@ describe("BoardSortChrome", () => {
     await user.click(screen.getByTestId("board-sort-trigger"));
 
     const content = screen.getByRole("dialog");
-    await user.click(within(content).getByRole("radio", { name: "board.sort.fields.created" }));
+    const findRadio = (value: string): HTMLElement => {
+      const radio = within(content)
+        .getAllByRole("radio")
+        .find((candidate) => candidate.getAttribute("value") === value);
+      if (radio === undefined) {
+        throw new Error(`Expected sort radio "${value}".`);
+      }
+      return radio;
+    };
+    await user.click(findRadio("created"));
     expect(runtime.setSort).toHaveBeenCalledWith({ field: "created", direction: "desc" });
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("board-sort-popover")).toBeInTheDocument();
 
     runtime.sort = { field: "created", direction: "desc" };
     view.rerender(<BoardSortChrome />);
-    await user.click(within(content).getByRole("radio", { name: "board.sort.directions.asc" }));
+    await user.click(findRadio("asc"));
     expect(runtime.setSort).toHaveBeenCalledWith({ field: "created", direction: "asc" });
   });
 
@@ -69,6 +77,5 @@ describe("BoardSortChrome", () => {
     render(<BoardSortChrome />);
 
     expect(screen.getByTestId("board-sort-trigger")).toHaveAttribute("data-selected", "true");
-    expect(screen.getByTestId("board-sort-summary")).toHaveTextContent("board.sort.summary");
   });
 });

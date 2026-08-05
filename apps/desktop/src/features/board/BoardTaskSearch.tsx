@@ -104,6 +104,7 @@ export function BoardTaskSearchChrome({
     <>
       <InteractiveChip
         aria-label={t("taskSearch.open")}
+        data-testid="board-task-search-trigger"
         onClick={openSearch}
         selected={open}
         style={{ paddingInline: "var(--space-3)" }}
