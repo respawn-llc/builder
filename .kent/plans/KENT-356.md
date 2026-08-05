@@ -739,3 +739,5 @@
   timeout under concurrent load (sidebar navigation once, Manual Move once);
   the implicated tests pass in the focused rerun, so no product failure was
   reproduced.
+  Final current-head rerun completed after unrelated workspace load subsided:
+  `./scripts/test.sh desktop` passed with 84 files / 375 tests.
