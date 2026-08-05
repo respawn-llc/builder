@@ -163,10 +163,26 @@ describe("Board Task Search", () => {
     expect(within(listbox).queryByRole("listitem")).not.toBeInTheDocument();
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("img", { name: appI18n.t("taskSearch.commentHit") })).toBeInTheDocument();
+    const secondResult = screen.getAllByRole("option")[1];
+    if (secondResult === undefined) {
+      throw new Error("Task Search keyboard test requires a second result.");
+    }
+    const smoothScroll = vi.fn();
+    Object.defineProperty(secondResult, "scrollIntoView", {
+      configurable: true,
+      value: smoothScroll,
+    });
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(input).toHaveFocus();
     expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => {
+      expect(smoothScroll).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onOpenTask).not.toHaveBeenCalled();
@@ -270,6 +286,10 @@ describe("Board Task Search", () => {
     if (first === undefined || second === undefined) {
       throw new Error("Task Search pointer test requires two results.");
     }
+    const listbox = screen.getByRole("listbox", { name: appI18n.t("taskSearch.results") });
+    const scrollTo = vi.fn();
+    Object.defineProperty(listbox, "scrollTo", { configurable: true, value: scrollTo });
+    scrollTo.mockClear();
 
     fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 10, clientY: 10 });
     expect(second).toHaveAttribute("aria-selected", "true");
@@ -282,6 +302,35 @@ describe("Board Task Search", () => {
 
     fireEvent.pointerMove(second, { pointerType: "mouse", clientX: 11, clientY: 10 });
     expect(second).toHaveAttribute("aria-selected", "true");
+    await act(async () => undefined);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("does not restore selection when another result page arrives", async () => {
+    vi.useRealTimers();
+    const firstPage = { ...searchResponse, next_offset: 40 };
+    const secondPage = { ...searchResponse, next_offset: null };
+    const services = createTestServices([
+      {
+        method: "workflow.task.search",
+        handler: (_params, callIndex) => (callIndex === 0 ? firstPage : secondPage),
+      },
+    ]);
+
+    renderSearch(services, "project-pagination");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    const listbox = screen.getByRole("listbox", { name: appI18n.t("taskSearch.results") });
+    const scrollTo = vi.fn();
+    Object.defineProperty(listbox, "scrollTo", { configurable: true, value: scrollTo });
+    scrollTo.mockClear();
+
+    await waitFor(() => {
+      expect(services.transport.dedicatedCalls).toHaveLength(2);
+    });
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it("closes the route-owned Task lifecycle after replacing it from global Search", async () => {

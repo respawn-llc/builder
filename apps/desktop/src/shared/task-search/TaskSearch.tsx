@@ -31,6 +31,7 @@ import {
   InfiniteListBoundary,
   InteractiveChip,
   VirtualizedInfiniteList,
+  useStableCallback,
 } from "@/ui";
 import { useRetainedQueryData } from "@/app-facade";
 import {
@@ -193,13 +194,11 @@ export function TaskSearchHost() {
   useEffect(() => {
     pendingTaskIDRef.current = null;
   }, [activeInvocation]);
-  const { activeKey, revealActive } = selection;
-  useEffect(() => {
-    if (!searchOpen || activeInvocation === null || search.results.length === 0 || activeKey === null) {
-      return;
-    }
-    revealActive();
-  }, [activeInvocation, activeKey, revealActive, search.results.length, searchOpen]);
+  const restoreToken = searchOpen
+    ? invocation.scope.kind === "project"
+      ? `project:${invocation.scope.projectID}`
+      : "global"
+    : "closed";
   const activate = useCallback(
     (result: SearchResult): void => {
       pendingTaskIDRef.current = result.group.taskID;
@@ -251,6 +250,7 @@ export function TaskSearchHost() {
       onQueryChange={memory.setQuery}
       open={searchOpen}
       query={query}
+      restoreToken={restoreToken}
       search={search}
       selection={selection}
     />
@@ -316,6 +316,7 @@ function TaskSearchDialog({
   onQueryChange,
   open,
   query,
+  restoreToken,
   search,
   selection,
 }: Readonly<{
@@ -326,12 +327,14 @@ function TaskSearchDialog({
   onQueryChange(value: string): void;
   open: boolean;
   query: string;
+  restoreToken: string;
   search: ReturnType<typeof useTaskSearch>;
   selection: ReturnType<typeof useTaskSearchSelection>;
 }>) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listID = useId();
+  const restoreSelection = useStableCallback(selection.revealActive);
   const resultsVisible = search.results.length > 0;
   const loadingVisible = search.searchable && search.request.isFetching && search.results.length === 0;
   const errorVisible = search.request.isError && !search.normalizedTooShort && search.results.length === 0;
@@ -369,6 +372,8 @@ function TaskSearchDialog({
         listID={listID}
         onActivate={onActivate}
         onSelect={selection.select}
+        restoreSelection={restoreSelection}
+        restoreToken={restoreToken}
         search={search}
         scrollRequest={selection.scrollRequest}
         selectedKey={selection.activeKey}
@@ -474,6 +479,8 @@ function TaskSearchResults({
   listID,
   onActivate,
   onSelect,
+  restoreSelection,
+  restoreToken,
   search,
   scrollRequest,
   selectedKey,
@@ -481,6 +488,8 @@ function TaskSearchResults({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
+  restoreSelection(): void;
+  restoreToken: string;
   search: ReturnType<typeof useTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
@@ -519,6 +528,8 @@ function TaskSearchResults({
       listID={listID}
       onActivate={onActivate}
       onSelect={onSelect}
+      restoreSelection={restoreSelection}
+      restoreToken={restoreToken}
       search={search}
       scrollRequest={scrollRequest}
       selectedKey={selectedKey}
@@ -530,6 +541,8 @@ function TaskSearchResultList({
   listID,
   onActivate,
   onSelect,
+  restoreSelection,
+  restoreToken,
   search,
   scrollRequest,
   selectedKey,
@@ -537,6 +550,8 @@ function TaskSearchResultList({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
+  restoreSelection(): void;
+  restoreToken: string;
   search: ReturnType<typeof useTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
@@ -575,6 +590,9 @@ function TaskSearchResultList({
     [onSelect, selectedKey],
   );
   const immediateScrollRequest = scrollRequest?.behavior === "auto" ? scrollRequest : null;
+  useEffect(() => {
+    restoreSelection();
+  }, [restoreSelection, restoreToken]);
   return (
     <VirtualizedInfiniteList
       ariaLabel={t("taskSearch.results")}
