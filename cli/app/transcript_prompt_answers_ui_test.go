@@ -16,6 +16,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func approvalCommentary(request serverapi.ApprovalAnswerRequest) string {
+	if request.Commentary == nil {
+		return ""
+	}
+	return *request.Commentary
+}
+
 type deadlineThenSuccessPromptControl struct {
 	mu           sync.Mutex
 	askRequests  []serverapi.AskAnswerRequest
@@ -715,8 +722,8 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	if requests[0].Decision != clientui.ApprovalDecisionDeny || requests[1].Decision != clientui.ApprovalDecisionDeny {
 		t.Fatalf("denial decisions = %q then %q, want deny", requests[0].Decision, requests[1].Decision)
 	}
-	if requests[0].Commentary != "original denial" || requests[1].Commentary != "original denial edited" {
-		t.Fatalf("denial commentary = %q then %q, want immutable submission then edited retry", requests[0].Commentary, requests[1].Commentary)
+	if approvalCommentary(requests[0]) != "original denial" || approvalCommentary(requests[1]) != "original denial edited" {
+		t.Fatalf("denial commentary = %q then %q, want immutable submission then edited retry", approvalCommentary(requests[0]), approvalCommentary(requests[1]))
 	}
 	if requests[0].ClientRequestID == requests[1].ClientRequestID {
 		t.Fatalf("denial resubmission reused request ID %q", requests[0].ClientRequestID)
@@ -782,7 +789,7 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	if len(requests) != 2 {
 		t.Fatalf("approval requests = %d, want original allow plus cancellation", len(requests))
 	}
-	if requests[0].Decision != clientui.ApprovalDecisionAllowOnce || requests[0].Commentary != "safe operation" {
+	if requests[0].Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(requests[0]) != "safe operation" {
 		t.Fatalf("original immutable approval request = %+v", requests[0])
 	}
 	if requests[1].ErrorMessage == "" {
@@ -871,8 +878,8 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	if len(requests) != 2 {
 		t.Fatalf("allow requests = %d, want deadline plus user resubmission", len(requests))
 	}
-	if requests[0].Commentary != "original allow" || requests[1].Commentary != "original allow edited" {
-		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", requests[0].Commentary, requests[1].Commentary)
+	if approvalCommentary(requests[0]) != "original allow" || approvalCommentary(requests[1]) != "original allow edited" {
+		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", approvalCommentary(requests[0]), approvalCommentary(requests[1]))
 	}
 	if requests[0].ClientRequestID == requests[1].ClientRequestID {
 		t.Fatalf("allow resubmission reused request ID %q", requests[0].ClientRequestID)

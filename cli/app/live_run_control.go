@@ -26,7 +26,14 @@ func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	defer func() { _ = closeFn() }()
-	return liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
+	response, err := liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	return response, nil
 }
 
 func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, text string) (RunLiveSteerResult, error) {

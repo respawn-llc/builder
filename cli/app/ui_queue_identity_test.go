@@ -249,7 +249,7 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	case <-time.After(time.Second):
 		t.Fatal("approval answer did not start while transient expiry was blocked")
 	}
-	if approvalRequest.Commentary != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
+	if approvalCommentary(approvalRequest) != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
 		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
 	}
 

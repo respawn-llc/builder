@@ -79,3 +79,19 @@
   the client and CLI instead of exposing EOF.
 - [x] Add shared-client regression coverage for connection-loss EOF at the
   Task observation RPC boundary.
+
+## PR watcher remediation round
+
+- [x] Consolidate approval answer validation, request submission, optional
+  commentary, and Task-selected successor-prompt presentation across Session
+  and Task selectors.
+- [x] Preserve absent approval commentary as a nullable request field while
+  keeping prompt-control internals string-valued at their owning boundary.
+- [x] Validate live-watch and Task-observation DTOs at both client boundaries.
+- [x] Preserve terminal arbitration when attention-stream cancellation races
+  with a terminal result.
+- [x] Quote project references in Task observation answer hints and keep
+  renderer tests focused on dynamic values.
+- [x] Keep the approved server reason/diagnostic contract; reject the
+  reviewer-proposed typed-reason API expansion as outside this ticket's
+  approved scope.

@@ -69,13 +69,16 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 		}},
 	}
 	var output bytes.Buffer
-	if code := writeTaskObservation(&output, response, "project"); code != 0 {
+	projectRef := "workspace path/$branch"
+	if code := writeTaskObservation(&output, response, projectRef); code != 0 {
 		t.Fatalf("writeTaskObservation exit code = %d", code)
 	}
 	text := output.String()
-	if !strings.Contains(text, "Session session-1 (Node build):") ||
-		!strings.Contains(text, "kent question answer --task T-1") ||
-		strings.Contains(text, "--session session-1") {
+	if !strings.Contains(text, sessionID) ||
+		!strings.Contains(text, "build") ||
+		!strings.Contains(text, response.TaskShortID) ||
+		!strings.Contains(text, "--project "+shellQuote(projectRef)) ||
+		strings.Contains(text, "--session "+sessionID) {
 		t.Fatalf("task observation output = %q", text)
 	}
 }

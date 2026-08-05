@@ -87,7 +87,7 @@ func writeTaskObservation(stdout io.Writer, response serverapi.WorkflowTaskObser
 				hint += " --commentary \"<answer>\""
 			}
 			if strings.TrimSpace(projectRef) != "" && projectRef != "." && questionCount == 1 {
-				hint += " --project " + projectRef
+				hint += " --project " + shellQuote(projectRef)
 			}
 			writeTaskOutcomeDiscriminator(stdout, outcome)
 			writeObservedQuestion(stdout, *outcome.Question, hint)

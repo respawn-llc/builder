@@ -644,7 +644,13 @@ func (c *Remote) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTask
 
 func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](c, ctx, protocol.MethodWorkflowTaskObserve, req)
-	return response, normalizeWorkflowTaskObservationRPCError(err)
+	if err = normalizeWorkflowTaskObservationRPCError(err); err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, fmt.Errorf("validate workflow task observation response: %w", err)
+	}
+	return response, nil
 }
 
 func normalizeWorkflowTaskObservationRPCError(err error) error {

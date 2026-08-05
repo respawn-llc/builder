@@ -23,7 +23,7 @@ type ApprovalAnswerRequest struct {
 	ApprovalID      string                    `json:"approval_id"`
 	ErrorMessage    string                    `json:"error_message,omitempty"`
 	Decision        clientui.ApprovalDecision `json:"decision"`
-	Commentary      string                    `json:"commentary,omitempty"`
+	Commentary      *string                   `json:"commentary,omitempty"`
 }
 
 func (r AskAnswerRequest) Validate() error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -29,6 +30,8 @@ type stubQuestionTaskRemote struct {
 	attentionResponses []serverapi.WorkflowTaskAttentionListResponse
 	attentionRequests  []serverapi.WorkflowTaskAttentionListRequest
 	answerRequests     []serverapi.WorkflowTaskQuestionAnswerRequest
+	approvalResponses  []serverapi.ApprovalListPendingBySessionResponse
+	approvalRequests   []serverapi.ApprovalAnswerRequest
 }
 
 func (r *stubQuestionTaskRemote) GetWorkflowTask(
@@ -57,6 +60,26 @@ func (r *stubQuestionTaskRemote) AnswerWorkflowTaskQuestion(
 	req serverapi.WorkflowTaskQuestionAnswerRequest,
 ) error {
 	r.answerRequests = append(r.answerRequests, req)
+	return nil
+}
+
+func (r *stubQuestionTaskRemote) ListPendingApprovalsBySession(
+	_ context.Context,
+	_ serverapi.ApprovalListPendingBySessionRequest,
+) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	if len(r.approvalResponses) == 0 {
+		return serverapi.ApprovalListPendingBySessionResponse{}, nil
+	}
+	response := r.approvalResponses[0]
+	r.approvalResponses = r.approvalResponses[1:]
+	return response, nil
+}
+
+func (r *stubQuestionTaskRemote) AnswerApproval(
+	_ context.Context,
+	req serverapi.ApprovalAnswerRequest,
+) error {
+	r.approvalRequests = append(r.approvalRequests, req)
 	return nil
 }
 
@@ -445,6 +468,69 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 	request := remote.answerRequests[0]
 	if request.TaskID != taskID || request.AskID != "ask-1" || request.FreeformAnswer != "Proceed" {
 		t.Fatalf("answer request = %+v", request)
+	}
+	if len(remote.attentionRequests) != 2 {
+		t.Fatalf("attention requests = %+v", remote.attentionRequests)
+	}
+}
+
+func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	taskID := "task-1"
+	sessionID := uuid.NewString()
+	approvalID := "approval-1"
+	remote := &stubQuestionTaskRemote{
+		task: serverapi.WorkflowTaskDetail{
+			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
+		},
+		attentionResponses: []serverapi.WorkflowTaskAttentionListResponse{
+			{Items: []serverapi.WorkflowAttentionItem{{
+				Kind:       string(serverapi.WorkflowTaskAttentionKindQuestion),
+				TaskID:     taskID,
+				SessionID:  &sessionID,
+				QuestionID: &approvalID,
+				Question: &serverapi.WorkflowAttentionQuestionPrompt{
+					Kind: serverapi.WorkflowAttentionQuestionKindApproval,
+				},
+			}}},
+			{Items: []serverapi.WorkflowAttentionItem{
+				taskQuestionAttention(taskID, sessionID, "Implementer", "ask-next", "Next?", 2),
+			}},
+		},
+		approvalResponses: []serverapi.ApprovalListPendingBySessionResponse{{
+			Approvals: []clientui.PendingApproval{{
+				ApprovalID: approvalID,
+				SessionID:  sessionID,
+				Question:   "Allow access?",
+				Options: []clientui.ApprovalOption{{
+					Decision: clientui.ApprovalDecisionAllowOnce,
+					Label:    "Allow once",
+				}},
+			}},
+		}},
+	}
+	installQuestionTaskRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := questionSubcommand(
+		[]string{"answer", "--task", taskID, "--option", "1"},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.approvalRequests) != 1 {
+		t.Fatalf("approval requests = %+v", remote.approvalRequests)
+	}
+	request := remote.approvalRequests[0]
+	if request.SessionID != sessionID || request.ApprovalID != approvalID ||
+		request.Decision != clientui.ApprovalDecisionAllowOnce || request.Commentary != nil {
+		t.Fatalf("approval request = %+v", request)
+	}
+	if !strings.Contains(stdout.String(), "Next?") {
+		t.Fatalf("successor question output = %q", stdout.String())
 	}
 	if len(remote.attentionRequests) != 2 {
 		t.Fatalf("attention requests = %+v", remote.attentionRequests)

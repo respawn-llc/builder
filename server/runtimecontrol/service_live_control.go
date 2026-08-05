@@ -264,7 +264,8 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		wg.Wait()
 		return liveWatchResult(id, name, terminal.result, terminal.err)
 	case err := <-attentionErrCh:
-		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+		var streamFailure *liveWatchAttentionStreamFailure
+		if errors.As(err, &streamFailure) && errors.Is(streamFailure.cause, context.Canceled) && ctx.Err() == nil {
 			select {
 			case terminal := <-terminalCh:
 				cancel()
@@ -283,12 +284,24 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 	}
 }
 
+type liveWatchAttentionStreamFailure struct {
+	cause error
+}
+
+func (e *liveWatchAttentionStreamFailure) Error() string {
+	return fmt.Sprintf("%s: %v", serverapi.ErrStreamFailed, e.cause)
+}
+
+func (e *liveWatchAttentionStreamFailure) Unwrap() error {
+	return serverapi.ErrStreamFailed
+}
+
 func liveWatchAttentionStreamError(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, context.Canceled) {
-		return fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, err)
+		return &liveWatchAttentionStreamFailure{cause: err}
 	}
 	return serverapi.NormalizeStreamError(err)
 }

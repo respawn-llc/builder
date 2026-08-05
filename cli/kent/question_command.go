@@ -198,27 +198,11 @@ func (c questionCommand) answerSessionQuestion(
 			return 1
 		}
 		if question.Approval != nil {
-			if option == nil {
-				fmt.Fprintln(stderr, "question answer requires --option for an access request")
-				return 2
-			}
-			if *option < 1 || *option > len(question.Approval.Options) {
-				fmt.Fprintln(stderr, "question answer option is out of range")
-				return 2
-			}
-			approvalRemote, ok := remote.(questionApprovalRemote)
-			if !ok {
-				fmt.Fprintln(stderr, "approval answer is unavailable")
-				return 1
-			}
-			answerCtx, stopAnswer := questionAnswerContext()
-			defer stopAnswer()
-			if err := approvalRemote.AnswerApproval(answerCtx, serverapi.ApprovalAnswerRequest{
-				ClientRequestID: uuid.NewString(), SessionID: sessionID.String(),
-				ApprovalID: question.Approval.ApprovalID, Decision: question.Approval.Options[*option-1].Decision,
-				Commentary: optionalQuestionCommentary(commentary),
-			}); err != nil {
+			if err := answerApprovalQuestion(remote, sessionID, question.Approval, option, commentary); err != nil {
 				fmt.Fprintln(stderr, err)
+				if isQuestionAnswerUsageError(err) {
+					return 2
+				}
 				return 1
 			}
 			next, nextOK, err := listPendingSessionPrompt(remote, sessionID)
@@ -305,32 +289,14 @@ func answerTaskQuestion(
 		}
 		question := candidate.Questions[0]
 		if question.Approval != nil {
-			if option == nil {
-				fmt.Fprintln(stderr, "question answer requires --option for an access request")
-				return 2
-			}
-			if *option < 1 || *option > len(question.Approval.Options) {
-				fmt.Fprintln(stderr, "question answer option is out of range")
-				return 2
-			}
-			approvalRemote, ok := remote.(questionApprovalRemote)
-			if !ok {
-				fmt.Fprintln(stderr, "approval answer is unavailable")
-				return 1
-			}
-			answerCtx, stopAnswer := questionAnswerContext()
-			defer stopAnswer()
-			err = approvalRemote.AnswerApproval(answerCtx, serverapi.ApprovalAnswerRequest{
-				ClientRequestID: uuid.NewString(), SessionID: candidate.SessionID.String(),
-				ApprovalID: question.Approval.ApprovalID, Decision: question.Approval.Options[*option-1].Decision,
-				Commentary: optionalQuestionCommentary(commentary),
-			})
-			if err != nil {
+			if err := answerApprovalQuestion(remote, candidate.SessionID, question.Approval, option, commentary); err != nil {
 				fmt.Fprintln(stderr, err)
+				if isQuestionAnswerUsageError(err) {
+					return 2
+				}
 				return 1
 			}
-			fmt.Fprintln(stdout, questionAnswerDoneText)
-			return 0
+			return writeTaskQuestionFollowUp(remote, taskID, candidate.SessionID, stdout, stderr)
 		}
 		request := serverapi.WorkflowTaskQuestionAnswerRequest{
 			ClientRequestID:      uuid.NewString(),
@@ -355,24 +321,75 @@ func answerTaskQuestion(
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		refreshed, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		for _, next := range refreshed {
-			if next.SessionID == candidate.SessionID && len(next.Questions) > 0 {
-				writePendingQuestion(stdout, next.Questions[0], true)
-				return 0
-			}
-		}
-		fmt.Fprintln(stdout, questionAnswerDoneText)
-		return 0
+		return writeTaskQuestionFollowUp(remote, taskID, candidate.SessionID, stdout, stderr)
 	})
 }
 
 func questionAnswerContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt)
+}
+
+type questionAnswerUsageError struct {
+	message string
+}
+
+func (e *questionAnswerUsageError) Error() string {
+	return e.message
+}
+
+func isQuestionAnswerUsageError(err error) bool {
+	var usageErr *questionAnswerUsageError
+	return errors.As(err, &usageErr)
+}
+
+func answerApprovalQuestion(
+	remote any,
+	sessionID runtimeids.SessionID,
+	approval *clientui.PendingApproval,
+	option *int,
+	commentary *string,
+) error {
+	if option == nil {
+		return &questionAnswerUsageError{message: "question answer requires --option for an access request"}
+	}
+	if *option < 1 || *option > len(approval.Options) {
+		return &questionAnswerUsageError{message: "question answer option is out of range"}
+	}
+	approvalRemote, ok := remote.(questionApprovalRemote)
+	if !ok {
+		return errors.New("approval answer is unavailable")
+	}
+	answerCtx, stopAnswer := questionAnswerContext()
+	defer stopAnswer()
+	return approvalRemote.AnswerApproval(answerCtx, serverapi.ApprovalAnswerRequest{
+		ClientRequestID: uuid.NewString(),
+		SessionID:       sessionID.String(),
+		ApprovalID:      approval.ApprovalID,
+		Decision:        approval.Options[*option-1].Decision,
+		Commentary:      optionalQuestionCommentary(commentary),
+	})
+}
+
+func writeTaskQuestionFollowUp(
+	remote workflowCommandRemote,
+	taskID string,
+	sessionID runtimeids.SessionID,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	refreshed, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	for _, next := range refreshed {
+		if next.SessionID == sessionID && len(next.Questions) > 0 {
+			writePendingQuestion(stdout, next.Questions[0], true)
+			return 0
+		}
+	}
+	fmt.Fprintln(stdout, questionAnswerDoneText)
+	return 0
 }
 
 func listPendingSessionQuestions(
@@ -418,11 +435,12 @@ func listPendingSessionPrompt(remote questionCommandRemote, sessionID runtimeids
 	return question, true, nil
 }
 
-func optionalQuestionCommentary(commentary *string) string {
+func optionalQuestionCommentary(commentary *string) *string {
 	if commentary == nil {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(*commentary)
+	trimmed := strings.TrimSpace(*commentary)
+	return &trimmed
 }
 
 func withQuestionTaskRemote(

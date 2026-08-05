@@ -122,7 +122,8 @@ func (a *transcriptPromptAnswerer) submitter(
 			request.ErrorMessage = answerErr.Error()
 		case answer.Approval != nil:
 			request.Decision = answer.Approval.Decision
-			request.Commentary = answer.Approval.Commentary
+			commentary := answer.Approval.Commentary
+			request.Commentary = &commentary
 		default:
 			return nil, errors.New("approval response is required")
 		}

@@ -648,7 +648,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	}
 	updated = runPromptDeliveryCommand(t, updated, cmd)
 	request := requireApprovalRequest(t, control)
-	if request.Decision != clientui.ApprovalDecisionDeny || request.Commentary != "blocked by policy" {
+	if request.Decision != clientui.ApprovalDecisionDeny || approvalCommentary(request) != "blocked by policy" {
 		t.Fatalf("unexpected approval request: %+v", request)
 	}
 	if len(updated.pendingInjected) != 0 {
