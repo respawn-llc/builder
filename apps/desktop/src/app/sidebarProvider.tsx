@@ -90,13 +90,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
           : "workflowEditor"
         : "board";
     return {
-      pathname: router.state.location.pathname,
       projectID: workflowEditorMatch?.search.projectId,
       routeKind,
       taskID: boardMatch?.search.taskId,
       workflowID: boardMatch?.search.workflowId,
     };
-  }, [boardMatch, router.state.location.pathname, workflowEditorMatch]);
+  }, [boardMatch, workflowEditorMatch]);
   const previousLocationRef = useRef(location);
   const taskDeletionRef = useRef<TaskDeletionOperation | null>(null);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
