@@ -97,3 +97,12 @@
   approved scope.
 - [x] Omit blank TUI approval commentary instead of encoding it as an empty
   string in the nullable approval request field.
+
+## CI remediation round
+
+- [x] Preserve an initialized empty interruption-detail field map when no
+  diagnostic is present, restoring the startup-recovery contract exercised by
+  `TestStartWithOptionsRecoversAdmittedCurrentNodeOnRestart`.
+- [x] Reproduce both CI failures locally; the workflow-runner failure passed
+  repeated runs as a timing flake, while the startup recovery failure was
+  fixed at the shared interruption-detail constructor.

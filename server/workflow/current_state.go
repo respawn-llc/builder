@@ -136,7 +136,10 @@ type CurrentNodeInterruptionDetail struct {
 const CurrentNodeInterruptionDiagnosticField = "error"
 
 func NewCurrentNodeInterruptionDetail(code string, diagnostic error) CurrentNodeInterruptionDetail {
-	detail := CurrentNodeInterruptionDetail{Code: strings.TrimSpace(code)}
+	detail := CurrentNodeInterruptionDetail{
+		Code:   strings.TrimSpace(code),
+		Fields: map[string]string{},
+	}
 	if diagnostic != nil {
 		detail.Fields = map[string]string{CurrentNodeInterruptionDiagnosticField: diagnostic.Error()}
 	}
