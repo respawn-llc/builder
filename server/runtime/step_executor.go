@@ -328,8 +328,12 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				if err := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
-					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", err)
+				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
+				if startErr != nil {
+					if active := e.reviewerRuntimeState().ActiveStepSnapshot(); active != nil && active.StepID == stepID {
+						startErr = errors.Join(startErr, s.terminalizeReviewerLifecycle(stepID, nil))
+					}
+					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
 				}
 				if !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
@@ -350,7 +354,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				} else {
 					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
-				terminalizationErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
+				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
 				if err != nil {
 					return stepLoopResult{}, errors.Join(err, terminalizationErr)
 				}
@@ -386,6 +390,21 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 	}
+}
+
+func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
+	if s == nil || s.engine == nil {
+		return errors.New("Reviewer lifecycle terminalizer requires an engine")
+	}
+	err := s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:     EventReviewerCompleted,
+		StepID:   stepID,
+		Reviewer: status,
+	}))
+	if active := s.engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil && active.StepID == stepID {
+		s.engine.reviewerRuntimeState().ClearActiveStep(stepID)
+	}
+	return err
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {

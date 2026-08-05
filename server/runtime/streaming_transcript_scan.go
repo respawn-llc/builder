@@ -146,24 +146,10 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		s.appendLocalEntry(entry, stepID, &provenance)
 	case session.ReviewerFeedbackRecord:
 		s.closeTurn()
-		s.scan.appendEntry(ChatEntry{
-			StepID:     stepID,
-			Visibility: runtimeEntryVisibilityFromSession(payload.Visibility),
-			ReviewerFeedback: &ReviewerFeedbackChatEntry{
-				ID:          payload.ID,
-				Suggestions: append([]string(nil), payload.Suggestions...),
-			},
-		})
+		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID))
 	case session.ReviewerErrorRecord:
 		s.closeTurn()
-		s.scan.appendEntry(ChatEntry{
-			StepID:     stepID,
-			Visibility: transcript.EntryVisibilityOngoing,
-			ReviewerError: &ReviewerErrorChatEntry{
-				ID:     payload.ID,
-				Detail: payload.Detail,
-			},
-		})
+		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID))
 	case session.CacheWarningRecord:
 		s.closeTurn()
 		warning := cacheWarningFromSessionRecord(payload)

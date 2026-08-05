@@ -1,9 +1,12 @@
 package runtime
 
 import (
+	"errors"
 	"testing"
 
 	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
@@ -18,11 +21,11 @@ func TestPersistedTranscriptScanReconstructsTypedReviewerFactsInBoundedWindows(t
 		ID:     runtimeids.NewReviewerErrorID(),
 		Detail: "raw failure detail",
 	}
-	feedbackEvent, err := session.NewEventRecord(1, stringPointer("step-feedback"), feedback)
+	feedbackEvent, err := session.NewEventRecord(1, stringPointer("11111111-1111-4111-8111-111111111111"), feedback)
 	if err != nil {
 		t.Fatalf("create feedback event: %v", err)
 	}
-	errorEvent, err := session.NewEventRecord(2, stringPointer("step-error"), reviewerError)
+	errorEvent, err := session.NewEventRecord(2, stringPointer("22222222-2222-4222-8222-222222222222"), reviewerError)
 	if err != nil {
 		t.Fatalf("create error event: %v", err)
 	}
@@ -43,7 +46,7 @@ func TestPersistedTranscriptScanReconstructsTypedReviewerFactsInBoundedWindows(t
 	}
 	if page.Entries[0].ReviewerError.ID != reviewerError.ID ||
 		page.Entries[0].ReviewerError.Detail != reviewerError.Detail ||
-		page.Entries[0].StepID != "step-error" ||
+		page.Entries[0].StepID != "22222222-2222-4222-8222-222222222222" ||
 		page.Entries[0].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("projected Reviewer error = %+v", page.Entries[0])
 	}
@@ -58,7 +61,84 @@ func TestPersistedTranscriptScanReconstructsTypedReviewerFactsInBoundedWindows(t
 	}
 }
 
+func TestChatStoreDeliverySnapshotKeepsTypedReviewerFactsProjected(t *testing.T) {
+	chat := newChatStore()
+	chat.appendLocalEntryRecord(reviewerFeedbackChatEntryFromSessionRecord(session.ReviewerFeedbackRecord{
+		ID:          runtimeids.NewReviewerFeedbackID(),
+		Suggestions: []string{"first", "second"},
+		Visibility:  session.EntryVisibilityOngoingCollapsed,
+	}, "11111111-1111-4111-8111-111111111111"), nil)
+	chat.appendLocalEntryRecord(reviewerErrorChatEntryFromSessionRecord(session.ReviewerErrorRecord{
+		ID: runtimeids.NewReviewerErrorID(), Detail: "failure",
+	}, "22222222-2222-4222-8222-222222222222"), nil)
+	snapshot := chat.deliverySnapshot()
+	if len(snapshot.Rows) != 2 || snapshot.Rows[0].ReviewerFeedback == nil || snapshot.Rows[1].ReviewerError == nil {
+		t.Fatalf("typed Reviewer delivery rows = %+v", snapshot.Rows)
+	}
+}
+
+func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
+	cases := []struct {
+		name   string
+		intent func() steeringIntent
+		assert func(t *testing.T, rows []TranscriptCommittedRowFact)
+	}{
+		{
+			name: "feedback",
+			intent: func() steeringIntent {
+				return steerReviewerFeedbackIntent([]string{"feedback"}, transcript.EntryVisibilityOngoingCollapsed)
+			},
+			assert: func(t *testing.T, rows []TranscriptCommittedRowFact) {
+				if len(rows) != 1 || rows[0].ReviewerFeedback == nil {
+					t.Fatalf("feedback rows = %+v", rows)
+				}
+			},
+		},
+		{
+			name: "error",
+			intent: func() steeringIntent {
+				return steerReviewerErrorIntent("raw failure")
+			},
+			assert: func(t *testing.T, rows []TranscriptCommittedRowFact) {
+				if len(rows) != 1 || rows[0].ReviewerError == nil {
+					t.Fatalf("error rows = %+v", rows)
+				}
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Run("uncommitted", func(t *testing.T) {
+				store := mustCreateTestSession(t)
+				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				mustBlockTestEventLogAppends(t, store)
+				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
+				if err == nil {
+					t.Fatal("uncommitted typed Reviewer append succeeded")
+				}
+				if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+					t.Fatalf("uncommitted typed Reviewer rows = %+v", rows)
+				}
+			})
+			t.Run("committed observer error", func(t *testing.T) {
+				observerErr := errors.New("typed Reviewer observer failed")
+				gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+				store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				gate.FailNext(observerErr)
+				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
+				if !errors.Is(err, observerErr) {
+					t.Fatalf("committed typed Reviewer error = %v, want %v", err, observerErr)
+				}
+				rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
+				testCase.assert(t, rows)
+			})
+		})
+	}
+}
+
 func TestPersistedTranscriptScanKeepsHistoricalReviewerLocalEntriesGeneric(t *testing.T) {
+	// TODO(KENT-405): delete this compatibility fixture with the legacy reader in 2.7.0.
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{

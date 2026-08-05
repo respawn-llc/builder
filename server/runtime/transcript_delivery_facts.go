@@ -477,7 +477,8 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 }
 
 func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
-	if strings.TrimSpace(entry.Role) == string(transcript.EntryRoleReviewerStatus) {
+	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
+	if role == transcript.EntryRoleReviewerStatus {
 		return TranscriptCommittedRowFact{}, false
 	}
 	fact, ok := transcriptNoticeRowFactFromChatEntryUnlocated(entry)
@@ -492,6 +493,10 @@ func transcriptNoticeRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptC
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
 	}
+	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
+	if role == transcript.EntryRoleReviewerSuggestions || role == transcript.EntryRoleReviewerError {
+		return legacyReviewerNoticeRowFactFromChatEntry(entry)
+	}
 	if entry.MessageType == llm.MessageTypeCompactionSummary {
 		return transcriptCompactionNoticeFact(
 			entry.StepID,
@@ -505,6 +510,23 @@ func transcriptNoticeRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptC
 	fact.StepID = entry.StepID
 	fact.Visibility = transcriptVisibilityForIntegrity(
 		resolveTranscriptVisibility(visibility, defaultTranscriptNoticeVisibility(entry)),
+		integrity,
+	)
+	fact.Integrity = integrity
+	return fact, true
+}
+
+// TODO(KENT-405): delete this reader and its reopen/page coverage in 2.7.0.
+// It exists only for persisted pre-typed Reviewer local entries.
+func legacyReviewerNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	integrity := transcriptNoticeEntryIntegrity(entry)
+	fact := localEntryNoticeFact(entry)
+	fact.StepID = entry.StepID
+	fact.Visibility = transcriptVisibilityForIntegrity(
+		resolveTranscriptVisibility(
+			normalizeRuntimeEntryVisibility(entry.Visibility),
+			transcript.EntryVisibilityOngoing,
+		),
 		integrity,
 	)
 	fact.Integrity = integrity

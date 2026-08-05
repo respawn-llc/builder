@@ -102,6 +102,9 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 		if stepID == nil || strings.TrimSpace(*stepID) == "" {
 			return EventRecord{}, fmt.Errorf("%s payload requires an enclosing step identity", payload.eventKind())
 		}
+		if _, err := runtimeids.ParseCanonicalUUIDv4(*stepID, "step identity"); err != nil {
+			return EventRecord{}, fmt.Errorf("%s payload step identity: %w", payload.eventKind(), err)
+		}
 	}
 	if err := payload.validate(); err != nil {
 		return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), err)

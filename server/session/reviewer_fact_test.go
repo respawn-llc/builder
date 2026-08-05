@@ -10,7 +10,7 @@ import (
 )
 
 func TestReviewerFactRecordsRoundTripWithExactSourceContent(t *testing.T) {
-	stepID := "step-1"
+	stepID := "11111111-1111-4111-8111-111111111111"
 	feedback := ReviewerFeedbackRecord{
 		ID:          runtimeids.NewReviewerFeedbackID(),
 		Suggestions: []string{"  **preserve**  \n\n- item", "second\nline  "},

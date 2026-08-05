@@ -643,7 +643,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			entry := ChatEntry{StepID: stepID, Visibility: item.reviewerFeedback.visibility, ReviewerFeedback: &ReviewerFeedbackChatEntry{ID: id, Suggestions: append([]string(nil), record.Suggestions...)}}
+			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
 			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true}))
 		}
@@ -654,7 +654,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail})
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			entry := ChatEntry{StepID: stepID, Visibility: transcript.EntryVisibilityOngoing, ReviewerError: &ReviewerErrorChatEntry{ID: id, Detail: item.reviewerError.detail}}
+			entry := reviewerErrorChatEntryFromSessionRecord(session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}, stepID)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
 			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true}))
 		}

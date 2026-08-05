@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -32,6 +33,14 @@ func TestTypedReviewerFeedbackRendersCountCollapsedAndMarkdownExpanded(t *testin
 	if expanded.Group != clientui.TranscriptRowReviewerFeedback {
 		t.Fatalf("typed feedback group = %q", expanded.Group)
 	}
+	if !linesContainText(collapsed.Lines, "2 suggestions") || linesContainText(collapsed.Lines, "**first**") {
+		t.Fatalf("collapsed feedback did not use structured count: %+v", collapsed.Lines)
+	}
+	if !linesContainText(expanded.Lines, "first") || !linesContainText(expanded.Lines, "second") ||
+		!linesContainText(expanded.Lines, "line") ||
+		!linesHaveSymbol(expanded.Lines, "§") {
+		t.Fatalf("expanded feedback lost source or success glyph: %+v", expanded.Lines)
+	}
 }
 
 func TestTypedReviewerErrorRendersExpandedDiagnostic(t *testing.T) {
@@ -47,6 +56,34 @@ func TestTypedReviewerErrorRendersExpandedDiagnostic(t *testing.T) {
 	if len(rendered.Lines) == 0 || rendered.Group != clientui.TranscriptRowReviewerError {
 		t.Fatalf("typed Reviewer error presentation = %+v", rendered)
 	}
+	if !linesContainText(rendered.Lines, "raw failure detail") || !linesHaveSymbol(rendered.Lines, "!") {
+		t.Fatalf("Reviewer error detail/glyph missing: %+v", rendered.Lines)
+	}
+}
+
+func linesContainText(lines []Line, want string) bool {
+	for _, line := range lines {
+		var text strings.Builder
+		if line.LeadingSymbol != nil {
+			text.WriteString(line.LeadingSymbol.Text)
+		}
+		for _, span := range line.Spans {
+			text.WriteString(span.Text)
+		}
+		if strings.Contains(text.String(), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func linesHaveSymbol(lines []Line, want string) bool {
+	for _, line := range lines {
+		if line.LeadingSymbol != nil && line.LeadingSymbol.Text == want {
+			return true
+		}
+	}
+	return false
 }
 
 func mustReviewerStepID(t *testing.T) runtimeids.StepID {
