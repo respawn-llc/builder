@@ -341,10 +341,12 @@
   defers the exact selector transition until the typed navigation outcome
   settles. Completed navigation consumes the operation and preserves unrelated
   sidebar survivors; failed navigation clears it and reconciles through the
-  ordinary route-close path while the Board surfaces the existing error. The
-  Board coordinator retains only the previously selected Task for opening and
-  reports the typed outcome; ordinary browser/search transitions follow the
-  central close-then-optional-open contract.
+  ordinary route-close path only while the operation's scoped survivor
+  activation is still current; a replacement activation remains untouched
+  while the Board surfaces the existing error. The Board coordinator retains
+  only the previously selected Task for opening and reports the typed outcome;
+  ordinary browser/search transitions follow the central close-then-optional-open
+  contract.
 - `SidebarProvider` owns one typed route-transition contract for all
   main-window navigation. It closes on pathname changes, Board `workflowId` or
   ordinary `taskId` changes, and Workflow Editor `projectId` changes. The
@@ -352,8 +354,10 @@
   deletion start/outcome to `SidebarProvider`; the provider owns the pending
   operation and consumes it to preserve an unrelated survivor when the deleted
   selector clears. Pending success and failure are both covered across the
-  selector transition, so a failure after selector absence still performs the
-  ordinary route close. Board and Workflow Editor routes contain no route-close
+  selector transition. The operation is scoped to the current history/key
+  activation, so a failure after replacement clears stale deletion state
+  without closing the newer destination; Board and Workflow Editor routes
+  contain no route-close
   effects. Home, Workflow Library, and standalone Task routes have no search
   contract; native-dialog routes are separate windows. This covers every
   current main-window search-bearing route without pathname/search-string
@@ -694,9 +698,11 @@
   selected-Task deletion through the same provider-owned typed operation.
   `SidebarProvider` keeps the pending operation through selector absence,
   defers reconciliation, and preserves or closes only after the matching
-  completed/failed outcome. Product-boundary tests cover parsed Board
-  selectors, selector-before-outcome delayed success/failure, and
-  unrelated-survivor preservation without literal-text control flow.
+  completed/failed outcome while checking the original activation's current
+  history/key. Product-boundary tests cover parsed Board selectors,
+  selector-before-outcome delayed success/failure, unrelated-survivor
+  preservation, and replacement activation after stale failure without
+  literal-text control flow.
   Focused route and deletion-coordinator tests pass; full verification is
   recorded below after the final remediation round.
   Progress (August 5, 2026): Remediated the compliance boundary by making
@@ -709,7 +715,7 @@
   and success/failure after selector absence commits without empty-string
   absence values. Final remediation verification passed: full Apps lint
   (0 errors; 4 existing warnings), Apps typecheck,
-  `./scripts/test.sh desktop` (82 files / 375 tests), and
+  `./scripts/test.sh desktop` (82 files / 376 tests), and
   `./scripts/build.sh desktop`. Browser/manual QA remains excluded.
 
 - [x] **Close the complete sidebar from one router transition owner.**
@@ -727,7 +733,7 @@
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,669 additions plus 328
+  `origin/main...HEAD`, including styles, is now 1,667 additions plus 330
   deletions: **1,997 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
@@ -736,6 +742,6 @@
   ownership, and guarantees are unchanged.
   Progress (August 5, 2026): Re-measured after deferred typed deletion
   reconciliation: Apps lint (0 errors; 4 existing warnings), Apps typecheck,
-  Desktop build, and `./scripts/test.sh desktop` (82 files / 375 tests) all
-  passed. The final non-test Desktop diff is 1,669 additions plus 328
+  Desktop build, and `./scripts/test.sh desktop` (82 files / 376 tests) all
+  passed. The final non-test Desktop diff is 1,667 additions plus 330
   deletions, totaling 1,997 changed lines.
