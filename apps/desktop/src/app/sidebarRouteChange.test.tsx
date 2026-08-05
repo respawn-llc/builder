@@ -12,11 +12,7 @@ import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
 import { appI18n } from "@/i18n";
-import type {
-  SidebarDestination,
-  SidebarInvalidationResult,
-  SidebarTaskDeletionOutcome,
-} from "@/app-facade";
+import type { SidebarController } from "@/app-facade";
 import { useSidebar } from "@/app-facade";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
@@ -409,7 +405,7 @@ describe("Sidebar route transition ownership", () => {
         taskID: "task-2",
       });
       const result = deletionHarness.invalidateSidebar({ kind: "task", taskID: "task-2" });
-      expect(result).toEqual({ kind: "discarded" } satisfies SidebarInvalidationResult);
+      expect(result).toEqual({ kind: "discarded" });
     });
     await act(async () => {
       deletionHarness.settleTaskDeletion("task-1", "failed");
@@ -530,13 +526,10 @@ function BoardSelectorObserver({
   return null;
 }
 
-type TaskDeletionHarness = Readonly<{
-  invalidateSidebar(target: Readonly<{ kind: "task"; taskID: string }>): SidebarInvalidationResult;
-  pushSidebar(destination: SidebarDestination): void;
-  recordTaskDeletion(taskID: string): void;
-  replaceSidebar(destination: SidebarDestination): void;
-  settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
-}>;
+type TaskDeletionHarness = Pick<
+  SidebarController,
+  "invalidateSidebar" | "pushSidebar" | "recordTaskDeletion" | "replaceSidebar" | "settleTaskDeletion"
+>;
 
 function DeletionHarness({
   onReady,
