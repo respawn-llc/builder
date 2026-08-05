@@ -54,13 +54,6 @@ export function appChromeTopTreatmentForPlatform(platform: NativePlatform): AppC
   return platform === "windows" ? appChromeProgressiveBlurTreatment : appChromeContrastFadeTreatment;
 }
 
-export function appChromeUsesMacOSLayout(platform: NativePlatform): boolean {
-  return (
-    platform === "macos" ||
-    (platform === "browser" && typeof navigator !== "undefined" && navigator.platform === "MacIntel")
-  );
-}
-
 export const appChromeTitleClassNames = [
   "pointer-events-none",
   "fixed",

@@ -29,6 +29,7 @@ import {
   createTauriCapabilities,
   normalizeNativePlatform,
   type NativeCapabilityState,
+  type NativeHostPlatform,
   type NativePlatform,
 } from "./capabilities";
 import {
@@ -59,6 +60,7 @@ export {
   createTauriCapabilities,
   normalizeNativePlatform,
   type NativeCapabilityState,
+  type NativeHostPlatform,
   type NativePlatform,
 } from "./capabilities";
 export { NativeNotificationIDMapper, type NativeNotificationBackendID } from "./notificationIds";
@@ -213,6 +215,7 @@ declare global {
 }
 
 export type BrowserNativeBridgeOptions = Readonly<{
+  hostPlatform?: NativeHostPlatform | undefined;
   platform?: NativePlatform | undefined;
 }>;
 
@@ -220,7 +223,7 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
   // Settings persist via localStorage so the browser QA shell (dev:browser) can
   // exercise settings-driven UI; the self-update gate never relies on this since
   // the browser shell is not updater-capable.
-  const capabilities = createBrowserCapabilities(options.platform ?? "browser");
+  const capabilities = createBrowserCapabilities(options.platform ?? "browser", options.hostPlatform);
   const projectDeletionHandlers = new Set<(event: NativeProjectDeleted) => void>();
   const browserWindowFocus = createBrowserWindowFocusControls();
   return {

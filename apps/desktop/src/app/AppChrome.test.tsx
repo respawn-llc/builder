@@ -50,42 +50,28 @@ describe("application chrome Search", () => {
     await flushQueuedWork();
 
     const navigation = screen.getByTestId("app-chrome-navigation");
-    const controls = within(navigation).getAllByTestId(/app-chrome-(search|home)/);
-    expect(controls[0]).toHaveAttribute(
-      "data-testid",
-      platform === "macos" ? "app-chrome-home" : "app-chrome-search",
+    const search = within(navigation).getByTestId("app-chrome-search");
+    const home = within(navigation).getByTestId("app-chrome-home");
+    expect(appearsBefore(platform === "macos" ? home : search, platform === "macos" ? search : home)).toBe(
+      true,
     );
-    expect(controls.at(-1)).toHaveAttribute(
-      "data-testid",
-      platform === "macos" ? "app-chrome-search" : "app-chrome-home",
-    );
-    expect(within(navigation).getByTestId("app-chrome-search")).toBeInTheDocument();
+    expect(search).toBeInTheDocument();
   });
 
   it("uses macOS navigation order for a Mac-hosted browser client", async () => {
-    const originalPlatform = window.navigator.platform;
-    Object.defineProperty(window.navigator, "platform", {
-      configurable: true,
-      value: "MacIntel",
+    const services = createTestServices(
+      startupRoutes,
+      createBrowserNativeBridge({ hostPlatform: "macos" }),
+    );
+    render(<AppRoot services={services} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("home-route-root")).toBeInTheDocument();
     });
-    try {
-      const services = createTestServices(startupRoutes);
-      render(<AppRoot services={services} />);
-      await waitFor(() => {
-        expect(screen.getByTestId("home-route-root")).toBeInTheDocument();
-      });
 
-      const controls = within(screen.getByTestId("app-chrome-navigation")).getAllByTestId(
-        /app-chrome-(search|home)/,
-      );
-      expect(controls[0]).toHaveAttribute("data-testid", "app-chrome-home");
-      expect(controls.at(-1)).toHaveAttribute("data-testid", "app-chrome-search");
-    } finally {
-      Object.defineProperty(window.navigator, "platform", {
-        configurable: true,
-        value: originalPlatform,
-      });
-    }
+    const navigation = screen.getByTestId("app-chrome-navigation");
+    const search = within(navigation).getByTestId("app-chrome-search");
+    const home = within(navigation).getByTestId("app-chrome-home");
+    expect(appearsBefore(home, search)).toBe(true);
   });
 
   it("keeps Search adjacent to visible history when an update is available", async () => {
@@ -120,11 +106,20 @@ describe("application chrome Search", () => {
       expect(within(navigation).getByTestId("app-chrome-history-buttons")).toBeInTheDocument();
     });
 
-    const controls = within(navigation).getAllByTestId(
-      /app-chrome-search|app-chrome-history-buttons|app-update-chip/,
-    );
-    expect(controls[0]).toHaveAttribute("data-testid", "app-chrome-search");
-    expect(controls[1]).toHaveAttribute("data-testid", "app-chrome-history-buttons");
-    expect(controls[2]).toHaveAttribute("data-testid", "app-update-chip");
+    const search = within(navigation).getByTestId("app-chrome-search");
+    const history = within(navigation).getByTestId("app-chrome-history-buttons");
+    const update = within(navigation).getByTestId("app-update-chip");
+    const historyButtons = within(history).getAllByRole("button");
+    const updateButtons = within(update).getAllByRole("button");
+    const controls = within(navigation).getAllByRole("button");
+    expect(controls[0]).toBe(search);
+    expect(controls[1]).toBe(historyButtons[0]);
+    expect(controls[2]).toBe(historyButtons[1]);
+    expect(controls[3]).toBe(updateButtons[0]);
+    expect(controls[4]).toBe(updateButtons[1]);
   });
 });
+
+function appearsBefore(first: Element, second: Element): boolean {
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
