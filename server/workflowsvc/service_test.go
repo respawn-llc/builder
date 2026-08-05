@@ -683,6 +683,59 @@ func TestServiceGraphMutationsUseStoreEditPolicyInsteadOfTaskWideQuiescence(t *t
 	}
 }
 
+func TestServiceSaveWorkflowGraphProjectsSelectorApplicabilityWithRoleCatalog(t *testing.T) {
+	service, binding, _ := newWorkflowServiceTestServiceWithRoleResolver(t, testsetup.QuestionsEnabled("coder", "reviewer"))
+	ctx := context.Background()
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	source, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(source.Definition)
+	edgeID := "edge-next-" + workflowID.String()
+	var selectedEdge *serverapi.WorkflowGraphDraftEdge
+	for index := range graph.Edges {
+		if graph.Edges[index].ID != edgeID {
+			continue
+		}
+		graph.Edges[index].AssigneeSelection = "previous_node"
+		graph.Edges[index].Parameters = append(graph.Edges[index].Parameters, serverapi.WorkflowParameter{
+			Key:     "role",
+			Purpose: "target_assignee",
+		})
+		selectedEdge = &graph.Edges[index]
+		break
+	}
+	if selectedEdge == nil {
+		t.Fatalf("graph edge %q not found", edgeID)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || saved.Definition == nil {
+		t.Fatalf("SaveWorkflowGraph response = %+v, want saved definition", saved)
+	}
+	for _, derivedEdge := range saved.Definition.DerivedWiring.Edges {
+		if derivedEdge.EdgeID != edgeID {
+			continue
+		}
+		applicability := derivedEdge.AssigneeSelectionApplicability
+		if !applicability.Available ||
+			!applicability.ParameterVisible ||
+			applicability.Reason != serverapi.WorkflowSelectorApplicabilityReasonEligible {
+			t.Fatalf("saved selector applicability = %+v, want catalog-backed eligible selector", applicability)
+		}
+		return
+	}
+	t.Fatalf("saved definition omitted derived wiring for edge %q", edgeID)
+}
+
 func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})

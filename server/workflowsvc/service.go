@@ -740,7 +740,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	if !result.Saved {
 		return resp, nil
 	}
-	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record)
+	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
 	resp.Definition = &definition
 	resp.CurrentVersion = result.Record.Version
 	if result.Changed {
