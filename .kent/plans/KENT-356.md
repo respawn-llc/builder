@@ -767,11 +767,18 @@
   flush. This preserves the one dispatch owner and removes the stale complete
   stack at the route lifecycle boundary. Focused coverage remains 12/12 and
   full Desktop coverage remains 82 files / 377 tests.
+  Progress (August 5, 2026): Replaced the synchronized presentation setters
+  with one discriminated `SidebarLifecycle` state. Open, closing, and closed
+  transitions now derive current history, outgoing animation content, and
+  phase from that single authority; route closure performs one lifecycle
+  transition. Push, Back, replacement, and invalidation no longer write phase
+  independently. The combined product guard retains both destination-mount
+  closing and eventual complete-sidebar removal assertions.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,669 additions plus 331
-  deletions: **2,000 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,666 additions plus 331
+  deletions: **1,997 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -788,3 +795,7 @@
   Desktop suite passed 82 files / 378 tests. Final verification passed with
   Apps lint at 0 errors and 4 existing warnings, Apps typecheck, and
   `./scripts/build.sh desktop`; browser/manual QA remains excluded.
+  Progress (August 5, 2026): Re-measured after the single-lifecycle
+  presentation refactor: 1,666 additions plus 331 deletions, totaling 1,997
+  changed production lines. Full Desktop tests passed 82 files / 377 tests;
+  lint, typecheck, and build remain passing.

@@ -51,6 +51,10 @@ const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing
 type History = SidebarHistory<SidebarDestination, SidebarDestinationSnapshot>;
 type HistorySnapshot = SidebarHistorySnapshot<SidebarDestination, SidebarDestinationSnapshot>;
 type PendingSidebar = Readonly<{ history: History; resolve: (result: SidebarResult) => void }>;
+type SidebarLifecycle =
+  | Readonly<{ kind: "closed" }>
+  | Readonly<{ kind: "open"; history: History }>
+  | Readonly<{ kind: "closing"; visible: VisibleSidebar | null }>;
 type VisibleSidebar = Readonly<{
   destination: SidebarDestination;
   snapshot: SidebarDestinationSnapshot | null;
@@ -64,9 +68,10 @@ type TaskDeletionOperation = Readonly<{
 }>;
 
 export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
-  const [currentHistory, setCurrentHistory] = useState<History | null>(null);
-  const [outgoing, setOutgoing] = useState<VisibleSidebar | null>(null);
-  const [phase, setPhase] = useState<SidebarPhase>("open");
+  const [lifecycle, setLifecycle] = useState<SidebarLifecycle>({ kind: "closed" });
+  const currentHistory = lifecycle.kind === "open" ? lifecycle.history : null;
+  const outgoing = lifecycle.kind === "closing" ? lifecycle.visible : null;
+  const phase: SidebarPhase = lifecycle.kind === "closing" ? "closing" : "open";
   const [activeWidthProfile, setActiveWidthProfile] =
     useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
   const [sidebarWidths, setSidebarWidths] = useState<SidebarWidths>(() => [
@@ -140,9 +145,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       history.destroy();
       closingHistoryRef.current = history;
       flushSync(() => {
-        setCurrentHistory(null);
-        setOutgoing(current);
-        setPhase("closing");
+        setLifecycle({ kind: "closing", visible: current });
       });
       pending.resolve(result);
       clearCloseTimeout();
@@ -150,8 +153,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         if (closingHistoryRef.current !== history) return;
         closeTimeoutRef.current = null;
         closingHistoryRef.current = null;
-        setOutgoing(null);
-        setPhase("open");
+        setLifecycle({ kind: "closed" });
       }, sidebarExitAnimationMs);
     },
     [clearCloseTimeout, clearMutationAdmission],
@@ -266,9 +268,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       const promise = new Promise<SidebarResult>((resolve) => {
         pendingRef.current = { history, resolve };
       });
-      setOutgoing(null);
-      setCurrentHistory(history);
-      setPhase("open");
+      setLifecycle({ kind: "open", history });
       setWidthFor(destination);
       return promise;
     },
@@ -301,7 +301,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
         })
       ) {
         clearMutationAdmission(history);
-        setPhase("open");
         setWidthFor(history.snapshot()?.destination ?? destination);
       }
     },
@@ -323,7 +322,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     const nextState = retainedState === false ? null : retainedState;
     if (history.back({ sourceKey: snapshot.key, retainedState: nextState })) {
       clearMutationAdmission(history);
-      setPhase("open");
       setWidthFor(history.snapshot()?.destination ?? null);
     }
   }, [captureCurrent, clearMutationAdmission, setWidthFor]);
@@ -338,7 +336,6 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
       captureRef.current = null;
       if (history.replace({ sourceKey: snapshot.key, destination, retainedState: null })) {
         clearMutationAdmission(history);
-        setPhase("open");
         setWidthFor(destination);
       }
     },
