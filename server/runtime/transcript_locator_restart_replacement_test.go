@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 
 	"core/server/llm"
@@ -130,6 +131,26 @@ func TestHistoryReplacementLocatorsSkipFilteredToolCallEntries(t *testing.T) {
 	hydrationFacts := hydrationSnapshot(t, engine).CommittedRows
 	assertReplacementLocatorsMatch(t, pageFacts, live, "page")
 	assertReplacementLocatorsMatch(t, hydrationFacts, live, "hydration")
+}
+
+func TestHistoryReplacementEmissionReturnsMissingOrdinalError(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	err := engine.emitProjectedHistoryReplacementEntriesRaw(
+		"step-1",
+		0,
+		[]ChatEntry{{
+			StepID:     "step-1",
+			Role:       "user",
+			Text:       "private transcript text",
+			Visibility: transcript.EntryVisibilityOngoing,
+		}},
+	)
+	if err == nil {
+		t.Fatal("history replacement emission returned nil for missing ordinal")
+	}
+	if strings.Contains(err.Error(), "private transcript text") {
+		t.Fatalf("history replacement error exposed transcript text: %v", err)
+	}
 }
 
 func assertReplacementLocatorsMatch(

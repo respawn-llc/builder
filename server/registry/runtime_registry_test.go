@@ -120,7 +120,8 @@ func TestSubscribeSessionTranscriptFailsExecutionTargetResolution(t *testing.T) 
 }
 
 func TestPublishMalformedLiveLocatorClosesTranscriptFeedWithContractError(t *testing.T) {
-	registry := NewRuntimeRegistry().WithTranscriptContractViolationPanic(false)
+	defer withTranscriptContractViolationPanic(false)()
+	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
 	defer closeRuntime(registry, engine.SessionID(), engine)
@@ -196,7 +197,8 @@ func TestPublishMalformedLiveLocatorClosesTranscriptFeedWithContractError(t *tes
 }
 
 func TestPublishMalformedLiveLocatorPanicsInContractMode(t *testing.T) {
-	registry := NewRuntimeRegistry().WithTranscriptContractViolationPanic(true)
+	defer withTranscriptContractViolationPanic(true)()
+	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
 	defer closeRuntime(registry, engine.SessionID(), engine)

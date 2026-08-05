@@ -78,30 +78,36 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 		[]session.EventRecordPayload{completionRecord, feedbackRecord},
 	)
 	var completionProvenance *TranscriptCommittedRowProvenance
-	if receipt.Committed {
-		value, provenanceErr := transcriptProvenanceFromRecord(records[0])
-		if provenanceErr != nil {
-			return receipt, nil, nil, errors.Join(err, provenanceErr)
-		}
-		feedbackProvenance, provenanceErr := transcriptProvenanceFromRecord(records[1])
-		if provenanceErr != nil {
-			return receipt, nil, nil, errors.Join(err, provenanceErr)
-		}
-		e.applyCommittedStoredToolCompletion(
-			payload,
-			backgroundSessionID,
-			hasBackgroundSession,
-			&value,
-		)
-		completionProvenance = &value
-		e.transcriptRuntimeState().AppendLocalEntryRecord(
-			*localEntryChatEntryForStep(feedback, stepID),
-			feedback.AfterToolCallID,
-			&feedbackProvenance,
-		)
-		return receipt, &value, &feedbackProvenance, err
+	if !receipt.Committed {
+		return receipt, nil, nil, err
 	}
-	return receipt, completionProvenance, nil, err
+	if len(records) < 2 {
+		return receipt, nil, nil, errors.Join(
+			err,
+			fmt.Errorf("persist finalized tool completion committed %d records, want at least 2", len(records)),
+		)
+	}
+	value, provenanceErr := transcriptProvenanceFromRecord(records[0])
+	if provenanceErr != nil {
+		return receipt, nil, nil, errors.Join(err, provenanceErr)
+	}
+	feedbackProvenance, provenanceErr := transcriptProvenanceFromRecord(records[1])
+	if provenanceErr != nil {
+		return receipt, nil, nil, errors.Join(err, provenanceErr)
+	}
+	e.applyCommittedStoredToolCompletion(
+		payload,
+		backgroundSessionID,
+		hasBackgroundSession,
+		&value,
+	)
+	completionProvenance = &value
+	e.transcriptRuntimeState().AppendLocalEntryRecord(
+		*localEntryChatEntryForStep(feedback, stepID),
+		feedback.AfterToolCallID,
+		&feedbackProvenance,
+	)
+	return receipt, completionProvenance, &feedbackProvenance, err
 }
 
 func (e *Engine) prepareStoredToolCompletion(

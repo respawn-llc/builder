@@ -812,7 +812,12 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 		copyEntry := clonePersistedChatEntry(entry)
 		provenance := cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 		if _, projected := transcriptCommittedRowFactFromChatEntry(copyEntry); projected && (provenance == nil || provenance.ProjectedOrdinal == nil) {
-			panic(fmt.Sprintf("history replacement projected row %d lacks filtered ordinal: entry=%+v provenance=%+v", idx, copyEntry, provenance))
+			return fmt.Errorf(
+				"history replacement projected row %d lacks filtered ordinal (step_id=%q role=%q)",
+				idx,
+				copyEntry.StepID,
+				copyEntry.Role,
+			)
 		}
 		if err := e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
