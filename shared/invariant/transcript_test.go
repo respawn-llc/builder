@@ -39,6 +39,15 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 			},
 		},
 		{
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowReasoningTrace,
+			ReasoningTrace: &clientui.TranscriptReasoningTraceRow{
+				StepID:      stepID,
+				CompactText: "Planning",
+				Text:        "Planning\nDetails",
+			},
+		},
+		{
 			Visibility: clientui.EntryVisibilityHidden,
 			Kind:       clientui.TranscriptRowNotice,
 			Notice:     &clientui.TranscriptNoticeRow{},

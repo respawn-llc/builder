@@ -19,6 +19,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 type registryRuntimeFakeClient struct{}
@@ -699,6 +700,43 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 			"hydrated in-flight tools = %+v, want none after canonical runtime became idle",
 			payload.InFlightTools,
 		)
+	}
+}
+
+func TestAuthorityEventFeedPublishesCommittedReasoningTraceRow(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	t.Cleanup(func() { _ = sub.Close() })
+	_ = nextTranscriptMessage(t, sub)
+
+	part := int64(0)
+	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:   runtime.EventLocalEntryAdded,
+		StepID: registryTestStepID,
+		LocalEntry: &runtime.ChatEntry{
+			Visibility: transcript.EntryVisibilityDetail,
+			Role:       string(transcript.EntryRoleReasoning),
+			Text:       "**Planning\nDetails**",
+		},
+		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+			Provider: &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part},
+		},
+	}); err != nil {
+		t.Fatalf("publish committed reasoning row: %v", err)
+	}
+
+	message := nextTranscriptMessage(t, sub)
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, message)
+	if row.Kind != clientui.TranscriptRowReasoningTrace ||
+		row.ReasoningTrace == nil ||
+		row.ReasoningTrace.Text != "Planning\nDetails" ||
+		row.ReasoningTrace.CompactText != "Planning" {
+		t.Fatalf("published authority reasoning row = %+v", row)
 	}
 }
 

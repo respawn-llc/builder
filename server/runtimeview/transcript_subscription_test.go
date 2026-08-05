@@ -322,6 +322,36 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 }
 
+func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) {
+	part := int64(0)
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:   runtime.EventLocalEntryAdded,
+		StepID: transcriptProjectionStepID,
+		LocalEntry: &runtime.ChatEntry{
+			Visibility: transcript.EntryVisibilityDetail,
+			Role:       string(transcript.EntryRoleReasoning),
+			Text:       "**Planning\nDetails**",
+		},
+		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+			Provider: &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part},
+		},
+	})
+	if len(messages) != 1 {
+		t.Fatalf("reasoning messages = %+v, want one committed row", messages)
+	}
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if row.Kind != clientui.TranscriptRowReasoningTrace ||
+		row.ReasoningTrace == nil ||
+		row.ReasoningTrace.Text != "Planning\nDetails" ||
+		row.ReasoningTrace.CompactText != "Planning" ||
+		row.ReasoningTrace.ProvisionalIdentity == nil {
+		t.Fatalf("projected reasoning row = %+v", row)
+	}
+	if err := row.Validate(); err != nil {
+		t.Fatalf("projected reasoning row failed validation: %v", err)
+	}
+}
+
 func TestUnknownToolExecutionProjectsFinalizedFailedInput(t *testing.T) {
 	input := json.RawMessage(`{}`)
 	call := llm.ToolCall{

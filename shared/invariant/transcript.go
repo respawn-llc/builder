@@ -37,6 +37,10 @@ func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
 		payloads++
 		expectedKind = clientui.TranscriptRowTool
 	}
+	if row.ReasoningTrace != nil {
+		payloads++
+		expectedKind = clientui.TranscriptRowReasoningTrace
+	}
 	if row.Notice != nil {
 		payloads++
 		expectedKind = clientui.TranscriptRowNotice

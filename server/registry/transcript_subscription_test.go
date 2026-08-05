@@ -162,6 +162,32 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 	})})
 }
 
+func TestTranscriptSubscriptionBrokerPublishesCommittedReasoningTraceRow(t *testing.T) {
+	broker := newTranscriptSubscriptionBroker()
+	sub, err := broker.Subscribe(transcriptBrokerHydration(t))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+
+	broker.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowReasoningTrace,
+		ReasoningTrace: &clientui.TranscriptReasoningTraceRow{
+			StepID:      mustRegistryStepID(t),
+			CompactText: "Planning",
+			Text:        "Planning\nDetails",
+		},
+	})})
+
+	message := nextTranscriptMessage(t, sub)
+	row, ok := message.Payload().(clientui.TranscriptCommittedRow)
+	if !ok || row.Kind != clientui.TranscriptRowReasoningTrace || row.ReasoningTrace == nil {
+		t.Fatalf("published reasoning row = %+v, want a populated reasoning trace row", message.Payload())
+	}
+}
+
 func TestSessionFeedSequencerRejectsInvalidBatchBeforePrefixMutation(t *testing.T) {
 	broker := newTranscriptSubscriptionBroker()
 	sequencer := newSessionFeedSequencer(broker)
