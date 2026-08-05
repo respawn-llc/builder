@@ -184,11 +184,10 @@ func embeddedSQLViolations(pkg *packages.Package) []string {
 }
 
 func isMetadataMigrationEmbed(pkg *packages.Package, pattern string) bool {
-	if pkg.PkgPath != "core/server/metadata" || len(pkg.CompiledGoFiles) == 0 {
-		return false
+	if pkg.PkgPath == "core/server/metadata/migrations" {
+		return filepath.Base(filepath.Clean(pattern)) == "*.up.sql"
 	}
-	want := filepath.Join(filepath.Dir(pkg.CompiledGoFiles[0]), "migrations", "*.up.sql")
-	return filepath.Clean(pattern) == filepath.Clean(want)
+	return false
 }
 
 func rawSQLConstantViolations(pkg *packages.Package, repoRoot string) []string {

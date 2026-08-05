@@ -20,6 +20,8 @@ type WorkflowGraphEditPolicyImpact struct {
 	TaskReferencedNodeKindChangeRefCount int64
 	UnsafeTransitionChangeCount          int64
 	UnsafeTransitionChangeRefCount       int64
+	ParameterContractChangeCount         int64
+	ParameterContractChangeRefCount      int64
 	HistoryReinterpretingEdgeChangeCount int64
 	HistoryReinterpretingEdgeRefCount    int64
 }
@@ -39,6 +41,28 @@ type WorkflowGraphEditPolicyError struct {
 	Blockers []WorkflowGraphEditPolicyBlocker
 }
 
+func workflowGraphEditPolicyDefinitions(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	proposedGraph preparedWorkflowGraphSave,
+) (workflow.Definition, workflow.Definition, error) {
+	currentDefinition, _, err := workflowDefinitionFromQueries(ctx, q, workflowID)
+	if err != nil {
+		return workflow.Definition{}, workflow.Definition{}, err
+	}
+	proposedDefinition, err := workflowDefinitionFromPreparedGraph(
+		proposedGraph,
+		workflowID,
+		currentDefinition.DisplayName,
+		currentDefinition.ExecutionTargetPolicy,
+	)
+	if err != nil {
+		return workflow.Definition{}, workflow.Definition{}, err
+	}
+	return currentDefinition, proposedDefinition, nil
+}
+
 func (e WorkflowGraphEditPolicyError) Error() string {
 	if len(e.Blockers) == 0 {
 		return "workflow graph edit blocked"
@@ -50,8 +74,15 @@ func (e WorkflowGraphEditPolicyError) Error() string {
 	return strings.Join(messages, "; ")
 }
 
-func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) error {
-	result, err := workflowGraphEditPolicy(ctx, q, workflowID, prepared)
+func enforceWorkflowGraphEditPolicy(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	prepared preparedWorkflowGraphSave,
+) error {
+	result, err := workflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, prepared)
 	if err != nil {
 		return err
 	}
@@ -61,12 +92,26 @@ func enforceWorkflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, w
 	return nil
 }
 
-func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave) (WorkflowGraphEditPolicyResult, error) {
+func workflowGraphEditPolicy(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	prepared preparedWorkflowGraphSave,
+) (WorkflowGraphEditPolicyResult, error) {
 	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, describeWorkflowGraphSave(currentGraph, prepared))
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(
+		ctx,
+		q,
+		workflowID,
+		currentDefinition,
+		proposedDefinition,
+		describeWorkflowGraphSave(currentGraph, prepared),
+	)
 	if err != nil {
 		return WorkflowGraphEditPolicyResult{}, err
 	}
@@ -78,6 +123,7 @@ type workflowGraphEditPolicyStructuralDescriptor struct {
 	LastTerminalChangeCount int64
 	NodeKindChanges         []workflow.NodeID
 	TransitionChanges       []workflowGraphTransitionChangeDescriptor
+	ParameterChanges        []workflow.EdgeID
 	HistoryEdgeChanges      []workflow.EdgeID
 }
 
@@ -119,12 +165,14 @@ func describeWorkflowGraphEditPolicy(current preparedWorkflowGraphSave, next pre
 	}
 	transitionDescriptor := describeWorkflowGraphTransitionChanges(current, next)
 	descriptor.TransitionChanges = transitionDescriptor.TransitionChanges
+	descriptor.ParameterChanges = transitionDescriptor.ParameterChanges
 	descriptor.HistoryEdgeChanges = transitionDescriptor.HistoryEdgeChanges
 	return descriptor
 }
 
 type workflowGraphTransitionStructuralDescriptor struct {
 	TransitionChanges  []workflowGraphTransitionChangeDescriptor
+	ParameterChanges   []workflow.EdgeID
 	HistoryEdgeChanges []workflow.EdgeID
 }
 
@@ -180,6 +228,9 @@ func describeWorkflowGraphTransitionChanges(current preparedWorkflowGraphSave, n
 			descriptor.HistoryEdgeChanges = append(descriptor.HistoryEdgeChanges, currentEdge.ID)
 		}
 		if workflowEdgeMetadataOnlyChange(currentEdge, nextEdge) {
+			if !slices.Equal(currentEdge.Parameters, nextEdge.Parameters) {
+				descriptor.ParameterChanges = append(descriptor.ParameterChanges, currentEdge.ID)
+			}
 			continue
 		}
 		currentGroup, hasCurrentGroup := currentGroups[currentEdge.TransitionGroupID]
@@ -226,8 +277,15 @@ func workflowGraphEdgeIDsSlice(edges []EdgeRecord) []workflow.EdgeID {
 	return ids
 }
 
-func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
-	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, structural)
+func evaluateWorkflowGraphSaveDynamicImpact(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	structural workflowGraphSaveStructuralDescriptor,
+) (workflowGraphSaveDynamicImpact, error) {
+	evaluation, err := evaluateWorkflowGraphSaveDynamicDecision(ctx, q, workflowID, currentDefinition, proposedDefinition, structural)
 	if err != nil {
 		return workflowGraphSaveDynamicImpact{}, err
 	}
@@ -240,7 +298,14 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 	return evaluation, nil
 }
 
-func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
+func evaluateWorkflowGraphSaveDynamicDecision(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	workflowID runtimeids.WorkflowID,
+	currentDefinition workflow.Definition,
+	proposedDefinition workflow.Definition,
+	structural workflowGraphSaveStructuralDescriptor,
+) (workflowGraphSaveDynamicImpact, error) {
 	impact := WorkflowGraphSaveImpact{
 		RemovedNodeCount:            int64(len(structural.Removed.nodes)),
 		RemovedTransitionGroupCount: int64(len(structural.Removed.transitionGroups)),
@@ -270,6 +335,8 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		StartNodeChangeCount:    structural.EditPolicy.StartNodeChangeCount,
 		LastTerminalChangeCount: structural.EditPolicy.LastTerminalChangeCount,
 	}
+	currentWiring := workflow.DeriveWiring(currentDefinition)
+	proposedWiring := workflow.DeriveWiring(proposedDefinition)
 	for _, nodeID := range structural.EditPolicy.NodeKindChanges {
 		refCount, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
@@ -297,6 +364,29 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 			editPolicyImpact.UnsafeTransitionChangeRefCount += refCount
 		}
 	}
+	for _, edgeID := range structural.EditPolicy.ParameterChanges {
+		dependencies := workflow.AppendUniqueEdgeIDs(
+			currentWiring.ParameterDependencyEdgesForEdge(edgeID),
+			proposedWiring.ParameterDependencyEdgesForEdge(edgeID),
+		)
+		var blockedRefCount int64
+		for _, dependency := range dependencies {
+			impact, err := q.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
+				WorkflowID: workflowID,
+				EdgeID:     sql.NullString{String: string(dependency), Valid: true},
+			})
+			if err != nil {
+				return workflowGraphSaveDynamicImpact{}, err
+			}
+			blockedRefCount += impact.ActiveCurrentNodeCount +
+				impact.UnresolvedParallelBranchCount +
+				impact.PendingApprovalCount
+		}
+		if blockedRefCount > 0 {
+			editPolicyImpact.ParameterContractChangeCount++
+			editPolicyImpact.ParameterContractChangeRefCount += blockedRefCount
+		}
+	}
 	for _, edgeID := range structural.EditPolicy.HistoryEdgeChanges {
 		refCount, err := q.CountAllTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
 		if err != nil {
@@ -322,12 +412,14 @@ func workflowTransitionGroupMetadataOnlyChange(current TransitionGroupRecord, ne
 }
 
 func workflowEdgeMetadataOnlyChange(current EdgeRecord, next EdgeRecord) bool {
+	// Parameter declarations may be edited after entry. Resume preflight owns
+	// the materialization check for already-entered Current Nodes; routing and
+	// binding changes remain structural policy changes.
 	return current.ID == next.ID &&
 		current.WorkflowID == next.WorkflowID &&
 		current.TransitionGroupID == next.TransitionGroupID &&
 		current.Key == next.Key &&
 		current.TargetNodeID == next.TargetNodeID &&
-		slices.Equal(current.Parameters, next.Parameters) &&
 		slices.Equal(current.InputBindings, next.InputBindings) &&
 		slices.Equal(current.OutputRequirements, next.OutputRequirements)
 }
@@ -372,7 +464,14 @@ func workflowGraphEditPolicyBlockers(impact WorkflowGraphEditPolicyImpact) []Wor
 		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_node_kind_changed", Message: "Workflow node kind changes are blocked for nodes referenced by existing tasks.", Count: impact.TaskReferencedNodeKindChangeRefCount})
 	}
 	if impact.UnsafeTransitionChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "active_transition_contract_changed", Message: "Transition routing and parameter contract changes are blocked while referenced transition work is unresolved.", Count: impact.UnsafeTransitionChangeRefCount})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "active_transition_contract_changed", Message: "Transition routing changes are blocked while referenced transition work is unresolved.", Count: impact.UnsafeTransitionChangeRefCount})
+	}
+	if impact.ParameterContractChangeCount > 0 {
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{
+			Code:    "active_transition_parameter_changed",
+			Message: "Transition Parameter changes are blocked while active execution, pending approval, or unresolved parallel work depends on the Transition Branch.",
+			Count:   impact.ParameterContractChangeRefCount,
+		})
 	}
 	if impact.HistoryReinterpretingEdgeChangeCount > 0 {
 		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_edge_group_changed", Message: "Transition branch group changes are blocked for branches referenced by existing tasks.", Count: impact.HistoryReinterpretingEdgeRefCount})

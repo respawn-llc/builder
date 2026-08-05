@@ -133,13 +133,12 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 		synth := nodeByKey(t, def, "synth")
 		doneGroupID := workflow.TransitionGroupID("group-synth-done-" + workflowID.String())
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID:             auditID,
-			WorkflowID:     workflowID,
-			Key:            "audit",
-			Kind:           workflow.NodeKindAgent,
-			DisplayName:    "Audit",
-			SubagentRole:   "coder",
-			PromptTemplate: "Audit.",
+			ID:           auditID,
+			WorkflowID:   workflowID,
+			Key:          "audit",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Audit",
+			SubagentRole: "coder",
 		})
 		req.TransitionGroups = mutateWorkflowGraphSaveTransitionGroup(
 			req.TransitionGroups,
@@ -299,8 +298,8 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 		implB := nodeByKey(t, def, "impl_b")
 		join := nodeByKey(t, def, "join")
 		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: detailAID, WorkflowID: workflowID, Key: "detail_a", Kind: workflow.NodeKindAgent, DisplayName: "Detail A", SubagentRole: "coder", PromptTemplate: "Detail A."},
-			NodeRecord{ID: detailBID, WorkflowID: workflowID, Key: "detail_b", Kind: workflow.NodeKindAgent, DisplayName: "Detail B", SubagentRole: "coder", PromptTemplate: "Detail B."},
+			NodeRecord{ID: detailAID, WorkflowID: workflowID, Key: "detail_a", Kind: workflow.NodeKindAgent, DisplayName: "Detail A", SubagentRole: "coder"},
+			NodeRecord{ID: detailBID, WorkflowID: workflowID, Key: "detail_b", Kind: workflow.NodeKindAgent, DisplayName: "Detail B", SubagentRole: "coder"},
 		)
 		req.TransitionGroups = mutateWorkflowGraphSaveTransitionGroup(req.TransitionGroups, joinAGroupID, func(group *TransitionGroupRecord) {
 			group.SourceNodeID = detailAID

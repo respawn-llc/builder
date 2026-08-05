@@ -37,10 +37,7 @@ func TestNodeWorkflowIDPreservesInvalidZeroIdentity(t *testing.T) {
 func TestNewNodeDropsUnsupportedFieldsForNonExecutableNodes(t *testing.T) {
 	fields := workflow.NodeFields{
 		SubagentRole:   "coder",
-		PromptTemplate: "Do work.",
 		CompletionMode: "manual",
-		InputFields:    []workflow.InputField{{Name: "input", Description: "Input."}},
-		OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Summary."}},
 	}
 
 	for _, tc := range []struct {
@@ -64,11 +61,8 @@ func TestNewNodeDropsUnsupportedFieldsForNonExecutableNodes(t *testing.T) {
 			if workflow.IsExecutableNode(node) {
 				t.Fatalf("%s node should not be executable", tc.name)
 			}
-			if workflow.NodeSubagentRole(node) != "" || workflow.NodePromptTemplate(node) != "" || workflow.NodeCompletionMode(node) != "" {
+			if workflow.NodeSubagentRole(node) != "" || workflow.NodeCompletionMode(node) != "" {
 				t.Fatalf("%s node retained executable fields", tc.name)
-			}
-			if len(workflow.NodeInputFields(node)) != 0 || len(workflow.NodeOutputFields(node)) != 0 {
-				t.Fatalf("%s node retained contract fields", tc.name)
 			}
 		})
 	}

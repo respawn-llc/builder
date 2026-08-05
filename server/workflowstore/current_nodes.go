@@ -354,31 +354,7 @@ func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID wo
 	if err != nil {
 		return nil, err
 	}
-	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	interrupted := make([]workflow.CurrentNode, 0, len(currentNodes))
-	for _, currentNode := range currentNodes {
-		if currentNode.Scheduling == nil || currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
-			continue
-		}
-		node, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
-		if err != nil {
-			return nil, err
-		}
-		if !executableNodeKind(node.Kind()) {
-			continue
-		}
-		eligible, err := s.IsCurrentNodeExecutionEligible(ctx, currentNode.Reference)
-		if err != nil {
-			return nil, err
-		}
-		if eligible {
-			interrupted = append(interrupted, currentNode)
-		}
-	}
-	return interrupted, nil
+	return s.interruptedExecutableCurrentNodesWithDefinition(ctx, taskID, definition)
 }
 
 // InterruptAdmittedCurrentNode records that a scope preparation or live

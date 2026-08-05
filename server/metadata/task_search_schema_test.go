@@ -10,6 +10,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	metadatamigrations "core/server/metadata/migrations"
+
 	"core/shared/tasksearchtext"
 
 	"github.com/pressly/goose/v3"
@@ -245,7 +247,7 @@ func openVersion59TaskSearchFixture(t *testing.T) (*sql.DB, string) {
 
 func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
 	t.Helper()
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	entries, err := fs.ReadDir(metadatamigrations.FS, ".")
 	if err != nil {
 		t.Fatalf("list metadata migrations: %v", err)
 	}
@@ -254,15 +256,15 @@ func taskSearchMigrationsWithForcedFailure(t *testing.T) fs.FS {
 		if entry.IsDir() {
 			continue
 		}
-		path := "migrations/" + entry.Name()
-		data, err := fs.ReadFile(migrationsFS, path)
+		path := entry.Name()
+		data, err := fs.ReadFile(metadatamigrations.FS, path)
 		if err != nil {
 			t.Fatalf("read metadata migration %s: %v", entry.Name(), err)
 		}
 		if entry.Name() == "00066_task_search_index.up.sql" {
 			data = append(data, []byte("\nSELECT * FROM task_search_forced_migration_failure;\n")...)
 		}
-		migrations[path] = &fstest.MapFile{Data: data}
+		migrations["migrations/"+path] = &fstest.MapFile{Data: data}
 	}
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {

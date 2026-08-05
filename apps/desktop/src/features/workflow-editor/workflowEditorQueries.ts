@@ -74,7 +74,7 @@ export function useWorkflowDraftDerivedWiringQuery(
 ) {
   const { api } = useAppServices();
   // Keyed on the draft graph content, not graphVersion: wiring-relevant edits
-  // (node input fields, edge parameters) intentionally leave graphVersion
+  // (edge parameters and derived wiring) intentionally leave graphVersion
   // unchanged, so a version key would serve stale wiring for exactly those
   // edits. Only stringify while the query is enabled (graph dirty) to avoid the
   // cost on every clean-state render. Derive-wiring is cheap (no validation),

@@ -143,7 +143,6 @@ export type {
   WorkflowGraphSavePreview,
   WorkflowGraphValidateDraftResult,
   WorkflowGraphValidationResults,
-  WorkflowInputField,
   WorkflowInputBinding,
   WorkflowJoinInputProvider,
   WorkflowNode,

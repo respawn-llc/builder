@@ -78,7 +78,7 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
 	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
 	agentID := "node-agent"
-	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder"}); err != nil {
 		t.Fatalf("AddWorkflowNode: %v", err)
 	}
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start", SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
@@ -655,7 +655,7 @@ func TestServiceGraphMutationsUseStoreEditPolicyInsteadOfTaskWideQuiescence(t *t
 	service.currentNodeExecution = execution
 	if _, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
 		WorkflowID: workflowID, NodeID: agentID, Key: "agent", Kind: "agent",
-		DisplayName: "Agent", SubagentRole: "explorer", PromptTemplate: "Do work.",
+		DisplayName: "Agent", SubagentRole: "explorer",
 	}); err != nil {
 		t.Fatalf("UpdateWorkflowNode role during active Task: %v", err)
 	}
@@ -2195,13 +2195,12 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 	}
 	agent := workflowServiceNodeByID(t, *savedScript.Definition, agentID)
 	if _, err := service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
-		WorkflowID:     workflowID,
-		NodeID:         agent.ID,
-		Key:            agent.Key,
-		Kind:           agent.Kind,
-		DisplayName:    agent.DisplayName,
-		SubagentRole:   "unavailable-assignee",
-		PromptTemplate: agent.PromptTemplate,
+		WorkflowID:   workflowID,
+		NodeID:       agent.ID,
+		Key:          agent.Key,
+		Kind:         agent.Kind,
+		DisplayName:  agent.DisplayName,
+		SubagentRole: "unavailable-assignee",
 	}); err != nil {
 		t.Fatalf("UpdateWorkflowNode unavailable assignee: %v", err)
 	}
@@ -2778,7 +2777,7 @@ func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, servi
 	}
 	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
 	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
-	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-agent-" + created.Workflow.ID.String(), Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-agent-" + created.Workflow.ID.String(), Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder"}); err != nil {
 		t.Fatalf("AddWorkflowNode: %v", err)
 	}
 	agentID := "node-agent-" + created.Workflow.ID.String()
@@ -2915,7 +2914,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName})
 	}
 	for _, node := range def.Nodes {
-		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders})
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, JoinInputProviders: node.JoinInputProviders})
 	}
 	for _, group := range def.TransitionGroups {
 		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})

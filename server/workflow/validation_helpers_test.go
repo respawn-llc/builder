@@ -40,11 +40,8 @@ func testTerminalNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key 
 func testNodeFields(node workflow.Node) workflow.NodeFields {
 	return workflow.NodeFields{
 		SubagentRole:       workflow.NodeSubagentRole(node),
-		PromptTemplate:     workflow.NodePromptTemplate(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
-		InputFields:        workflow.NodeInputFields(node),
 		JoinInputProviders: workflow.NodeJoinInputProviders(node),
-		OutputFields:       workflow.NodeOutputFields(node),
 		ScriptPath:         workflow.NodeScriptPath(node),
 	}
 }

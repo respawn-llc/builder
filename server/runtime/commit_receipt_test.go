@@ -143,9 +143,9 @@ func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
 			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: reference,
-				WorkflowID:  runtimeids.NewWorkflowID(),
-				NodePrompt:  "Perform the assigned workflow step.",
+				CurrentNode:      reference,
+				WorkflowID:       runtimeids.NewWorkflowID(),
+				TransitionPrompt: "Perform the assigned workflow step.",
 			},
 		},
 	}

@@ -2364,6 +2364,56 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 	return i, err
 }
 
+const getWorkflowEdgeParameterEditPolicyImpact = `-- name: GetWorkflowEdgeParameterEditPolicyImpact :one
+SELECT
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = ?1
+          AND current_node.entered_by_edge_id = ?2
+          AND (
+              current_node.scheduling_state IS NULL
+              OR current_node.scheduling_state != 'interrupted'
+          )
+    ) AS active_current_node_count,
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = ?1
+          AND current_node.entered_by_edge_id = ?2
+          AND current_node.transition_branch_key IS NOT NULL
+    ) AS unresolved_parallel_branch_count,
+    (
+        SELECT CAST(COUNT(DISTINCT approval.id) AS INTEGER)
+        FROM task_pending_approvals approval
+        JOIN task_records task ON task.id = approval.source_task_id
+        JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
+        WHERE task.workflow_id = ?1
+          AND json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?2
+    ) AS pending_approval_count
+`
+
+type GetWorkflowEdgeParameterEditPolicyImpactParams struct {
+	WorkflowID runtimeids.WorkflowID
+	EdgeID     sql.NullString
+}
+
+type GetWorkflowEdgeParameterEditPolicyImpactRow struct {
+	ActiveCurrentNodeCount        int64
+	UnresolvedParallelBranchCount int64
+	PendingApprovalCount          int64
+}
+
+func (q *Queries) GetWorkflowEdgeParameterEditPolicyImpact(ctx context.Context, arg GetWorkflowEdgeParameterEditPolicyImpactParams) (GetWorkflowEdgeParameterEditPolicyImpactRow, error) {
+	row := q.db.QueryRowContext(ctx, getWorkflowEdgeParameterEditPolicyImpact, arg.WorkflowID, arg.EdgeID)
+	var i GetWorkflowEdgeParameterEditPolicyImpactRow
+	err := recordQueryError(ctx, row.Scan(&i.ActiveCurrentNodeCount, &i.UnresolvedParallelBranchCount, &i.PendingApprovalCount), getWorkflowEdgeParameterEditPolicyImpact, 2)
+
+	return i, err
+}
+
 const getWorkflowGraphActiveWorkPolicyImpact = `-- name: GetWorkflowGraphActiveWorkPolicyImpact :one
 SELECT
     (
@@ -2403,12 +2453,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -2423,12 +2470,9 @@ type GetWorkflowNodeRow struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
 	CompletionMode         string
 	ScriptPath             sql.NullString
-	InputFieldsJson        string
 	JoinInputProvidersJson string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
 }
@@ -2443,12 +2487,9 @@ func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNo
 		&i.Kind,
 		&i.DisplayName,
 		&i.SubagentRole,
-		&i.PromptTemplate,
 		&i.CompletionMode,
 		&i.ScriptPath,
-		&i.InputFieldsJson,
 		&i.JoinInputProvidersJson,
-		&i.OutputFieldsJson,
 		&i.GroupID,
 		&i.SortOrder,
 	), getWorkflowNode, 1)
@@ -3386,12 +3427,9 @@ INSERT INTO workflow_nodes (
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 ) VALUES (
@@ -3405,10 +3443,7 @@ INSERT INTO workflow_nodes (
     ?8,
     ?9,
     ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14
+    ?11
 )
 `
 
@@ -3419,12 +3454,9 @@ type InsertWorkflowNodeParams struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
 	CompletionMode         string
 	ScriptPath             sql.NullString
-	InputFieldsJson        string
 	JoinInputProvidersJson string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
 }
@@ -3437,16 +3469,13 @@ func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNode
 		arg.Kind,
 		arg.DisplayName,
 		arg.SubagentRole,
-		arg.PromptTemplate,
 		arg.CompletionMode,
 		arg.ScriptPath,
-		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowNode, 14)
+	err = recordQueryError(ctx, err, insertWorkflowNode, 11)
 
 	return err
 }
@@ -7380,12 +7409,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -7400,12 +7426,9 @@ type ListWorkflowNodesRow struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
 	CompletionMode         string
 	ScriptPath             sql.NullString
-	InputFieldsJson        string
 	JoinInputProvidersJson string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
 }
@@ -7427,12 +7450,9 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID runtimeids.W
 			&i.Kind,
 			&i.DisplayName,
 			&i.SubagentRole,
-			&i.PromptTemplate,
 			&i.CompletionMode,
 			&i.ScriptPath,
-			&i.InputFieldsJson,
 			&i.JoinInputProvidersJson,
-			&i.OutputFieldsJson,
 			&i.GroupID,
 			&i.SortOrder,
 		), listWorkflowNodes, 1); err != nil {
@@ -9773,15 +9793,12 @@ SET
     kind = ?2,
     display_name = ?3,
     subagent_role = ?4,
-    prompt_template = ?5,
-    completion_mode = ?6,
-    script_path = ?7,
-    input_fields_json = ?8,
-    join_input_providers_json = ?9,
-    output_fields_json = ?10,
-    group_id = ?11
-WHERE id = ?12
-  AND workflow_id = ?13
+    completion_mode = ?5,
+    script_path = ?6,
+    join_input_providers_json = ?7,
+    group_id = ?8
+WHERE id = ?9
+  AND workflow_id = ?10
 `
 
 type UpdateWorkflowNodeParams struct {
@@ -9789,12 +9806,9 @@ type UpdateWorkflowNodeParams struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
 	CompletionMode         string
 	ScriptPath             sql.NullString
-	InputFieldsJson        string
 	JoinInputProvidersJson string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	ID                     string
 	WorkflowID             runtimeids.WorkflowID
@@ -9806,17 +9820,14 @@ func (q *Queries) UpdateWorkflowNode(ctx context.Context, arg UpdateWorkflowNode
 		arg.Kind,
 		arg.DisplayName,
 		arg.SubagentRole,
-		arg.PromptTemplate,
 		arg.CompletionMode,
 		arg.ScriptPath,
-		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
 		arg.GroupID,
 		arg.ID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowNode, 13)
+	err = recordQueryError(ctx, err, updateWorkflowNode, 10)
 
 	if err != nil {
 		return 0, err
@@ -10270,7 +10281,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 }
 
 const upsertWorkflowNode = `-- name: UpsertWorkflowNode :execrows
-INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, script_path, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode, script_path, join_input_providers_json, group_id, sort_order)
 VALUES (
     ?1,
     ?2,
@@ -10282,22 +10293,16 @@ VALUES (
     ?8,
     ?9,
     ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14
+    ?11
 )
 ON CONFLICT(id) DO UPDATE SET
     node_key = excluded.node_key,
     kind = excluded.kind,
     display_name = excluded.display_name,
     subagent_role = excluded.subagent_role,
-    prompt_template = excluded.prompt_template,
     completion_mode = excluded.completion_mode,
     script_path = excluded.script_path,
-    input_fields_json = excluded.input_fields_json,
     join_input_providers_json = excluded.join_input_providers_json,
-    output_fields_json = excluded.output_fields_json,
     group_id = excluded.group_id,
     sort_order = excluded.sort_order
 WHERE workflow_nodes.workflow_id = excluded.workflow_id
@@ -10310,12 +10315,9 @@ type UpsertWorkflowNodeParams struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
 	CompletionMode         string
 	ScriptPath             sql.NullString
-	InputFieldsJson        string
 	JoinInputProvidersJson string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
 }
@@ -10328,16 +10330,13 @@ func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNode
 		arg.Kind,
 		arg.DisplayName,
 		arg.SubagentRole,
-		arg.PromptTemplate,
 		arg.CompletionMode,
 		arg.ScriptPath,
-		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowNode, 14)
+	err = recordQueryError(ctx, err, upsertWorkflowNode, 11)
 
 	if err != nil {
 		return 0, err

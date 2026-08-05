@@ -102,18 +102,18 @@ type TaskAwarenessSource interface {
 }
 
 type TaskInstructions struct {
-	CurrentNode     workflow.CurrentNodeReference
-	TaskShortID     string
-	TaskTitle       string
-	TaskBody        string
-	WorkflowID      runtimeids.WorkflowID
-	WorkflowName    string
-	NodeKey         string
-	NodeDisplayName string
-	ContextMode     string
-	SourceSessionID string
-	Transitions     []TransitionInstruction
-	NodePrompt      string
+	CurrentNode      workflow.CurrentNodeReference
+	TaskShortID      string
+	TaskTitle        string
+	TaskBody         string
+	WorkflowID       runtimeids.WorkflowID
+	WorkflowName     string
+	NodeKey          string
+	NodeDisplayName  string
+	ContextMode      string
+	SourceSessionID  string
+	Transitions      []TransitionInstruction
+	TransitionPrompt string
 }
 
 // CurrentNodePromptIdentity gives one stable prompt SourcePath to the full

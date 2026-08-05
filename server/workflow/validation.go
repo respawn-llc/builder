@@ -827,20 +827,6 @@ func (s *validationState) validatePromptPlaceholders() {
 		for _, priorParam := range refs.PriorParams {
 			s.validatePriorParameterReference(edge, priorParam, ref, derived)
 		}
-		target, targetExists := s.nodesByID[edge.TargetNodeID]
-		for _, input := range refs.Inputs {
-			s.validateInputReference(target, targetExists, input, ref)
-		}
-	}
-}
-
-func (s *validationState) validateInputReference(target Node, targetExists bool, input PromptInputReference, baseRef ValidationError) {
-	name := strings.TrimSpace(input.Name)
-	ref := baseRef
-	ref.InputName = name
-	ref.Placeholder = input.Placeholder
-	if !targetExists || name == "" || !workflowkey.Valid(name) || !inputFieldNameSet(NodeInputFields(target))[name] {
-		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown node input", ref)
 	}
 }
 
@@ -850,17 +836,6 @@ func edgeParameterNameSet(edge Edge) map[string]bool {
 		key := strings.TrimSpace(parameter.Key)
 		if key != "" {
 			out[key] = true
-		}
-	}
-	return out
-}
-
-func inputFieldNameSet(fields []InputField) map[string]bool {
-	out := map[string]bool{}
-	for _, field := range fields {
-		name := strings.TrimSpace(field.Name)
-		if name != "" {
-			out[name] = true
 		}
 	}
 	return out

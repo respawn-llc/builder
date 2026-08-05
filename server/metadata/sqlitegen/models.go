@@ -360,11 +360,8 @@ type WorkflowNode struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
-	InputFieldsJson        string
 	JoinInputProvidersJson string
 	CompletionMode         string
 	ScriptPath             sql.NullString

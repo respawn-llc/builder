@@ -149,7 +149,6 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 		`UPDATE workflow_nodes
 		 SET kind = 'script',
 		     subagent_role = '',
-		     prompt_template = '',
 		     completion_mode = '',
 		     script_path = 'scripts/branch'
 		 WHERE id = ?`,
@@ -188,10 +187,8 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 		node := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(target))
 		node.Kind = workflow.NodeKindScript
 		node.SubagentRole = ""
-		node.PromptTemplate = ""
 		node.CompletionMode = ""
 		node.ScriptPath = validatedScriptPath
-		node.InputFields = nil
 		edge := edgeByKey(t, def, "next")
 		workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID).PromptTemplate = ""
 	})

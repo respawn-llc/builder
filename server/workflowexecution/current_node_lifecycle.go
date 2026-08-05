@@ -175,16 +175,21 @@ func (c *CurrentNodeController) resumeTask(
 			return nil, err
 		}
 		c.mu.Unlock()
-		selected, err := c.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
 		if err != nil {
 			return nil, err
 		}
-		if len(selected) == 0 {
+		if len(classifications) == 0 {
 			return nil, &TaskResumeConflictError{TaskID: taskID}
 		}
-		resumed := make([]workflow.CurrentNode, 0, len(selected))
+		resumed := make([]workflow.CurrentNode, 0, len(classifications))
 		var resumeErrs []error
-		for _, currentNode := range selected {
+		for _, classification := range classifications {
+			currentNode := classification.CurrentNode
+			if validationErr := classification.ValidationError(); validationErr != nil {
+				resumeErrs = append(resumeErrs, validationErr)
+				continue
+			}
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))

@@ -15,6 +15,7 @@ type DerivedWiring struct {
 	possibleProvisionFieldsByNode    map[NodeID][]OutputField
 	requiredProviderFieldsByJoinEdge map[EdgeID][]OutputField
 	joinOutputFieldsByNode           map[NodeID][]OutputField
+	parameterDependencyEdgesByEdge   map[EdgeID][]EdgeID
 	currentNodeInputBindingsByEdge   map[EdgeID][]InputBinding
 	currentNodeOutputFieldsByGroup   map[TransitionGroupID][]OutputField
 	priorParameterRequirementsByNode map[NodeID][]PriorTransitionParameterRequirement
@@ -37,6 +38,25 @@ type derivedPriorParameterRequirement struct {
 }
 
 func DeriveWiring(def Definition) DerivedWiring {
+	priorReferencesByEdge := make(map[EdgeID][]PromptPriorParameterReference, len(def.Edges))
+	for _, edge := range def.Edges {
+		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
+		if err != nil {
+			continue
+		}
+		priorReferencesByEdge[edge.ID] = append([]PromptPriorParameterReference(nil), refs.PriorParams...)
+	}
+	return DeriveWiringWithPriorParameterReferences(def, priorReferencesByEdge)
+}
+
+// DeriveWiringWithPriorParameterReferences derives the canonical wiring graph
+// from prompt-owned prior-Parameter references supplied by the caller. The
+// metadata migration boundary uses this entry point with its frozen historical
+// parser; runtime callers use DeriveWiring, which owns live prompt parsing.
+func DeriveWiringWithPriorParameterReferences(
+	def Definition,
+	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
+) DerivedWiring {
 	derived := DerivedWiring{
 		inputBindingsByEdge:              map[EdgeID][]InputBinding{},
 		requiredProvisionFieldsByEdge:    map[EdgeID][]OutputField{},
@@ -44,6 +64,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 		possibleProvisionFieldsByNode:    map[NodeID][]OutputField{},
 		requiredProviderFieldsByJoinEdge: map[EdgeID][]OutputField{},
 		joinOutputFieldsByNode:           map[NodeID][]OutputField{},
+		parameterDependencyEdgesByEdge:   map[EdgeID][]EdgeID{},
 		currentNodeInputBindingsByEdge:   map[EdgeID][]InputBinding{},
 		currentNodeOutputFieldsByGroup:   map[TransitionGroupID][]OutputField{},
 		priorParameterRequirementsByNode: map[NodeID][]PriorTransitionParameterRequirement{},
@@ -67,6 +88,7 @@ func DeriveWiring(def Definition) DerivedWiring {
 		if group, ok := groupsByID[edge.TransitionGroupID]; ok {
 			outgoingByNode[group.SourceNodeID] = append(outgoingByNode[group.SourceNodeID], edge)
 		}
+		derived.parameterDependencyEdgesByEdge[edge.ID] = []EdgeID{edge.ID}
 	}
 	for _, edge := range def.Edges {
 		group, groupExists := groupsByID[edge.TransitionGroupID]
@@ -90,7 +112,8 @@ func DeriveWiring(def Definition) DerivedWiring {
 			derived.deriveJoinAggregateParameters(node, incomingByNode)
 		}
 	}
-	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode)
+	derived.deriveParameterDependencies(incomingByNode, outgoingByNode)
+	derived.deriveCurrentNodeValueEnvironment(def, nodesByID, groupsByID, outgoingByNode, priorReferencesByEdge)
 	return derived
 }
 
@@ -128,6 +151,13 @@ func (w DerivedWiring) CurrentNodeOutputFieldsForTransitionGroup(groupID Transit
 
 func (w DerivedWiring) PriorParameterRequirementsForNode(nodeID NodeID) []PriorTransitionParameterRequirement {
 	return append([]PriorTransitionParameterRequirement(nil), w.priorParameterRequirementsByNode[nodeID]...)
+}
+
+// ParameterDependencyEdgesForEdge returns entering Edges whose materialized
+// values depend on an Edge's Parameters. The dependency map is derived from
+// the same Join aggregate fields used by CurrentNodeInputBindingsForEdge.
+func (w DerivedWiring) ParameterDependencyEdgesForEdge(edgeID EdgeID) []EdgeID {
+	return append([]EdgeID(nil), w.parameterDependencyEdgesByEdge[edgeID]...)
 }
 
 func (w DerivedWiring) TransitionOutputFieldsForEdge(edge Edge, source Node) []OutputField {
@@ -225,21 +255,51 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(join Node, incomingByNode 
 	w.joinOutputFieldsByNode[NodeIDOf(join)] = aggregate
 }
 
+func (w *DerivedWiring) deriveParameterDependencies(
+	incomingByNode map[NodeID][]Edge,
+	outgoingByNode map[NodeID][]Edge,
+) {
+	for joinID := range w.joinOutputFieldsByNode {
+		for _, provider := range incomingByNode[joinID] {
+			if len(w.requiredProviderFieldsByJoinEdge[provider.ID]) == 0 {
+				continue
+			}
+			for _, outgoing := range outgoingByNode[joinID] {
+				w.parameterDependencyEdgesByEdge[provider.ID] = AppendUniqueEdgeIDs(
+					w.parameterDependencyEdgesByEdge[provider.ID],
+					[]EdgeID{outgoing.ID},
+				)
+			}
+		}
+	}
+}
+
+// AppendUniqueEdgeIDs returns existing Edge IDs followed by additions that are
+// not already present, preserving first-seen order.
+func AppendUniqueEdgeIDs(existing []EdgeID, additions ...[]EdgeID) []EdgeID {
+	for _, group := range additions {
+		for _, addition := range group {
+			if slices.Contains(existing, addition) {
+				continue
+			}
+			existing = append(existing, addition)
+		}
+	}
+	return existing
+}
+
 func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 	def Definition,
 	nodesByID map[NodeID]Node,
 	groupsByID map[TransitionGroupID]TransitionGroup,
 	outgoingByNode map[NodeID][]Edge,
+	priorReferencesByEdge map[EdgeID][]PromptPriorParameterReference,
 ) {
 	startNodeID, hasSingleStart := singleStartNodeID(def.Nodes)
 	priorRequirementsByPromptNode := make(map[NodeID][]derivedPriorParameterRequirement, len(nodesByID))
 	for _, edge := range def.Edges {
 		_, targetExists := nodesByID[edge.TargetNodeID]
 		if !targetExists {
-			continue
-		}
-		refs, err := ExtractPromptTemplateReferences(edge.PromptTemplate)
-		if err != nil {
 			continue
 		}
 		consumerGroup, consumerGroupExists := groupsByID[edge.TransitionGroupID]
@@ -262,7 +322,7 @@ func (w *DerivedWiring) deriveCurrentNodeValueEnvironment(
 		if !hasSingleStart {
 			continue
 		}
-		for _, priorParam := range refs.PriorParams {
+		for _, priorParam := range priorReferencesByEdge[edge.ID] {
 			transitionKey := ModelKey(strings.TrimSpace(string(priorParam.TransitionKey)))
 			outputName := strings.TrimSpace(priorParam.ParameterKey)
 			if transitionKey == "" || outputName == "" {

@@ -95,12 +95,9 @@ type WorkflowNode struct {
 	GroupID            string                      `json:"group_id,omitempty"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
 	ScriptPath         *string                     `json:"script_path,omitempty"`
-	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
-	OutputFields       []WorkflowOutputField       `json:"output_fields,omitempty"`
 }
 
 type WorkflowNodeGroup struct {
@@ -141,14 +138,8 @@ type WorkflowContextSource struct {
 }
 
 // WorkflowOutputField is read-only/derived in workflow editor contracts. It is used for runtime
-// output snapshots, board summaries, and derived provision fields; writable graph contracts use
-// WorkflowInputField on consuming nodes instead of user-authored source output fields.
+// output snapshots, board summaries, and derived provision fields.
 type WorkflowOutputField struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-type WorkflowInputField struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
@@ -232,10 +223,8 @@ type WorkflowGraphDraftNode struct {
 	GroupID            string                      `json:"group_id,omitempty"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
 	ScriptPath         *string                     `json:"script_path,omitempty"`
-	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
 
@@ -409,10 +398,8 @@ type WorkflowNodeAddRequest struct {
 	DisplayName        string                      `json:"display_name"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
 	ScriptPath         *string                     `json:"script_path,omitempty"`
-	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
 
@@ -428,10 +415,8 @@ type WorkflowNodeUpdateRequest struct {
 	DisplayName        string                      `json:"display_name"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
 	ScriptPath         *string                     `json:"script_path,omitempty"`
-	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
 
@@ -1866,17 +1851,17 @@ func (r WorkflowGetRequest) Validate() error {
 }
 
 func (r WorkflowNodeAddRequest) Validate() error {
-	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
 }
 
 func (r WorkflowNodeUpdateRequest) Validate() error {
 	if err := validateRequired("node_id", r.NodeID); err != nil {
 		return err
 	}
-	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
 }
 
-func validateWorkflowNodeFields(workflowID runtimeids.WorkflowID, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, inputFields []WorkflowInputField, joinInputProviders []WorkflowJoinInputProvider) error {
+func validateWorkflowNodeFields(workflowID runtimeids.WorkflowID, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, joinInputProviders []WorkflowJoinInputProvider) error {
 	if err := validateRequiredWorkflowID(workflowID); err != nil {
 		return err
 	}
@@ -1901,14 +1886,6 @@ func validateWorkflowNodeFields(workflowID runtimeids.WorkflowID, nodeID string,
 	if strings.TrimSpace(groupKey) != "" {
 		if err := validateModelKey("group_key", groupKey); err != nil {
 			return err
-		}
-	}
-	for _, field := range inputFields {
-		if err := validateModelKey("input_field.name", field.Name); err != nil {
-			return err
-		}
-		if strings.TrimSpace(field.Description) == "" {
-			return workflowRequestError(WorkflowRequestErrorRequired, "input_field.description", "input_field.description is required")
 		}
 	}
 	for _, provider := range joinInputProviders {
@@ -2255,9 +2232,6 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 		if node.ScriptPath != nil && strings.TrimSpace(node.Kind) != "script" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.script_path", "script_path is only valid on script nodes")
-		}
-		if len(node.InputFields) > WorkflowGraphDraftMaxFieldsPerEntity {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.input_fields", fmt.Sprintf("input_fields must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
 		if len(node.JoinInputProviders) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.join_input_providers", fmt.Sprintf("join_input_providers must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))

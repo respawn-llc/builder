@@ -1,6 +1,6 @@
 You're working on ticket `{{.TaskShortId}}` titled "{{.TaskTitle}}" as part of workflow "{{.WorkflowName}}". Workflows are teams of agents working together autonomously without direct user supervision. You are one of the agents doing your part of the workflow to close the ticket, and you just received a new task:
 <task>
-{{.NodePrompt}}
+{{.TransitionPrompt}}
 </task>
 
 ## Workflow mode guidelines
