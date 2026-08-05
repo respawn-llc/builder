@@ -728,8 +728,8 @@
   the provider's typed pending operation; the provider preserves an unrelated
   survivor only for a matching completed deletion transition and closes
   ordinary or failed route changes. Pathname closure is subscribed at the
-  provider's router lifecycle boundary before route loading; that same
-  callback derives the typed search transitions. Regression coverage
+  provider's `onBeforeNavigate` lifecycle boundary before route loading; that
+  same callback derives the typed search transitions. Regression coverage
   uses real router transitions for every route case, including delayed
   success/failure after selector absence, the AppChrome Home View Transition
   path, and the deletion-survivor exception.
@@ -738,12 +738,19 @@
   subscription and retained structured search-transition reconciliation.
   Full Desktop verification passed again: 82 files / 377 tests.
   Progress (August 5, 2026): Completed the compliance remediation by making
-  the provider's single `onBeforeLoad` dispatch derive both pathname and
+  the provider's single typed dispatch derive both pathname and
   validated Board/Workflow Editor search locations through one typed
   `SidebarRouteTransition` model. The same callback owns deletion-operation
   reconciliation and sidebar closure; no React location observer or separate
   pathname writer remains. The structural router-match adapter preserves
   typed optional search values without parsing route strings.
+  Progress (August 5, 2026): QA reproduced a native browser View Transition
+  that changed the pathname while leaving the sidebar live. The single
+  provider dispatch now runs at TanStack Router's earlier
+  `onBeforeNavigate` lifecycle event, before route loading and View Transition
+  mounting can replace the route shell. This keeps pathname, Board search,
+  Workflow Editor search, deletion reconciliation, and closure in the same
+  typed path while covering the real top-level Home navigation timing.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from

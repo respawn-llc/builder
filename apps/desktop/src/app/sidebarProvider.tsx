@@ -198,7 +198,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
 
   useLayoutEffect(
     () =>
-      router.subscribe("onBeforeLoad", ({ toLocation }) => {
+      router.subscribe("onBeforeNavigate", ({ toLocation }) => {
         const nextLocation = sidebarRouteLocationFromMatches(
           toLocation.pathname,
           router.matchRoutes(toLocation.pathname, toLocation.search),
