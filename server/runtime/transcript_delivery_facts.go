@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"sort"
 	"strings"
 
 	"core/server/llm"
@@ -163,6 +164,20 @@ func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommitt
 }
 
 func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
+	sort.SliceStable(facts, func(left, right int) bool {
+		leftProvenance := facts[left].Provenance
+		rightProvenance := facts[right].Provenance
+		if leftProvenance == nil || rightProvenance == nil {
+			return false
+		}
+		if leftProvenance.EventSequence != rightProvenance.EventSequence {
+			return leftProvenance.EventSequence < rightProvenance.EventSequence
+		}
+		if leftProvenance.ProjectedOrdinal != nil && rightProvenance.ProjectedOrdinal != nil {
+			return *leftProvenance.ProjectedOrdinal < *rightProvenance.ProjectedOrdinal
+		}
+		return false
+	})
 	ordinals := make(map[int64]int64, len(facts))
 	for index := range facts {
 		provenance := facts[index].Provenance

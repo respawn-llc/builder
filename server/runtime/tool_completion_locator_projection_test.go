@@ -69,6 +69,9 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 
 	page := mustEngineNewestSegmentPage(t, engine)
 	pageFacts := TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)
+	assertToolFactsFollowLocatorOrder(t, pageFacts, "page")
+	hydrationFacts := hydrationSnapshot(t, engine).CommittedRows
+	assertToolFactsFollowLocatorOrder(t, hydrationFacts, "hydration")
 	for _, callID := range []string{"call-1", "call-2"} {
 		pageFact := findToolFact(t, pageFacts, callID)
 		liveLocator, ok := liveLocators[callID]
@@ -88,10 +91,26 @@ func TestToolCompletionLocatorOwnerSurvivesRoleToolMaterializationAndReopen(t *t
 	}
 	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	reopenedFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, reopened).Snapshot)
+	assertToolFactsFollowLocatorOrder(t, reopenedFacts, "reopened page")
+	assertToolFactsFollowLocatorOrder(t, hydrationSnapshot(t, reopened).CommittedRows, "reopened hydration")
 	for _, callID := range []string{"call-1", "call-2"} {
 		if got := findToolFact(t, reopenedFacts, callID).Locator; got != liveLocators[callID] {
 			t.Fatalf("reopened tool %s locator = %+v, live locator = %+v", callID, got, liveLocators[callID])
 		}
+	}
+}
+
+func assertToolFactsFollowLocatorOrder(t *testing.T, facts []TranscriptCommittedRowFact, source string) {
+	t.Helper()
+	var previous *TranscriptCommittedRowFact
+	for index := range facts {
+		if facts[index].Tool == nil {
+			continue
+		}
+		if previous != nil && facts[index].Locator.EventSequence < previous.Locator.EventSequence {
+			t.Fatalf("%s tool facts regress by locator: previous=%+v current=%+v", source, previous.Locator, facts[index].Locator)
+		}
+		previous = &facts[index]
 	}
 }
 
