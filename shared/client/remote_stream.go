@@ -99,8 +99,11 @@ func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.T
 	if err != nil {
 		return nil, err
 	}
-	return newRemoteSubscription(conn, route, func(params protocol.SessionTranscriptEventParams) clientui.TranscriptMessage {
-		return params.Message
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.SessionTranscriptEventParams) (clientui.TranscriptMessage, error) {
+		if err := params.Message.Validate(); err != nil {
+			return clientui.TranscriptMessage{}, err
+		}
+		return params.Message, nil
 	}), nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 )
 
 const transcriptSubscriptionBufferSize = 256
@@ -112,12 +113,35 @@ func (b *transcriptSubscriptionBroker) Close(err error) {
 		return
 	}
 	b.closed = true
+	subs := b.detachSubscribersLocked()
+	b.mu.Unlock()
+	closeTranscriptSubscribers(subs, err)
+}
+
+func (b *transcriptSubscriptionBroker) CloseSubscribers(err error) {
+	if b == nil {
+		return
+	}
+	subs := b.detachSubscribers()
+	closeTranscriptSubscribers(subs, err)
+}
+
+func (b *transcriptSubscriptionBroker) detachSubscribers() []*transcriptSubscription {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.detachSubscribersLocked()
+}
+
+func (b *transcriptSubscriptionBroker) detachSubscribersLocked() []*transcriptSubscription {
 	subs := make([]*transcriptSubscription, 0, len(b.subscribers))
 	for id, sub := range b.subscribers {
 		subs = append(subs, sub)
 		delete(b.subscribers, id)
 	}
-	b.mu.Unlock()
+	return subs
+}
+
+func closeTranscriptSubscribers(subs []*transcriptSubscription, err error) {
 	for _, sub := range subs {
 		sub.closeWithError(err)
 	}
@@ -178,10 +202,20 @@ func transcriptPublishError(err error) error {
 	return serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReasonContractViolation, err)
 }
 
+func transcriptProjectionContractError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return transcriptPublishError(errTranscriptContractViolation(err.Error()))
+}
+
 type transcriptSubscriptionContract struct {
-	hydrated      bool
-	activeStream  *runtimeids.AssistantStreamID
-	inFlightTools map[clientui.ToolCallID]struct{}
+	hydrated                 bool
+	activeStream             *runtimeids.AssistantStreamID
+	inFlightTools            map[clientui.ToolCallID]struct{}
+	hydratedEventSequence    int64
+	hasHydratedEventSequence bool
+	liveLocator              *transcript.CommittedRowLocator
 }
 
 func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptMessage) error {
@@ -215,6 +249,10 @@ func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.Tr
 		if err := validateCommittedRow(row); err != nil {
 			return err
 		}
+		if !c.hasHydratedEventSequence || row.Locator.EventSequence > c.hydratedEventSequence {
+			c.hydratedEventSequence = row.Locator.EventSequence
+			c.hasHydratedEventSequence = true
+		}
 	}
 	return nil
 }
@@ -240,6 +278,9 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 		if err := validateCommittedRow(row); err != nil {
 			return err
 		}
+		if err := c.validateLiveLocator(row.Locator); err != nil {
+			return err
+		}
 		if row.Assistant != nil {
 			if row.Assistant.StreamID != nil {
 				if err := c.matchActiveStream(*row.Assistant.StreamID, message.Sequence, "committed assistant row"); err != nil {
@@ -254,6 +295,33 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 			return c.trackToolTerminal(row.Tool.ToolCallID, fmt.Sprintf("committed tool row at seq=%d", message.Sequence))
 		}
 	}
+	return nil
+}
+
+func (c *transcriptSubscriptionContract) validateLiveLocator(locator transcript.CommittedRowLocator) error {
+	if c.liveLocator == nil {
+		if c.hasHydratedEventSequence && locator.EventSequence <= c.hydratedEventSequence {
+			return errTranscriptContractViolation(fmt.Sprintf("first live committed row event sequence %d is not newer than hydrated sequence %d", locator.EventSequence, c.hydratedEventSequence))
+		}
+		if locator.RowOrdinal != 1 {
+			return errTranscriptContractViolation(fmt.Sprintf("first live committed row for event %d has ordinal %d, want 1", locator.EventSequence, locator.RowOrdinal))
+		}
+		copyLocator := locator
+		c.liveLocator = &copyLocator
+		return nil
+	}
+	if locator.EventSequence < c.liveLocator.EventSequence {
+		return errTranscriptContractViolation(fmt.Sprintf("live committed row event sequence regressed from %d to %d", c.liveLocator.EventSequence, locator.EventSequence))
+	}
+	if locator.EventSequence == c.liveLocator.EventSequence {
+		if locator.RowOrdinal != c.liveLocator.RowOrdinal+1 {
+			return errTranscriptContractViolation(fmt.Sprintf("live committed row ordinal for event %d = %d, want %d", locator.EventSequence, locator.RowOrdinal, c.liveLocator.RowOrdinal+1))
+		}
+	} else if locator.RowOrdinal != 1 {
+		return errTranscriptContractViolation(fmt.Sprintf("live committed row for event %d starts at ordinal %d, want 1", locator.EventSequence, locator.RowOrdinal))
+	}
+	copyLocator := locator
+	c.liveLocator = &copyLocator
 	return nil
 }
 

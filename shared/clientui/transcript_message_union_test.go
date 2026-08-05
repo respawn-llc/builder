@@ -56,6 +56,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			Visibility: transcript.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Assistant: &TranscriptAssistantRow{
 				StepID: transcriptTestStepID(t),
 				Text:   "Done",

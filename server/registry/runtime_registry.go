@@ -487,7 +487,12 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
 	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
-		entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
+		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
+		if err != nil {
+			contractErr := entry.sessionFeed.CloseContractViolation(fmt.Errorf("project runtime transcript event: %w", err))
+			return contractErr
+		}
+		entry.sessionFeed.Publish(messages)
 	}
 	if runtimeEventShouldPublishSessionStatus(evt) {
 		if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {

@@ -235,12 +235,14 @@ func TestDetailTranscriptMalformedToolRowsRemainLoadable(t *testing.T) {
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityRecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Tool:       &clientui.TranscriptToolRow{},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityUnrecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 2},
 			Tool:       &clientui.TranscriptToolRow{},
 		},
 	}

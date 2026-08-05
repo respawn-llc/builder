@@ -11,6 +11,9 @@ import (
 )
 
 func ValidateTranscriptCommittedRow(row clientui.TranscriptCommittedRow) error {
+	if err := row.Locator.Validate(); err != nil {
+		return fmt.Errorf("committed row locator: %w", err)
+	}
 	if err := row.ValidateStructure(); err != nil {
 		return err
 	}
@@ -46,10 +49,15 @@ func ValidateTranscriptPage(page clientui.TranscriptPage) error {
 			return fmt.Errorf("transcript page latest rollback candidate: %w", err)
 		}
 	}
+	seenTranscriptLocators := make(map[transcript.CommittedRowLocator]struct{}, len(page.Entries))
 	for index, row := range page.Entries {
 		if err := ValidateTranscriptCommittedRow(row); err != nil {
 			return fmt.Errorf("transcript page entry %d: %w", index, err)
 		}
+		if _, exists := seenTranscriptLocators[row.Locator]; exists {
+			return fmt.Errorf("transcript page repeats committed row locator %+v", row.Locator)
+		}
+		seenTranscriptLocators[row.Locator] = struct{}{}
 	}
 	return nil
 }

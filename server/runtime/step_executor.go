@@ -38,6 +38,9 @@ type preparedCompletedResponse struct {
 	response                     llm.Response
 	phaseTurn                    phaseProtocolTurn
 	assistant                    llm.Message
+	assistantProvenance          *TranscriptCommittedRowProvenance
+	resolutionOutcome            completedResponseResolutionOutcome
+	resolutionResolved           bool
 	localToolCalls               []llm.ToolCall
 	hostedToolExecutions         []hostedToolExecution
 	noopFinalAnswer              bool
@@ -121,9 +124,14 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			executedToolCall = true
 		}
 		patchEditsApplied = patchEditsApplied || prepared.patchEditsApplied
-		resolution, err := e.resolveCompletedResponseStream(stepID, prepared.resolution)
-		if err != nil {
-			return stepLoopResult{}, err
+		var resolution completedResponseResolutionOutcome
+		if prepared.resolutionResolved {
+			resolution = prepared.resolutionOutcome
+		} else {
+			resolution, err = e.resolveCompletedResponseStream(stepID, prepared.resolution)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 		}
 		if err := s.resolveReasoningDisposition(stepID, prepared.next, prepared.response.Reasoning); err != nil {
 			return stepLoopResult{}, err
@@ -159,6 +167,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		hostedToolExecutions := prepared.hostedToolExecutions
 		noopFinalAnswer := prepared.noopFinalAnswer
 		assistantCommittedCoordinate := prepared.assistantCommittedCoordinate
+		assistantProvenance := cloneTranscriptCommittedRowProvenance(prepared.assistantProvenance)
 		assistantEventEmitted := resolution.committedAssistantEventPublished
 
 		if !noopFinalAnswer {
@@ -323,7 +332,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
 					// after an unannounced committed assistant message.
-					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate)
+					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 					assistantEventEmitted = true
 				}
 				preReviewMessage := resolved
@@ -340,7 +349,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 			}
 			if !assistantEventEmitted {
-				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate)
+				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 			}
 			if reviewerCompletion != nil {
 				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: reviewerStatusEntryRole(*reviewerCompletion), Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
@@ -491,42 +500,33 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			return preparedCompletedResponse{}, err
 		}
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
+	executableCallIDs := make(map[string]struct{}, len(localToolCalls))
+	for _, call := range localToolCalls {
+		if callID := strings.TrimSpace(call.ID); callID != "" {
+			executableCallIDs[callID] = struct{}{}
+		}
+	}
+	assistantCommitResult := steeringAssistantCommitResult{}
+	if err := e.steer(
+		stepID,
+		steerAssistantCommitIntent(assistantMsg, executableCallIDs, &assistantCommitResult),
+	); err != nil {
 		return preparedCompletedResponse{}, err
 	}
-	var assistantCommittedCoordinate *committedAssistantCoordinate
-	if !noopFinalAnswer {
-		executableCallIDs := make(map[string]struct{}, len(localToolCalls))
-		for _, call := range localToolCalls {
-			if callID := strings.TrimSpace(call.ID); callID != "" {
-				executableCallIDs[callID] = struct{}{}
-			}
-		}
-		var toolCallStarts map[string]int
-		assistantCommittedCoordinate, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
-		e.rememberPendingToolCallStarts(toolCallStarts)
-	}
+	assistantCommittedCoordinate := assistantCommitResult.coordinate
+	assistantProvenance := assistantCommitResult.provenance
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
-	resolution := completedResponseAbortInstruction()
-	if committedAssistantMessageFinalizesStreaming(assistantMsg) {
-		if assistantCommittedCoordinate == nil {
-			return preparedCompletedResponse{}, errors.New("persisted assistant text row has no committed transcript coordinate")
-		}
-		resolution = completedResponseFinalizeInstruction(assistantMsg, assistantCommittedCoordinate)
-	} else if len(VisibleChatEntriesFromMessage(assistantMsg)) > 0 {
-		if err := s.publishCommittedAssistantMessage(stepID, assistantMsg, assistantCommittedCoordinate); err != nil {
-			return preparedCompletedResponse{}, err
-		}
-	}
-
 	return preparedCompletedResponse{
 		next:                         completedResponseNextAccepted,
-		resolution:                   resolution,
+		resolution:                   completedResponseAbortInstruction(),
+		resolutionOutcome:            assistantCommitResult.resolution,
+		resolutionResolved:           true,
 		response:                     resp,
 		phaseTurn:                    phaseTurn,
 		assistant:                    assistantMsg,
+		assistantProvenance:          cloneTranscriptCommittedRowProvenance(assistantProvenance),
 		localToolCalls:               localToolCalls,
 		hostedToolExecutions:         hostedToolExecutions,
 		noopFinalAnswer:              noopFinalAnswer,
@@ -827,8 +827,8 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	return newCompactionReminderCoordinator(e).maybeAppend(ctx, stepID)
 }
 
-func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, msg llm.Message, coordinate *committedAssistantCoordinate) error {
-	return s.engine.steer(stepID, steerCommittedAssistantMessageIntent(msg, coordinate))
+func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, msg llm.Message, coordinate *committedAssistantCoordinate, provenances ...*TranscriptCommittedRowProvenance) error {
+	return s.engine.steer(stepID, steerCommittedAssistantMessageIntent(msg, coordinate, provenances...))
 }
 
 func committedAssistantMessageFinalizesStreaming(msg llm.Message) bool {

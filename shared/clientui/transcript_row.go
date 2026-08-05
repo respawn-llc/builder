@@ -22,6 +22,7 @@ type TranscriptCommittedRow struct {
 	Visibility     transcript.EntryVisibility
 	Integrity      transcript.RowIntegrity
 	Kind           TranscriptRowKind
+	Locator        transcript.CommittedRowLocator
 	User           *TranscriptUserRow
 	Assistant      *TranscriptAssistantRow
 	Tool           *TranscriptToolRow
@@ -214,6 +215,9 @@ func (r TranscriptCommittedRow) ValidateStructure() error {
 }
 
 func (r TranscriptCommittedRow) Validate() error {
+	if err := r.Locator.Validate(); err != nil {
+		return fmt.Errorf("transcript committed row locator: %w", err)
+	}
 	if err := r.ValidateStructure(); err != nil {
 		return err
 	}

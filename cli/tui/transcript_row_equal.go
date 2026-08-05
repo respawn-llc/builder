@@ -9,7 +9,8 @@ import (
 func TranscriptCommittedRowEqual(left, right clientui.TranscriptCommittedRow) bool {
 	if left.Visibility != right.Visibility ||
 		left.Integrity != right.Integrity ||
-		left.Kind != right.Kind {
+		left.Kind != right.Kind ||
+		left.Locator != right.Locator {
 		return false
 	}
 	return transcriptUserRowEqual(left.User, right.User) &&

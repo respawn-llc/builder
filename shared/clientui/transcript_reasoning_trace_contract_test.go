@@ -148,6 +148,7 @@ func TestTranscriptReasoningTraceCommittedRowCarriesProjectedTextAndNullableCorr
 		Visibility: transcript.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       TranscriptRowReasoningTrace,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		ReasoningTrace: &TranscriptReasoningTraceRow{
 			StepID:              stepID,
 			CompactText:         "Planning",
@@ -181,6 +182,7 @@ func TestTranscriptHydrationRejectsCommittedReasoningCorrelation(t *testing.T) {
 			Visibility: transcript.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       TranscriptRowReasoningTrace,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			ReasoningTrace: &TranscriptReasoningTraceRow{
 				StepID:              stepID,
 				CompactText:         "Planning",
@@ -194,15 +196,18 @@ func TestTranscriptHydrationRejectsCommittedReasoningCorrelation(t *testing.T) {
 	}
 }
 
-func TestTranscriptReasoningTraceContractDoesNotAddCommittedLocatorOrTimestamp(t *testing.T) {
-	for _, owner := range []any{
-		TranscriptReasoningTraceRow{},
-		TranscriptCommittedRow{},
-	} {
-		for _, field := range []string{"Locator", "Timestamp", "CreatedAt", "RowID"} {
-			if _, ok := reflect.TypeOf(owner).FieldByName(field); ok {
-				t.Fatalf("%T unexpectedly exposes %s", owner, field)
-			}
+func TestTranscriptReasoningTraceContractDoesNotAddTimestampOrDuplicateLocator(t *testing.T) {
+	for _, field := range []string{"Locator", "Timestamp", "CreatedAt", "RowID"} {
+		if _, ok := reflect.TypeOf(TranscriptReasoningTraceRow{}).FieldByName(field); ok {
+			t.Fatalf("TranscriptReasoningTraceRow unexpectedly exposes %s", field)
+		}
+	}
+	if _, ok := reflect.TypeOf(TranscriptCommittedRow{}).FieldByName("Locator"); !ok {
+		t.Fatal("TranscriptCommittedRow omits the shared committed-row Locator")
+	}
+	for _, field := range []string{"Timestamp", "CreatedAt", "RowID"} {
+		if _, ok := reflect.TypeOf(TranscriptCommittedRow{}).FieldByName(field); ok {
+			t.Fatalf("TranscriptCommittedRow unexpectedly exposes %s", field)
 		}
 	}
 }

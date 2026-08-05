@@ -653,7 +653,13 @@ func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMa
 
 func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	var resp serverapi.SessionTranscriptPageResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp)
+	if err := c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.SessionTranscriptPageResponse{}, fmt.Errorf("validate session transcript page response: %w", err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {

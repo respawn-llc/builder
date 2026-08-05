@@ -393,6 +393,14 @@ func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.Trans
 			uiStatusNoticeReplace,
 			"",
 		)
+	case clientui.OperationalDiagnosticInFlightClearFailed:
+		return m.sendTransientStatusWithNoticeID(
+			"run cleanup failed: "+diagnostic.Detail,
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
 	default:
 		panic(fmt.Sprintf("unsupported transcript operational diagnostic %q", diagnostic.Code))
 	}

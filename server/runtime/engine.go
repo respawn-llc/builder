@@ -681,11 +681,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 			return err
 		}
 		userMessage := llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}
-		intents := []steeringIntent{steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{userMessage})}
-		if flushed := flushedUserMessageEvent(userMessage, stepID); flushed != nil {
-			intents = append(intents, steerEventIntent(*flushed))
-		}
-		if err := e.steer(stepID, intents...); err != nil {
+		if err := e.steer(stepID, steerUserMessageWithFlushIntent(userMessage)); err != nil {
 			return err
 		}
 		if onFlushed != nil {

@@ -324,5 +324,5 @@ func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegment
 		meta.Name,
 		runtimeview.ConversationFreshnessFromSession(freshness),
 		segment,
-	), nil
+	)
 }
