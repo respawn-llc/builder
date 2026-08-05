@@ -122,7 +122,7 @@ const (
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
 	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
-	TranscriptMessageAgentSteer                     TranscriptMessageType = "agent_steer"
+	TranscriptMessageAgentSteer                     TranscriptMessageType = TranscriptMessageType(MessageTypeAgentSteer)
 )
 
 type NoticeID string

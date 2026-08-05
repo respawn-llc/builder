@@ -59,6 +59,13 @@ func TestLiveSteerCallerSessionIDRejectsMalformedPresentContext(t *testing.T) {
 	}
 }
 
+func TestLiveSteerCallerSessionIDRejectsLegacyPresentContext(t *testing.T) {
+	t.Setenv("KENT_SESSION_ID", "legacy_session.2024")
+	if _, err := LiveSteerCallerSessionID(); err == nil {
+		t.Fatal("liveSteerCallerSessionID unexpectedly accepted legacy context")
+	}
+}
+
 func TestLiveSteerCallerSessionIDOmittedForBlankContext(t *testing.T) {
 	t.Setenv("KENT_SESSION_ID", " \t ")
 	callerID, err := LiveSteerCallerSessionID()
