@@ -223,9 +223,8 @@ function testCardsPage(nodeID: string): BoardNodeCardsPage {
   return {
     cards: [],
     generatedAt: 1,
-    nextPageToken: null,
+    nextOffset: null,
     nodeID,
-    previousPageToken: null,
     projectID: "project-1",
     workflowID: "11111111-1111-4111-8111-111111111111",
   };

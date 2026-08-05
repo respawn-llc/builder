@@ -58,7 +58,7 @@ func sanitizeReviewerSuggestions(in []string) []string {
 		if strings.EqualFold(trimmed, reviewerNoopToken) {
 			continue
 		}
-		out = append(out, trimmed)
+		out = append(out, suggestion)
 	}
 	if len(out) == 0 {
 		return nil

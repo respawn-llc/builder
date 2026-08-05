@@ -35,6 +35,7 @@ export {
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
 } from "./models";
+export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
   ContractError,
   ProtocolMismatchError,
@@ -168,6 +169,12 @@ export type {
   WorkflowSelectorApplicability,
   WorkflowSelectorApplicabilityReason,
 } from "./workflowSelectionModels";
+export type {
+  BoardNodeCardsSort,
+  WorkflowTaskListSort,
+  WorkflowTaskListSortDirection,
+  WorkflowTaskListSortField,
+} from "./boardNodeCardsSorting";
 export type {
   CanonicalTaskLabelFilter,
   ProjectLabel,

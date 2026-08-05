@@ -630,8 +630,7 @@ export type BoardNodeCardsPage = Readonly<{
   workflowID: string;
   nodeID: string;
   cards: readonly BoardCard[];
-  previousPageToken: string | null;
-  nextPageToken: string | null;
+  nextOffset: number | null;
   generatedAt: number;
 }>;
 

@@ -111,6 +111,9 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		}
 		s.completionProvenance[callID] = cloneTranscriptCommittedRowProvenance(&provenance)
 	case session.LocalEntryRecord:
+		if payload.Role == string(transcript.EntryRoleReviewerStatus) {
+			return nil
+		}
 		entry, err := storedLocalEntryFromSessionRecord(payload)
 		if err != nil {
 			return fmt.Errorf("restore session local entry record: %w", err)
@@ -141,6 +144,20 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			return provenanceErr
 		}
 		s.appendLocalEntry(entry, stepID, &provenance)
+	case session.ReviewerFeedbackRecord:
+		s.closeTurn()
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance))
+	case session.ReviewerErrorRecord:
+		s.closeTurn()
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance))
 	case session.CacheWarningRecord:
 		s.closeTurn()
 		warning := cacheWarningFromSessionRecord(payload)

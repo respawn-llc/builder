@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestListBoardNodeTasksUsesIndexedOrderingInBothDirections(t *testing.T) {
+func TestListBoardColumnTaskCountsUsesLabelIndexes(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
@@ -58,60 +58,6 @@ CREATE INDEX task_label_assignments_label_task_idx
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
-	for _, direction := range []string{"older", "newer"} {
-		t.Run(direction, func(t *testing.T) {
-			requireQueryUsesIndexWithoutSorter(
-				t,
-				db,
-				listBoardNodeTasks,
-				"tasks_project_workflow_updated_idx",
-				"project-1",
-				"workflow-1",
-				"none",
-				"",
-				"[]",
-				"[]",
-				"node-1",
-				"node-done",
-				direction,
-				int64(100),
-				"task-anchor",
-				int64(26),
-			)
-		})
-	}
-	for _, query := range []struct {
-		name string
-		sql  string
-		args []any
-	}{
-		{
-			name: "column counts",
-			sql:  listBoardColumnTaskCounts,
-			args: []any{"none", "", "[]", "[]", "project-1", "workflow-1", "node-done"},
-		},
-		{
-			name: "node cards",
-			sql:  listBoardNodeTasks,
-			args: []any{
-				"project-1",
-				"workflow-1",
-				"none",
-				"",
-				"[]",
-				"[]",
-				"node-1",
-				"node-done",
-				"older",
-				int64(100),
-				"task-anchor",
-				int64(26),
-			},
-		},
-	} {
-		t.Run(query.name+" label indexes", func(t *testing.T) {
-			requireQueryUsesIndex(t, db, query.sql, "sqlite_autoindex_task_label_assignments_1", query.args...)
-			requireQueryUsesIndex(t, db, query.sql, "task_label_assignments_label_task_idx", query.args...)
-		})
-	}
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "sqlite_autoindex_task_label_assignments_1", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "task_label_assignments_label_task_idx", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
 }

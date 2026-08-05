@@ -1424,7 +1424,8 @@ type WorkflowBoardNodeCardsListRequest struct {
 	LabelFilter      WorkflowTaskLabelFilter `json:"label_filter"`
 	DependencyFilter *bool                   `json:"dependency_filter,omitempty"`
 	PageSize         int                     `json:"page_size"`
-	PageToken        *string                 `json:"page_token"`
+	Sort             *WorkflowTaskListSort   `json:"sort,omitempty"`
+	Offset           *int                    `json:"offset,omitempty"`
 }
 
 type WorkflowBoardNodeCardsListResponse struct {
@@ -1432,8 +1433,7 @@ type WorkflowBoardNodeCardsListResponse struct {
 	WorkflowID        runtimeids.WorkflowID   `json:"workflow_id"`
 	NodeID            string                  `json:"node_id"`
 	Cards             []WorkflowBoardTaskCard `json:"cards"`
-	PreviousPageToken *string                 `json:"previous_page_token"`
-	NextPageToken     *string                 `json:"next_page_token"`
+	NextOffset        *int                    `json:"next_offset,omitempty"`
 	GeneratedAtUnixMs int64                   `json:"generated_at_unix_ms"`
 }
 
@@ -3255,11 +3255,20 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 	if r.PageSize > WorkflowBoardNodeCardsMaxPageSize {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowBoardNodeCardsMaxPageSize))
 	}
-	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) == "" {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not be blank")
+	if r.Offset != nil && *r.Offset < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
 	}
-	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	if r.Sort != nil {
+		switch r.Sort.Field {
+		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldLabels, WorkflowTaskListSortFieldShortID:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.field", "sort field must be created, updated, labels, or short_id")
+		}
+		switch r.Sort.Direction {
+		case WorkflowTaskListSortDirectionAsc, WorkflowTaskListSortDirectionDesc:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.direction", "sort direction must be asc or desc")
+		}
 	}
 	return nil
 }

@@ -200,6 +200,22 @@ export const englishResources = {
       title: "Workflow board",
       menu: "Board menu",
       unblocked: "Unblocked",
+      sort: {
+        chip: "Sort",
+        summary: "Sort · {{field}} · {{direction}}",
+        fields: {
+          label: "Sort field",
+          updated: "Updated",
+          created: "Created",
+          labels: "Labels",
+          short_id: "Short ID",
+        },
+        directions: {
+          label: "Sort direction",
+          asc: "Asc",
+          desc: "Desc",
+        },
+      },
       workflowPicker: "Workflows",
       newTask: "New Task",
       backlog: "Backlog",

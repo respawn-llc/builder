@@ -16,6 +16,8 @@ import (
 const (
 	backgroundedShellStatus = "backgrounded"
 	BackgroundedShellSuffix = "· " + backgroundedShellStatus
+	reviewerFeedbackGlyph   = "§"
+	reviewerErrorGlyph      = "!"
 )
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
@@ -130,6 +132,20 @@ func renderCommittedRow(
 			Group: group,
 			Lines: renderTextBlockWithOptions(role, text, "", width, mode, meta, options),
 		}
+	case clientui.TranscriptRowReviewerFeedback:
+		if row.ReviewerFeedback == nil {
+			panic(fmt.Sprintf("render reviewer feedback row missing payload at locator %+v", row.Locator))
+		}
+		text := fmt.Sprintf("%d suggestions", row.ReviewerFeedback.SuggestionCount)
+		if mode == ModeOngoing || mode == ModeOngoingFull || mode == ModeDetailExpanded {
+			text = strings.Join(row.ReviewerFeedback.Suggestions, "\n\n")
+		}
+		return Row{Group: row.Kind, Lines: renderMarkdownTextBlock(StyleRoleNoticeReviewer, text, width, mode, toolMeta{}, textBlockOptions{}, linkPresentation)}
+	case clientui.TranscriptRowReviewerError:
+		if row.ReviewerError == nil {
+			panic(fmt.Sprintf("render reviewer error row missing payload at locator %+v", row.Locator))
+		}
+		return Row{Group: row.Kind, Lines: renderTextBlock(StyleRoleError, row.ReviewerError.Detail, width, mode)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
@@ -645,7 +661,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 		return "⇄"
 	}
 	if meta.IsError && role != StyleRoleToolShell {
-		return "!"
+		return reviewerErrorGlyph
 	}
 	symbol := "•"
 	switch role {
@@ -663,11 +679,11 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
 	case StyleRoleNoticeReviewer:
-		symbol = "§"
+		symbol = reviewerFeedbackGlyph
 	case StyleRoleWarning:
 		symbol = "⚠"
 	case StyleRoleError, StyleRoleToolError:
-		symbol = "!"
+		symbol = reviewerErrorGlyph
 	}
 	return symbol
 }

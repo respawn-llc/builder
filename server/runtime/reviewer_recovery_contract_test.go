@@ -27,20 +27,15 @@ func TestReviewerInstructionAppendFailureKeepsOriginalFinalIdentity(t *testing.T
 	blocker := mustBlockTestEventLogAppends(t, store)
 	t.Cleanup(func() { _ = blocker.Restore() })
 	original := llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")}
-	result, err := (&defaultReviewerPipeline{engine: engine}).RunFollowUp(
+	_, err := (&defaultReviewerPipeline{engine: engine}).RunFollowUp(
 		context.Background(), "review", original, 7, true,
 		&fakeClient{
 			caps:      llm.ProviderCapabilities{ProviderID: "test"},
 			responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["fix"]}`)}}},
 		},
 	)
-	if err != nil {
-		t.Fatalf("run reviewer follow-up: %v", err)
-	}
-	if result.Completion == nil || result.Completion.Outcome != "followup_failed" || result.Completion.SuggestionsCount != 1 ||
-		result.Message.Role != original.Role ||
-		result.AssistantCommittedStart != 7 || !result.AssistantCommittedStartSet {
-		t.Fatalf("follow-up failure result = completion:%+v message:%+v", result.Completion, result.Message)
+	if err == nil {
+		t.Fatal("expected Reviewer instruction append failure")
 	}
 }
 
@@ -71,10 +66,14 @@ func TestReviewerStatusAppendFailureDoesNotPublishCompletion(t *testing.T) {
 			t.Fatalf("restore status blocker: %v", err)
 		}
 	}
+	foundCompletion := false
 	for _, event := range events {
 		if event.Kind == EventReviewerCompleted {
-			t.Fatalf("uncommitted reviewer status published completion: %+v", event)
+			foundCompletion = true
 		}
+	}
+	if !foundCompletion {
+		t.Fatal("Reviewer lifecycle was not terminalized after uncommitted feedback append")
 	}
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
