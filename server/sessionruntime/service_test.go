@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -222,6 +223,88 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		DropOwner:       true,
 		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
+}
+
+func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sibling := t.TempDir()
+	target := filepath.Join(sibling, "interactive.txt")
+	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write sibling fixture: %v", err)
+	}
+	binding, err := fixture.metadata.ResolveSessionNavigationBinding(context.Background(), fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
+	}
+	if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, sibling); err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("editing"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-interactive-edit",
+				Name:  string(toolspec.ToolEdit),
+				Input: json.RawMessage(`{"path":"` + target + `","old_string":"before","new_string":"interactive"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return client, nil
+		}),
+	})
+	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activate-sibling-edit",
+		SessionID:       fixture.store.Meta().SessionID,
+		OwnerID:         "interactive-owner",
+		ActiveSettings: config.Settings{
+			Model:              "gpt-5",
+			ModelContextWindow: 200000,
+			AllowNonCwdEdits:   false,
+			Reviewer:           config.ReviewerSettings{Frequency: "off"},
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
+			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		EnabledToolIDs: []string{string(toolspec.ToolEdit)},
+		Source:         config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-sibling-edit",
+			Attachment:      activation.Attachment,
+			OwnerID:         "interactive-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtimepkg.Engine) error {
+		_, err := engine.SubmitUserMessage(context.Background(), "edit the sibling Workspace")
+		return err
+	}); err != nil {
+		t.Fatalf("SubmitUserMessage through activated runtime: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, readErr := os.ReadFile(target); readErr == nil && string(data) == "interactive\n" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	data, readErr := os.ReadFile(target)
+	t.Fatalf("interactive sibling edit data = %q, read error = %v", data, readErr)
 }
 
 func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(t *testing.T) {
