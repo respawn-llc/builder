@@ -43,6 +43,9 @@ export function TranscriptDisclosureShowcase() {
 
   useEffect(() => {
     const originalMatchMedia = window.matchMedia;
+    const rootStyle = document.documentElement.style;
+    const previousMotionFast = rootStyle.getPropertyValue("--motion-fast");
+    const previousMotionFastPriority = rootStyle.getPropertyPriority("--motion-fast");
     const controlledMatchMedia = (query: string) =>
       query === "(prefers-reduced-motion: reduce)"
         ? createMediaQueryList(query, reducedMotion)
@@ -51,18 +54,25 @@ export function TranscriptDisclosureShowcase() {
       configurable: true,
       value: controlledMatchMedia,
     });
+    if (reducedMotion) {
+      rootStyle.setProperty("--motion-fast", "0ms ease");
+    }
     return () => {
       Object.defineProperty(window, "matchMedia", {
         configurable: true,
         value: originalMatchMedia,
       });
+      if (previousMotionFast.length === 0) {
+        rootStyle.removeProperty("--motion-fast");
+      } else {
+        rootStyle.setProperty("--motion-fast", previousMotionFast, previousMotionFastPriority);
+      }
     };
   }, [reducedMotion]);
 
   return (
     <div
       className="transcript-disclosure-showcase h-full overflow-y-auto bg-[var(--color-background)] px-[var(--space-4)] py-[var(--space-5)] text-[var(--color-on-background)]"
-      data-reduced-motion={reducedMotion}
     >
       <div className="mx-auto grid w-full max-w-[1120px] gap-[var(--space-5)]">
         <header className="grid gap-[var(--space-3)]">
