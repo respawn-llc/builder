@@ -742,23 +742,28 @@
   Final current-head rerun completed after unrelated workspace load subsided:
   `./scripts/test.sh desktop` passed with 84 files / 375 tests.
 
-- [x] **Bind shell route-close ownership to router lifecycle transitions.**
-  The render observer and direct history/lifecycle subscriptions could miss the
-  live application navigation even though the URL changed. The shell now
-  observes the router's pathname store directly and closes the complete
-  sidebar synchronously on a changed pathname. Same-path search changes remain
-  available to the typed Board/Workflow route owners, and sidebar-local
-  Push/Back still produce no browser navigation event. Regression coverage
-  uses the real `RouterProvider` and router history for Project-to-Home,
-  Project-to-Project, search-only transitions, and the actual AppChrome
-  Home-link flow, including the browser View Transition update path.
-  Progress (August 5, 2026): Fresh QA reproduced the onBeforeLoad
-  reappearance boundary on Home navigation. Replaced that event observer with
-  a direct router pathname-store observer and verified all route cases, the
-  AppChrome Home flow, and the View Transition path in focused tests. Final
-  current-head verification passed: Apps lint (0 errors; 4 existing warnings),
-  Apps typecheck, `./scripts/test.sh desktop` (84 files / 376 tests), and
-  `./scripts/build.sh desktop`.
+- [x] **Bind route-close ownership to one router transition contract.**
+  `SidebarProvider` is the sole route-transition owner. Its typed
+  `sidebarRouteTransition` contract classifies canonical router locations as
+  `pathname`, `search`, or `none`; only a pathname change closes the complete
+  sidebar, while same-path search-only changes stay with typed Board/Workflow
+  owners. Normal links, browser history, and View Transition updates all arrive
+  through that one router store,
+  while sidebar-local Push/Back never change the router pathname and therefore
+  never invoke route closure. The former shell observer and direct
+  history/lifecycle subscriptions are deleted, so route closure has no parallel
+  writer.
+  Regression coverage uses the real `RouterProvider` and router history for
+  Project-to-Home, Project-to-Project, browser Back, search-only transitions,
+  sidebar-local navigation, and the actual AppChrome Home-link flow, including
+  the browser View Transition update path.
+  Progress (August 5, 2026): Fresh QA repeatedly exposed that render,
+  history, and lifecycle observer seams were not durable. Returned ownership
+  to `SidebarProvider`, added the typed pathname/search/none contract, and adapted
+  provider tests to the real router context instead of adding a test-only
+  production seam. Final verification passed: Apps lint (0 errors; 4 existing
+  warnings), Apps typecheck, `./scripts/test.sh desktop` (84 files / 378
+  tests), and Desktop build.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
@@ -772,4 +777,4 @@
   Progress (August 5, 2026): Re-measured after the cap remediation and reran
   current-head verification: frozen Apps install, Apps lint (0 errors; 4
   existing warnings), Apps typecheck, Desktop build, and
-  `./scripts/test.sh desktop` (84 files / 375 tests) all passed.
+  `./scripts/test.sh desktop` (84 files / 378 tests) all passed.

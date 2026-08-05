@@ -1,3 +1,9 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 import { render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import type * as TanStackRouter from "@tanstack/react-router";
@@ -37,25 +43,34 @@ describe("Workflow Editor route ownership", () => {
   it("closes an unrelated sidebar on a validated projectId-only transition", async () => {
     const services = createTestServices([]);
     const { rerender } = render(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <RouteScenario projectID="project-1" />
-        </SidebarProvider>
-      </TestAppProviders>,
+      <RouterContextProvider router={routeTestRouter}>
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <RouteScenario projectID="project-1" />
+          </SidebarProvider>
+        </TestAppProviders>
+      </RouterContextProvider>,
     );
 
     await screen.findByTestId("app-sidebar-host");
     routeState.projectID = "project-2";
     rerender(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <RouteScenario projectID="project-2" />
-        </SidebarProvider>
-      </TestAppProviders>,
+      <RouterContextProvider router={routeTestRouter}>
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <RouteScenario projectID="project-2" />
+          </SidebarProvider>
+        </TestAppProviders>
+      </RouterContextProvider>,
     );
 
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing");
   });
+});
+
+const routeTestRouter = createRouter({
+  history: createMemoryHistory({ initialEntries: ["/"] }),
+  routeTree: createRootRoute(),
 });
 
 function RouteScenario({ projectID }: Readonly<{ projectID: string }>) {

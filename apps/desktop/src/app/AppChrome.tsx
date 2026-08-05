@@ -21,7 +21,7 @@ import {
   projectRouteIsCurrent,
   useProjectDeletedEvents,
 } from "@/app-facade";
-import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
+import { SidebarHost } from "./sidebar";
 import { useSidebar } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
@@ -123,7 +123,6 @@ export function AppChrome({ children }: AppChromeProps) {
             </div>
             <SidebarHost />
           </div>
-          <SidebarRouteChangeCloser />
         </WorkflowEditorDraftBridgeProvider>
       </SidebarProvider>
     </main>

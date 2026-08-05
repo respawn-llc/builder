@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { useRouterState } from "@tanstack/react-router";
 
 import {
   SidebarContext,
@@ -37,6 +38,7 @@ import {
   type SidebarHistory,
   type SidebarHistorySnapshot,
 } from "./sidebarStack";
+import { classifySidebarRouteTransition } from "./sidebarRouteTransition";
 import {
   sidebarSizePreference,
   sidebarWidthProfile,
@@ -77,6 +79,8 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
   const captureRef = useRef<SidebarStateCapture | null>(null);
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingHistoryRef = useRef<History | null>(null);
+  const location = useRouterState({ select: (state) => state.location });
+  const previousLocationRef = useRef(location);
   const [mutationAdmitted, setMutationAdmitted] = useState(false);
 
   useLayoutEffect(() => {
@@ -168,6 +172,12 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     },
     [settleAndClose],
   );
+
+  useLayoutEffect(() => {
+    const transition = classifySidebarRouteTransition(previousLocationRef.current, location);
+    previousLocationRef.current = location;
+    if (transition === "pathname") closeSidebar("route_change");
+  }, [closeSidebar, location]);
 
   const openSidebar = useCallback(
     async (destination: SidebarDestination): Promise<SidebarResult> => {

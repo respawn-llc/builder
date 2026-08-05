@@ -1,3 +1,9 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -7,8 +13,15 @@ import { useSidebarHost } from "./sidebarHostContext";
 import { SidebarProvider } from "./sidebarProvider";
 
 const wrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
-  <SidebarProvider>{children}</SidebarProvider>
+  <RouterContextProvider router={sidebarTestRouter}>
+    <SidebarProvider>{children}</SidebarProvider>
+  </RouterContextProvider>
 );
+
+const sidebarTestRouter = createRouter({
+  history: createMemoryHistory({ initialEntries: ["/"] }),
+  routeTree: createRootRoute(),
+});
 
 function task(taskID: string) {
   return taskDetailSidebarDestination(taskID, "project-1");

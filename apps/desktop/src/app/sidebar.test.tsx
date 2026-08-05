@@ -20,11 +20,13 @@ describe("SidebarHost navigation controls", () => {
     const mounts: string[] = [];
     const services = createTestServices([]);
     render(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <ShellScenario mounts={mounts} />
-        </SidebarProvider>
-      </TestAppProviders>,
+      <RouterContextProvider router={sidebarTestRouter}>
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <ShellScenario mounts={mounts} />
+          </SidebarProvider>
+        </TestAppProviders>
+      </RouterContextProvider>,
     );
 
     const user = userEvent.setup();
@@ -45,11 +47,13 @@ describe("SidebarHost navigation controls", () => {
   it("keeps the outgoing destination rendered during the close phase", async () => {
     const services = createTestServices([]);
     render(
-      <TestAppProviders services={services}>
-        <SidebarProvider>
-          <ShellScenario mounts={[]} />
-        </SidebarProvider>
-      </TestAppProviders>,
+      <RouterContextProvider router={sidebarTestRouter}>
+        <TestAppProviders services={services}>
+          <SidebarProvider>
+            <ShellScenario mounts={[]} />
+          </SidebarProvider>
+        </TestAppProviders>
+      </RouterContextProvider>,
     );
 
     const user = userEvent.setup();
@@ -138,6 +142,11 @@ describe("SidebarHost navigation controls", () => {
     expect(screen.getByTestId("current-sidebar-task")).toHaveTextContent("task-a");
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
   });
+});
+
+const sidebarTestRouter = createRouter({
+  history: createMemoryHistory({ initialEntries: ["/"] }),
+  routeTree: createRootRoute(),
 });
 
 function ShellScenario({ mounts }: Readonly<{ mounts: string[] }>) {

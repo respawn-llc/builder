@@ -13,11 +13,12 @@ import { z } from "zod";
 import { appI18n } from "@/i18n";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
-import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
+import { SidebarHost } from "./sidebar";
+import { classifySidebarRouteTransition } from "./sidebarRouteTransition";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebar } from "@/app-facade";
 
-describe("SidebarRouteChangeCloser", () => {
+describe("Sidebar route transition ownership", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -29,7 +30,6 @@ describe("SidebarRouteChangeCloser", () => {
       const router = createTestRouter(
         <TestAppProviders services={services}>
           <SidebarProvider>
-            <SidebarRouteChangeCloser />
             <SidebarHost />
             <OpenSidebar />
           </SidebarProvider>
@@ -57,12 +57,36 @@ describe("SidebarRouteChangeCloser", () => {
     },
   );
 
+  it("closes the complete sidebar when browser history goes back", async () => {
+    const services = createTestServices([]);
+    const router = createTestRouter(
+      <TestAppProviders services={services}>
+        <SidebarProvider>
+          <SidebarHost />
+          <OpenSidebar />
+        </SidebarProvider>
+      </TestAppProviders>,
+      ["/", "/projects/project-1"],
+    );
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
+    );
+    await act(async () => {
+      router.history.back();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "closing"),
+    );
+  });
+
   it("does not close for a search-only route change", async () => {
     const services = createTestServices([]);
     const router = createTestRouter(
       <TestAppProviders services={services}>
         <SidebarProvider>
-          <SidebarRouteChangeCloser />
           <SidebarHost />
           <OpenSidebar />
         </SidebarProvider>
@@ -78,6 +102,27 @@ describe("SidebarRouteChangeCloser", () => {
     });
 
     expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open");
+  });
+
+  it("classifies only pathname changes as external sidebar transitions", () => {
+    expect(
+      classifySidebarRouteTransition(
+        { pathname: "/projects/project-1", searchStr: "" },
+        { pathname: "/", searchStr: "" },
+      ),
+    ).toBe("pathname");
+    expect(
+      classifySidebarRouteTransition(
+        { pathname: "/projects/project-1", searchStr: "" },
+        { pathname: "/projects/project-1", searchStr: "filter=next" },
+      ),
+    ).toBe("search");
+    expect(
+      classifySidebarRouteTransition(
+        { pathname: "/projects/project-1", searchStr: "" },
+        { pathname: "/projects/project-1", searchStr: "" },
+      ),
+    ).toBe("none");
   });
 
   it("closes the sidebar through the AppChrome Home navigation", async () => {
@@ -126,7 +171,10 @@ describe("SidebarRouteChangeCloser", () => {
   });
 });
 
-function createTestRouter(children: ReactElement) {
+function createTestRouter(
+  children: ReactElement,
+  initialEntries: readonly string[] = ["/projects/project-1"],
+) {
   const rootRoute = createRootRoute({ component: () => children });
   const homeRoute = createRoute({
     component: () => null,
@@ -141,7 +189,7 @@ function createTestRouter(children: ReactElement) {
       z.object({ filter: z.string().optional() }).parse(search),
   });
   return createRouter({
-    history: createMemoryHistory({ initialEntries: ["/projects/project-1"] }),
+    history: createMemoryHistory({ initialEntries: [...initialEntries] }),
     routeTree: rootRoute.addChildren([homeRoute, projectRoute]),
   });
 }
