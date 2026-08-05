@@ -8,9 +8,7 @@ export type SidebarRouteLocation = Readonly<{
   workflowID: string | undefined;
 }>;
 
-export type SidebarRouteTransition =
-  | Readonly<{ kind: "none" | "pathname" | "boardWorkflow" | "workflowEditorProject" }>
-  | Readonly<{ kind: "boardTask"; from: string | undefined; to: string | undefined }>;
+export type SidebarRouteTransition = Readonly<{ kind: "none" | "pathname" | "boardWorkflow" | "workflowEditorProject" }> | Readonly<{ kind: "boardTask"; from: string | undefined; to: string | undefined }>;
 
 export type SidebarRouteMatch = Readonly<{ routeId: string; search: SidebarRouteSearch }>;
 
