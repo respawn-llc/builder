@@ -760,8 +760,8 @@
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,673 additions plus 320
-  deletions: **1,993 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,674 additions plus 320
+  deletions: **1,994 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
