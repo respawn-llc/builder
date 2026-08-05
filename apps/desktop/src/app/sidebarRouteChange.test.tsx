@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { useEffect, type ReactElement } from "react";
 import { z } from "zod";
 
+import { appI18n } from "@/i18n";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import { AppChrome } from "./AppChrome";
 import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
@@ -93,7 +94,7 @@ describe("SidebarRouteChangeCloser", () => {
     await waitFor(() =>
       expect(screen.getByTestId("app-sidebar-host")).toHaveAttribute("data-state", "open"),
     );
-    await userEvent.click(screen.getByRole("link", { name: "Home" }));
+    await userEvent.click(screen.getByRole("link", { name: appI18n.t("app.home") }));
 
     await waitFor(() => {
       expect(screen.queryByTestId("app-sidebar-host")).toBeNull();
