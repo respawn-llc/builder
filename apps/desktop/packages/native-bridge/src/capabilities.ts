@@ -71,13 +71,10 @@ const unavailableCapabilities: NativeCapabilityState = {
   macosVibrancy: false,
 };
 
-export function createBrowserCapabilities(
-  platform: NativePlatform,
-  hostPlatform?: NativeHostPlatform,
-): NativeCapabilityState {
+export function createBrowserCapabilities(platform: NativePlatform): NativeCapabilityState {
   return {
     ...unavailableCapabilities,
-    hostPlatform: platform === "browser" ? (hostPlatform ?? detectBrowserHostPlatform()) : platform,
+    hostPlatform: platform === "browser" ? detectBrowserHostPlatform() : platform,
     platform,
     settings: true,
   };
@@ -145,7 +142,7 @@ function detectBrowserHostPlatform(): NativeHostPlatform {
   if (navigator.platform === "Win32") {
     return "windows";
   }
-  if (navigator.platform === "Linux x86_64" || navigator.platform === "Linux armv81") {
+  if (navigator.platform === "Linux x86_64" || navigator.platform === "Linux armv8l") {
     return "linux";
   }
   return "unknown";

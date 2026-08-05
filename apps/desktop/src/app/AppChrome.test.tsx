@@ -59,9 +59,13 @@ describe("application chrome Search", () => {
   });
 
   it("uses macOS navigation order for a Mac-hosted browser client", async () => {
+    const browserBridge = createBrowserNativeBridge();
     const services = createTestServices(
       startupRoutes,
-      createBrowserNativeBridge({ hostPlatform: "macos" }),
+      {
+        ...browserBridge,
+        capabilities: { ...browserBridge.capabilities, hostPlatform: "macos" },
+      },
     );
     render(<AppRoot services={services} />);
     await waitFor(() => {
