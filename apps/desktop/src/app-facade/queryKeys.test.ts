@@ -41,8 +41,36 @@ describe("board query identities", () => {
         }),
       ),
     );
-    expect(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", filter)).not.toEqual(
-      queryKeys.boardNodeCards("project-1", "workflow-1", "node-2", filter),
+    expect(
+      queryKeys.boardNodeCards({
+        filter,
+        nodeID: "node-1",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      }),
+    ).not.toEqual(
+      queryKeys.boardNodeCards({
+        filter,
+        nodeID: "node-2",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      }),
+    );
+    expect(
+      queryKeys.boardNodeCards({
+        filter,
+        nodeID: "node-1",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      }),
+    ).not.toEqual(
+      queryKeys.boardNodeCards({
+        filter,
+        nodeID: "node-1",
+        projectID: "project-1",
+        sort: { field: "created", direction: "asc" },
+        workflowID: "workflow-1",
+      }),
     );
   });
 

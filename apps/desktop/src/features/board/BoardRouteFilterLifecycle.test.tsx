@@ -40,6 +40,17 @@ describe("board filter route lifecycle", () => {
     expect(screen.getByTestId("dependency-filter")).toHaveTextContent("null");
     expect(screen.getByTestId("label-filter")).toHaveTextContent("named");
   });
+
+  it("resets the route-local board sort when the board key changes", async () => {
+    const user = userEvent.setup();
+    const view = render(<TestApp projectID="project-1" workflowID="workflow-1" />);
+
+    await user.click(screen.getByRole("button", { name: "select created sort" }));
+    expect(screen.getByTestId("board-sort")).toHaveTextContent("created:asc");
+
+    view.rerender(<TestApp projectID="project-2" workflowID="workflow-2" />);
+    expect(screen.getByTestId("board-sort")).toHaveTextContent("updated:desc");
+  });
 });
 
 function TestApp({
@@ -76,6 +87,7 @@ function FilterProbe() {
     <>
       <output data-testid="dependency-filter">{String(active.filter.dependencyFilter)}</output>
       <output data-testid="label-filter">{active.filter.labelFilter.kind}</output>
+      <output data-testid="board-sort">{runtime.sort.field}:{runtime.sort.direction}</output>
       <button
         onClick={() => {
           runtime.controller.setDesiredFilter({
@@ -86,6 +98,14 @@ function FilterProbe() {
         type="button"
       >
         select unblocked
+      </button>
+      <button
+        onClick={() => {
+          runtime.setSort({ field: "created", direction: "asc" });
+        }}
+        type="button"
+      >
+        select created sort
       </button>
     </>
   );
