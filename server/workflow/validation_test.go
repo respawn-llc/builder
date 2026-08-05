@@ -395,6 +395,20 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 
 }
 
+func TestValidationRejectsPromptReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	edge := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	edge.Parameters = append(edge.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	edge.PromptTemplate = "Use {{.Params.role}}."
+
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+}
+
 func TestFanoutJoinTopology(t *testing.T) {
 	t.Run("valid fanout has one nearest common join", func(t *testing.T) {
 		def := fanoutWorkflow(t)

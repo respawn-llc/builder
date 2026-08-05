@@ -284,6 +284,57 @@ func TestManualMovePreviewRejectsFieldsForDirectDestinations(t *testing.T) {
 	}
 }
 
+func TestManualMovePlansNewSessionSelectorValuesWithoutCurrentNode(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		edge.Parameters = []workflow.Parameter{{
+			Key:     "role",
+			Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	})
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	edge := edgeByKey(t, definition, "audit")
+	group, err := transitionGroupForEdge(definition, edge)
+	if err != nil {
+		t.Fatalf("transitionGroupForEdge: %v", err)
+	}
+	source, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
+	if err != nil {
+		t.Fatalf("source node: %v", err)
+	}
+	target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+	if err != nil {
+		t.Fatalf("target node: %v", err)
+	}
+	planned, err := store.planTransitionParameterContract(
+		ctx,
+		store.queries,
+		definition,
+		edge,
+		source,
+		target,
+		nil,
+		nil,
+		true,
+		true,
+		transitionContractContextResolutionRequired,
+	)
+	if err != nil {
+		t.Fatalf("planTransitionParameterContract: %v", err)
+	}
+	if len(planned.Parameters) != 1 ||
+		planned.Parameters[0].Key != "role" ||
+		planned.Parameters[0].Purpose != workflow.ParameterPurposeTargetAssignee {
+		t.Fatalf("planned parameters = %+v, want exposed target role", planned.Parameters)
+	}
+}
+
 func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	store.roleResolver = completionTargetCatalog{

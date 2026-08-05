@@ -886,7 +886,7 @@ func (s *validationState) validateStartOutgoingShape() {
 }
 
 func (s *validationState) validatePromptPlaceholders() {
-	derived := DeriveWiring(s.def)
+	derived := DeriveWiringWithCatalog(s.def, s.opts.RoleResolver)
 	for _, edge := range s.def.Edges {
 		prompt := strings.TrimSpace(edge.PromptTemplate)
 		if prompt == "" {
@@ -903,10 +903,13 @@ func (s *validationState) validatePromptPlaceholders() {
 			invalidRef.Placeholder = invalid.Placeholder
 			s.addHard(CodeInvalidTemplatePlaceholder, invalid.Message, invalidRef)
 		}
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
 		currentParams := edgeParameterNameSet(edge)
 		source, sourceExists := s.edgeSource(edge)
 		if sourceExists && source.Kind() == NodeKindJoin {
 			currentParams = outputFieldNameSet(derived.JoinOutputFieldsForNode(NodeIDOf(source)))
+		} else if sourceExists && targetExists {
+			currentParams = s.promptParameterNameSet(edge, source, target)
 		}
 		for _, param := range refs.Params {
 			name := strings.TrimSpace(param.Name)
@@ -924,6 +927,37 @@ func (s *validationState) validatePromptPlaceholders() {
 			s.validatePriorParameterReference(edge, priorParam, ref, derived)
 		}
 	}
+}
+
+func (s *validationState) promptParameterNameSet(edge Edge, source Node, target Node) map[string]bool {
+	names := edgeParameterNameSet(edge)
+	consumption := PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
+		Edge:                edge,
+		SourceKind:          source.Kind(),
+		TargetKind:          target.Kind(),
+		TargetRole:          NodeSubagentRole(target),
+		FanOut:              len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		Catalog:             s.opts.RoleResolver,
+		TargetSessionPolicy: AssigneeSessionPolicyEstablishTarget,
+	})
+	contextSourceKind := CanonicalContextSource(edge.ContextSource).Kind
+	retainedSessionPossible := edge.ContextMode == ContextModeContinueSession &&
+		(contextSourceKind == ContextSourcePreviousTarget || contextSourceKind == ContextSourcePreviousTargetOrNew)
+	for _, parameter := range edge.Parameters {
+		var policy ProtectedParameterConsumptionPolicy
+		switch CanonicalParameterPurpose(parameter.Purpose) {
+		case ParameterPurposeTargetAssignee:
+			policy = consumption.Assignee
+		case ParameterPurposeTargetThinking:
+			policy = consumption.Thinking
+		default:
+			continue
+		}
+		if retainedSessionPossible || policy != ProtectedParameterConsumptionRequiredValidate {
+			delete(names, strings.TrimSpace(parameter.Key))
+		}
+	}
+	return names
 }
 
 func edgeParameterNameSet(edge Edge) map[string]bool {

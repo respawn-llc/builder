@@ -36,10 +36,11 @@ func (s *Store) planTransitionParameterContract(
 	requireExecutionDescriptions bool,
 	contextResolutionMode transitionContractContextResolutionMode,
 ) (workflow.TransitionParameterContract, error) {
-	if currentSource == nil {
+	sessionPolicyRequired := transitionContractTargetSessionPolicyModeForEdge(edge) == transitionContractTargetSessionPolicyRequired
+	if currentSource == nil && sessionPolicyRequired {
 		return workflow.TransitionParameterContract{}, nil
 	}
-	if transitionContractTargetSessionPolicyModeForEdge(edge) != transitionContractTargetSessionPolicyRequired {
+	if !sessionPolicyRequired {
 		return workflow.PlanTransitionParameterContract(workflow.TransitionParameterContractRequest{
 			Edge:                         edge,
 			SourceKind:                   source.Kind(),
