@@ -723,8 +723,8 @@
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,612 additions plus 329
-  deletions: **1,941 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,623 additions plus 329
+  deletions: **1,952 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -732,5 +732,5 @@
   ownership, and guarantees are unchanged.
   Progress (August 5, 2026): Re-measured after full route-owner centralization:
   frozen Apps install, Apps lint (0 errors; 4 existing warnings), Apps
-  typecheck, Desktop build, and `./scripts/test.sh desktop` (84 files / 377
+  typecheck, Desktop build, and `./scripts/test.sh desktop` (82 files / 373
   tests) all passed.
