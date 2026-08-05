@@ -94,3 +94,22 @@ func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
 		CompactionNumber: textutil.Pointer(compactionNumber),
 	}
 }
+
+func assignHistoryReplacementEntryProvenance(
+	entries []ChatEntry,
+	base *TranscriptCommittedRowProvenance,
+) []ChatEntry {
+	var ordinal int64
+	for index := range entries {
+		entries[index].CommittedProvenance = cloneTranscriptCommittedRowProvenance(base)
+		if _, projected := transcriptCommittedRowFactFromChatEntry(entries[index]); !projected {
+			continue
+		}
+		ordinal++
+		provenance := cloneTranscriptCommittedRowProvenance(base)
+		projectedOrdinal := ordinal
+		provenance.ProjectedOrdinal = &projectedOrdinal
+		entries[index].CommittedProvenance = provenance
+	}
+	return entries
+}

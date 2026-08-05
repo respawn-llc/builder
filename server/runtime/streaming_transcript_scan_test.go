@@ -14,6 +14,10 @@ import (
 )
 
 func streamScanTestEvent(t *testing.T, kind string, payload any) session.EventRecord {
+	return streamScanTestEventAtSequence(t, 1, kind, payload)
+}
+
+func streamScanTestEventAtSequence(t *testing.T, sequence int64, kind string, payload any) session.EventRecord {
 	t.Helper()
 	var record session.EventRecordPayload
 	switch kind {
@@ -91,7 +95,7 @@ func streamScanTestEvent(t *testing.T, kind string, payload any) session.EventRe
 	default:
 		t.Fatalf("unsupported persisted test event kind %q", kind)
 	}
-	event, err := session.NewEventRecord(1, nil, record)
+	event, err := session.NewEventRecord(sequence, nil, record)
 	if err != nil {
 		t.Fatalf("create %s record: %v", kind, err)
 	}
@@ -371,6 +375,96 @@ func TestStreamingTranscriptScanPagesAreWindowsOfFullProjection(t *testing.T) {
 		if len(got.Snapshot.Entries) != len(want) || (len(want) > 0 && !reflect.DeepEqual(got.Snapshot.Entries, want)) {
 			t.Fatalf("page(%d,%d) entries diverged from full-projection window: got %d want %d entries", req.offset, req.limit, len(got.Snapshot.Entries), len(want))
 		}
+	}
+}
+
+func TestStreamingTranscriptScanPagesOrderMaterializedToolsByCompletionProvenance(t *testing.T) {
+	t.Parallel()
+	events := []session.EventRecord{
+		streamScanTestEventAtSequence(t, 1, "message", llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{ID: "call-a", Name: string(toolspec.ToolExecCommand)},
+				{ID: "call-b", Name: string(toolspec.ToolExecCommand)},
+			},
+		}),
+		streamScanTestEventAtSequence(t, 2, "tool_completed", storedToolCompletion{
+			CallID: "call-b",
+			Name:   string(toolspec.ToolExecCommand),
+			Output: json.RawMessage(`{"output":"b"}`),
+		}),
+		streamScanTestEventAtSequence(t, 3, "tool_completed", storedToolCompletion{
+			CallID: "call-a",
+			Name:   string(toolspec.ToolExecCommand),
+			Output: json.RawMessage(`{"output":"a"}`),
+		}),
+		streamScanTestEventAtSequence(t, 4, "message", llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: textutil.Value("call-a"),
+			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+			Content:    textutil.Value(`{"output":"a"}`),
+		}),
+		streamScanTestEventAtSequence(t, 5, "message", llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: textutil.Value("call-b"),
+			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+			Content:    textutil.Value(`{"output":"b"}`),
+		}),
+		streamScanTestEventAtSequence(t, 6, "message", llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("done"),
+		}),
+	}
+
+	for _, test := range []struct {
+		offset int
+		callID string
+		seq    int64
+	}{
+		{offset: 2, callID: "call-b", seq: 2},
+		{offset: 3, callID: "call-a", seq: 3},
+	} {
+		scan := newStreamingTranscriptScan(
+			inMemoryTranscriptScanRequest{Offset: test.offset, Limit: 1},
+			config.CacheWarningModeDefault,
+		)
+		applyEventsToStreaming(t, scan, events)
+		page := scan.PageSnapshot()
+		if page.TotalEntries != 5 {
+			t.Fatalf("page at offset %d total entries = %d, want 5", test.offset, page.TotalEntries)
+		}
+		if len(page.Snapshot.Entries) != 1 {
+			t.Fatalf("page at offset %d entries = %+v, want one row", test.offset, page.Snapshot.Entries)
+		}
+		entry := page.Snapshot.Entries[0]
+		if entry.Role != "tool_result_ok" || entry.ToolCallID != test.callID {
+			t.Fatalf("page at offset %d entry = %+v, want tool result for %s", test.offset, entry, test.callID)
+		}
+		if entry.CommittedProvenance == nil || entry.CommittedProvenance.EventSequence != test.seq {
+			t.Fatalf(
+				"page at offset %d entry provenance = %+v, want event sequence %d",
+				test.offset,
+				entry.CommittedProvenance,
+				test.seq,
+			)
+		}
+	}
+
+	tail := newStreamingTranscriptScan(
+		inMemoryTranscriptScanRequest{TrackRecentTail: true, TailLimit: 1},
+		config.CacheWarningModeDefault,
+	)
+	applyEventsToStreaming(t, tail, events[:5])
+	window := tail.RecentTailSnapshot()
+	if len(window.Snapshot.Entries) != 1 {
+		t.Fatalf("recent tail entries = %+v, want one row", window.Snapshot.Entries)
+	}
+	if entry := window.Snapshot.Entries[0]; entry.Role != "tool_result_ok" ||
+		entry.ToolCallID != "call-a" ||
+		entry.CommittedProvenance == nil ||
+		entry.CommittedProvenance.EventSequence != 3 {
+		t.Fatalf("recent tail entry = %+v, want latest completion for call-a", entry)
 	}
 }
 

@@ -55,6 +55,7 @@ func TestCommittedToolRowAppendsImmediatelyAndRemovesPendingToolInSameEvent(t *t
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowTool,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Tool: &clientui.TranscriptToolRow{
 			StepID:     ongoingTestStepID(),
 			ToolCallID: "tool-1",
@@ -165,6 +166,7 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowTool,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Tool: &clientui.TranscriptToolRow{
 			StepID:       ongoingTestStepID(),
 			ToolCallID:   "77777777-7777-4777-8777-777777777777",

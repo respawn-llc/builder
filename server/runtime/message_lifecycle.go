@@ -64,7 +64,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if err := rollbackLocator.ObserveMessage(record.Seq(), msg); err != nil {
 				return err
 			}
-			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg); err != nil {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session message provenance: %w", provenanceErr)
+			}
+			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
 			}
 			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
@@ -93,7 +97,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				reminderIssued = true
 			}
 		case session.ToolCompletionRecord:
-			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload); err != nil {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session tool completion provenance: %w", provenanceErr)
+			}
+			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload, &provenance); err != nil {
 				return err
 			}
 			for _, generation := range generationsByStep[stepID] {
@@ -117,9 +125,17 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
 			}
 			restored := *localEntryChatEntryForStep(entry, stepID)
-			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session local entry provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID, &provenance)
 		case session.CacheWarningRecord:
-			applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), payload, e.cfg.CacheWarningMode)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session cache warning provenance: %w", provenanceErr)
+			}
+			applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), payload, e.cfg.CacheWarningMode, &provenance)
 		case session.CacheRequestObservationRecord:
 			// Cache requests are observational. The following response record
 			// reconstructs the cache tracker state.
@@ -134,14 +150,23 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			e.resetLocalDiagnostics()
 			manualEligible = false
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session history replacement provenance: %w", provenanceErr)
+			}
+			projectedEntries := transcriptEntriesFromHistoryReplacement(
+				replacement.Items,
+				replacement.CompactionNumber,
+			)
+			for index := range projectedEntries {
+				projectedEntries[index].StepID = stepID
+			}
+			projectedEntries = assignHistoryReplacementEntryProvenance(projectedEntries, &provenance)
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
 				stepID,
 				replacement.Items,
 				replacement.CommittedEntryStart,
-				transcriptEntriesFromHistoryReplacement(
-					replacement.Items,
-					replacement.CompactionNumber,
-				),
+				projectedEntries,
 			)
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(

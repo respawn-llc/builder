@@ -30,7 +30,7 @@
 ## Transcript
 
 - Chat has one infinite-scrolling transcript with a live assistant tail. It does not expose the TUI's Ongoing Mode and Detail Mode split. It shows every committed transcript item except items whose explicit hidden classification requires omission.
-- Each non-conversational item has a compact and full presentation. Expansion is local to the visible row and returns to that row type's default after the row leaves and re-enters the viewport. Expanded rows alone show their committed timestamp and actions; live rows never invent a timestamp.
+- Each non-conversational item has a compact and full presentation. Expansion is local to the visible row and returns to that row type's default after the row leaves and re-enters the viewport. Expanded rows alone show their actions.
 - Expanded flat rows use the transcript width without a nested island. They are borderless and neutral except for the semantic color of their leading status icon. Their header shows icon, localized type, compact summary, and available status or actions. The header toggles expansion without taking row-specific actions.
 - Context rows start collapsed: loaded instructions with their source label, skill guidance, environment facts, Subagent context, handoff context, mode instructions and restoration, Workflow execution instructions, active-goal continuation, Compaction-Preserved User Messages, compaction summaries, context-pressure reminders, Goal feedback, and worktree changes. Worktree entry shows branch and path; return to the main workspace shows its destination. Full expansion shows the original complete content.
 - Assistant commentary is a full assistant message without a phase label.
@@ -51,7 +51,7 @@
 - Thinking Status remains visible throughout the complete running active-work scope. For a main-agent Agent Step this includes assistant streaming and tool execution. As live or committed content arrives, it remains the final transient tail immediately before the composer.
 - Thinking Status disappears when its owning active work finishes or runtime activity leaves running. Its initial production exit combines a short downward slide with a fade; reduced motion removes the transition.
 - A later Agent Step starts fresh at `Working…`. Desktop does not morph Thinking Status into an assistant message.
-- Thinking Status is non-interactive. It has no disclosure, Copy action, timestamp, hover detail, or link to a Reasoning Trace.
+- Thinking Status is non-interactive. It has no disclosure, Copy action, hover detail, or link to a Reasoning Trace.
 - While the Reviewer model request is processing, the same transient presentation shows a spinner and `Reviewing…`. Reviewer completion removes it and creates no completed-review marker.
 - Main-agent Thinking Status takes precedence over Reviewer activity. If a main-agent follow-up starts while Reviewer activity is still represented, the fresh ordinary `Working…` and Thinking Status presentation replaces `Reviewing…`.
 - While a Question or Approval waits for the operator, Thinking Status is absent. The prompt picker alone owns the waiting state.
@@ -61,12 +61,15 @@
 - The first nonempty progressive Reasoning Trace update creates one provisional collapsed item. Later updates change that same item in place. The operator may expand it while it streams, and its complete visible text continues updating in place.
 - If the server resets a provider attempt, Desktop removes the discarded provisional Reasoning Trace but retains the current Thinking Status. A later trace update creates fresh provisional trace content.
 - A live Reasoning Trace does not auto-open or auto-close. A provider that supplies only a completed trace creates the collapsed item when that trace becomes available.
-- A live Reasoning Trace has no timestamp or actions. After it commits, its expanded presentation shows the authoritative timestamp and an icon-only Copy action for the complete plain text.
+- A live Reasoning Trace has no actions. After it commits, its expanded presentation shows an icon-only Copy action for the complete plain text.
 - The server's Reasoning Trace presentation projection removes only the provider's outer literal `**` delimiters. It preserves interior asterisks and all other content. Desktop and the TUI display and copy that projected text without repeating the cleanup. Persisted and model-facing content remains unchanged.
 - Desktop represents every Reasoning Trace supplied by the server in authoritative order. It never concatenates, groups, drops, or otherwise interprets separate traces.
 - Desktop shows no reasoning-duration copy until the server supplies an authoritative duration. It never estimates a duration from client observation. A future authoritative duration measures from the first nonempty update for that Reasoning Trace through its commit.
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
-- Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. Desktop does not infer row identity from display text, role, position, or transport order.
+- Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. The identity is a Session-scoped locator composed of the durable event sequence and a one-based ordinal among committed rows projected from that event, after filtering, in deterministic projection order.
+- Both locator components are positive and required on every committed row. Provisional and other non-committed row shapes omit the whole locator. Desktop does not infer row identity from display text, role, position, or transport order.
+- Duplicate locators are contract failures within one bounded page and within one continuous subscription generation after applying hydration and live committed rows. After hydration, live committed rows advance by durable event sequence; rows from one event are contiguous and use gapless one-based ordinals in deterministic projection order. Regression, repetition, an ordinal gap, or a live event sequence that is not newer than the greatest hydrated event sequence is a contract failure.
+- The locator-order contract applies only to committed rows in one subscription generation. The same locator may recur across independent reads, page responses, replacement hydration generations, reconnects, and separate clients or surfaces.
 - Opening, reopening, and transcript recovery hydrate mutable Session facts from their authoritative server owners. Cached feed-ordering state never replaces fresher Session identity, execution-target, runtime, or transcript facts.
 - Desktop does not require a globally atomic cross-owner snapshot-plus-live handoff or exactly-once delivery across that boundary. If event-sequence continuity cannot be established, Desktop discards transient live state and repeats authoritative hydration instead of remaining silently stale.
 
@@ -105,8 +108,7 @@
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
 - Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. Eligible user messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Edit is the only fork action.
-- A live assistant message has no footer. The committed message receives timestamp and Copy together when it resolves.
-- Committed-message time uses the server's durable timestamp: relative age for 24 hours, then localized compact date and time, including the year only when different from the current year. Full date, time, and time zone are available on focus or hover.
+- A live assistant message has no footer. The committed message receives Copy when it resolves.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
 - Contextual destinations adapt between shifted and overlay presentation. Processes and Goal are the defined Chat destinations. Session settings use a non-modal popover under the composer, not a contextual destination.
@@ -114,7 +116,7 @@
 ## Edit And Fork
 
 - Desktop replaces the TUI rollback picker with the Edit action in an eligible committed user-message footer. It adds no global rollback picker, double-Escape shortcut, separate Fork action, or confirmation dialog.
-- A user message is eligible only when the server supplies its typed rollback target. Desktop never derives eligibility from role, text, position, timestamp, or another row.
+- A user message is eligible only when the server supplies its typed rollback target. Desktop never derives eligibility from role, text, position, or another row.
 - Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
 - Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
 - The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.

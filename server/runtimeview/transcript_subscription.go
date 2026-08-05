@@ -17,8 +17,20 @@ import (
 )
 
 func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
+	hydration, err := TranscriptHydrationFromSnapshotChecked(runtimeSnapshot)
+	if err != nil {
+		panic(err)
+	}
+	return hydration
+}
+
+func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHydrationSnapshot) (clientui.TranscriptHydration, error) {
+	rows, err := transcriptRowsFromFactsChecked(runtimeSnapshot.CommittedRows)
+	if err != nil {
+		return clientui.TranscriptHydration{}, err
+	}
 	hydration := clientui.TranscriptHydration{
-		CommittedRows:   transcriptRowsFromFacts(runtimeSnapshot.CommittedRows),
+		CommittedRows:   rows,
 		ActiveAssistant: transcriptAssistantStream(runtimeSnapshot),
 	}
 	hydration.ActiveReasoning = transcriptReasoningStateFromRuntime(runtimeSnapshot.ActiveReasoning)
@@ -28,7 +40,7 @@ func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydration
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
 	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
-	return hydration
+	return hydration, nil
 }
 
 func transcriptReasoningStateFromRuntime(state *runtime.TranscriptReasoningState) *clientui.TranscriptReasoningUpdate {
@@ -129,6 +141,19 @@ func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) [
 }
 
 func TranscriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.TranscriptEvent {
+	return transcriptMessagesFromRuntimeEvent(evt)
+}
+
+func TranscriptMessagesFromRuntimeEventChecked(evt runtime.Event) ([]clientui.TranscriptEvent, error) {
+	for index, fact := range runtime.TranscriptCommittedRowFactsFromEvent(evt) {
+		if err := fact.Locator.Validate(); err != nil {
+			return nil, fmt.Errorf("runtime committed row fact %d from event %q lacks valid provenance: %w", index, evt.Kind, err)
+		}
+	}
+	return transcriptMessagesFromRuntimeEvent(evt), nil
+}
+
+func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.TranscriptEvent {
 	switch evt.Kind {
 	case runtime.EventAssistantDelta:
 		if evt.AssistantDelta == "" {
@@ -180,7 +205,7 @@ func TranscriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptLiveRunFinishedMessages(evt)
 	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
 		return transcriptReviewerStateMessages(evt)
-	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed:
+	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed, runtime.EventInFlightClearFailed:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -403,6 +428,9 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptEven
 	}
 	out := make([]clientui.TranscriptEvent, 0, len(rowFacts))
 	for _, fact := range rowFacts {
+		if err := fact.Locator.Validate(); err != nil {
+			panic(fmt.Sprintf("runtime committed row lacks valid provenance: event_kind=%q fact=%+v error=%v", evt.Kind, fact, err))
+		}
 		row := transcriptRowFromFact(fact)
 		out = append(out, clientui.NewTranscriptEvent(row))
 	}
@@ -410,14 +438,40 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptEven
 }
 
 func transcriptRowsFromFacts(facts []runtime.TranscriptCommittedRowFact) []clientui.TranscriptCommittedRow {
-	if len(facts) == 0 {
-		return []clientui.TranscriptCommittedRow{}
-	}
-	rows := make([]clientui.TranscriptCommittedRow, 0, len(facts))
-	for _, fact := range facts {
-		rows = append(rows, transcriptRowFromFact(fact))
+	rows, err := transcriptRowsFromFactsChecked(facts)
+	if err != nil {
+		panic(err)
 	}
 	return rows
+}
+
+func transcriptRowsFromFactsChecked(facts []runtime.TranscriptCommittedRowFact) ([]clientui.TranscriptCommittedRow, error) {
+	if len(facts) == 0 {
+		return []clientui.TranscriptCommittedRow{}, nil
+	}
+	rows := make([]clientui.TranscriptCommittedRow, 0, len(facts))
+	for index, fact := range facts {
+		if err := fact.Locator.Validate(); err != nil {
+			return nil, fmt.Errorf(
+				"runtime hydrated committed row lacks valid provenance: fact_index=%d kind=%q step_id=%q provenance=%+v notice=%+v error=%v",
+				index,
+				fact.Kind,
+				fact.StepID,
+				fact.Provenance,
+				transcriptNoticeFactDiagnostic(fact.Notice),
+				err,
+			)
+		}
+		rows = append(rows, transcriptRowFromFact(fact))
+	}
+	return rows, nil
+}
+
+func transcriptNoticeFactDiagnostic(notice *runtime.TranscriptNoticeRowFact) any {
+	if notice == nil {
+		return nil
+	}
+	return *notice
 }
 
 func transcriptAssistantStream(snapshot runtime.TranscriptHydrationSnapshot) *clientui.TranscriptAssistantStream {
@@ -565,6 +619,8 @@ func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.Trans
 		diagnostic.Code = clientui.OperationalDiagnosticSleepGuardFailed
 	case runtime.EventPromptHistoryPersistFailed:
 		diagnostic.Code = clientui.OperationalDiagnosticPromptHistoryPersistFailed
+	case runtime.EventInFlightClearFailed:
+		diagnostic.Code = clientui.OperationalDiagnosticInFlightClearFailed
 	default:
 		panic(fmt.Sprintf("runtime event %q is not an operational diagnostic", evt.Kind))
 	}
@@ -575,6 +631,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 	row := clientui.TranscriptCommittedRow{
 		Visibility: fact.Visibility,
 		Integrity:  fact.Integrity,
+		Locator:    fact.Locator,
 	}
 	switch fact.Kind {
 	case runtime.TranscriptCommittedRowFactUser:

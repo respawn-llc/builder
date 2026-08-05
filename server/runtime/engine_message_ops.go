@@ -21,29 +21,37 @@ import (
 	"github.com/google/uuid"
 )
 
-func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, error) {
+func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
 	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(r)
 	record, adaptErr := sessionToolCompletionRecordFromStored(payload)
 	if adaptErr != nil {
-		return session.CommitReceipt{}, fmt.Errorf("adapt tool completion record: %w", adaptErr)
+		return session.CommitReceipt{}, nil, fmt.Errorf("adapt tool completion record: %w", adaptErr)
 	}
-	_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+	appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+	var provenance *TranscriptCommittedRowProvenance
 	if receipt.Committed {
+		value, provenanceErr := transcriptProvenanceFromRecord(appended)
+		if provenanceErr != nil {
+			return receipt, nil, errors.Join(err, provenanceErr)
+		}
 		e.applyCommittedStoredToolCompletion(
 			payload,
 			backgroundSessionID,
 			hasBackgroundSession,
+			&value,
 		)
+		provenance = &value
 	}
-	return receipt, err
+	return receipt, provenance, err
 }
 
 func (e *Engine) persistFinalizedToolCompletionRaw(
 	stepID string,
 	completion finalizedToolCompletion,
-) (session.CommitReceipt, error) {
+) (session.CommitReceipt, *TranscriptCommittedRowProvenance, *TranscriptCommittedRowProvenance, error) {
 	if completion.OperatorFeedback == nil {
-		return e.persistToolCompletionRaw(stepID, completion.Result)
+		receipt, provenance, err := e.persistToolCompletionRaw(stepID, completion.Result)
+		return receipt, provenance, nil, err
 	}
 	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(
 		completion.Result,
@@ -59,28 +67,47 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 	}
 	completionRecord, adaptErr := sessionToolCompletionRecordFromStored(payload)
 	if adaptErr != nil {
-		return session.CommitReceipt{}, fmt.Errorf("adapt tool completion record: %w", adaptErr)
+		return session.CommitReceipt{}, nil, nil, fmt.Errorf("adapt tool completion record: %w", adaptErr)
 	}
 	feedbackRecord, adaptErr := sessionLocalEntryRecordFromRuntime(feedback)
 	if adaptErr != nil {
-		return session.CommitReceipt{}, fmt.Errorf("adapt operator feedback record: %w", adaptErr)
+		return session.CommitReceipt{}, nil, nil, fmt.Errorf("adapt operator feedback record: %w", adaptErr)
 	}
-	_, receipt, err := e.eventLog.AppendRecordsAtomic(
+	records, receipt, err := e.eventLog.AppendRecordsAtomic(
 		textutil.OptionalExactString(stepID),
 		[]session.EventRecordPayload{completionRecord, feedbackRecord},
 	)
-	if receipt.Committed {
-		e.applyCommittedStoredToolCompletion(
-			payload,
-			backgroundSessionID,
-			hasBackgroundSession,
-		)
-		e.transcriptRuntimeState().AppendLocalEntryRecord(
-			*localEntryChatEntryForStep(feedback, stepID),
-			feedback.AfterToolCallID,
+	var completionProvenance *TranscriptCommittedRowProvenance
+	if !receipt.Committed {
+		return receipt, nil, nil, err
+	}
+	if len(records) < 2 {
+		return receipt, nil, nil, errors.Join(
+			err,
+			fmt.Errorf("persist finalized tool completion committed %d records, want at least 2", len(records)),
 		)
 	}
-	return receipt, err
+	value, provenanceErr := transcriptProvenanceFromRecord(records[0])
+	if provenanceErr != nil {
+		return receipt, nil, nil, errors.Join(err, provenanceErr)
+	}
+	feedbackProvenance, provenanceErr := transcriptProvenanceFromRecord(records[1])
+	if provenanceErr != nil {
+		return receipt, nil, nil, errors.Join(err, provenanceErr)
+	}
+	e.applyCommittedStoredToolCompletion(
+		payload,
+		backgroundSessionID,
+		hasBackgroundSession,
+		&value,
+	)
+	completionProvenance = &value
+	e.transcriptRuntimeState().AppendLocalEntryRecord(
+		*localEntryChatEntryForStep(feedback, stepID),
+		feedback.AfterToolCallID,
+		&feedbackProvenance,
+	)
+	return receipt, completionProvenance, &feedbackProvenance, err
 }
 
 func (e *Engine) prepareStoredToolCompletion(
@@ -118,9 +145,10 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	payload storedToolCompletion,
 	backgroundSessionID string,
 	hasBackgroundSession bool,
+	provenance *TranscriptCommittedRowProvenance,
 ) {
 	e.markCurrentRequestShapeDirtyForSignificantMutation()
-	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
+	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
 		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
@@ -190,27 +218,34 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 	return nil
 }
 
-func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, error) {
+func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
 	entry, err := normalizeStoredLocalEntry(entry)
 	if err != nil {
-		return session.CommitReceipt{}, fmt.Errorf("normalize local entry: %w", err)
+		return session.CommitReceipt{}, nil, fmt.Errorf("normalize local entry: %w", err)
 	}
 	record, adaptErr := sessionLocalEntryRecordFromRuntime(entry)
 	if adaptErr != nil {
-		return session.CommitReceipt{}, fmt.Errorf("adapt local entry record: %w", adaptErr)
+		return session.CommitReceipt{}, nil, fmt.Errorf("adapt local entry record: %w", adaptErr)
 	}
-	_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+	appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+	var provenance *TranscriptCommittedRowProvenance
 	if receipt.Committed {
+		value, provenanceErr := transcriptProvenanceFromRecord(appended)
+		if provenanceErr != nil {
+			return receipt, nil, errors.Join(err, provenanceErr)
+		}
+		provenance = &value
 		projected := localEntryChatEntryForStep(entry, stepID)
-		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
+		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID, provenance)
 		e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 projected,
 			CommittedTranscriptChanged: true,
+			CommittedProvenance:        provenance,
 		})
 	}
-	return receipt, err
+	return receipt, provenance, err
 }
 
 func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error) {
@@ -280,7 +315,13 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 	return e.diagnostics
 }
 
-func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) (session.CommitReceipt, error) {
+func (e *Engine) appendMessageRaw(
+	stepID string,
+	msg llm.Message,
+	eventPolicy steeringMessageEventPolicy,
+	persist bool,
+	provenanceDestination **TranscriptCommittedRowProvenance,
+) (session.CommitReceipt, error) {
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
 	var err error
 	msg, err = normalizePersistedMessageWorktreeContext(msg)
@@ -295,6 +336,7 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	receipt := session.CommitReceipt{}
 	var appendErr error
+	var provenance *TranscriptCommittedRowProvenance
 	if persist {
 		appended, err := e.appendPersistedMessageEvent(stepID, msg)
 		receipt = appended.CommitReceipt
@@ -302,22 +344,33 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 		if !receipt.Committed {
 			return receipt, appendErr
 		}
+		value, provenanceErr := transcriptProvenanceFromRecord(appended.Record)
+		if provenanceErr != nil {
+			return receipt, errors.Join(appendErr, provenanceErr)
+		}
+		provenance = &value
 	}
 	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
 		e.markCurrentRequestShapeDirtyForSignificantMutation()
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
+	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg, provenance); projectionErr != nil {
 		return receipt, errors.Join(appendErr, fmt.Errorf("append message projection: %w", projectionErr))
 	}
+	if provenanceDestination != nil {
+		*provenanceDestination = cloneTranscriptCommittedRowProvenance(provenance)
+	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
+	if eventPolicy != steeringMessageEventNone &&
+		currentCommittedCount > previousCommittedCount &&
+		e.shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{
 			Kind:                       EventConversationUpdated,
 			StepID:                     stepID,
 			CommittedTranscriptChanged: true,
 			Message:                    msg,
+			CommittedProvenance:        cloneTranscriptCommittedRowProvenance(provenance),
 		})
 	}
 	return receipt, appendErr
@@ -374,6 +427,21 @@ func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 	return len(VisibleChatEntriesFromMessage(msg)) > 0
 }
 
+func (e *Engine) shouldEmitCommittedMessageEvent(msg llm.Message) bool {
+	if !shouldEmitCommittedMessageEvent(msg) {
+		return false
+	}
+	if msg.Role != llm.RoleTool {
+		return true
+	}
+	callID, present := textutil.OptionalTrimmed(msg.ToolCallID)
+	if !present {
+		return true
+	}
+	_, completed := e.transcriptRuntimeState().ToolCompletionSnapshot(callID)
+	return !completed
+}
+
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
 	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, e.transcriptWorkingDir())
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
@@ -390,7 +458,11 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg); projectionErr != nil {
+	provenance, provenanceErr := transcriptProvenanceFromRecord(appended.Record)
+	if provenanceErr != nil {
+		return appended.CommitReceipt, errors.Join(appendErr, provenanceErr)
+	}
+	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); projectionErr != nil {
 		return appended.CommitReceipt, errors.Join(appendErr, fmt.Errorf("append queued message projection: %w", projectionErr))
 	}
 	e.emitRaw(Event{
@@ -401,6 +473,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 		UserMessageBatchQueueItemIDs: normalizedIDs,
 		UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
 		CommittedTranscriptChanged:   true,
+		CommittedProvenance:          &provenance,
 	})
 	for _, item := range normalizedItems {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
@@ -560,6 +633,7 @@ func (e *Engine) emitCommittedAssistantMessageEventRaw(stepID string, committed 
 		Kind:                        EventAssistantMessage,
 		StepID:                      stepID,
 		Message:                     committed.message,
+		CommittedProvenance:         cloneTranscriptCommittedRowProvenance(committed.provenance),
 		AssistantStreamMetadata:     cloneAssistantStreamMetadata(streamMetadata),
 		AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID),
 		CommittedTranscriptChanged:  true,
@@ -603,6 +677,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
 			message:    committed.message,
 			coordinate: cloneCommittedAssistantCoordinate(committed.coordinate),
+			provenance: cloneTranscriptCommittedRowProvenance(committed.provenance),
 		}, clearedMetadata, clearedStreamID); err != nil {
 			return completedResponseResolutionOutcome{}, err
 		}
@@ -634,7 +709,7 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 	}, nil
 }
 
-func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {
+func flushedUserMessageEvent(provenance *TranscriptCommittedRowProvenance, msg llm.Message, stepID string) *Event {
 	if msg.Role != llm.RoleUser {
 		return nil
 	}
@@ -645,7 +720,7 @@ func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return nil
 	}
-	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: *msg.Content, UserMessageBatch: []string{*msg.Content}, CommittedTranscriptChanged: true}
+	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: *msg.Content, UserMessageBatch: []string{*msg.Content}, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}
 }
 
 func (e *Engine) flushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {

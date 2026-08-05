@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 func (h TranscriptHydration) Validate() error {
@@ -19,10 +20,15 @@ func (h TranscriptHydration) Validate() error {
 	if h.CommittedRows == nil {
 		return fmt.Errorf("transcript hydration committed rows are required")
 	}
+	seenLocators := make(map[transcript.CommittedRowLocator]struct{}, len(h.CommittedRows))
 	for index, row := range h.CommittedRows {
 		if err := row.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration committed row %d: %w", index, err)
 		}
+		if _, exists := seenLocators[row.Locator]; exists {
+			return fmt.Errorf("transcript hydration repeats committed row locator %+v", row.Locator)
+		}
+		seenLocators[row.Locator] = struct{}{}
 	}
 	if h.ActiveAssistant != nil {
 		if err := h.ActiveAssistant.Validate(); err != nil {
