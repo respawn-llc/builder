@@ -759,6 +759,14 @@
   route-transition coverage passes 12/12; the full Desktop suite passes 82
   files / 377 tests after adding the combined guard. Apps lint remains 0 errors with
   4 existing warnings, Apps typecheck passes, and the Desktop build passes.
+  Progress (August 5, 2026): Fresh browser QA still found the complete sidebar
+  stack mounted after Home navigation because only the closing phase had been
+  flushed synchronously; current history and outgoing state were deferred
+  separately. The route-close owner now commits current-history removal,
+  outgoing close-animation state, and closing phase together in one synchronous
+  flush. This preserves the one dispatch owner and removes the stale complete
+  stack at the route lifecycle boundary. Focused coverage remains 12/12 and
+  full Desktop coverage remains 82 files / 377 tests.
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
