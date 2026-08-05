@@ -407,8 +407,12 @@ func (r RuntimeLiveSteerRequest) Validate() error {
 		return err
 	}
 	if r.CallerSessionID != nil {
-		if _, err := runtimeids.ParseSessionID(*r.CallerSessionID); err != nil {
+		callerSessionID, err := runtimeids.ParseSessionID(*r.CallerSessionID)
+		if err != nil {
 			return fmt.Errorf("caller_session_id: %w", err)
+		}
+		if !callerSessionID.IsCanonicalUUIDv4() {
+			return errors.New("caller_session_id: canonical UUIDv4 required")
 		}
 	}
 	if strings.TrimSpace(r.Text) == "" {

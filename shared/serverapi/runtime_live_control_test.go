@@ -41,7 +41,7 @@ func TestRuntimeLiveSteerRequestValidateUsesUUIDV4Boundaries(t *testing.T) {
 }
 
 func TestRuntimeLiveSteerRequestRejectsMalformedCallerProvenance(t *testing.T) {
-	for _, caller := range []string{"", "/invalid/session", "  " /* whitespace is not canonical */} {
+	for _, caller := range []string{"", "/invalid/session", "session-1", "  " /* whitespace is not canonical */} {
 		req := RuntimeLiveSteerRequest{
 			ClientRequestID: validLiveClientRequestID,
 			SessionID:       validLiveSessionID,
