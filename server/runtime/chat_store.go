@@ -539,7 +539,7 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *str
 			}
 			return cloneTranscriptCommittedRowProvenance(provenances[0])
 		}(),
-		Projected:         entry.ReviewerFeedback != nil || entry.ReviewerError != nil,
+		Projected: entry.ReviewerFeedback != nil || entry.ReviewerError != nil,
 	})
 	s.transcriptEntryCount++
 }
