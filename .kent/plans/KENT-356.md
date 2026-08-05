@@ -762,8 +762,8 @@
 
 - [x] **Keep the complete production diff within the approved cap.**
   The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,668 additions plus 331
-  deletions: **1,999 changed lines**, within the Design boundary. The final
+  `origin/main...HEAD`, including styles, is now 1,669 additions plus 331
+  deletions: **2,000 changed lines**, within the Design boundary. The final
   remediation restores readable CSS and stack formatting, consolidates the
   two directional animations into one parameterized motion path, removes
   dead adapter-only identity/narrowing helpers and an unused production test
@@ -775,8 +775,8 @@
   passed. The final non-test Desktop diff is 1,667 additions plus 330
   deletions, totaling 1,997 changed lines.
   Progress (August 5, 2026): Re-measured after unified typed dispatch
-  remediation: 1,668 additions plus 331 deletions, totaling 1,999 changed
-  production lines, still within the 2,000-line cap. The full Desktop suite
-  passed 82 files / 377 tests. Final verification passed with Apps lint at
-  0 errors and 4 existing warnings, Apps typecheck, and
+  remediation and the ordering guard: 1,669 additions plus 331 deletions,
+  totaling 2,000 changed production lines, exactly within the cap. The full
+  Desktop suite passed 82 files / 378 tests. Final verification passed with
+  Apps lint at 0 errors and 4 existing warnings, Apps typecheck, and
   `./scripts/build.sh desktop`; browser/manual QA remains excluded.
