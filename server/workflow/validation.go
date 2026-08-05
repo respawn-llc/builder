@@ -1054,9 +1054,17 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 		}
 	}
 	for _, edge := range s.edgesByGroup[groupID] {
+		group := s.groupsByID[groupID]
+		source, sourceExists := s.nodesByID[group.SourceNodeID]
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
+		if sourceExists && targetExists {
+			for key := range s.promptParameterNameSet(edge, source, target) {
+				out[key] = true
+			}
+			continue
+		}
 		for _, parameter := range edge.Parameters {
-			key := strings.TrimSpace(parameter.Key)
-			if key != "" {
+			if key := strings.TrimSpace(parameter.Key); key != "" {
 				out[key] = true
 			}
 		}

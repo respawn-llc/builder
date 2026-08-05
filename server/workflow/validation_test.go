@@ -409,6 +409,21 @@ func TestValidationRejectsPromptReferenceToHiddenSelectorParameter(t *testing.T)
 	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
 }
 
+func TestValidationRejectsPriorReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	producer := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	producer.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	producer.Parameters = append(producer.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	consumer := edgeByIDForValidationTest(t, &def, "edge_implement_done")
+	consumer.PromptTemplate = "Use {{.Params.implement.role}}."
+
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+}
+
 func TestFanoutJoinTopology(t *testing.T) {
 	t.Run("valid fanout has one nearest common join", func(t *testing.T) {
 		def := fanoutWorkflow(t)
