@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"text/template"
 	"text/template/parse"
 
 	"core/server/workflow"
@@ -441,68 +440,17 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 }
 
 func migrationPriorParameterReferences(prompt string) ([]workflow.PromptPriorParameterReference, error) {
-	if strings.TrimSpace(prompt) == "" {
-		return nil, nil
-	}
-	tmpl, err := template.New("historical workflow prompt").Parse(prompt)
-	if err != nil {
-		return nil, err
-	}
 	refs := make([]workflow.PromptPriorParameterReference, 0)
-	for _, parsed := range tmpl.Templates() {
-		if parsed.Tree != nil {
-			if err := walkMigrationPromptNode(parsed.Tree.Root, &refs); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return refs, nil
+	err := workflow.WalkPromptTemplateAST(prompt, func(node parse.Node) error {
+		return migrationPromptASTNode(node, &refs)
+	})
+	return refs, err
 }
 
-func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParameterReference) error {
+func migrationPromptASTNode(node parse.Node, refs *[]workflow.PromptPriorParameterReference) error {
 	switch typed := node.(type) {
 	case nil:
 		return nil
-	case *parse.ListNode:
-		for _, child := range typed.Nodes {
-			if err := walkMigrationPromptNode(child, refs); err != nil {
-				return err
-			}
-		}
-	case *parse.ActionNode:
-		return walkMigrationPromptNode(typed.Pipe, refs)
-	case *parse.IfNode:
-		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
-			return err
-		}
-		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
-			return err
-		}
-		return walkMigrationPromptNode(typed.ElseList, refs)
-	case *parse.RangeNode:
-		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
-			return err
-		}
-		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
-			return err
-		}
-		return walkMigrationPromptNode(typed.ElseList, refs)
-	case *parse.WithNode:
-		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
-			return err
-		}
-		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
-			return err
-		}
-		return walkMigrationPromptNode(typed.ElseList, refs)
-	case *parse.TemplateNode:
-		return walkMigrationPromptNode(typed.Pipe, refs)
-	case *parse.PipeNode:
-		for _, command := range typed.Cmds {
-			if err := walkMigrationPromptNode(command, refs); err != nil {
-				return err
-			}
-		}
 	case *parse.CommandNode:
 		if len(typed.Args) > 0 {
 			if ident, ok := typed.Args[0].(*parse.IdentifierNode); ok &&
@@ -511,15 +459,7 @@ func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParame
 				return errors.New("historical dynamic prompt reference lookup is unsupported")
 			}
 		}
-		for _, arg := range typed.Args {
-			if err := walkMigrationPromptNode(arg, refs); err != nil {
-				return err
-			}
-		}
 	case *parse.ChainNode:
-		if err := walkMigrationPromptNode(typed.Node, refs); err != nil {
-			return err
-		}
 		if len(typed.Field) > 0 && historicalPromptNamespace(typed.Field[0]) {
 			return errors.New("historical chained prompt references are unsupported")
 		}

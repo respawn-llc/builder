@@ -87,6 +87,17 @@ func (s *Store) PreflightTaskResume(
 				ParameterKey:   binding.Name,
 			})
 		}
+		for _, requirement := range derived.PriorParameterRequirementsForNode(currentNode.Reference.NodeID) {
+			if _, materialized := currentNode.PriorValues.TransitionParameter(requirement.TransitionKey, requirement.ParameterName); materialized {
+				continue
+			}
+			classification.Diagnostics = append(classification.Diagnostics, CurrentNodeResumeValidationDiagnostic{
+				Code:           CurrentNodeResumeParameterNotMaterializedCode,
+				CurrentNode:    currentNode.Reference,
+				EnteringEdgeID: edge.ID,
+				ParameterKey:   requirement.ParameterName,
+			})
+		}
 		classifications = append(classifications, classification)
 	}
 	return classifications, nil

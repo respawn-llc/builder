@@ -143,6 +143,86 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 	}
 }
 
+func TestPreflightTaskResumeRejectsEditedPriorParameterReference(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, def, "audit").ID).PromptTemplate = "Audit."
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode plan: %v", err)
+	}
+	audit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "audit",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review: %v", err)
+	}
+	current := audit.Mutation.Created[0]
+	if err := store.InterruptCurrentNode(
+		ctx,
+		current.Reference,
+		workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		workflow.CurrentNodeInterruptionDetail{Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt)},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET prior_node_values_json = '{"transition_parameters":{}}'
+WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		string(task.ID), string(current.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("clear prior parameter values: %v", err)
+	}
+
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
+	auditEdgeID := edgeByKey(t, definition, "audit").ID
+	foundEdge := false
+	for index := range request.Edges {
+		if request.Edges[index].ID == auditEdgeID {
+			foundEdge = true
+			request.Edges[index].PromptTemplate = "Audit {{.Params.review.summary}}."
+		}
+	}
+	if !foundEdge {
+		t.Fatalf("audit Edge %q not found in save request", auditEdgeID)
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, request)
+	if err != nil || !saved.Saved {
+		t.Fatalf("SaveWorkflowGraph prior-Parameter prompt edit = %+v, err=%v; want saved", saved, err)
+	}
+
+	classifications, err := store.PreflightTaskResume(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("PreflightTaskResume: %v", err)
+	}
+	if len(classifications) != 1 || len(classifications[0].Diagnostics) != 1 {
+		t.Fatalf("resume classifications = %+v, want one missing prior-Parameter diagnostic", classifications)
+	}
+	diagnostic := classifications[0].Diagnostics[0]
+	if diagnostic.Code != CurrentNodeResumeParameterNotMaterializedCode ||
+		!diagnostic.CurrentNode.Equal(current.Reference) ||
+		diagnostic.EnteringEdgeID != auditEdgeID ||
+		diagnostic.ParameterKey != "summary" {
+		t.Fatalf("resume diagnostic = %+v, want prior Parameter context", diagnostic)
+	}
+}
+
 func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -29,70 +30,156 @@ type PromptReferenceIssue struct {
 }
 
 func ExtractPromptTemplateReferences(promptTemplate string) (PromptTemplateReferences, error) {
-	prompt := strings.TrimSpace(promptTemplate)
-	if prompt == "" {
-		return PromptTemplateReferences{}, nil
-	}
-	tmpl, err := template.New("workflow node prompt validation").Parse(prompt)
-	if err != nil {
-		return PromptTemplateReferences{}, err
-	}
 	refs := PromptTemplateReferences{}
-	for _, parsed := range tmpl.Templates() {
-		if parsed.Tree != nil {
-			walkTemplateNode(parsed.Tree.Root, &refs)
-		}
-	}
-	return refs, nil
-}
-
-func walkTemplateNode(node parse.Node, refs *PromptTemplateReferences) {
-	switch typed := node.(type) {
-	case nil:
-		return
-	case *parse.ListNode:
-		walkTemplateNodeList(typed, refs)
-	case *parse.ActionNode:
-		walkTemplateNode(typed.Pipe, refs)
-	case *parse.IfNode:
-		walkTemplateNode(typed.Pipe, refs)
-		walkTemplateNodeList(typed.List, refs)
-		walkTemplateNodeList(typed.ElseList, refs)
-	case *parse.RangeNode:
-		walkTemplateNode(typed.Pipe, refs)
-		walkTemplateNodeList(typed.List, refs)
-		walkTemplateNodeList(typed.ElseList, refs)
-	case *parse.WithNode:
-		walkTemplateNode(typed.Pipe, refs)
-		walkTemplateNodeList(typed.List, refs)
-		walkTemplateNodeList(typed.ElseList, refs)
-	case *parse.TemplateNode:
-		walkTemplateNode(typed.Pipe, refs)
-	case *parse.PipeNode:
-		for _, command := range typed.Cmds {
-			walkTemplateNode(command, refs)
-		}
-	case *parse.CommandNode:
-		if len(typed.Args) > 0 {
-			if ident, ok := typed.Args[0].(*parse.IdentifierNode); ok && ident.Ident == "index" && indexCommandTouchesPromptNamespace(typed.Args[1:]) {
-				refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: "index", Message: "dynamic prompt reference lookup is not supported"})
+	err := WalkPromptTemplateAST(promptTemplate, func(node parse.Node) error {
+		switch typed := node.(type) {
+		case *parse.CommandNode:
+			if len(typed.Args) > 0 {
+				if ident, ok := typed.Args[0].(*parse.IdentifierNode); ok &&
+					ident.Ident == "index" &&
+					indexCommandTouchesPromptNamespace(typed.Args[1:]) {
+					refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: "index", Message: "dynamic prompt reference lookup is not supported"})
+				}
+			}
+		case *parse.ChainNode:
+			if len(typed.Field) > 0 && promptNamespace(typed.Field[0]) {
+				refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: "." + strings.Join(typed.Field, "."), Message: "prompt reference shape is unsupported"})
+			}
+		case *parse.FieldNode:
+			recordPromptFieldReference(typed.Ident, &refs)
+		case *parse.VariableNode:
+			if variableTouchesPromptNamespace(typed.Ident) {
+				refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: strings.Join(typed.Ident, "."), Message: "variable prompt reference lookup is not supported"})
 			}
 		}
-		for _, arg := range typed.Args {
-			walkTemplateNode(arg, refs)
-		}
-	case *parse.ChainNode:
-		walkTemplateNode(typed.Node, refs)
-		if len(typed.Field) > 0 && promptNamespace(typed.Field[0]) {
-			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: "." + strings.Join(typed.Field, "."), Message: "prompt reference shape is unsupported"})
-		}
-	case *parse.FieldNode:
-		recordPromptFieldReference(typed.Ident, refs)
-	case *parse.VariableNode:
-		if variableTouchesPromptNamespace(typed.Ident) {
-			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: strings.Join(typed.Ident, "."), Message: "variable prompt reference lookup is not supported"})
+		return nil
+	})
+	return refs, err
+}
+
+// WalkPromptTemplateAST parses prompt and visits every syntax-tree node.
+// Semantic interpretation belongs to the caller so historical
+// migration rules can share the parser traversal without changing live rules.
+func WalkPromptTemplateAST(promptTemplate string, visit func(parse.Node) error) error {
+	if visit == nil {
+		return fmt.Errorf("prompt AST visitor is required")
+	}
+	prompt := strings.TrimSpace(promptTemplate)
+	if prompt == "" {
+		return nil
+	}
+	tmpl, err := template.New("workflow prompt").Parse(prompt)
+	if err != nil {
+		return err
+	}
+	for _, parsed := range tmpl.Templates() {
+		if parsed.Tree != nil {
+			if err := walkPromptTemplateASTNode(parsed.Tree.Root, visit); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
+}
+
+func walkPromptTemplateASTNode(node parse.Node, visit func(parse.Node) error) error {
+	switch typed := node.(type) {
+	case nil:
+		return nil
+	case *parse.ListNode:
+		if typed == nil {
+			return nil
+		}
+		for _, child := range typed.Nodes {
+			if err := walkPromptTemplateASTNode(child, visit); err != nil {
+				return err
+			}
+		}
+	case *parse.ActionNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Pipe, visit); err != nil {
+			return err
+		}
+	case *parse.IfNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Pipe, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.List, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.ElseList, visit); err != nil {
+			return err
+		}
+	case *parse.RangeNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Pipe, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.List, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.ElseList, visit); err != nil {
+			return err
+		}
+	case *parse.WithNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Pipe, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.List, visit); err != nil {
+			return err
+		}
+		if err := walkPromptTemplateASTNode(typed.ElseList, visit); err != nil {
+			return err
+		}
+	case *parse.TemplateNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Pipe, visit); err != nil {
+			return err
+		}
+	case *parse.PipeNode:
+		if typed == nil {
+			return nil
+		}
+		for _, command := range typed.Cmds {
+			if err := walkPromptTemplateASTNode(command, visit); err != nil {
+				return err
+			}
+		}
+	case *parse.CommandNode:
+		if typed == nil {
+			return nil
+		}
+		for _, arg := range typed.Args {
+			if err := walkPromptTemplateASTNode(arg, visit); err != nil {
+				return err
+			}
+		}
+	case *parse.ChainNode:
+		if typed == nil {
+			return nil
+		}
+		if err := walkPromptTemplateASTNode(typed.Node, visit); err != nil {
+			return err
+		}
+	}
+	if node != nil {
+		if err := visit(node); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func indexCommandTouchesPromptNamespace(args []parse.Node) bool {
@@ -135,15 +222,6 @@ func variableTouchesPromptNamespace(ident []string) bool {
 		}
 	}
 	return false
-}
-
-func walkTemplateNodeList(list *parse.ListNode, refs *PromptTemplateReferences) {
-	if list == nil {
-		return
-	}
-	for _, node := range list.Nodes {
-		walkTemplateNode(node, refs)
-	}
 }
 
 func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) {
