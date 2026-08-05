@@ -297,6 +297,12 @@ func (e *Engine) SetWorkflowThinkingValue(value workflow.ThinkingValue) error {
 	return e.setThinkingValue(string(value))
 }
 
+// ClearWorkflowThinkingValue removes a workflow-owned thinking override while
+// preserving the current prompt-cache lineage and contract generation.
+func (e *Engine) ClearWorkflowThinkingValue() error {
+	return e.setThinkingValue("")
+}
+
 func (e *Engine) setThinkingValue(value string) error {
 	e.mu.Lock()
 	e.cfg.ThinkingLevel = strings.TrimSpace(value)

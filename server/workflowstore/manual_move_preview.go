@@ -336,6 +336,7 @@ func (s *Store) manualMoveProtectedParameterPolicies(
 			nil,
 			true,
 			true,
+			false,
 		)
 		if err != nil {
 			return nil, nil, err

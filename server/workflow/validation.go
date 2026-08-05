@@ -699,14 +699,23 @@ func (s *validationState) validateSelectorApplicability(edge Edge, source Node, 
 		targetKind = target.Kind()
 		targetRole = NodeSubagentRole(target)
 	}
-	applicability := ResolveEdgeSelectorApplicability(
-		edge,
-		sourceKind,
-		targetKind,
-		len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
-		s.opts.RoleResolver,
-		targetRole,
-	)
+	plan, planErr := PlanTransitionSelection(TransitionParameterContractRequest{
+		Edge:                         edge,
+		SourceKind:                   sourceKind,
+		TargetKind:                   targetKind,
+		TargetRole:                   targetRole,
+		FanOut:                       len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		TargetSessionPolicy:          AssigneeSessionPolicyEstablishTarget,
+		Catalog:                      s.opts.RoleResolver,
+		RequireExecutionDescriptions: s.context == ValidationContextExecution,
+	})
+	applicability := plan.Applicability
+	if planErr != nil {
+		applicability = EdgeSelectorApplicability{
+			Assignee: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
+			Thinking: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
+		}
+	}
 	if assigneeSelection == AssigneeSelectionPreviousNode {
 		if applicability.Assignee.Reason == SelectorApplicabilityTopology ||
 			applicability.Assignee.Reason == SelectorApplicabilityContextSource {
@@ -724,6 +733,17 @@ func (s *validationState) validateSelectorApplicability(edge Edge, source Node, 
 	}
 	if !applicability.Thinking.Available {
 		s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection is unavailable for the applicable target models", ref)
+	}
+	if s.context == ValidationContextExecution &&
+		thinkingSelection == ThinkingSelectionPreviousNode &&
+		sourceExists &&
+		targetExists {
+		err := planErr
+		var selectionErr TargetAgentSelectionError
+		if errors.As(err, &selectionErr) &&
+			selectionErr.Code == TargetAgentSelectionErrorThinkingDescriptionRequired {
+			s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection requires an authored description for the open thinking catalog", ref)
+		}
 	}
 }
 

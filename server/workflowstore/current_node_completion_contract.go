@@ -33,6 +33,7 @@ func (s *Store) currentNodeCompletionOutputIssues(
 			transitionBranchKeyForCurrentNode(currentSource.Reference),
 			false,
 			true,
+			false,
 		)
 		if err != nil {
 			return nil, err

@@ -118,6 +118,7 @@ type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
 	RequiredTools              []toolspec.ID
 	WorkflowThinking           *workflow.ThinkingValue
+	ClearWorkflowThinking      bool
 }
 
 func optionalSessionName(name string) (*string, error) {
@@ -511,7 +512,7 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	next, err = withWorkflowThinking(next, options.WorkflowThinking)
+	next, err = withWorkflowThinking(next, options.WorkflowThinking, options.ClearWorkflowThinking)
 	return next, warnings, err
 }
 
@@ -528,15 +529,21 @@ func withRequiredRunPromptTools(plan SessionPlan, required []toolspec.ID) (Sessi
 	return plan, nil
 }
 
-func withWorkflowThinking(plan SessionPlan, thinking *workflow.ThinkingValue) (SessionPlan, error) {
-	if thinking == nil {
+func withWorkflowThinking(plan SessionPlan, thinking *workflow.ThinkingValue, clear bool) (SessionPlan, error) {
+	if thinking == nil && !clear {
 		return plan, nil
 	}
-	if err := thinking.Validate(); err != nil {
-		return SessionPlan{}, err
+	if thinking != nil {
+		if err := thinking.Validate(); err != nil {
+			return SessionPlan{}, err
+		}
 	}
 	plan.ActiveSettings = cloneSettings(plan.ActiveSettings)
-	plan.ActiveSettings.ThinkingLevel = string(*thinking)
+	if clear {
+		plan.ActiveSettings.ThinkingLevel = ""
+	} else {
+		plan.ActiveSettings.ThinkingLevel = string(*thinking)
+	}
 	return plan, nil
 }
 

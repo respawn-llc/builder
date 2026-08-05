@@ -19,6 +19,10 @@ type TargetAgentExecutionSelectionRequest struct {
 // PlanTargetAgentExecutionSelection composes the role and thinking planners
 // into the one transition-target assignment decision.
 func PlanTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequest) (AgentExecutionSelection, error) {
+	return planTargetAgentExecutionSelection(request)
+}
+
+func planTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequest) (AgentExecutionSelection, error) {
 	if request.RetainedSession != nil {
 		selection := request.RetainedSession.Clone()
 		selection.Origin = AssigneeOriginRetainedSession
@@ -39,6 +43,7 @@ func PlanTargetAgentExecutionSelection(request TargetAgentExecutionSelectionRequ
 			if err != nil {
 				return AgentExecutionSelection{}, err
 			}
+			selection.Thinking = nil
 			if strings.TrimSpace(thinking.Value) != "" {
 				value, err := NewThinkingValue(thinking.Value)
 				if err != nil {

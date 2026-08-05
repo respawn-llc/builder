@@ -99,6 +99,50 @@ func TestAssigneeSelectionIsInapplicableToOtherContinueContextSources(t *testing
 	assertHasCodes(t, result, workflow.CodeAssigneeSelectionInapplicable)
 }
 
+func TestThinkingSelectionIsUnavailableForFiniteNonReasoningRoles(t *testing.T) {
+	applicability := workflow.ResolveEdgeSelectorApplicability(
+		workflow.Edge{AssigneeSelection: workflow.AssigneeSelectionPreviousNode, ThinkingSelection: workflow.ThinkingSelectionPreviousNode},
+		workflow.NodeKindAgent,
+		workflow.NodeKindAgent,
+		false,
+		selectorCatalog{
+			explicit: []workflow.TargetAgentRole{{
+				Identity:              "tool",
+				ExplicitAgentCallable: true,
+				Thinking: workflow.ThinkingCapability{
+					Finite: true,
+					Levels: []string{"low", "high"},
+				},
+			}},
+		},
+		"tool",
+	)
+	if applicability.Thinking.Available || applicability.Thinking.Reason != workflow.SelectorApplicabilityNoThinkingSupport {
+		t.Fatalf("thinking applicability = %+v, want unavailable no_thinking_support", applicability.Thinking)
+	}
+}
+
+func TestExecutionValidationRequiresDescriptionForOpenThinkingSelection(t *testing.T) {
+	def := serialAgentTargetWorkflow(t)
+	edge := edgeByIDForValidationTest(t, &def, "edge_done")
+	edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+	edge.Parameters = []workflow.Parameter{{Key: "thinking", Purpose: workflow.ParameterPurposeTargetThinking}}
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+		Context: workflow.ValidationContextExecution,
+		RoleResolver: selectorCatalog{
+			configured: map[string]workflow.TargetAgentRole{
+				"coder": {Identity: "coder", QuestionsEnabled: true},
+			},
+			explicit: []workflow.TargetAgentRole{{
+				Identity:              "coder",
+				ExplicitAgentCallable: true,
+				Thinking:              workflow.ThinkingCapability{ReasoningCapable: true, Finite: false},
+			}},
+		},
+	})
+	assertHasCodes(t, result, workflow.CodeThinkingSelectionUnavailable)
+}
+
 func serialAgentTargetWorkflow(t *testing.T) workflow.Definition {
 	def := validWorkflow(t)
 	workflowID := def.ID

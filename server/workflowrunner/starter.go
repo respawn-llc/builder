@@ -204,6 +204,10 @@ func (s *Starter) SteerCurrentNodeAssignment(
 				if err := engine.SetWorkflowThinkingValue(*selection.Thinking); err != nil {
 					return err
 				}
+			} else if workflowThinkingClearRequested(input, selection) {
+				if err := engine.ClearWorkflowThinkingValue(); err != nil {
+					return err
+				}
 			}
 			var err error
 			steer, err = engine.SteerWorkflowAssignment(assignment)
@@ -503,7 +507,7 @@ func (s *Starter) planCurrentNodeSession(
 		if err != nil {
 			return launch.SessionPlan{}, disposable, err
 		}
-		if selection.Thinking != nil {
+		if selection.Thinking != nil || workflowThinkingClearRequested(input, selection) {
 			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 				var applyErr error
 				plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
@@ -511,7 +515,10 @@ func (s *Starter) planCurrentNodeSession(
 					store,
 					serverapi.RunPromptOverrides{},
 					auth.EmptyState(),
-					launch.RunPromptOverrideOptions{WorkflowThinking: selection.Thinking},
+					launch.RunPromptOverrideOptions{
+						WorkflowThinking:      selection.Thinking,
+						ClearWorkflowThinking: workflowThinkingClearRequested(input, selection),
+					},
 				)
 				return applyErr
 			}); err != nil {
@@ -527,7 +534,9 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if policy.assignee != currentNodeSessionAssigneeEstablishTarget && selection.Thinking == nil {
+	if policy.assignee != currentNodeSessionAssigneeEstablishTarget &&
+		selection.Thinking == nil &&
+		!workflowThinkingClearRequested(input, selection) {
 		return plan, disposable, nil
 	}
 	options := launch.RunPromptOverrideOptions{}
@@ -535,6 +544,7 @@ func (s *Starter) planCurrentNodeSession(
 		options.RequiredTools = []toolspec.ID{toolspec.ToolAskQuestion}
 	}
 	options.WorkflowThinking = selection.Thinking
+	options.ClearWorkflowThinking = workflowThinkingClearRequested(input, selection)
 	overrides := serverapi.RunPromptOverrides{}
 	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		overrides = workflowPromptOverrides(selection.Assignee)
@@ -875,6 +885,12 @@ func currentNodeAgentExecutionSelection(input workflowstore.CurrentNodeStartCont
 		return workflow.AgentExecutionSelection{}, err
 	}
 	return selection, nil
+}
+
+func workflowThinkingClearRequested(input workflowstore.CurrentNodeStartContext, selection workflow.AgentExecutionSelection) bool {
+	return selection.Origin == workflow.AssigneeOriginRetainedSession &&
+		workflow.CanonicalThinkingSelection(input.EnteringEdge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode &&
+		selection.Thinking == nil
 }
 
 type executionPromptAwaiter struct {

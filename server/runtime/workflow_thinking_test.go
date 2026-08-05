@@ -82,3 +82,33 @@ func TestWorkflowThinkingSetterPreservesCacheAndContractBoundaries(t *testing.T)
 		t.Fatalf("locked contract changed after thinking mutation: before=%+v after=%+v", before.Locked, after.Locked)
 	}
 }
+
+func TestWorkflowThinkingClearPreservesCacheAndContractBoundaries(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir(), sessiontest.NewPersistence().Options()...)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+		}},
+	}, Config{Model: "workflow-thinking-model", ThinkingLevel: "high"})
+	if _, err := engine.SubmitUserMessage(context.Background(), "seed"); err != nil {
+		t.Fatalf("seed SubmitUserMessage: %v", err)
+	}
+	before := store.Meta()
+	if before.Locked == nil {
+		t.Fatal("seed did not establish locked contract")
+	}
+	if err := engine.ClearWorkflowThinkingValue(); err != nil {
+		t.Fatalf("ClearWorkflowThinkingValue: %v", err)
+	}
+	if got := engine.ThinkingLevel(); got != "" {
+		t.Fatalf("ThinkingLevel = %q, want cleared", got)
+	}
+	after := store.Meta()
+	if after.PromptCacheLineageGeneration != before.PromptCacheLineageGeneration {
+		t.Fatalf("cache lineage generation changed from %d to %d", before.PromptCacheLineageGeneration, after.PromptCacheLineageGeneration)
+	}
+	if after.Locked == nil || !reflect.DeepEqual(after.Locked, before.Locked) {
+		t.Fatalf("locked contract changed after thinking clear: before=%+v after=%+v", before.Locked, after.Locked)
+	}
+}

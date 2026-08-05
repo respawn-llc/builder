@@ -777,6 +777,9 @@ func (s *Store) AddEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
 	if edge.ID == "" {
 		edge.ID = workflow.EdgeID(prefixedID("edge"))
 	}
+	if err := s.validateDirectEdgeSelection(ctx, edge, false); err != nil {
+		return 0, err
+	}
 	edge.SortOrder = 100
 	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		if _, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID }); exists {
@@ -801,6 +804,9 @@ func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) 
 	if edge.WorkflowID.IsZero() {
 		return 0, ErrWorkflowIDRequired
 	}
+	if err := s.validateDirectEdgeSelection(ctx, edge, true); err != nil {
+		return 0, err
+	}
 	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
 		current, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID })
 		if !exists {
@@ -817,6 +823,82 @@ func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) 
 		}
 		return upsertWorkflowEdge(ctx, q, edge, edge.SortOrder, "update workflow edge")
 	})
+}
+
+func (s *Store) validateDirectEdgeSelection(ctx context.Context, candidate EdgeRecord, updating bool) error {
+	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode &&
+		workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) != workflow.ThinkingSelectionPreviousNode {
+		return nil
+	}
+	definition, _, err := s.GetDefinition(ctx, candidate.WorkflowID)
+	if err != nil {
+		return err
+	}
+	edges := make([]workflow.Edge, 0, len(definition.Edges)+1)
+	for _, edge := range definition.Edges {
+		if updating && edge.ID == candidate.ID {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+	candidateValue := candidateEdge(candidate)
+	edges = append(edges, candidateValue)
+	group, ok := workflowTransitionGroupByID(definition.TransitionGroups, candidate.TransitionGroupID)
+	if !ok {
+		return nil
+	}
+	var source, target workflow.Node
+	for _, node := range definition.Nodes {
+		if workflow.NodeIDOf(node) == group.SourceNodeID {
+			source = node
+		}
+		if workflow.NodeIDOf(node) == candidate.TargetNodeID {
+			target = node
+		}
+	}
+	if source == nil || target == nil {
+		return nil
+	}
+	fanOut := 0
+	for _, edge := range edges {
+		if edge.TransitionGroupID == candidate.TransitionGroupID {
+			fanOut++
+		}
+	}
+	applicability := workflow.ResolveEdgeSelectorApplicability(candidateValue, source.Kind(), target.Kind(), fanOut > 1, s.roleResolver, workflow.NodeSubagentRole(target))
+	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode &&
+		!applicability.Assignee.Available {
+		return fmt.Errorf("edge Assignee selection is inapplicable: %s", applicability.Assignee.Reason)
+	}
+	if workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode &&
+		!applicability.Thinking.Available {
+		return fmt.Errorf("edge thinking selection is inapplicable: %s", applicability.Thinking.Reason)
+	}
+	return nil
+}
+
+func candidateEdge(record EdgeRecord) workflow.Edge {
+	return workflow.Edge{
+		ID:                record.ID,
+		WorkflowID:        record.WorkflowID,
+		TransitionGroupID: record.TransitionGroupID,
+		Key:               record.Key,
+		TargetNodeID:      record.TargetNodeID,
+		AssigneeSelection: record.AssigneeSelection,
+		ThinkingSelection: record.ThinkingSelection,
+		ContextMode:       record.ContextMode,
+		ContextSource:     record.ContextSource,
+		Parameters:        record.Parameters,
+	}
+}
+
+func workflowTransitionGroupByID(groups []workflow.TransitionGroup, id workflow.TransitionGroupID) (workflow.TransitionGroup, bool) {
+	for _, group := range groups {
+		if group.ID == id {
+			return group, true
+		}
+	}
+	return workflow.TransitionGroup{}, false
 }
 
 func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {

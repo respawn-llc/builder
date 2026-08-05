@@ -45,3 +45,27 @@ func TestApplyRunPromptOverridesAppliesWorkflowThinkingAfterRoleResolution(t *te
 		t.Fatalf("thinking level = %q, want max", updated.ActiveSettings.ThinkingLevel)
 	}
 }
+
+func TestApplyRunPromptOverridesClearsWorkflowThinking(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	planner, err := testPlannerForPlan(plan)
+	if err != nil {
+		t.Fatalf("testPlannerForPlan: %v", err)
+	}
+	store := testStoreForPlanForOverride(plan)
+	updated, _, err := planner.ApplyRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{ClearWorkflowThinking: true},
+	)
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverridesWithStore: %v", err)
+	}
+	if updated.ActiveSettings.ThinkingLevel != "" {
+		t.Fatalf("thinking level = %q, want cleared", updated.ActiveSettings.ThinkingLevel)
+	}
+}

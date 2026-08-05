@@ -35,6 +35,31 @@ func ResolveEdgeSelectorApplicability(
 	catalog TargetAgentCatalog,
 	targetRole string,
 ) EdgeSelectorApplicability {
+	plan, err := PlanTransitionSelection(TransitionParameterContractRequest{
+		Edge:       edge,
+		SourceKind: source,
+		TargetKind: target,
+		TargetRole: targetRole,
+		FanOut:     fanOut,
+		Catalog:    catalog,
+	})
+	if err != nil {
+		return EdgeSelectorApplicability{
+			Assignee: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
+			Thinking: SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration},
+		}
+	}
+	return plan.Applicability
+}
+
+func resolveEdgeSelectorApplicability(
+	edge Edge,
+	source NodeKind,
+	target NodeKind,
+	fanOut bool,
+	catalog TargetAgentCatalog,
+	targetRole string,
+) EdgeSelectorApplicability {
 	eligibleTopology := !fanOut &&
 		(source == NodeKindAgent || source == NodeKindScript) &&
 		target == NodeKindAgent
@@ -90,16 +115,14 @@ func thinkingApplicability(edge Edge, catalog TargetAgentCatalog, targetRole str
 		return SelectorApplicability{Reason: SelectorApplicabilityUnavailableConfiguration}
 	}
 	union := UnionTargetAgentThinkingCapabilities(roles)
+	if !union.ReasoningCapable {
+		return SelectorApplicability{Reason: SelectorApplicabilityNoThinkingSupport}
+	}
 	if union.Finite && len(union.Levels) == 0 {
 		return SelectorApplicability{Available: true, Reason: SelectorApplicabilityNoThinkingLevels}
 	}
 	if union.Finite && len(union.Levels) == 1 {
 		return SelectorApplicability{Available: true, Reason: SelectorApplicabilitySoleThinkingLevel}
 	}
-	for _, role := range roles {
-		if role.Thinking.ReasoningCapable {
-			return SelectorApplicability{Available: true, ParameterVisible: true, Reason: SelectorApplicabilityEligible}
-		}
-	}
-	return SelectorApplicability{Reason: SelectorApplicabilityNoThinkingSupport}
+	return SelectorApplicability{Available: true, ParameterVisible: true, Reason: SelectorApplicabilityEligible}
 }

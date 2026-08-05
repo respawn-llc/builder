@@ -15,8 +15,15 @@ type TransitionParameterContractRequest struct {
 	RetainedTargetRole           *TargetAgentRole
 	FanOut                       bool
 	TargetSessionResolved        bool
+	TargetSessionPolicy          AssigneeSessionPolicy
 	Catalog                      TargetAgentCatalog
 	RequireExecutionDescriptions bool
+	FallbackRole                 string
+	SubmittedRole                string
+	SubmittedThinking            string
+	ThinkingDescription          string
+	RetainedSession              *AgentExecutionSelection
+	MaterializeSelection         bool
 }
 
 type TransitionParameterContract struct {
@@ -26,7 +33,55 @@ type TransitionParameterContract struct {
 	Thinking        ThinkingCapability
 }
 
+type TransitionSelectionPlan struct {
+	Applicability      EdgeSelectorApplicability
+	Contract           TransitionParameterContract
+	ExecutionSelection *AgentExecutionSelection
+}
+
+func PlanTransitionSelection(request TransitionParameterContractRequest) (TransitionSelectionPlan, error) {
+	plan := TransitionSelectionPlan{
+		Applicability: resolveEdgeSelectorApplicability(
+			request.Edge,
+			request.SourceKind,
+			request.TargetKind,
+			request.FanOut,
+			request.Catalog,
+			request.TargetRole,
+		),
+	}
+	contract, err := planTransitionParameterContract(request)
+	if err != nil {
+		return plan, err
+	}
+	plan.Contract = contract
+	if request.MaterializeSelection {
+		selection, err := planTargetAgentExecutionSelection(TargetAgentExecutionSelectionRequest{
+			Edge:                request.Edge,
+			FallbackRole:        request.FallbackRole,
+			Catalog:             request.Catalog,
+			SubmittedRole:       request.SubmittedRole,
+			SubmittedThinking:   request.SubmittedThinking,
+			ThinkingDescription: request.ThinkingDescription,
+			RetainedSession:     request.RetainedSession,
+		})
+		if err != nil {
+			return plan, err
+		}
+		plan.ExecutionSelection = &selection
+	}
+	return plan, nil
+}
+
 func PlanTransitionParameterContract(request TransitionParameterContractRequest) (TransitionParameterContract, error) {
+	plan, err := PlanTransitionSelection(request)
+	if err != nil {
+		return TransitionParameterContract{}, err
+	}
+	return plan.Contract, nil
+}
+
+func planTransitionParameterContract(request TransitionParameterContractRequest) (TransitionParameterContract, error) {
 	roles := transitionThinkingRoles(request)
 	thinking := UnionTargetAgentThinkingCapabilities(roles)
 	consumption := ResolveProtectedParameterConsumption(ProtectedParameterConsumptionRequest{
@@ -35,6 +90,7 @@ func PlanTransitionParameterContract(request TransitionParameterContractRequest)
 		TargetKind:            request.TargetKind,
 		FanOut:                request.FanOut,
 		TargetSessionResolved: request.TargetSessionResolved,
+		TargetSessionPolicy:   request.TargetSessionPolicy,
 		ExplicitCallableRoles: explicitCallableRoleCount(request.Catalog),
 		Thinking:              thinking,
 	})

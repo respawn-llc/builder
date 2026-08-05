@@ -2,6 +2,8 @@ package workflowstore
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
@@ -18,6 +20,7 @@ func (s *Store) planTransitionParameterContract(
 	transitionBranchKey *workflow.TransitionBranchKey,
 	manualMoveContext bool,
 	requireExecutionDescriptions bool,
+	deferContextResolution bool,
 ) (workflow.TransitionParameterContract, error) {
 	if currentSource == nil {
 		return workflow.TransitionParameterContract{}, nil
@@ -25,8 +28,14 @@ func (s *Store) planTransitionParameterContract(
 	requiresProtectedPolicy := false
 	for _, parameter := range edge.Parameters {
 		if purpose := workflow.CanonicalParameterPurpose(parameter.Purpose); purpose == workflow.ParameterPurposeTargetAssignee || purpose == workflow.ParameterPurposeTargetThinking {
-			requiresProtectedPolicy = true
-			break
+			requiresProtectedPolicy =
+				(purpose == workflow.ParameterPurposeTargetAssignee &&
+					workflow.CanonicalAssigneeSelection(edge.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode) ||
+					(purpose == workflow.ParameterPurposeTargetThinking &&
+						workflow.CanonicalThinkingSelection(edge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode)
+			if requiresProtectedPolicy {
+				break
+			}
 		}
 	}
 	if !requiresProtectedPolicy {
@@ -51,10 +60,14 @@ func (s *Store) planTransitionParameterContract(
 		manualMoveContext,
 	)
 	if err != nil {
-		return workflow.TransitionParameterContract{}, err
+		if !deferContextResolution || (!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrManualMoveTransitionNotUsable)) {
+			return workflow.TransitionParameterContract{}, err
+		}
+		sessionID = nil
 	}
 
 	var retainedTargetRole *workflow.TargetAgentRole
+	sessionPolicy := workflow.AssigneeSessionPolicyEstablishTarget
 	if sessionID != nil {
 		policy, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
 			ContextMode:           edge.ContextMode,
@@ -64,18 +77,24 @@ func (s *Store) planTransitionParameterContract(
 		if err != nil {
 			return workflow.TransitionParameterContract{}, err
 		}
+		sessionPolicy = policy
 		if policy == workflow.AssigneeSessionPolicyPreserve {
 			selection, err := s.resolveRetainedSessionSelection(ctx, *sessionID)
 			if err != nil {
-				return workflow.TransitionParameterContract{}, err
-			}
-			role := workflow.TargetAgentRole{Identity: selection.Assignee}
-			if s.roleResolver != nil {
-				if resolved, ok := s.roleResolver.ResolveConfiguredRole(selection.Assignee); ok {
-					role = resolved
+				if !deferContextResolution || !errors.Is(err, sql.ErrNoRows) {
+					return workflow.TransitionParameterContract{}, err
 				}
+				sessionID = nil
+				sessionPolicy = workflow.AssigneeSessionPolicyEstablishTarget
+			} else {
+				role := workflow.TargetAgentRole{Identity: selection.Assignee}
+				if s.roleResolver != nil {
+					if resolved, ok := s.roleResolver.ResolveConfiguredRole(selection.Assignee); ok {
+						role = resolved
+					}
+				}
+				retainedTargetRole = &role
 			}
-			retainedTargetRole = &role
 		}
 	}
 
@@ -93,6 +112,7 @@ func (s *Store) planTransitionParameterContract(
 		RetainedTargetRole:           retainedTargetRole,
 		FanOut:                       edgeCount > 1,
 		TargetSessionResolved:        sessionID != nil,
+		TargetSessionPolicy:          sessionPolicy,
 		Catalog:                      s.roleResolver,
 		RequireExecutionDescriptions: requireExecutionDescriptions,
 	})

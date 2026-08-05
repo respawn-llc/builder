@@ -19,6 +19,7 @@ type ProtectedParameterConsumptionRequest struct {
 	TargetKind            NodeKind
 	FanOut                bool
 	TargetSessionResolved bool
+	TargetSessionPolicy   AssigneeSessionPolicy
 	ExplicitCallableRoles int
 	Thinking              ThinkingCapability
 }
@@ -36,7 +37,7 @@ func ResolveProtectedParameterConsumption(request ProtectedParameterConsumptionR
 		!(request.Edge.ContextMode == ContextModeContinueSession &&
 			CanonicalContextSource(request.Edge.ContextSource).Kind != ContextSourcePreviousTargetOrNew) {
 		switch {
-		case request.TargetSessionResolved:
+		case request.TargetSessionPolicy == AssigneeSessionPolicyPreserve:
 			result.Assignee = ProtectedParameterConsumptionIgnoreAuthorized
 		case request.ExplicitCallableRoles == 1:
 			result.Assignee = ProtectedParameterConsumptionIgnoreAuthorized

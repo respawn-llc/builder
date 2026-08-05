@@ -471,6 +471,7 @@ func (s *Store) currentNodeTransitionParameters(
 				transitionBranchKeyForCurrentNode(currentSource.Reference),
 				false,
 				true,
+				true,
 			)
 			if err != nil {
 				return nil, err

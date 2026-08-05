@@ -76,6 +76,12 @@ func TestResolveProtectedParameterConsumptionPolicies(t *testing.T) {
 				TargetKind:            test.target,
 				FanOut:                test.fanout,
 				TargetSessionResolved: test.targetResolved,
+				TargetSessionPolicy: func() AssigneeSessionPolicy {
+					if test.targetResolved {
+						return AssigneeSessionPolicyPreserve
+					}
+					return AssigneeSessionPolicyEstablishTarget
+				}(),
 				ExplicitCallableRoles: test.roleCount,
 				Thinking:              test.thinking,
 			})
@@ -83,5 +89,22 @@ func TestResolveProtectedParameterConsumptionPolicies(t *testing.T) {
 				t.Fatalf("policies = %+v, want assignee=%q thinking=%q", got, test.wantAssignee, test.wantThinking)
 			}
 		})
+	}
+}
+
+func TestCompactionWithResolvedTargetSessionStillRequiresAssigneeSelection(t *testing.T) {
+	got := ResolveProtectedParameterConsumption(ProtectedParameterConsumptionRequest{
+		Edge: Edge{
+			AssigneeSelection: AssigneeSelectionPreviousNode,
+			ContextMode:       ContextModeCompactAndContinueSession,
+		},
+		SourceKind:            NodeKindAgent,
+		TargetKind:            NodeKindAgent,
+		TargetSessionResolved: true,
+		TargetSessionPolicy:   AssigneeSessionPolicyEstablishTarget,
+		ExplicitCallableRoles: 2,
+	})
+	if got.Assignee != ProtectedParameterConsumptionRequiredValidate {
+		t.Fatalf("assignee policy = %q, want %q", got.Assignee, ProtectedParameterConsumptionRequiredValidate)
 	}
 }

@@ -631,14 +631,18 @@ func materializeTargetAgentSelection(
 			thinkingDescription = parameter.Description
 		}
 	}
-	selection, err := workflow.PlanTargetAgentExecutionSelection(workflow.TargetAgentExecutionSelectionRequest{
-		Edge:                request.Edge,
-		FallbackRole:        workflow.NodeSubagentRole(request.Target),
-		Catalog:             request.Catalog,
-		SubmittedRole:       submittedRole,
-		SubmittedThinking:   submittedThinking,
-		ThinkingDescription: thinkingDescription,
-		RetainedSession:     retainedSessionSelection,
+	plan, err := workflow.PlanTransitionSelection(workflow.TransitionParameterContractRequest{
+		Edge:                 request.Edge,
+		SourceKind:           request.Source.Kind(),
+		TargetKind:           request.Target.Kind(),
+		TargetRole:           workflow.NodeSubagentRole(request.Target),
+		FallbackRole:         workflow.NodeSubagentRole(request.Target),
+		Catalog:              request.Catalog,
+		SubmittedRole:        submittedRole,
+		SubmittedThinking:    submittedThinking,
+		ThinkingDescription:  thinkingDescription,
+		RetainedSession:      retainedSessionSelection,
+		MaterializeSelection: true,
 	})
 	if err != nil {
 		var selectionErr workflow.TargetAgentSelectionError
@@ -654,7 +658,10 @@ func materializeTargetAgentSelection(
 		}
 		return nil, err
 	}
-	return &selection, nil
+	if plan.ExecutionSelection == nil {
+		return nil, errors.New("transition selection planner omitted Agent execution selection")
+	}
+	return plan.ExecutionSelection, nil
 }
 
 func transitionParameterByKey(edge workflow.Edge, key string) (workflow.Parameter, bool) {
