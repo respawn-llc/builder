@@ -49,6 +49,7 @@ import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
+import { finishBoardTaskDeletion } from "./boardTaskDeletionNavigation";
 import {
   boardTaskDeletionCauseMatches,
   recordBoardTaskDeletionAttempt,
@@ -460,11 +461,8 @@ function BoardContent({
     try {
       await actions.delete.mutateAsync(target.taskID);
       if (target.taskID === selectedTaskId) {
-        const navigationResult = await navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id);
-        if (navigationResult.status === "failed") {
-          reportNavigationError(navigationResult.error);
-          return;
-        }
+        finishBoardTaskDeletion({ close, navigationResult: await navigation.closeProjectTask(board.projectID, board.selectedWorkflow.id), onNavigationError: reportNavigationError });
+        return;
       }
       close();
     } catch (error) {

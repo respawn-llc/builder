@@ -60,10 +60,12 @@
   `docs/tmp/KENT-356-pr-686-review-report.html`. The rejected August 3
   simplification must not be recorded as superseding resolved findings.
 - **Required scope cleanup:** Remove unrelated legacy-route migration handling,
-  server/worktree and timeout-test edits, and generic
-  `VirtualizedInfiniteList` scrolling changes. Errors remain typed and visible
-  at the UI boundary; no error swallowing, error-text parsing, hardcoded
-  app-facade copy, or string-based destination identity is permitted.
+  server/worktree and timeout-test edits. The typed scroll-restoration seam is
+  owned by `VirtualizedInfiniteList`; Task Detail supplies only its restoration
+  request and does not mutate the virtualized scroll element directly. Errors
+  remain typed and visible at the UI boundary; no error swallowing, error-text
+  parsing, hardcoded app-facade copy, or string-based destination identity is
+  permitted.
 - **Verification boundary:** Automated product-boundary tests, typecheck, lint,
   architecture checks, scope-diff checks, and builds are authoritative.
   Product browser/manual QA remains excluded; opening the review report in
@@ -98,9 +100,9 @@
   existing UI error boundary. The navigation core does not swallow errors,
   parse error text, or own localized copy.
 - KENT-356 does not add legacy-route migration behavior, change server or
-  worktree code, extend test timeouts, or change generic
-  `VirtualizedInfiniteList` scrolling behavior. Task Detail owns restoration
-  through its existing rendering and list seams.
+  worktree code, or extend test timeouts. Scroll restoration is a typed
+  offset request owned by `VirtualizedInfiniteList`; Task Detail owns the
+  request data through its existing rendering and list seam.
 - Selecting a related Task pushes its Task Detail onto the sidebar stack.
 - When the selected Task already has an entry earlier in the stack, the sidebar
   returns to that saved entry and removes every later destination instead of
@@ -293,10 +295,12 @@
   drafts over fresh data. Incoming focus wins over saved scroll; Back supplies
   no focus. Switching location keys remounts mutation state, while same-current
   refocus remains feature-local.
-- Restore scroll through Task Detail's existing list/scroll-element seam.
-  Reapply one pixel offset after restored rows mount and accept browser clamping;
-  do not modify `VirtualizedInfiniteList`, request pages for restoration, or
-  change ordinary inactive React Query lifetime.
+- Restore scroll through Task Detail's existing list seam. Capture the current
+  scroll element for snapshots, then send one typed pixel-offset request after
+  restored rows mount; `VirtualizedInfiniteList` applies it through TanStack
+  Virtual so range and infinite-load state stay coherent. Accept browser
+  clamping. Do not request pages for restoration or change ordinary inactive
+  React Query lifetime.
 - Related Task rows and Dependency Add receive Push only from the
   sidebar-rendered Task adapter; standalone Task Detail keeps route navigation.
   Inbox Previous/Next remains replace-only. The generic history never names
@@ -362,8 +366,8 @@
 - Keep Project `taskId` route search optional and non-empty, omit absence, and
   propagate navigation failure to the existing localized Board boundary.
   Remove legacy-selector migration/error/copy paths, error-text parsing,
-  unrelated route refactors, server/worktree timeout edits, and generic
-  scrolling changes.
+  unrelated route refactors, server/worktree timeout edits, and untyped
+  feature-owned virtualizer scrolling.
 - Keep X and Back in one leading-controls grid child; Back is hidden at root.
   Use the existing sidebar CSS/reduced-motion path for horizontal Push/Back and
   the existing whole-panel X animation; KENT-356 does not modify the generic
@@ -676,10 +680,12 @@
   operation-scoped attempts, generic VirtualizedInfiniteList changes were
   removed, and route/deletion regression coverage was added. Final automated
   verification passed: `./scripts/test.sh desktop` (81 files / 367 tests) and
-  `./scripts/build.sh desktop`. Current remediation removes the generic
-  VirtualizedInfiniteList offset seam and its test per the Design prohibition,
-  restores Task Detail's existing scroll-element seam, and requires a
-  successful deletion attempt before preserving a selector transition.
-  Navigation now returns a typed close-project outcome from the real adapter,
-  so Board failure handling observes and surfaces the production result.
-  Final verification is rerunning after this round.
+  `./scripts/build.sh desktop`. Following the user's August 5 decision to
+  revise the Design, the current remediation restores one typed offset request
+  at the VirtualizedInfiniteList owner, where it updates both the DOM position
+  and TanStack Virtual range/load-more state; Task Detail supplies the request
+  without direct scroll mutation. The immediate-navigation result wrapper is
+  unified, and committed Board deletion now dismisses its confirmation after a
+  typed navigation failure while surfacing the error. Focused regression tests
+  cover the virtual range/load-more behavior and deletion confirmation
+  settlement. Final verification is rerunning after this round.

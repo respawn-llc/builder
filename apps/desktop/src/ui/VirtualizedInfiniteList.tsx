@@ -31,6 +31,8 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   initialScrollKey?: string | undefined;
   initialScrollRequestKey?: string | undefined;
   initialScrollAlign?: "auto" | "start" | undefined;
+  initialScrollOffset?: number | undefined;
+  initialScrollOffsetRequestKey?: string | undefined;
   paddingEnd?: number | undefined;
   paddingStart?: number | undefined;
   className?: string | undefined;
@@ -65,6 +67,8 @@ export function VirtualizedInfiniteList<TItem>({
   initialScrollKey,
   initialScrollRequestKey,
   initialScrollAlign = "start",
+  initialScrollOffset,
+  initialScrollOffsetRequestKey,
   paddingEnd = 0,
   paddingStart = 0,
   className,
@@ -87,6 +91,7 @@ export function VirtualizedInfiniteList<TItem>({
     [onScrollElementChange],
   );
   const lastInitialScrollKeyRef = useRef<string | null>(null);
+  const lastInitialScrollOffsetRequestKeyRef = useRef<string | null>(null);
   const lastLoadPreviousKeyRef = useRef<string | null>(null);
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
@@ -245,6 +250,23 @@ export function VirtualizedInfiniteList<TItem>({
     items,
     virtualizer,
   ]);
+
+  useLayoutEffect(() => {
+    if (initialScrollOffset === undefined || initialScrollOffsetRequestKey === undefined) {
+      return;
+    }
+    if (lastInitialScrollOffsetRequestKeyRef.current === initialScrollOffsetRequestKey) {
+      return;
+    }
+    const element = scrollRef.current;
+    if (element === null) {
+      return;
+    }
+    lastInitialScrollOffsetRequestKeyRef.current = initialScrollOffsetRequestKey;
+    const offset = Math.max(0, initialScrollOffset);
+    element.scrollTop = offset;
+    virtualizer.scrollToOffset(offset, { behavior: "auto" });
+  }, [initialScrollOffset, initialScrollOffsetRequestKey, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);
