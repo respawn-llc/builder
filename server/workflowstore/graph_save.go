@@ -157,14 +157,14 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		Structural:      structural,
 		Definition:      def,
 	}
-	currentDefinition, record, err := workflowDefinitionFromQueries(ctx, q, workflowID)
+	_, record, err := workflowDefinitionFromQueries(ctx, q, workflowID)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
 	plan.Record = record
 	var evaluation workflowGraphSaveDynamicImpact
 	if (graphChanged || metadataChanged) && current.Version == req.ExpectedVersion {
-		evaluation, err = evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, currentDefinition, def, structural)
+		evaluation, err = evaluateWorkflowGraphSaveDynamicImpact(ctx, q, workflowID, structural)
 		if err != nil {
 			return WorkflowGraphSavePlan{}, err
 		}
@@ -246,11 +246,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan.workflowGraphSaveResult(false), nil
 	}
-	currentDefinition, _, err := workflowDefinitionFromQueries(ctx, q, plan.WorkflowID)
-	if err != nil {
-		return WorkflowGraphSaveResult{}, err
-	}
-	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, currentDefinition, plan.Definition, plan.Structural)
+	evaluation, err := evaluateWorkflowGraphSaveDynamicImpact(ctx, q, plan.WorkflowID, plan.Structural)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}

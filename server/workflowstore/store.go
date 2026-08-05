@@ -107,11 +107,7 @@ func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID runtim
 	if err != nil {
 		return 0, err
 	}
-	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, next)
-	if err != nil {
-		return 0, err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, next); err != nil {
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, next); err != nil {
 		return 0, err
 	}
 	if err := apply(ctx, q, tx); err != nil {
@@ -833,12 +829,7 @@ func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
 	if err != nil {
 		return err
 	}
-	nextGraph := withoutWorkflowGraphNode(currentGraph, nodeID)
-	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, nextGraph)
-	if err != nil {
-		return err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, nextGraph); err != nil {
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphNode(currentGraph, nodeID)); err != nil {
 		return err
 	}
 	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
@@ -878,12 +869,7 @@ func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
 	if err != nil {
 		return err
 	}
-	nextGraph := withoutWorkflowGraphEdge(currentGraph, edgeID)
-	currentDefinition, proposedDefinition, err := workflowGraphEditPolicyDefinitions(ctx, q, workflowID, nextGraph)
-	if err != nil {
-		return err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, currentDefinition, proposedDefinition, nextGraph); err != nil {
+	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphEdge(currentGraph, edgeID)); err != nil {
 		return err
 	}
 	refs, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
