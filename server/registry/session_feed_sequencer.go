@@ -131,7 +131,7 @@ func (s *sessionFeedSequencer) CloseContractViolation(err error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	contractErr := transcriptProjectionContractError(err)
-	s.broker.Close(contractErr)
+	s.broker.CloseSubscribers(contractErr)
 	return contractErr
 }
 

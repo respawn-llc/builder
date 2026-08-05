@@ -160,6 +160,39 @@ func TestPublishMalformedLiveLocatorClosesTranscriptFeedWithContractError(t *tes
 	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
 		t.Fatalf("subscription close reason = %q ok=%t, want contract violation", reason, ok)
 	}
+
+	reconnected, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: engine.SessionID(),
+	})
+	if err != nil {
+		t.Fatalf("reconnect transcript subscription: %v", err)
+	}
+	defer func() { _ = reconnected.Close() }()
+	if hydration := nextTranscriptMessage(t, reconnected); hydration.Kind() != clientui.TranscriptMessageHydration {
+		t.Fatalf("reconnected first message = %+v, want hydration", hydration)
+	}
+	err = registry.PublishAuthorityRuntimeEvent(
+		registryTestResourceRef(engine.SessionID()),
+		runtime.Event{
+			Kind:        runtime.EventUserMessageFlushed,
+			StepID:      registryTestStepID,
+			UserMessage: "valid after reconnect",
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
+				EventSequence: 1,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("publish valid row after reconnect: %v", err)
+	}
+	message := nextTranscriptMessage(t, reconnected)
+	if message.Kind() != clientui.TranscriptMessageCommittedRow {
+		t.Fatalf("reconnected live message = %+v, want committed row", message)
+	}
+	row := transcriptPayload[clientui.TranscriptCommittedRow](t, message)
+	if row.Locator.EventSequence != 1 || row.Locator.RowOrdinal != 1 {
+		t.Fatalf("reconnected live locator = %+v, want {event=1 ordinal=1}", row.Locator)
+	}
 }
 
 func TestPublishMalformedLiveLocatorPanicsInContractMode(t *testing.T) {

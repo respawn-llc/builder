@@ -124,6 +124,22 @@ func (b *transcriptSubscriptionBroker) Close(err error) {
 	}
 }
 
+func (b *transcriptSubscriptionBroker) CloseSubscribers(err error) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	subs := make([]*transcriptSubscription, 0, len(b.subscribers))
+	for id, sub := range b.subscribers {
+		subs = append(subs, sub)
+		delete(b.subscribers, id)
+	}
+	b.mu.Unlock()
+	for _, sub := range subs {
+		sub.closeWithError(err)
+	}
+}
+
 func (s *transcriptSubscription) publish(event clientui.TranscriptEvent) error {
 	if s == nil {
 		return errTranscriptContractViolation("transcript subscription is nil")
