@@ -7,8 +7,6 @@ import { WorkflowEditorRoute, WorkflowInspectorSidebar } from "@/features/workfl
 import { LinkWorkflowSidebar, WorkflowCreateForm } from "@/features/workflows";
 import { useAppNavigation } from "@/app-facade";
 import type { SidebarController, SidebarDestination } from "@/app-facade";
-import { taskDetailSidebarDestination } from "./sidebarDestinationAdapter";
-import { useSidebarHost } from "./sidebarHostContext";
 
 export function SidebarDestinationView({
   closeSidebar,
@@ -19,22 +17,14 @@ export function SidebarDestinationView({
   destination: SidebarDestination;
   resolveSidebar: SidebarController["resolveSidebar"];
 }>): ReactElement {
-  const { actions, snapshot } = useSidebarHost();
   if (destination.kind === "newTask") {
     return (
       <NewTaskForm
         boardQueryWorkflowID={destination.boardQueryWorkflowID}
         className="w-full"
         initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
-        onSubmitAdmission={actions.admitMutation}
-        onSubmitted={(taskID) => {
-          if (destination.pendingRelationship !== undefined && taskID !== undefined) {
-            actions.replace(
-              taskDetailSidebarDestination(taskID, destination.projectID, { mode: destination.mode }),
-            );
-            return;
-          }
-          actions.resolve({ destination: "newTask", status: "submitted" });
+        onSubmitted={() => {
+          resolveSidebar({ destination: "newTask", status: "submitted" });
         }}
         projectID={destination.projectID}
         pendingRelationship={destination.pendingRelationship}
@@ -48,11 +38,6 @@ export function SidebarDestinationView({
       <TaskDetailSurface
         enabled
         initialFocus={destination.initialFocus}
-        sidebarSnapshot={snapshot ?? undefined}
-        onCaptureSidebarState={actions.capture}
-        onMissingTask={() => {
-          actions.invalidate();
-        }}
         onMutated={destination.onMutated}
         taskId={destination.taskID}
       />

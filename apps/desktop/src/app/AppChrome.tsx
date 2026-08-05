@@ -1,4 +1,4 @@
-import { Link, useRouter } from "@tanstack/react-router";
+import { Link, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Home, SunMoon } from "lucide-react";
 import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from "react";
@@ -16,13 +16,9 @@ import {
   appChromeTitlePlacementClassNames,
 } from "./appChromeStyles";
 import { useAppNavigation, useNavigationStackState } from "@/app-facade";
-import {
-  completeProjectDeletion,
-  projectRouteIsCurrent,
-  useProjectDeletedEvents,
-} from "@/app-facade";
-import { SidebarHost } from "./sidebar";
-import { useSidebar } from "@/app-facade";
+import { completeProjectDeletion, useProjectDeletedEvents } from "@/app-facade";
+import { SidebarHost, SidebarRouteChangeCloser } from "./sidebar";
+import { useSidebar, type SidebarDestination } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -123,6 +119,7 @@ export function AppChrome({ children }: AppChromeProps) {
             </div>
             <SidebarHost />
           </div>
+          <SidebarRouteChangeCloser />
         </WorkflowEditorDraftBridgeProvider>
       </SidebarProvider>
     </main>
@@ -152,21 +149,21 @@ function AppChromeFloatingUpdateChip({
 
 function ProjectDeletionEventHandler() {
   const { t } = useTranslation();
-  const router = useRouter();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
-  const { closeSidebar, invalidateSidebar } = useSidebar();
+  const { activeDestination, closeSidebar } = useSidebar();
   const { push } = useStatusController();
   useProjectDeletedEvents(
     nativeBridge,
     useCallback(
       (event) => {
+        const routeMatches = routeReferencesProject(location.pathname, event.projectID);
+        const sidebarMatches = sidebarReferencesProject(activeDestination, event.projectID);
         void completeProjectDeletion({
-          closeSidebar,
-          invalidateSidebar,
-          isProjectRouteCurrent: () => projectRouteIsCurrent(router, event.projectID),
-          navigateHome: navigation.openHome,
+          closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
+          navigateHome: routeMatches ? navigation.openHome : noopNavigation,
           projectID: event.projectID,
           pushDeletedToast: () => {
             push({
@@ -178,10 +175,33 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [closeSidebar, invalidateSidebar, navigation.openHome, push, queryClient, router, t],
+      [activeDestination, closeSidebar, location.pathname, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
+}
+
+function routeReferencesProject(pathname: string, projectID: string): boolean {
+  const segments = pathname.split("/").filter((segment) => segment.length > 0);
+  return segments[0] === "projects" && segments[1] === projectID;
+}
+
+function sidebarReferencesProject(destination: SidebarDestination | null, projectID: string): boolean {
+  if (destination === null) {
+    return false;
+  }
+  if ("projectID" in destination && destination.projectID === projectID) {
+    return true;
+  }
+  return destination.kind === "linkWorkflow" && destination.projectID === projectID;
+}
+
+function noopCloseSidebar(): void {
+  return;
+}
+
+async function noopNavigation(): Promise<void> {
+  return;
 }
 
 function isPlainPrimaryClick(event: MouseEvent): boolean {

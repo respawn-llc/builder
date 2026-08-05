@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type TaskDetail } from "@/api";
-import type {
-  SidebarDestination,
-  SidebarStateCapture,
-  SidebarTaskDetailSnapshot,
-  TaskDetailInitialFocus,
-} from "@/app-facade";
+import type { TaskDetailInitialFocus } from "@/app-facade";
 import { useAppNavigation, useConnectionSnapshot, useSidebar, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
 import {
@@ -20,7 +15,6 @@ import { TaskResumeProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
-import { taskDetailSavePending, taskDetailSnapshot } from "./taskDetailSidebarState";
 
 // TaskDraftState tracks the editable title/body draft alongside the server
 // snapshot (`base`) the draft last synced to. Comparing the draft to `base`
@@ -33,224 +27,6 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
-function relatedNewTaskDestination(
-  detail: TaskDetail,
-  direction: "blocked-by" | "blocks",
-): Extract<SidebarDestination, { kind: "newTask" }> {
-  return {
-    boardQueryWorkflowID: detail.workflowID,
-    initialSourceWorkspaceID: detail.sourceWorkspace.id,
-    kind: "newTask",
-    mode: "overlay",
-    pendingRelationship: {
-      originTaskID: detail.id,
-      newTaskRole: direction === "blocked-by" ? "blocker" : "blocked",
-    },
-    projectID: detail.projectID,
-    workflowID: detail.workflowID,
-  };
-}
-
-function relatedTaskDestination(
-  current: Extract<SidebarDestination, { kind: "taskDetail" }>,
-  taskID: string,
-): Extract<SidebarDestination, { kind: "taskDetail" }> {
-  return {
-    kind: "taskDetail",
-    projectID: current.projectID,
-    taskID,
-    ...(current.mode === undefined ? {} : { mode: current.mode }),
-    ...(current.onMutated === undefined ? {} : { onMutated: current.onMutated }),
-  };
-}
-
-function useTaskDetailSidebarCapture({
-  captureState,
-  descriptionExpanded,
-  editingComment,
-  newCommentBody,
-  savePending,
-  scrollElementRef,
-  selectedTab,
-  titleBodyDraft,
-}: Readonly<{
-  captureState: ((capture: SidebarStateCapture) => () => void) | undefined;
-  descriptionExpanded: boolean;
-  editingComment: Readonly<{ id: string; body: string }> | null;
-  newCommentBody: string;
-  savePending: boolean;
-  scrollElementRef: Readonly<{ current: HTMLDivElement | null }>;
-  selectedTab: "comments" | "activity";
-  titleBodyDraft: TaskDraft | undefined;
-}>) {
-  useEffect(() => {
-    if (captureState === undefined) return;
-    return captureState(() =>
-      savePending
-        ? null
-        : taskDetailSnapshot({
-            descriptionExpanded,
-            editedCommentDraft:
-              editingComment === null
-                ? undefined
-                : { body: editingComment.body, commentID: editingComment.id },
-            newCommentDraft: newCommentBody,
-            scrollTop: scrollElementRef.current?.scrollTop ?? 0,
-            selectedTab,
-            titleBodyDraft,
-          }),
-    );
-  }, [
-    captureState,
-    descriptionExpanded,
-    editingComment,
-    newCommentBody,
-    savePending,
-    scrollElementRef,
-    selectedTab,
-    titleBodyDraft,
-  ]);
-}
-
-function initialTaskDraftState(
-  taskID: string,
-  serverDraft: TaskDraft,
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): TaskDraftState {
-  return { taskID, base: serverDraft, draft: snapshot?.titleBodyDraft ?? serverDraft };
-}
-
-function restoredEditingComment(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): Readonly<{ id: string; body: string }> | null {
-  return snapshot?.editedCommentDraft === undefined
-    ? null
-    : { id: snapshot.editedCommentDraft.commentID, body: snapshot.editedCommentDraft.body };
-}
-
-function restoredDescriptionPresentation(
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-): DescriptionPresentationState {
-  return snapshot === undefined
-    ? initialDescriptionPresentationState
-    : { editing: false, expanded: snapshot.descriptionExpanded };
-}
-
-function useTaskDetailNavigation({
-  activeDestination,
-  detail,
-  navigation,
-  openSidebar,
-  pushSidebar,
-}: Readonly<{
-  activeDestination: SidebarDestination | null;
-  detail: TaskDetail;
-  navigation: ReturnType<typeof useAppNavigation>;
-  openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
-  pushSidebar: ReturnType<typeof useSidebar>["pushSidebar"];
-}>) {
-  const addDependency = useCallback(
-    (direction: "blocked-by" | "blocks") => {
-      const destination = relatedNewTaskDestination(detail, direction);
-      if (activeDestination?.kind === "taskDetail") pushSidebar(destination);
-      else void openSidebar(destination);
-    },
-    [activeDestination, detail, openSidebar, pushSidebar],
-  );
-  const selectDependencyTask = useCallback(
-    (taskID: string) => {
-      if (activeDestination?.kind === "taskDetail") {
-        pushSidebar(relatedTaskDestination(activeDestination, taskID));
-        return;
-      }
-      void navigation.replaceTask(taskID);
-    },
-    [activeDestination, navigation, pushSidebar],
-  );
-  return { addDependency, selectDependencyTask };
-}
-
-function taskDetailRenderState({
-  detail,
-  draftState,
-  loadedTaskID,
-  serverDraft,
-  snapshot,
-}: Readonly<{
-  detail: TaskDetail;
-  draftState: TaskDraftState;
-  loadedTaskID: string;
-  serverDraft: TaskDraft;
-  snapshot: SidebarTaskDetailSnapshot | undefined;
-}>): Readonly<{ changed: boolean; state: TaskDraftState }> {
-  if (loadedTaskID !== detail.id) {
-    return {
-      changed: true,
-      state: initialTaskDraftState(detail.id, serverDraft, snapshot),
-    };
-  }
-  return {
-    changed: false,
-    state: reconcileDraftState(draftState, detail.id, serverDraft),
-  };
-}
-
-function useTaskDetailLocalState(
-  detail: TaskDetail,
-  serverDraft: TaskDraft,
-  snapshot: SidebarTaskDetailSnapshot | undefined,
-) {
-  const [draftState, setDraftState] = useState<TaskDraftState>(() =>
-    initialTaskDraftState(detail.id, serverDraft, snapshot),
-  );
-  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(
-    () => restoredEditingComment(snapshot),
-  );
-  const [newCommentBody, setNewCommentBody] = useState(snapshot?.newCommentDraft ?? "");
-  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
-    () => restoredDescriptionPresentation(snapshot),
-  );
-  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(
-    snapshot?.selectedTab ?? "comments",
-  );
-  const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
-    () => new Map(),
-  );
-  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
-  const { changed: taskChanged, state: reconciled } = taskDetailRenderState({
-    detail,
-    draftState,
-    loadedTaskID,
-    serverDraft,
-    snapshot,
-  });
-  if (taskChanged) {
-    setLoadedTaskID(detail.id);
-    setEditingComment(restoredEditingComment(snapshot));
-    setNewCommentBody(snapshot?.newCommentDraft ?? "");
-    setDescriptionPresentation(restoredDescriptionPresentation(snapshot));
-    setDraftState(reconciled);
-    setSelectedTab(snapshot?.selectedTab ?? "comments");
-    setQuestionSelections(new Map());
-  }
-  if (reconciled !== draftState) setDraftState(reconciled);
-  return {
-    draft: reconciled.draft,
-    draftState: reconciled,
-    editingComment,
-    newCommentBody,
-    descriptionPresentation,
-    questionSelections,
-    selectedTab,
-    setDraftState,
-    setEditingComment,
-    setNewCommentBody,
-    setDescriptionPresentation,
-    setQuestionSelections,
-    setSelectedTab,
-  };
-}
-
 export function TaskDetailContent({
   activity,
   attention,
@@ -259,9 +35,6 @@ export function TaskDetailContent({
   initialFocus,
   onMutated,
   openLink,
-  onCaptureSidebarState,
-  restoredDataReady,
-  sidebarSnapshot,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
@@ -270,36 +43,39 @@ export function TaskDetailContent({
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
-  onCaptureSidebarState?: ((capture: SidebarStateCapture) => () => void) | undefined;
-  restoredDataReady: boolean;
-  sidebarSnapshot?: SidebarTaskDetailSnapshot | undefined;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const navigation = useAppNavigation();
-  const {
-    activeDestination,
-    pushSidebar,
-    openSidebar,
-  } = useSidebar();
+  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
   const serverDraft = taskDraft(detail);
-  const restoredSnapshot = sidebarSnapshot;
-  const scrollElementRef = useRef<HTMLDivElement | null>(null);
-  const {
-    draft,
-    draftState,
-    editingComment,
-    newCommentBody,
-    descriptionPresentation,
-    questionSelections,
-    selectedTab,
-    setDraftState,
-    setEditingComment,
-    setNewCommentBody,
-    setDescriptionPresentation,
-    setQuestionSelections,
-    setSelectedTab,
-  } = useTaskDetailLocalState(detail, serverDraft, restoredSnapshot);
+  const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
+    taskID: detail.id,
+    base: serverDraft,
+    draft: serverDraft,
+  }));
+  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(null);
+  const [newCommentBody, setNewCommentBody] = useState("");
+  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
+    initialDescriptionPresentationState,
+  );
+  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">("comments");
+  const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
+    () => new Map(),
+  );
+  // When the surface switches to a different task, drop the previous task's
+  // in-progress comment edit, new-comment draft, and question selections so they
+  // don't bleed into the newly loaded task. Reset during render (the React
+  // "adjust state on prop change" pattern) rather than in an effect. The
+  // title/body draft is reconciled separately below via reconcileDraftState.
+  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
+  if (loadedTaskID !== detail.id) {
+    setLoadedTaskID(detail.id);
+    setEditingComment(null);
+    setNewCommentBody("");
+    setDescriptionPresentation(initialDescriptionPresentationState);
+    setQuestionSelections(new Map());
+  }
   const update = useUpdateTask(detail.id, detail.projectID);
   const reportActionError = useCallback(
     (action: "dependency_remove" | "interrupt", error: unknown) => {
@@ -323,11 +99,6 @@ export function TaskDetailContent({
     onActionError: reportActionError,
     onChanged: onMutated,
   });
-  const savePending = taskDetailSavePending({
-    addComment: mutations.addComment.isPending,
-    editComment: mutations.replaceComment.isPending,
-    task: update.isPending,
-  });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
 
@@ -337,18 +108,11 @@ export function TaskDetailContent({
   // unsaved edits keeps the user's draft so a background refresh never clobbers
   // in-progress work. A draft that has caught up to the server (e.g. after a
   // save) re-baselines so subsequent server changes are followed again.
-  const reconciled = draftState;
-
-  useTaskDetailSidebarCapture({
-    captureState: onCaptureSidebarState,
-    descriptionExpanded: descriptionPresentation.expanded,
-    editingComment,
-    newCommentBody,
-    savePending,
-    scrollElementRef,
-    selectedTab,
-    titleBodyDraft: sameDraft(reconciled.draft, reconciled.base) ? undefined : reconciled.draft,
-  });
+  const reconciled = reconcileDraftState(draftState, detail.id, serverDraft);
+  if (reconciled !== draftState) {
+    setDraftState(reconciled);
+  }
+  const draft = reconciled.draft;
 
   async function saveDraft(nextDraft: TaskDraft = draft): Promise<void> {
     await update.mutateAsync({
@@ -358,13 +122,6 @@ export function TaskDetailContent({
     });
     onMutated?.();
   }
-  const { addDependency, selectDependencyTask } = useTaskDetailNavigation({
-    activeDestination,
-    detail,
-    navigation,
-    openSidebar,
-    pushSidebar,
-  });
 
   return (
     <TaskResumeProvider key={detail.id} onApplied={mutations.refresh} taskID={detail.id}>
@@ -374,8 +131,6 @@ export function TaskDetailContent({
       comments={comments}
       detail={detail}
       disabled={connection.phase !== "connected"}
-      dependencyDisabled={connection.phase !== "connected"}
-      dependencyNavigationDisabled={connection.phase !== "connected" || savePending}
       draft={draft}
       descriptionPresentation={descriptionPresentation}
       editingComment={editingComment}
@@ -386,11 +141,40 @@ export function TaskDetailContent({
         setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
       }}
       onDescriptionPresentationChange={setDescriptionPresentation}
-      onAddDependency={addDependency}
+      onAddDependency={(direction) => {
+        const destination = {
+          boardQueryWorkflowID: detail.workflowID,
+          initialSourceWorkspaceID: detail.sourceWorkspace.id,
+          kind: "newTask" as const,
+          mode: "overlay" as const,
+          pendingRelationship: {
+            originTaskID: detail.id,
+            newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
+          },
+          projectID: detail.projectID,
+          workflowID: detail.workflowID,
+        };
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar(destination);
+        } else {
+          void openSidebar(destination);
+        }
+      }}
       onRemoveDependency={(pair) => {
         mutations.removeDependency.mutate(pair);
       }}
-      onSelectDependencyTask={selectDependencyTask}
+      onSelectDependencyTask={(taskID) => {
+        if (activeDestination?.kind === "taskDetail") {
+          replaceSidebar({
+            kind: "taskDetail",
+            taskID,
+            ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
+            ...(activeDestination.onMutated === undefined ? {} : { onMutated: activeDestination.onMutated }),
+          });
+          return;
+        }
+        void navigation.replaceTask(taskID);
+      }}
       onNewCommentBodyChange={setNewCommentBody}
       onEditingCommentChange={setEditingComment}
       onQuestionSelectionChange={(askID, selection) => {
@@ -399,16 +183,11 @@ export function TaskDetailContent({
       onSaveDraft={saveDraft}
       openLink={openLink}
       questionSelections={questionSelections}
-      restoredDataReady={restoredDataReady}
-      restoredScrollTop={restoredSnapshot?.scrollTop}
       selectedTab={selectedTab}
       setTab={setSelectedTab}
       updateError={update.error}
-      updatePending={update.isPending}
-      onScrollElementChange={(element) => {
-        scrollElementRef.current = element;
-      }}
-    />
+        updatePending={update.isPending}
+      />
     </TaskResumeProvider>
   );
 }

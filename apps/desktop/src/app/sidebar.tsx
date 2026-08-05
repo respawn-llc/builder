@@ -1,5 +1,6 @@
+import { useLocation } from "@tanstack/react-router";
 import type { NativeDialogWindowOptions } from "@app/native-bridge";
-import { ChevronLeft, PictureInPicture, Plus, X } from "lucide-react";
+import { PictureInPicture, Plus, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -25,7 +26,6 @@ import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-faca
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { SidebarHeaderOffsetContext } from "@/app-facade";
 import { sidebarPopOutOptions } from "./sidebarPopOut";
-import { useSidebarHost } from "./sidebarHostContext";
 import { sidebarTitle } from "@/app-facade";
 import { sidebarSizePreference } from "@/app-facade";
 import { useSidebar, type SidebarDestination } from "@/app-facade";
@@ -38,19 +38,27 @@ import {
   type SidebarResizeBounds,
 } from "@/app-facade";
 
+export function SidebarRouteChangeCloser() {
+  const location = useLocation();
+  const { activeDestination, closeSidebar } = useSidebar();
+  const routeKey = `${location.pathname}?${location.searchStr}`;
+  const previousRouteKeyRef = useRef(routeKey);
+
+  useEffect(() => {
+    if (previousRouteKeyRef.current !== routeKey) {
+      previousRouteKeyRef.current = routeKey;
+      if (activeDestination !== null) {
+        closeSidebar("route_change");
+      }
+    }
+  }, [activeDestination, closeSidebar, routeKey]);
+
+  return null;
+}
+
 export function SidebarHost() {
   const { t } = useTranslation();
-  const { direction, key: hostKey, mutationAdmitted } = useSidebarHost();
-  const {
-    activeDestination,
-    backSidebar,
-    canGoBack,
-    closeSidebar,
-    phase,
-    resizeSidebar,
-    resolveSidebar,
-    sidebarWidthPx,
-  } =
+  const { activeDestination, closeSidebar, phase, resizeSidebar, resolveSidebar, sidebarWidthPx } =
     useSidebar();
   const sizePreference = useMemo(() => sidebarSizePreference(activeDestination), [activeDestination]);
   const titleId = useId();
@@ -259,28 +267,14 @@ export function SidebarHost() {
           className="absolute top-0 right-0 left-0 z-10 grid grid-cols-[auto_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-[var(--space-3)] border-b border-[var(--color-outline)] bg-[var(--color-island-0)] px-[var(--space-4)] py-[var(--space-3)] [backdrop-filter:blur(8px)]"
           ref={headerRef}
         >
-          <div className="flex items-center gap-[var(--space-1)]" data-testid="app-sidebar-leading-controls">
-            <IconTooltipButton
-              disabled={mutationAdmitted}
-              label={t("app.close")}
-              onClick={() => {
-                closeSidebar("closed");
-              }}
-            >
-              <X aria-hidden="true" size={18} strokeWidth={1.5} />
-            </IconTooltipButton>
-            {canGoBack ? (
-              <IconTooltipButton
-                disabled={mutationAdmitted}
-                label={t("app.back")}
-                onClick={() => {
-                  backSidebar();
-                }}
-              >
-                <ChevronLeft aria-hidden="true" size={18} strokeWidth={1.5} />
-              </IconTooltipButton>
-            ) : null}
-          </div>
+          <IconTooltipButton
+            label={t("app.close")}
+            onClick={() => {
+              closeSidebar("closed");
+            }}
+          >
+            <X aria-hidden="true" size={18} strokeWidth={1.5} />
+          </IconTooltipButton>
           <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
             {title}
           </h2>
@@ -294,13 +288,15 @@ export function SidebarHost() {
         <div
           className={cx(
             "absolute right-0 bottom-0 left-0 min-h-0",
-            sidebarDestinationContentClassName(activeDestination.kind),
-            sidebarDestinationMotionClassName(direction),
+            activeDestination.kind === "workflowEditor"
+              ? "top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]"
+              : activeDestination.kind === "taskDetail" || activeDestination.kind === "projectEdit"
+                ? "top-0 overflow-hidden"
+                : "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]",
           )}
         >
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView
-              key={hostKey ?? undefined}
               closeSidebar={closeSidebar}
               destination={activeDestination}
               resolveSidebar={resolveSidebar}
@@ -319,28 +315,6 @@ function SidebarInboxNavSlot({ destination }: Readonly<{ destination: SidebarDes
   return <SidebarInboxNav destination={destination} />;
 }
 
-function sidebarDestinationContentClassName(kind: SidebarDestination["kind"]): string {
-  switch (kind) {
-    case "workflowEditor":
-      return "top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]";
-    case "taskDetail":
-    case "projectEdit":
-      return "top-0 overflow-hidden";
-    case "custom":
-    case "newTask":
-    case "workflowCreate":
-    case "linkWorkflow":
-    case "workflowInspect":
-      return "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]";
-  }
-}
-
-function sidebarDestinationMotionClassName(direction: "push" | "back" | null): string | null {
-  if (direction === "push") return "app-sidebar-destination-push";
-  if (direction === "back") return "app-sidebar-destination-back";
-  return null;
-}
-
 function SidebarPopOutSlot({
   destination,
   title,
@@ -355,7 +329,7 @@ function SidebarPopOutSlot({
 function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindowOptions }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const { actions } = useSidebarHost();
+  const { closeSidebar } = useSidebar();
   const { push } = useStatusController();
   if (!nativeBridge.capabilities.dialogWindows) {
     return null;
@@ -364,11 +338,10 @@ function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindow
     <IconTooltipButton
       label={t("app.popOut")}
       onClick={() => {
-        const close = actions.close;
         void nativeBridge.dialogs
           .openWindow(options)
           .then(() => {
-            close("closed");
+            closeSidebar("closed");
           })
           .catch((error: unknown) => {
             push({

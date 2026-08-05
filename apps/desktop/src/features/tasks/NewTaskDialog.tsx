@@ -101,8 +101,7 @@ export function NewTaskForm({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitAdmission?: (() => (() => void) | null) | undefined;
-  onSubmitted: (taskID?: string) => void;
+  onSubmitted: () => void;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -142,7 +141,6 @@ export function NewTaskForm({
 function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
-  onSubmitAdmission,
   onSubmitted,
   initialSourceWorkspaceID,
   pendingRelationship,
@@ -151,8 +149,7 @@ function NewTaskFormContent({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitAdmission?: (() => (() => void) | null) | undefined;
-  onSubmitted: (taskID?: string) => void;
+  onSubmitted: () => void;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -209,14 +206,10 @@ function NewTaskFormContent({
     if (!canSubmit) {
       return;
     }
-    const releaseAdmission = onSubmitAdmission?.() ?? null;
-    if (onSubmitAdmission !== undefined && releaseAdmission === null) {
-      return;
-    }
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
-      const createdTaskID = await createTask.mutateAsync({
+      await createTask.mutateAsync({
         projectID,
         workflowID,
         title: values.title,
@@ -231,9 +224,8 @@ function NewTaskFormContent({
                 newTaskRole: pendingRelationship.newTaskRole,
               },
       });
-      onSubmitted(createdTaskID);
+      onSubmitted();
     } catch {
-      releaseAdmission?.();
       // The mutation state renders the persistent failure without clearing form input.
     }
   }

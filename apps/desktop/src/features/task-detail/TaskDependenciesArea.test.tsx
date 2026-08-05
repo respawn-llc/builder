@@ -126,27 +126,6 @@ describe("TaskDependenciesArea", () => {
     expect(screen.getByTestId("dependency-remove-task-2")).toBeDisabled();
   });
 
-  it("keeps Remove available while save-pending navigation is blocked", async () => {
-    const onSelectTask = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TaskDependenciesArea
-        dependencies={dependencies}
-        disabled={false}
-        navigationDisabled
-        onAdd={vi.fn()}
-        onRemove={vi.fn()}
-        onSelectTask={onSelectTask}
-        taskID="task-1"
-      />,
-    );
-
-    expect(screen.getByTestId("dependency-add-blocked-by")).toBeDisabled();
-    expect(screen.getByTestId("dependency-remove-task-2")).toBeEnabled();
-    await user.click(screen.getByTestId("dependency-row-task-2"));
-    expect(onSelectTask).not.toHaveBeenCalled();
-  });
-
   it("renders both typed directions and delegates relationship actions", async () => {
     const onAdd = vi.fn();
     const onRemove = vi.fn();

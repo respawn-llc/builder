@@ -1,12 +1,11 @@
 import { useCallback, useRef, useState } from "react";
-import { useRouter } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
-import { completeProjectDeletion, projectRouteIsCurrent } from "@/app-facade";
+import { completeProjectDeletion } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -27,9 +26,8 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const connection = useConnectionSnapshot();
-  const { closeSidebar, invalidateSidebar } = useSidebar();
+  const { closeSidebar } = useSidebar();
   const navigation = useAppNavigation();
-  const router = useRouter();
   const { push } = useStatusController();
   const queryClient = useQueryClient();
   const mutation = useProjectDelete(projectID, { invalidateOnDeleted: false });
@@ -51,10 +49,8 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
         close();
         await completeProjectDeletion({
           closeSidebar,
-          invalidateSidebar,
           navigateHome: navigation.openHome,
           projectID,
-          isProjectRouteCurrent: () => projectRouteIsCurrent(router, projectID),
           pushDeletedToast: () => {
             push({
               id: "project-delete-deleted",
@@ -73,7 +69,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
         });
       }
     },
-    [closeSidebar, invalidateSidebar, mutation, navigation.openHome, projectID, push, queryClient, router, t],
+    [closeSidebar, mutation, navigation.openHome, projectID, push, queryClient, t],
   );
 
   const deleteDialog = useNativeDialogFallback<ProjectDeleteTarget>({

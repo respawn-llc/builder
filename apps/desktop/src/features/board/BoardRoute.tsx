@@ -39,6 +39,7 @@ import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
 import { useBoardResumeAction } from "./useBoardResumeAction";
+import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
@@ -47,12 +48,11 @@ import { BoardTaskSearchChrome } from "./BoardTaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
-import { useBoardSelectedTaskDeletion } from "./useBoardSelectedTaskDeletion";
 
 export type BoardRouteProps = Readonly<{
   projectId: string;
   workflowId: string | undefined;
-  selectedTaskId: string | undefined;
+  selectedTaskId: string;
 }>;
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
@@ -141,6 +141,8 @@ function BoardRouteData({
   }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
+  const navigation = useAppNavigation();
+  const { activeDestination, closeSidebar } = useSidebar();
   const reportBoardNavigationError = useCallback(
     (error: unknown) => {
       push({
@@ -156,17 +158,27 @@ function BoardRouteData({
   const boardQuery = useBoard(projectId, workflowId);
   const board = boardQuery.data;
   const selectedWorkflowID = board?.selectedWorkflow?.id;
-  const deletionCoordinator = useBoardSelectedTaskDeletion({
-    enabled: board !== undefined && hasSelectedWorkflow(board),
-    onNavigationError: reportBoardNavigationError,
+  const handleSelectedTaskDeleted = useCallback(() => {
+    // The task detail sidebar is opened independently of the route, so closing
+    // the route task alone would leave it mounted and refetching the now-deleted
+    // task into an error state. Close it too when it targets the deleted task.
+    if (activeDestination?.kind === "taskDetail" && activeDestination.taskID === selectedTaskId) {
+      closeSidebar();
+    }
+    void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
+  }, [
+    activeDestination,
+    closeSidebar,
+    navigation,
     projectId,
+    reportBoardNavigationError,
     selectedTaskId,
-    selectedWorkflowID,
-  });
+    workflowId,
+  ]);
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
-    onSelectedTaskDeleted: deletionCoordinator.request,
-    ...(selectedTaskId === undefined ? {} : { selectedTaskID: selectedTaskId }),
+    onSelectedTaskDeleted: handleSelectedTaskDeleted,
+    selectedTaskID: selectedTaskId,
     selectedWorkflowID,
   });
 
@@ -197,7 +209,6 @@ function BoardRouteData({
       onBoardRefreshRetry={() => {
         void boardQuery.refetch().catch(reportBoardLoadError);
       }}
-      onSelectedTaskDeletionRequested={deletionCoordinator.request}
       selectedTaskId={selectedTaskId}
     />
   );
@@ -208,15 +219,13 @@ function BoardContent({
   boardQueryWorkflowID,
   boardRefreshError,
   onBoardRefreshRetry,
-  onSelectedTaskDeletionRequested,
   selectedTaskId,
 }: Readonly<{
   board: SelectedWorkflowBoard;
   boardQueryWorkflowID: string | undefined;
   boardRefreshError: Error | null;
   onBoardRefreshRetry(): void;
-  onSelectedTaskDeletionRequested(): void;
-  selectedTaskId: string | undefined;
+  selectedTaskId: string;
 }>) {
   const { t } = useTranslation();
   const [workflowIssuesCollapsed, setWorkflowIssuesCollapsed] = useState(false);
@@ -329,6 +338,35 @@ function BoardContent({
   );
 
   useEffect(() => {
+    if (selectedTaskId.length === 0) {
+      return;
+    }
+    let active = true;
+    void openSidebar({
+      kind: "taskDetail",
+      mode: "overlay",
+      onMutated: undefined,
+      taskID: selectedTaskId,
+    }).then((result) => {
+      if (active && taskDetailRouteShouldClose(result)) {
+        void navigation
+          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
+          .catch(reportNavigationError);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    board.projectID,
+    board.selectedWorkflow.id,
+    navigation,
+    openSidebar,
+    reportNavigationError,
+    selectedTaskId,
+  ]);
+
+  useEffect(() => {
     const handleDocumentDrop = (event: Event): void => {
       const root = scrollportRef.current;
       if (root !== null && event.target instanceof Node && root.contains(event.target)) {
@@ -385,7 +423,9 @@ function BoardContent({
     try {
       await actions.delete.mutateAsync(target.taskID);
       if (target.taskID === selectedTaskId) {
-        onSelectedTaskDeletionRequested();
+        await navigation
+          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
+          .catch(reportNavigationError);
       }
       close();
     } catch (error) {
@@ -485,7 +525,6 @@ function BoardContent({
       kind: "taskDetail" as const,
       initialFocus: { kind: "dependencies" as const },
       mode: "overlay" as const,
-      projectID: board.projectID,
       taskID,
     };
     if (activeDestination?.kind === "taskDetail") {

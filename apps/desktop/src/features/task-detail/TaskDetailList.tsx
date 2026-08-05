@@ -44,8 +44,6 @@ export function TaskDetailList({
   comments,
   detail,
   disabled,
-  dependencyDisabled,
-  dependencyNavigationDisabled,
   draft,
   descriptionPresentation,
   editingComment,
@@ -63,21 +61,16 @@ export function TaskDetailList({
   onSaveDraft,
   openLink,
   questionSelections,
-  restoredDataReady,
-  restoredScrollTop,
   selectedTab,
   setTab,
   updateError,
   updatePending,
-  onScrollElementChange,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   disabled: boolean;
-  dependencyDisabled: boolean;
-  dependencyNavigationDisabled: boolean;
   draft: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -95,13 +88,10 @@ export function TaskDetailList({
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  restoredDataReady: boolean;
-  restoredScrollTop?: number | undefined;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
   updatePending: boolean;
-  onScrollElementChange: (element: HTMLDivElement | null) => void;
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
@@ -172,17 +162,12 @@ export function TaskDetailList({
       initialScrollRequestKey={
         initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
-      initialScrollOffset={restoredDataReady ? restoredScrollTop : undefined}
-      initialScrollOffsetRequestKey={
-        restoredDataReady && restoredScrollTop !== undefined ? `${detail.id}:restored` : undefined
-      }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
-      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
       rowSpacing="compact"
@@ -196,8 +181,6 @@ export function TaskDetailList({
           draftDirty={draftDirty}
           detail={detail}
           disabled={disabled}
-          dependencyDisabled={dependencyDisabled}
-          dependencyNavigationDisabled={dependencyNavigationDisabled}
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
@@ -239,8 +222,6 @@ type TaskDetailListRowProps = Readonly<{
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
-  dependencyDisabled: boolean;
-  dependencyNavigationDisabled: boolean;
   draft: TaskDraft;
   draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
@@ -355,8 +336,7 @@ function BodyRow({
 
 function DependenciesRow({
   detail,
-  dependencyDisabled,
-  dependencyNavigationDisabled,
+  disabled,
   onAddDependency,
   onRemoveDependency,
   onSelectDependencyTask,
@@ -364,8 +344,7 @@ function DependenciesRow({
   return (
     <TaskDependenciesArea
       dependencies={detail.dependencies}
-      disabled={dependencyDisabled}
-      navigationDisabled={dependencyNavigationDisabled}
+      disabled={disabled}
       onAdd={onAddDependency}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}

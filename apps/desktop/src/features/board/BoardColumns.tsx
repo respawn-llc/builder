@@ -42,7 +42,6 @@ import { useSidebar } from "@/app-facade";
 export type KanbanColumnProps = Readonly<{
   cards: readonly KanbanCardVM[];
   column: KanbanColumnVM;
-  projectID: string;
   hasMoreCards: boolean;
   hasPreviousCards?: boolean | undefined;
   isLoadingMoreCards: boolean;
@@ -106,7 +105,6 @@ export function KanbanGroup({
 export function KanbanColumn({
   cards,
   column,
-  projectID,
   hasMoreCards,
   hasPreviousCards = false,
   isLoadingMoreCards,
@@ -242,7 +240,6 @@ export function KanbanColumn({
                   card={card}
                   cardIndex={cardIndex}
                   instance={instance}
-                  projectID={projectID}
                   onCardClick={onCardClick}
                   onCardDragEnd={onCardDragEnd}
                   onCardDragStart={onCardDragStart}
@@ -330,7 +327,6 @@ const TaskCard = memo(function TaskCard({
   card,
   cardIndex,
   instance,
-  projectID,
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
@@ -343,7 +339,6 @@ const TaskCard = memo(function TaskCard({
   card: KanbanCardVM;
   cardIndex: number;
   instance: BoardCardInstance;
-  projectID: string;
   actionsDisabled: boolean;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
@@ -468,7 +463,7 @@ const TaskCard = memo(function TaskCard({
                     <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
                   </span>
                 ) : null}
-                <TaskCardDependencyProgress card={card} projectID={projectID} />
+                <TaskCardDependencyProgress card={card} />
                 {labelItems.length === 0 ? null : (
                   <OneLineOverflowRow
                     ariaLabel={t("labels.filter")}
@@ -506,10 +501,7 @@ const TaskCard = memo(function TaskCard({
   );
 });
 
-function TaskCardDependencyProgress({
-  card,
-  projectID,
-}: Readonly<{ card: KanbanCardVM; projectID: string }>): ReactNode {
+function TaskCardDependencyProgress({ card }: Readonly<{ card: KanbanCardVM }>): ReactNode {
   const { openSidebar } = useSidebar();
   if (card.dependencyProgress === null) {
     return null;
@@ -521,7 +513,6 @@ function TaskCardDependencyProgress({
           kind: "taskDetail",
           initialFocus: { kind: "dependencies" },
           mode: "overlay",
-          projectID,
           taskID: card.id,
         });
       }}

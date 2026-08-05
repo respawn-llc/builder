@@ -34,7 +34,6 @@ describe("KanbanColumn retained replacement boundary", () => {
         actionsDisabled={false}
         cards={[]}
         column={column}
-        projectID="project-1"
         dropState="idle"
         hasMoreCards={false}
         initialBoundary={undefined}

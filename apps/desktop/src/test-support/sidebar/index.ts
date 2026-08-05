@@ -7,28 +7,12 @@ export function createTestSidebarController(
 ): SidebarController {
   return {
     activeDestination: null,
-    backSidebar() {
-      return;
-    },
-    canGoBack: false,
     closeSidebar() {
-      return;
-    },
-    invalidateSidebar() {
-      return { kind: "absent" };
-    },
-    recordTaskDeletion() {
-      return;
-    },
-    settleTaskDeletion() {
       return;
     },
     async openSidebar(destination) {
       onOpen(destination);
       return { status: "canceled", reason: "closed" };
-    },
-    pushSidebar(destination) {
-      onOpen(destination);
     },
     replaceSidebar(destination) {
       onOpen(destination);

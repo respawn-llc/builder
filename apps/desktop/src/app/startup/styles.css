@@ -376,13 +376,6 @@
   }
 }
 
-@keyframes sidebar-destination-enter {
-  from {
-    opacity: 0;
-    transform: translateX(var(--sidebar-destination-offset));
-  }
-}
-
 @layer base {
   * {
     box-sizing: border-box;
@@ -654,17 +647,5 @@
 
   .view-transition-route::view-transition-new(root) {
     animation: route-fade-scale var(--motion-fast) both;
-  }
-  .app-sidebar-destination-push,
-  .app-sidebar-destination-back {
-    animation: sidebar-destination-enter var(--motion-fast) both;
-  }
-
-  .app-sidebar-destination-push {
-    --sidebar-destination-offset: 10%;
-  }
-
-  .app-sidebar-destination-back {
-    --sidebar-destination-offset: -10%;
   }
 }

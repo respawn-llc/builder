@@ -46,7 +46,7 @@ const workspaceUnlinkSearchSchema = z.object({
   workspaceID: optionalSearchString,
 });
 
-export function createNativeDialogRoutes<TRootRoute extends AnyRootRoute>(rootRoute: TRootRoute) {
+export function createNativeDialogRoutes(rootRoute: AnyRootRoute) {
   const projectCreateRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/native-dialog/project-create",

@@ -64,7 +64,6 @@ export type SidebarDestination =
       kind: "taskDetail";
       mode?: SidebarMode;
       initialFocus?: TaskDetailInitialFocus | undefined;
-      projectID: string;
       taskID: string;
       onMutated?: (() => void) | undefined;
       // Set when opened from the Home inbox so the sidebar header exposes live
@@ -109,40 +108,10 @@ export type SidebarDestination =
       content: ReactNode;
     }>;
 
-export type SidebarTaskDetailSnapshot = Readonly<{
-  kind: "taskDetail";
-  scrollTop: number;
-  descriptionExpanded: boolean;
-  selectedTab: "comments" | "activity";
-  titleBodyDraft?: Readonly<{ title: string; body: string }> | undefined;
-  newCommentDraft?: string | undefined;
-  editedCommentDraft?: Readonly<{ commentID: string; body: string }> | undefined;
-}>;
-
-export type SidebarDestinationSnapshot = SidebarTaskDetailSnapshot;
-export type SidebarStateCapture = () => SidebarDestinationSnapshot | null;
-
-export type SidebarInvalidationTarget =
-  | Readonly<{ kind: "task"; taskID: string }>
-  | Readonly<{ kind: "project"; projectID: string }>;
-
-export type SidebarInvalidationResult =
-  | Readonly<{ kind: "absent" }>
-  | Readonly<{ kind: "discarded" }>
-  | Readonly<{ kind: "closed" }>;
-
-export type SidebarTaskDeletionOutcome = "completed" | "failed";
-
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
-  backSidebar(): void;
-  canGoBack: boolean;
   closeSidebar(reason?: SidebarCancelReason): void;
-  invalidateSidebar(target: SidebarInvalidationTarget): SidebarInvalidationResult;
-  recordTaskDeletion(taskID: string): void;
-  settleTaskDeletion(taskID: string, outcome: SidebarTaskDeletionOutcome): void;
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
-  pushSidebar(destination: SidebarDestination): void;
   replaceSidebar(destination: SidebarDestination): void;
   phase: SidebarPhase;
   resolveSidebar(result: Exclude<SidebarResult, SidebarCanceledResult>): void;

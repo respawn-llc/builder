@@ -305,7 +305,6 @@ async function expectAttentionCalls(transport: FakeRpcTransport, count: number):
 const taskDetailDestination = {
   kind: "taskDetail",
   inboxNav: true,
-  projectID: "project-1",
   taskID: "task-1",
 } as const;
 

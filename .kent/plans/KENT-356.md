@@ -1,877 +1,124 @@
 ## Recon
 
-- The current sidebar is a single-destination lifecycle in `apps/desktop/src/app/sidebarProvider.tsx`. Its public contract is `SidebarController` in `apps/desktop/src/app-facade/sidebarContext.ts`: `activeDestination`, `openSidebar`, `replaceSidebar`, `closeSidebar`, `resolveSidebar`, and width/phase state. `openSidebar` resolves the prior lifecycle as `canceled/replaced`; `replaceSidebar` keeps the existing lifecycle promise pending while swapping the rendered destination. `SidebarProvider` retains only the current destination.
-- Sidebar rendering and close behavior are centralized in `apps/desktop/src/app/sidebar.tsx` and `apps/desktop/src/app/sidebarDestinations.tsx`. The header currently renders X first, then the title, then optional Inbox Previous/Next, pop-out, and destination-specific actions. `SidebarRouteChangeCloser` watches TanStack Router location and closes the sidebar with `route_change`; X calls `closeSidebar("closed")`. The destination content is mounted once below the header.
-- `SidebarDestination` already has typed `taskDetail` and `newTask` variants in `apps/desktop/src/app-facade/sidebarContext.ts`. `newTask` carries `projectID`, `workflowID`, optional `boardQueryWorkflowID`, source workspace, and `pendingRelationship`; `taskDetail` carries `taskID`, optional `initialFocus`, `mode`, `onMutated`, and `inboxNav`. `SidebarDestinationView` passes these values to `TaskDetailSurface` and `NewTaskForm`.
-- Existing shell seams for native pop-out are `apps/desktop/src/app/sidebarPopOut.ts` and `apps/desktop/src/features/task-detail/TaskDetailWindowRoute.tsx`. A sidebar Task Detail pop-out currently sends only `taskID` in native window params and then closes the sidebar after the window opens. The standalone route is `/tasks/$taskId` for browser routing, while the native dialog route is `/native-dialog/task-detail`.
-- Browser route state is independent from the sidebar: `/projects/$projectId` stores `workflowId` and `taskId` search values, and `BoardRoute` opens a sidebar Task Detail when `selectedTaskId` is present. `BoardRoute` also closes the sidebar when the route changes through `SidebarRouteChangeCloser`; selected-task deletion closes the sidebar and clears the project task route. `apps/desktop/src/app-facade/navigation.ts` is the route navigation seam and should be inspected wherever sidebar-local movement must avoid changing browser history.
-- KENT-210’s current product contract is recorded in `docs/dev/specs/desktop-gui.md:136-186`: related Task selection replaces the current Task Detail, dependency Add opens ordinary New Task, related creation uses the open Task’s Project/Workflow and source workspace default, creation carries a typed dependency intent, and there is no existing-Task picker. The adjacent orchestration contract in `docs/dev/specs/workflow-orchestration.md:44-117` permits directed cycles of three or more Tasks, requires same-Project scope, has complete unpaginated direct dependency reads, and forbids transitive dependency traversal.
-- The dependency UI is isolated in `apps/desktop/src/features/task-detail/TaskDependenciesArea.tsx` and composed by `TaskDetailList.tsx`. Rows call `onSelectTask`; direction Add calls `onAdd`; remove is immediate. `TaskDetailContent.tsx` currently maps related selection to `replaceSidebar({ kind: "taskDetail", taskID })` when the active destination is a Task Detail, and maps Add to `replaceSidebar(newTaskDestination)` with `pendingRelationship.newTaskRole` (`blocker` for `blocked-by`, `blocked` for `blocks`). Outside a sidebar it falls back to route navigation.
-- New Task creation is implemented in `apps/desktop/src/features/tasks/NewTaskDialog.tsx`. `NewTaskForm` uses React Hook Form with title/body/source workspace fields, preserves input on mutation failure, and submits `dependencyIntent` through `useCreateTask`. `apps/desktop/src/api/clientInputs.ts` defines `TaskDependencyCreateIntent`; `apps/desktop/src/api/clientWorkflowLabels.ts` adapts it to the server `workflow.task.create` payload. `apps/desktop/src/shared/task-mutations/useTaskMutations.ts` invalidates affected board queries after success but currently returns only the created Task ID to the caller through the API mutation.
-- Task Detail local UI state currently lives inside the mounted `TaskDetailContent`/`TaskDetailList` subtree: title/body draft reconciliation, editing comment, unsent new-comment body, description presentation, selected Comments/Activity tab, question selections, and task list rendering state. `TaskDetailContent.tsx` explicitly resets comment/question/presentation state when `detail.id` changes and keeps dirty title/body edits separate from server refreshes. `TaskDetailSurface.tsx` owns the active detail/attention/activity/comments queries.
-- A mounted Task Detail composes several existing live-resource owners across
-  Task refresh, Project labels, Question lookup, and label-assignment
-  lifecycles. Stack verification must prove that only the current destination
-  remains behaviorally active and traversal does not multiply requests,
-  subscription-driven refreshes, or visible updates. It must not freeze current
-  framework topology or add production inspection APIs.
-- The shared API dependency seam is `apps/desktop/src/api/clientTaskDependencies.ts` (`listTaskDependencies`, `addTaskDependency`, `removeTaskDependency`) with typed models/schemas under `apps/desktop/src/api`. Existing dependency rows are complete direct lists, so cycle traversal is currently possible through repeated UI selection even though no traversal helper exists.
-- Inbox navigation is the closest existing visual/interaction precedent. `apps/desktop/src/features/home/SidebarInboxNav.tsx` uses `IconTooltipButton` with ChevronLeft/ChevronRight and `app.inboxPrevious`/`app.inboxNext` translations, and opens another sidebar destination. It is mounted by `SidebarInboxNavSlot` in `sidebar.tsx` only for `taskDetail.inboxNav === true`; it is not a general sidebar history control.
-- Reusable test seams include `apps/desktop/src/app/sidebarProvider.test.tsx` (lifecycle replacement semantics) and `apps/desktop/src/test-support/sidebar/index.ts` (`createTestSidebarController`). Existing tests should be extended or supplemented at the sidebar contract boundary rather than coupling feature tests to shell internals.
-- `apps/desktop/src/app-facade/projectDeletionEvents.ts` and `apps/desktop/src/app/AppChrome.tsx` inspect `activeDestination` to close or react to project deletion. Any future sidebar stack representation will need equivalent whole-stack matching/cleanup rather than checking only one destination.
-- Desktop ownership rules in `apps/AGENTS.md` place sidebar providers, routes, native-window controllers, and shell composition under `apps/desktop/src/app/**`; feature behavior under `src/features`; reusable cross-feature capability under `src/shared`; and feature-facing sidebar contracts under `src/app-facade`. Architecture lint is fail-closed, so new stack seams must respect those public entrypoints.
+- The authoritative implementation baseline is merge-base commit `c945238c9`. The rejected KENT-356 production, test, and specification changes have been restored to that baseline in the index and working tree. The branch history remains available for evidence, but no code from those commits is implementation authority.
+- The rejected branch ended at 2,861 production changed LoC, 2,253 test changed LoC, and 108 documentation changed LoC. `SidebarProvider` grew from 195 to 625 lines, route behavior accumulated a 599-line test file, and Task deletion acquired competing mutation, subscription, route, and history authorities.
+- The baseline sidebar is one generic lifecycle with one current destination. `SidebarProvider` owns open, replace, close, the pending result, width, and presentation phase. `sidebar.tsx` owns shell presentation. `sidebarDestinations.tsx` dispatches typed destinations.
+- Task Detail already owns its server refresh, typed missing-Task failure, drafts, comments, selected tab, description state, and scroll surface. New Task already owns form validation, mutation state, and the created Task result. These destinations can own their own missing-entity and asynchronous-completion behavior without teaching the sidebar about Tasks or Projects.
+- Related Task rows and Dependency Add already enter through Task Detail. Inbox Previous/Next already uses replacement rather than history. Native Task pop-out already completes asynchronously after opening a separate window.
+- Main Desktop screens already own the interactions that open a root sidebar destination. The unsupported browser test surface and its URL/history are not a Desktop product contract and must not drive sidebar ownership or verification.
+- The user reset the hard production cap to 1,200 changed LoC on August 5, 2026. The user also decided that the sidebar is only a generic navigation stack: Task, Project, Board, Workflow, deletion, query, mutation, and route concepts must not enter sidebar code.
+- The user decided that deletion does not proactively inspect or mutate sidebar history. A mounted destination refreshes the entity it displays. A typed missing result asks the generic navigator to go Back. Back at the root closes the sidebar. An inactive missing destination is handled only when it later becomes current.
+- The 65 resolved PR #686 threads remain resolved and must not be reopened. The report generator and generated report under `docs/tmp` remain planning evidence and must be regenerated against this replacement design with a row-specific recurrence condition, structural exclusion, deterministic gate, and causal proof.
 
 ## Design Scope Card
 
-- **Outcome:** Users can traverse related Tasks and related-Task creation in one
-  bounded sidebar stack; Back restores the approved Task Detail state, and
-  successful related creation opens the newly created Task Detail.
-- **Estimate:** Production 18–25 files / 900–1,800 changed LoC; tests 10–16
-  files / 850–1,300 changed LoC; documentation 1 file / 40–80 changed LoC;
-  generated files 0. Confidence: low until Architecture replaces the rejected
-  mechanisms and proves the full contract fits the user-mandated production
-  cap. The complete current Desktop/spec worktree is 30 production files /
-  1,916 changed LoC, 12 test files / 1,281 changed LoC, and 1 documentation file
-  / 62 changed LoC, so it is not implementation authority. Stop for a new human
-  scope decision if the corrected projection exceeds 2,000 production changed
-  LoC; do not weaken product behavior to fit silently.
-- **Affected subsystems:** Desktop sidebar shell and app-facade, Task Detail,
-  New Task and Task mutation, Desktop styles/i18n, and Desktop tests/test
-  support.
-- **Contract impact:** Desktop-internal app-facade and component contracts
-  change, and the Desktop product specification changes. The history core is
-  destination-agnostic, uses the existing TanStack navigation/history
-  primitives, and contains no Task, Workflow, or Board knowledge. Typed feature
-  adapters own same-Task equivalence/truncation, Task/Project invalidation, and
-  restoration. Pop out completion is scoped to the sidebar/destination that
-  started it.
-  The sidebar exposes a minimal navigation contract without lifecycle, entry,
-  or activation IDs or tokens; loading, query, and snapshot-registry internals
-  remain private. Server API/wire, protocol version, persistence, migrations,
-  and native-dialog contracts do not change.
-- **Bounded-retention boundary:** The 50-entry and live-resource bounds cover
-  sidebar state, snapshots, mounted surfaces, observers, and transport
-  subscriptions. Ordinary inactive React Query cache is explicitly excluded
-  and keeps the app's existing time-based lifecycle.
-- **Required review disposition:** Preserve the accepted outcomes of all 65
-  resolved PR #686 findings without reopening them. Satisfy the 25 unresolved
-  findings through the destination-agnostic ownership model and the
-  finding-specific regression barriers recorded in
-  `docs/tmp/KENT-356-pr-686-review-report.html`. The rejected August 3
-  simplification must not be recorded as superseding resolved findings.
-- **Required scope cleanup:** Remove unrelated legacy-route migration handling,
-  server/worktree and timeout-test edits. The typed scroll-restoration seam is
-  owned by `VirtualizedInfiniteList`; Task Detail supplies only its restoration
-  request and does not mutate the virtualized scroll element directly. Errors
-  remain typed and visible at the UI boundary; no error swallowing, error-text
-  parsing, hardcoded app-facade copy, or string-based destination identity is
-  permitted.
-- **Verification boundary:** Automated product-boundary tests, typecheck, lint,
-  architecture checks, scope-diff checks, and builds are authoritative.
-  Product browser/manual QA remains excluded; opening the review report in
-  Firefox is workflow evidence only.
-- **Excluded follow-ups:** KENT-369 owns shared New Task Dependencies and the
-  existing-Task picker. KENT-372 owns unifying Task create/edit navigation and
-  introducing the server Task upsert operation.
-- **Rejected adjustment:** On August 3, 2026, the human rejected duplicate
-  same-Task entries, whole-stack replacement for retained-entry invalidation,
-  removal of Project-history reconciliation, and unscoped existing Pop out
-  completion. Retain the full previously approved behavior. In particular, a
-  Pop out started by an old sidebar may open its native window but must not
-  close a replacing sidebar.
-- **Downstream status:** The Architecture and Planning sections below replace
-  the rejected adjustment and implement this approved card. The rejected branch
-  implementation and its completed checklist are not authority for future work.
+- **Outcome:** Users can traverse related Tasks and related-Task creation in one bounded sidebar stack. Back restores the approved Task Detail interface state. Successful related creation opens the newly created Task Detail with the originating Task immediately behind it.
+- **Estimate:** Production 12–18 files / 820–1,120 changed LoC; tests 8–13 files / 650–1,000 changed LoC; documentation 1 file / 35–65 changed LoC; generated files 0. Confidence: medium because the implementation restarts from the 195-line single-destination provider and deletes every route/deletion coordination mechanism. The hard production limit is 1,200 changed LoC.
+- **Affected subsystems:** Generic Desktop sidebar provider and shell, Sidebar destination dispatch, Task Detail, New Task, related-Task callers, native Task pop-out, Desktop product specification, and focused Desktop tests/test support.
+- **Contract impact:** Desktop-internal sidebar navigation and component contracts change. The Desktop product specification changes to describe visible Desktop screen and destination behavior rather than unsupported browser URL/history behavior. Server API/wire, protocol version, persistence, migrations, generated contracts, and native-dialog payloads do not change.
+- **Ownership boundary:** Sidebar code owns only generic stack operations, current-page capture, current-page leave availability, generic root lifecycle, width, and animation. Destination code owns entity refresh, typed missing handling, drafts, mutation settlement, stale asynchronous completion, and feature-specific equality/restoration policy. Screen owners open and release root sidebar lifecycles.
+- **Deletion boundary:** No Task or Project deletion event, identity, membership, predicate, cause, attempt, retry, or reconciliation operation reaches the sidebar. Missing destinations dismiss themselves when current. The stack never scans inactive entries because an entity was deleted.
+- **Navigation boundary:** Sidebar-local Push, Back, and replace do not navigate the main Desktop screen. Leaving or replacing the Desktop screen that owns a root sidebar releases that root lifecycle. Browser URLs, browser Back/Forward, and browser-history synchronization are unsupported test-surface details and are not product requirements.
+- **Review boundary:** Preserve the accepted outcomes of the 65 resolved PR #686 threads without reopening them. Remove the implementation mechanisms that later findings invalidated. Each report row must explain the exact recurrence condition, why the replacement ownership makes that condition unreachable, and which automated gate rejects its return.
+- **Verification boundary:** Automated product-boundary tests, architecture checks, lint, typecheck, scope-diff checks, and the Desktop build are authoritative. Product browser/manual QA remains excluded by explicit decision.
+- **Excluded follow-ups:** KENT-369 still owns shared New Task Dependencies and the existing-Task picker. KENT-372 still owns unified Task create/edit navigation and server Task upsert.
 
 ## Design
 
-- Sidebar Task navigation is local to the sidebar and does not use browser
-  history.
-- The sidebar navigation-history core supports arbitrary typed destinations and
-  is implemented through the existing TanStack navigation/history primitives.
-  It does not inspect or name Task, Workflow, Board, or other feature variants.
-- Typed destination adapters own feature-specific identity, deduplication,
-  invalidation, and restoration. The generic history core owns only bounded
-  push/replace/back/close behavior.
-- The sidebar's feature-facing contract is a minimal deep navigation contract.
-  Lifecycle, entry, and activation IDs or tokens, loading/query state, snapshot
-  registries, and destination-shape inspection are not exposed or propagated.
-- Navigation and route failures remain typed and are surfaced through the
-  existing UI error boundary. The navigation core does not swallow errors,
-  parse error text, or own localized copy.
-- KENT-356 does not add legacy-route migration behavior, change server or
-  worktree code, or extend test timeouts. Scroll restoration is a typed
-  offset request owned by `VirtualizedInfiniteList`; Task Detail owns the
-  request data through its existing rendering and list seam.
-- Selecting a related Task pushes its Task Detail onto the sidebar stack.
-- When the selected Task already has an entry earlier in the stack, the sidebar
-  returns to that saved entry and removes every later destination instead of
-  creating a duplicate.
-- Returning to an earlier Task silently discards unsent Task edits and comment
-  drafts from every removed later destination.
-- The sidebar header keeps X first and places Back after it. X closes the
-  complete stack. Back returns to the preceding destination.
-- Back is hidden when the sidebar is at its root destination.
-- Back uses the existing sidebar navigation icon-control presentation. The
-  sidebar does not provide Forward.
+- The sidebar presents one bounded navigation stack.
+- Opening a root destination starts a new stack and replaces any older root stack.
+- Selecting a related Task pushes its Task Detail.
+- Selecting a Task that already appears earlier returns to that retained destination and removes every later destination.
+- Returning to an earlier Task silently discards unsent input retained by removed later destinations.
+- Dependency Add pushes the ordinary New Task form with its originating relationship preconfigured and hidden.
+- Inbox Previous and Next replace the current Inbox Task and do not add history.
+- X closes the complete stack.
+- Back returns to the preceding destination.
+- Back at the root closes the sidebar.
+- Back is hidden at the root.
+- The header keeps X before Back and uses the existing icon-control presentation.
+- The stack has no Forward action.
 - The stack retains at most 50 destinations.
-- Only the current sidebar destination remains live. Earlier destinations retain
-  bounded interface state without continuing to load or receive live updates.
-- The 50-destination bound applies to sidebar entries and retained interface
-  snapshots, not React Query cache entries.
-- Inactive Task Detail queries follow the Desktop app's ordinary time-based
-  cache lifecycle. Dependency traversal may temporarily increase that inactive
-  cache until ordinary expiry; the sidebar does not pin, copy, extend, isolate,
-  or explicitly evict those queries.
-- Pushing a 51st destination preserves the root and evicts the oldest
-  non-root destination. Eviction is silent and discards that destination's
-  retained state, including unsent Task edits and comment drafts.
-- Related-Task creation pushes New Task onto the stack.
-- Related-Task selection and Dependency Add are unavailable while a Task
-  title/body save or add/edit-comment save is pending. Back, X, route change,
-  and Pop out keep their ordinary behavior.
-- If the Task Detail remains current, save success re-enables Push without
-  retaining submitted input; failure re-enables Push and leaves the failed draft
-  eligible for ordinary snapshot restoration.
-- Leaving through Back, X, route change, or Pop out while a save is pending uses
-  the already approved discard/close behavior. Later settlement does not restore
-  or reopen that destination.
-- Because New Task has no Cancel button, Back discards the unsubmitted form and
-  returns to the preceding Task Detail. X discards it and closes the complete
-  stack.
-- Related New Task carries its preconfigured originating relationship without
-  showing Dependencies in the form.
-- Successful related-Task creation atomically creates the Task and relationship,
-  then replaces the New Task destination with the newly created Task Detail.
-  The originating Task remains immediately behind it in the stack.
-- If creation succeeds after its New Task destination is no longer current, the
-  Task and relationship remain created but the current sidebar is unchanged.
-- Pop out opens only the current Task Detail. After the native window opens,
-  the originating sidebar closes its complete stack.
-- If the destination or complete sidebar lifecycle changes before the window
-  opens, the window remains open and the replacing/current sidebar is unchanged.
-- New Task does not show Dependencies.
-- New Task has no Cancel button.
-- KENT-356 does not change the existing Task Detail Dependencies Add controls.
-  They continue to open New Task. Existing-Task search and a new Add chooser
-  belong to a dependent follow-up after GUI Task Search exists.
-- Inbox Previous/Next continues to replace the current Inbox Task and does not
-  push sidebar history.
-- The browser Task route remains anchored to the root Task that opened the
-  sidebar stack. Sidebar push and Back do not update that route.
-- Back restores only the Task Detail state named by this ticket: scroll
-  position, description expansion, Comments/Activity tab, unsent Task edits,
-  and unsent comment drafts. It does not preserve unfinished Question
-  responses.
-- Scroll restoration reapplies the captured pixel offset after the ordinary
-  server refetch. If refreshed content is shorter or structurally different,
-  the list uses the nearest available position; inactive query pages are not
-  pinned or replayed solely to reconstruct the old viewport.
-- Task Detail initial focus applies only to its first activation. Back restores
-  the captured scroll position and does not replay the original Dependencies,
-  Question, Approval, or interrupted-node focus request.
-- Back from a current Task Detail discards that destination's unsent Task edits
-  and comment drafts without warning. Restored drafts belong only to an earlier
-  retained destination.
-- Restoring a Task Detail refetches current server data and layers its retained
-  unsent Task/comment drafts over the fresh data.
-- When a retained Task is deleted, the sidebar removes that destination. Back
-  skips deleted destinations and closes the sidebar only when no destination
-  survives.
-- Removing the final Task settles the originating sidebar lifecycle as an
-  ordinary `closed` cancellation so an anchored browser Task route clears.
-- Project deletion reconciles both current and inactive sidebar destinations.
-  Deleted-Project destinations cannot remain reachable through Back; unrelated
-  surviving destinations remain available when the browser route stays put, and
-  the sidebar closes when no destination survives. If deletion navigates away
-  from the current Project route, the ordinary route-change contract closes the
-  complete stack.
-- A browser route change outside sidebar-local navigation closes the complete
-  stack and silently discards its unsent Task edits and comment drafts.
-- A server disconnect/reconnect preserves the complete stack and its saved UI
-  state. The current destination uses the ordinary reconnect state and
-  refreshes server data after reconnection.
-- Pop out proceeds without a warning when stack entries contain unsent input.
-  Opening the separate window discards that unsent input when the originating
-  stack closes.
-- X silently discards unsent Task edits and comment drafts when it closes the
-  complete stack.
-- Push and Back use a quick horizontal transition and respect reduced-motion
-  settings. X keeps the existing sidebar close transition.
-- KENT-369 is the dependent follow-up for the shared New Task Dependencies
-  widget and existing-Task dependency picker. KENT-356 blocks it, and its
-  implementation waits for reusable Desktop GUI Task Search.
-- KENT-372 is the separate follow-up for unifying Task create and Task edit into
-  one navigation destination backed by a typed server upsert operation.
+- Pushing a 51st destination preserves the root and silently evicts the oldest non-root destination and its retained interface state.
+- Only the current destination remains mounted and live.
+- Earlier destinations retain only bounded interface state. They do not keep loading, observing, subscribing, or extending query lifetime.
+- Ordinary inactive Task Detail queries keep the app's existing time-based cache behavior.
+- Back restores scroll position, description expansion, the selected Comments or Activity tab, unsent Task title/body edits, unsent new-comment text, and one edited-comment draft.
+- Back does not restore unfinished Question responses, server projections, query pages, loading state, mutation state, or subscriptions.
+- Restored Task Detail refreshes server-authoritative data and layers retained unsent Task/comment drafts over it.
+- An incoming focus request applies only when that Task destination is first opened. Back restores the saved viewport without replaying the original focus request.
+- Scroll restoration sends the captured pixel offset through the virtualized list's typed offset seam after refreshed rows mount. The list uses the nearest available position and does not load pages only to reconstruct an old viewport.
+- A current Task Detail that receives a typed missing-Task result immediately goes Back without showing stale Task content.
+- If a missing Task Detail is the root, its Back closes the sidebar.
+- If Back reveals another missing Task Detail, that destination performs the same check and goes Back again. This lazily skips missing retained destinations without a history scan.
+- Task and Project deletion do not otherwise alter sidebar history. The sidebar receives no deletion event and knows no Task or Project identity.
+- Leaving the Desktop screen that owns a root sidebar closes that root stack unless another root sidebar has already replaced it.
+- Opening an unrelated root sidebar replaces the prior stack. Cleanup belonging to the prior screen cannot close the replacement.
+- Browser URL text and browser-history behavior are not part of the Desktop product contract.
+- Related-Task selection and Dependency Add remain unavailable while the current Task title/body or add/edit-comment save is pending. Relationship Remove keeps its existing independent availability.
+- Leaving a Task Detail while one of its saves is pending uses the ordinary discard/close behavior. Later settlement does not restore or reopen it.
+- New Task has no Cancel button and does not show Dependencies.
+- Back from an unsubmitted New Task discards the form and restores the originating Task Detail.
+- X from an unsubmitted New Task discards the form and closes the stack.
+- Related New Task atomically creates the Task and relationship.
+- Current success replaces New Task with the created Task Detail and leaves the originating Task directly behind it.
+- Failure preserves the ordinary New Task recovery path.
+- If success arrives after New Task is no longer current, the Task and relationship remain created and the current sidebar does not change.
+- Pop out opens only the current Task Detail.
+- Current pop-out success closes the originating stack after the separate window opens.
+- Pop-out success after that destination or root stack was replaced leaves the separate window open and does not close the replacement.
+- Pop out and X keep the approved silent-discard behavior for unsent input.
+- Disconnect and reconnect preserve the stack and retained interface state. The current destination uses its ordinary reconnect and refresh behavior.
+- Push and Back use a quick horizontal transition and respect reduced-motion settings. X keeps the existing whole-sidebar close transition.
+- KENT-356 does not add browser-route migration, server/worktree changes, test timeout changes, query-cache ownership, existing-Task dependency search, or Task upsert.
 
 ## Architecture
 
-- Replace the interrupted object-owner bridge rather than patching it. The final
-  shell has no lifecycle/entry/activation IDs, object-owner comparisons,
-  callback registry, sidebar-owned route-expectation state, or family of
-  conditional-current methods. Retain the original sidebar's width profiles,
-  close animation, and one pending result Promise.
-- Reuse the existing direct `@tanstack/react-router` dependency and its
-  `createHistory` primitive for one shell-owned generic bounded history. Its
-  private storage is the only stack source of truth and retains each complete
-  TanStack state (`__TSR_key`, `__TSR_index`) plus typed
-  `{ destination, retainedState }`. React observes snapshots with
-  `useSyncExternalStore`; it does not mirror entries in a reducer or component
-  state.
-- All in-memory locations use the same `/` href with empty search/hash.
-  Destination identity and membership remain typed payload data and never enter
-  paths or serialized strings. Initialize the root through TanStack so it has
-  an opaque library key. Every activation receives a fresh TanStack-generated
-  key: Push, replace, Back, same-Task return-to-earlier, and current-entry
-  removal that reveals a predecessor. Retained state survives, but a previously
-  active key is never reused as current.
-- The generic history imports no feature type. It owns branch truncation,
-  root-preserving oldest-non-root eviction at 50 entries, physical Back with no
-  Forward branch, replace, atomic predicate-based removal, index rebasing, one
-  subscriber notification per accepted operation, and inert behavior after
-  destroy.
-- Keep positions and entries inside the shell. Generic commands accept typed
-  predicates supplied by the destination adapter rather than exposing arrays or
-  numeric locations. Push receives the current source key, captured outgoing
-  state, requested destination, and same-destination predicate; it atomically
-  saves/deactivates the source, then either returns to the matching earlier
-  location while preserving its retained state and refreshing its TanStack key,
-  or appends with capacity eviction. Remove accepts a typed predicate and
-  atomically reveals the nearest surviving predecessor with a fresh key,
-  promotes a surviving root when necessary, or reports empty history.
-- Use one concrete sidebar destination adapter beside the existing dispatcher,
-  not a generic registry/factory. It owns Task equality, Project membership,
-  activation-only focus removal, natural feature keys, and Task retained-state
-  narrowing. Other destination variants do not deduplicate unless a later
-  approved use case adds a typed rule.
-- Task Detail destinations carry required `projectID` membership. Board/Home,
-  related navigation, created-Task replacement, Inbox replacement, and
-  notifications populate it from existing typed data. A native notification
-  that lacks membership resolves the Task through the existing Task API before
-  opening. Task Project membership is immutable, so no later loading callback
-  or query state is needed to keep history synchronized.
-- `SidebarProvider` retains one `PendingSidebar { history, resolve }`. Open
-  cancels and destroys the previous history before installing a new root;
-  Push/replace/Back remain inside the same pending result; close/route change or
-  destination completion settles it once. Destroy makes old deferred history
-  commands inert but preserves the last snapshot long enough to render the
-  outgoing destination through the 140 ms close animation.
-- Key `CurrentSidebarDestination` by the current opaque TanStack location key.
-  A new `openSidebar` therefore remounts the shell host even for the same Task or
-  same-kind New Task. Push/Back/replacement also remount it; returning A→B→A
-  mounts a new A host from A's retained snapshot under a fresh key. Same-current-
-  Task refocus is handled inside Task Detail without a history operation,
-  preserving its subtree and drafts.
-- The current host owns one capture callback and current X/Back availability
-  locally. It exposes one shell-private scoped action function bound only to the
-  pending history and opaque location key. Typed actions cover synchronous
-  admission, current replace, resolve, close, and destination invalidation. The
-  function performs the single currentness check; stale New Task, missing-Task,
-  and Pop out completions have no separate guards to diverge.
-- Push/Back commits synchronously through the history boundary after capture.
-  The accepted operation changes the current TanStack key before returning to
-  the event loop, so old scoped actions become inert immediately and there is no
-  pre-admission exit window or deferred command to cancel. A→B→A remains safe
-  because every activation receives a fresh key.
-- Ordering is fixed. Push captures first; blocked capture changes nothing.
-  Accepted Push/Back performs the atomic keyed history operation. X/route close
-  destroys history and settles the result, retaining only the final snapshot
-  for the existing close animation. Replacing open destroys/cancels the old
-  pending history before installing the new root; replacement performs one
-  keyed history replace. Back/X remain unavailable only after related creation
-  mutation admission; route close and replacing open remain legal.
-- The history snapshot carries only presentation direction (`push` or `back`)
-  for the newly activated location. The fresh-keyed host uses the existing
-  sidebar CSS motion path for a quick horizontal enter animation, with the
-  existing reduced-motion media behavior. Navigation correctness does not
-  depend on the View Transition API or any cancellation/serialization layer.
-- Render only the current destination. Task Detail owns the retained snapshot:
-  scroll offset, description expansion, selected Comments/Activity tab, unsent
-  title/body, unsent new-comment text, and one edited-comment draft. It excludes
-  Question responses, server projections, query pages, mutation/loading state,
-  observers, and subscriptions.
-- The Task adapter captures only after Task Detail has applied restored state.
-  On restore, Task Detail refetches through its existing query owners and layers
-  drafts over fresh data. Incoming focus wins over saved scroll; Back supplies
-  no focus. Switching location keys remounts mutation state, while same-current
-  refocus remains feature-local.
-- Restore scroll through Task Detail's existing list seam. Capture the current
-  scroll element for snapshots, then send one typed pixel-offset request after
-  restored rows mount; `VirtualizedInfiniteList` applies it through TanStack
-  Virtual so range and infinite-load state stay coherent. Accept browser
-  clamping. Do not request pages for restoration or change ordinary inactive
-  React Query lifetime.
-- Related Task rows and Dependency Add receive Push only from the
-  sidebar-rendered Task adapter; standalone Task Detail keeps route navigation.
-  Inbox Previous/Next remains replace-only. The generic history never names
-  Task, dependency, Board, Workflow, or Inbox.
-- Related New Task keeps the existing `pendingRelationship` and atomic mutation.
-  After validation, the form asks the scoped current action to invoke its
-  mutation-admission closure synchronously. If navigation already changed the
-  history/key, no request starts. Accepted admission blocks X/Back in the host
-  before starting the mutation; an admitted server mutation is not canceled by
-  later exit. The host owns one typed admission state. Mutation failure or
-  ordinary non-success settlement asks the same scoped current action to release
-  the lock; release updates the host only while the original history/key is
-  still current. Success replaces/unmounts the form, so no unlock is needed.
-  Stale settlement after navigation is a no-op.
-- Pop out captures the same scoped current action before opening the native
-  Task window. Success may leave the native window open, but close executes only
-  when the initiating pending history and location key are still current.
-  A→B→A does not pass because the later A has a fresh TanStack key. No stack
-  snapshot or new field crosses the native bridge.
-- Centralize Task and Project invalidation through one typed facade operation
-  that delegates predicates to the destination adapter and reports
-  absent/discarded/closed. Current Task Detail maps only typed
-  `workflowTaskNotFound`; other errors retain Retry. Removal activates a
-  survivor under a fresh key or destroys empty history, so old validation,
-  admitted-mutation settlement, and other scoped actions become stale through
-  the same history/current-action boundary.
-- `BoardRoute` owns one bounded typed selector coordinator in addition to the
-  typed search values it already owns; there is no independent selected-Task
-  open effect or route-change close effect. On initial mount, a non-empty
-  `taskId` opens that Task as a fresh sidebar root. A same-selector rerender does
-  nothing. On an ordinary `taskId` transition, the coordinator synchronously
-  destroys/closes the previous pending sidebar first, then opens a non-empty new
-  selector as a fresh root; transition to absence stops after close. Therefore
-  `/projects/P?taskId=A` with unrelated sidebar B followed by `taskId=C` always
-  removes B and ends with exactly C open, regardless of React effect order.
-  Selected-Task deletion records a typed pending operation in
-  `SidebarProvider` before invalidating A and clearing `taskId`; the provider
-  defers the exact selector transition until the typed navigation outcome
-  settles. Completed navigation consumes the operation and preserves unrelated
-  sidebar survivors; failed navigation clears it and reconciles through the
-  ordinary route-close path only while the operation's scoped survivor
-  activation is still current; a replacement activation remains untouched
-  while the Board surfaces the existing error. The Board coordinator retains
-  only the previously selected Task for opening and reports the typed outcome;
-  ordinary browser/search transitions follow the central close-then-optional-open
-  contract.
-- `SidebarProvider` owns one typed route-transition contract for all
-  main-window navigation. It closes on pathname changes, Board `workflowId` or
-  ordinary `taskId` changes, and Workflow Editor `projectId` changes. The
-  Board selector coordinator owns only selected-Task opening and reports
-  deletion start/outcome to `SidebarProvider`; the provider owns the pending
-  operation and consumes it to preserve an unrelated survivor when the deleted
-  selector clears. Pending success and failure are both covered across the
-  selector transition. The operation is scoped to the current history/key
-  activation, and invalidation refreshes that scope only when the stored key
-  is still current before removal, so a failure after replacement clears stale
-  deletion state without closing the newer destination; Board and Workflow
-  Editor routes contain no route-close
-  effects. Home, Workflow Library, and standalone Task routes have no search
-  contract; native-dialog routes are separate windows. This covers every
-  current main-window search-bearing route without pathname/search-string
-  parsing, independent close writers, or route-expectation tokens.
-- Project deletion calls the typed invalidation operation after its existing
-  asynchronous cleanup completes, so membership is read from current history at
-  operation time. `AppChrome` does not inspect destination shapes, cache data,
-  or stale match booleans. Current and inactive Project destinations are removed;
-  unrelated survivors remain unless the existing typed route owner navigates
-  away from the deleted Project, in which case the ordinary pathname change
-  closes the stack.
-- Keep Project `taskId` route search optional and non-empty, omit absence, and
-  propagate navigation failure to the existing localized Board boundary.
-  Remove legacy-selector migration/error/copy paths, error-text parsing,
-  unrelated route refactors, server/worktree timeout edits, and untyped
-  feature-owned virtualizer scrolling.
-- Keep X and Back in one leading-controls grid child; Back is hidden at root.
-  Use the existing sidebar CSS/reduced-motion path for horizontal Push/Back and
-  the existing whole-panel X animation; KENT-356 does not modify the generic
-  View Transition helper.
-- Enforce the 2,000-production-LoC cap by allocating changed production scope:
-  generic history plus concrete adapter/facade 230–290; provider/current host,
-  shell controls, CSS motion, and scoped Pop out 300–360; Task Detail/New Task
-  retention and navigation 270–330; route/invalidation/notification integration
-  90–130; styles/i18n 50–70. Target total: 940–1,180. Re-measure after the
-  history/adapter and provider/host replacements; if the remaining projection
-  exceeds 2,000, return to Design rather than weaken the contract. Fresh-key
-  activation replaces retained-key reuse inside the history budget and does not
-  change the allocation.
-- Lock the generic core with synthetic non-Task tests and the public facade with
-  type/architecture tests. Product-boundary tests cover same-Task truncation,
-  bounded cycles, retained-state restoration, one live surface, Task/Project
-  invalidation, delayed validation with synchronous admission, same-key open,
-  activation ABA rejection, A→B→A Pop out, Project and Workflow Editor
-  search-only route changes, reconnect, and close animation. Final scope checks
-  require no server/worktree, legacy migration, generic-list, query-cache
-  ownership, or KENT-369/KENT-372 changes.
-- Keep all 90 PR #686 findings in the review ledger. The 65 resolved threads
-  remain closed and are never reopened; every row states the removed
-  reappearance path and deterministic test/type/lint/scope guard. No August 3
-  simplification is recorded as superseding the retained product contract.
-- No server API/wire, protocol-version, persistence, migration, generated, or
-  native-dialog contract changes are added.
+- Treat merge-base `c945238c9` as the implementation starting point. Do not recover the superseded provider, TanStack-history wrapper, destination membership fields, deletion coordinator, route-transition owner, route test harness, scoped admission state machine, or history-wide invalidation code from branch history.
+- Keep `SidebarProvider` generic. It owns one immutable in-memory stack of generic destinations and retained snapshots, the existing pending root result, width profiles, and presentation phase. It imports no Task, Project, Board, Workflow, query, mutation, deletion, or router feature module.
+- Implement only four generic stack commands: Push, replace current, Back, and close. Back at root delegates to close. Push performs branch truncation, injected equality-based return-to-earlier, and root-preserving capacity eviction in one state transition.
+- Keep feature equality outside sidebar code. App composition supplies one typed destination policy that can compare destinations and narrow retained snapshots. The generic stack consumes that policy without inspecting destination variants or strings.
+- Keep stack positions, private remount mechanics, and current-page registration private to the provider. No lifecycle, entry, activation, route, deletion, or operation identifier/token appears in app-facade or feature contracts.
+- Mount only the current page. The current generic page host accepts one capture callback and generic Back/X availability from the rendered destination. Navigation captures the current snapshot before an accepted Push or Back. Unmount removes the registration.
+- Give the mounted page a navigator whose Push, replace, Back, and close calls become inert when that page unmounts. Implement this through the page host's React lifetime; do not add IDs, epochs, revisions, cancellation signals, owner objects, or conditional-current method families.
+- Keep asynchronous ownership in destinations. New Task uses its mounted-page navigator after mutation settlement. Pop out uses its mounted-page navigator after the native window opens. Task Detail uses its mounted-page navigator after a typed missing result. The provider does not know which asynchronous operation produced a navigation call.
+- Add one generic root-lifecycle capability for screen owners. Opening a root returns a release function scoped to that root. A screen releases its root on selector change or unmount. The release becomes inert after another root replaces it. There is no router subscription, pathname/search observer, route cause, deferred reconciliation, or browser-history test contract.
+- Board selected-Task opening uses the generic root lifecycle only. Task deletion mutation and project subscription paths do not call sidebar code. Removing every selected-Task deletion hook/coordinator is required.
+- AppChrome and Project deletion do not inspect or mutate stack entries. Visible screen navigation releases the screen-owned root through the ordinary generic lifecycle. If a Task Detail survives in another root, its own refresh handles a typed missing result.
+- Task Detail owns one compact retained-state model and decoder. Reuse the existing local state owners and expose one capture function rather than duplicating each field in provider state. Apply restored state once per mount before registration becomes active.
+- Task Detail handles only the typed missing-Task discriminator. Other load failures keep the existing Retry behavior. Missing handling calls generic Back; it does not publish deletion or Project information.
+- Keep scroll restoration at the existing Task Detail to `VirtualizedInfiniteList` typed offset seam. Do not add generic sidebar scrolling or page loading.
+- Related Task rows and Dependency Add receive the mounted generic navigator only inside sidebar Task Detail. Standalone Task Detail keeps its existing main-screen navigation.
+- New Task keeps the existing `pendingRelationship` and atomic server mutation. Use its local pending state to provide generic X/Back availability if required by the existing form contract. Do not add provider-owned admission, settlement, or mutation state.
+- Keep native pop-out payload unchanged. Its destination-owned completion calls generic close and relies on the mounted navigator becoming inert after replacement.
+- Delete the route/deletion implementation and tests instead of adapting them. Replace the 599-line route test file with focused root-owner tests for mount, selected root change, unmount, and stale release after replacement. Do not assert URL strings, browser Back/Forward, effect order, or route table internals.
+- Update the Desktop specification in product language. Remove browser URL/history requirements and proactive Task/Project history reconciliation. State destination-owned typed missing handling, lazy skipping, root Back closure, root replacement, and screen-owner release.
+- Production budget: generic stack/provider/current host 250–320 LoC; shell Back/motion 70–100; typed destination policy and root lifecycle integration 90–130; Task Detail retention/missing handling/scroll 230–290; related traversal/New Task/Pop out 120–170; styles/i18n and caller cleanup 40–70. Target 800–1,080 LoC. The 1,200-LoC hard stop includes all production additions and modifications from merge-base.
+- Test budget: generic stack/provider 220–300 LoC; Task Detail/traversal/restoration 220–320; New Task/Pop out/root ownership 160–240; architecture/scope guards 50–90. Target 650–950 LoC.
+- Architecture guards fail if sidebar code imports feature/router modules, if Task/Project deletion reaches a sidebar contract, if browser URL/history appears in product tests, if inactive entries are scanned on deletion, if stale-completion IDs/tokens return, or if the final production diff exceeds 1,200 LoC.
 
 ## Planning
 
-- [x] **Write final generic-history contract tests, then replace the current
-  history implementation in place.** Reuse the proven `createHistory` storage
-  direction, but make entries retain complete TanStack state and typed payload.
-  With synthetic destinations, cover root key creation,
-  Push/replace/physical Back, abandoned
-  branch truncation, root-preserving 51st-entry eviction, same-destination
-  return-to-earlier, current/inactive/root/final predicate removal, index
-  rebasing, one notification, source-key rejection, and inert destroyed
-  history. Assert a fresh TanStack key whenever Back, same-destination return,
-  or current-entry removal activates a retained entry. Keep entries/positions
-  private and accept typed predicates rather than feature imports. **Complete when:**
-  focused tests pass; physical/current index, opaque key, and
-  `canGoBack()` always agree; an activation key is never reused; stale
-  source-key commands and destroyed history cannot mutate; and the generic
-  production diff remains inside 170–220 changed LoC.
-  Progress (August 4, 2026): Replaced the feature-shaped reducer with the
-  destination-agnostic `createSidebarHistory` backed by TanStack
-  `createHistory`, including private typed entries, opaque-key activation,
-  bounded eviction, branch truncation, predicate removal, rebasing, and
-  inert destruction. Focused `sidebarStack.test.ts` passes 10/10; the
-  production implementation is 215 lines.
+- [ ] **Lock the clean implementation baseline and delete superseded evidence from the executable diff.** Verify every KENT-356 production, test, and specification path except this plan equals merge-base `c945238c9`; retain branch history only for review evidence. Remove stale generated test artifacts and ensure no conflict marker remains. Record a fresh diff classifier that separates production, tests, documentation, and generated files from merge-base. **Complete when:** the working tree contains only the staged removal of the rejected implementation plus this replacement plan/report evidence, baseline Desktop tests covering the pre-KENT sidebar pass, and the next projected implementation starts from 195-line `SidebarProvider` rather than any superseded mechanism.
 
-- [x] **Write concrete destination-adapter and facade tests, then remove the
-  rejected abstractions.** Cover Task equality, Project membership,
-  activation-only focus removal, natural keys, retained-state narrowing, and
-  typed Task/Project invalidation targets. Populate required Task `projectID`
-  from Board, Home/Inbox, related navigation, created Task, and notification
-  origins; resolve missing notification membership through the existing Task
-  API before opening. Replace the generic policy factory/registry, old reducer,
-  lifecycle/entry/activation IDs, sidebar-owned route expectations, exposed
-  entries, and duplicate matchers with one concrete adapter and minimal facade; leave the
-  shell-private object-owner bridge for the provider replacement slice.
-  **Complete when:** focused adapter/origin tests and typecheck pass;
-  history has no feature import; facade exposes no entry/key/work signal; and
-  cumulative generic-history + adapter/facade production scope is 230–290 LoC.
-  Progress (August 4, 2026): Added the concrete typed destination adapter,
-  required Task Project membership, Task/Project invalidation targets,
-  activation-only focus removal, retained-state narrowing, notification
-  membership resolution, and the minimal public facade. Adapter tests pass
-  5/5 and the desktop typecheck passes.
+- [ ] **Write the generic stack contract tests, then implement the smallest immutable stack inside the provider boundary.** With synthetic destinations and snapshots, cover root open/replacement, Push, replace, Back, Back-at-root close, same-destination return-to-earlier with branch truncation, 50-entry root-preserving eviction, capture-before-leave, and one notification per accepted transition. **Complete when:** focused tests pass; the stack contains no feature or router import/string; no entry, activation, lifecycle, route, deletion, or operation identity crosses its private boundary; and cumulative generic stack production scope is 110–160 LoC.
 
-- [x] **Stop and re-estimate after the history/adapter boundary.** Measure the
-  complete working-tree diff, including untracked files, remove superseded
-  implementation-shaped tests from the projection, and record actual
-  production/test/file counts in this plan and the Task. Project every remaining
-  slice against the Architecture allocation. **Complete when:** the measured
-  final projection remains within 18–25 production files / 900–2,000 LoC,
-  10–16 test files / 850–1,300 LoC, docs 1 / 40–80, generated 0. If production
-  exceeds 2,000, stop and return to Design without starting provider work.
-  Progress (August 4, 2026): The human revised the production cap to 2,000
-  changed lines. The current tracked production projection is 21 files /
-  1,320 changed lines, excluding two untracked shell files; it remains within
-  the revised cap before the remaining slices.
+- [ ] **Write provider/current-page lifecycle tests, then expose only generic navigation and root release.** Cover pending root result settlement, root replacement, screen-owner release, stale release after replacement, current-page capture registration, unmount cleanup, inert navigation after page unmount, width profiles, and close-phase rendering. **Complete when:** focused provider tests pass; `SidebarProvider` remains at or below 300 total lines and 180–230 changed production LoC from merge-base; and no feature state, asynchronous operation state, router observer, callback registry, ID/token, signal, revision, or owner object exists.
 
-- [x] **Write provider/current-host lifecycle tests, then replace the failed
-  bridge.** Cover one pending result Promise, replacement cancellation,
-  exactly-once close/unmount settlement, width profiles, close-phase final
-  snapshot retention, and history observation through `useSyncExternalStore`.
-  Prove a replacing open to the same Task or same-kind New Task gets a new
-  TanStack root key; A→B→Back-to-A mounts A under a fresh activation key; and
-  stale scoped replace/resolve/close/invalidate actions cannot affect the newer
-  sidebar. Implement one host-local capture/exit state and one typed scoped
-  current action bound only to history/key; synchronous admission invokes its
-  closure only while current. **Complete when:** focused provider/host
-  tests pass with no callback registry, mounted flag, owner comparison,
-  `*IfCurrent` family, AbortController/work signal, or Kent-generated
-  identifier; provider/current-host production scope remains within 220–270
-  LoC.
-  Progress (August 4, 2026): Replaced the reducer/token bridge with one
-  TanStack-backed pending history, `useSyncExternalStore`, one private scoped
-  host action object, close-phase outgoing retention, and typed invalidation.
-  Focused provider tests pass 6/6; the provider implementation is 390 lines,
-  above the original slice allocation but within the revised cap.
+- [ ] **Write shell tests, then add Back and generic page chrome without feature coordination.** Cover X-before-Back, root Back hiding, destination-supplied generic X/Back availability, quick Push/Back direction, reduced motion, existing resize/width behavior, and unchanged X close animation. **Complete when:** focused shell tests pass without literal copy/style assertions, only the current page is mounted, and cumulative provider/stack/shell production scope is 320–420 LoC.
 
-- [x] **Write synchronous navigation and shell tests, then wire keyed
-  Push/Back, controls, and Pop out.** Prove accepted Push/Back changes the
-  current key before returning to the event loop; blocked capture changes
-  nothing; X, route close, replacement, and replacing open invalidate old scoped
-  actions synchronously; and Push capture plus dedup/append is one atomic
-  history notification. Add the activation-ABA regression by retaining an old A
-  scoped action, committing A→B→A, snapshotting the returned A, invoking the old
-  action, and requiring byte-for-byte no change. Cover one X/Back grid child,
-  root Back hiding, fresh-host horizontal CSS animation, reduced-motion
-  behavior, and outgoing close rendering.
-  Use the same scoped current action for native Pop out success; prove current
-  success closes, replacement does not close, and A→B→A old completion remains
-  stale while the native window stays open. **Complete when:** focused
-  history/provider/shell/pop-out tests pass, no AbortController, command
-  signal/ID/revision/epoch, or generic View Transition change is introduced, no
-  stack snapshot crosses the native bridge, and cumulative
-  provider/host/shell/motion/Pop out production scope is 300–360 LoC.
-  Progress (August 4, 2026): Added private opaque-key/direction host state,
-  keyed destination remounts, synchronous ABA stale-action coverage, one
-  X/Back leading-controls child, direction-specific CSS motion under the
-  existing reduced-motion media boundary, close-phase outgoing rendering, and
-  scoped native Pop out integration tests. Focused stack, provider, shell, and
-  Pop out tests pass; no View Transition helper or native bridge payload
-  changes were introduced.
+- [ ] **Stop and measure the first hard-cap checkpoint.** Delete duplicate or implementation-shaped tests before counting. Measure all tracked and untracked changes from merge-base and project the remaining Task Detail, New Task, callers, specification, and report work from concrete seams. **Complete when:** actual production is at most 420 changed LoC, projected final production is at most 1,120 changed LoC, and no remaining slice requires a sidebar feature import or route/deletion coordination. Return to Design if either limit fails.
 
-- [x] **Stop and re-estimate after provider/shell replacement.** Remove the
-  invalidated bridge/provider tests and measure the actual cumulative final diff.
-  Project Task Detail, creation, invalidation, route, styles/i18n, and docs work
-  from the remaining checklist rather than the rejected branch. **Complete when:**
-  history+adapter/facade and provider/host/shell remain within a
-  cumulative 530–650 production LoC and the full projection remains at or below
-  the human-approved 1,800-production-LoC cap; otherwise return to Design before
-  feature work.
-  Progress (August 4, 2026): The human revised the production cap from 1,200
-  to 2,000 changed lines. The tracked production diff after the history,
-  adapter/facade, and provider boundary is 21 files / 1,320 changed lines,
-  excluding two untracked shell adapter files; the remaining slices continue
-  under the revised cap.
-  Progress (August 4, 2026): After the keyed shell and Pop out slice, the
-  complete tracked production diff is 21 files / 1,440 changed lines. The
-  working tree contains 9 changed test/support files plus one new shell test,
-  one specification document, and no generated or server/worktree changes.
-  The final projection remains below the human-approved 2,000-production-LoC
-  cap, so Task Detail and route/invalidation work continues without reducing
-  the approved behavior.
+- [ ] **Write Task Detail restoration and typed-missing tests, then keep both behaviors inside Task Detail.** Cover retained title/body, new-comment, edited-comment, description expansion, selected tab, scroll offset, fresh-data layering, initial-focus precedence, and exclusion of Question/query/mutation state. Cover current typed missing going Back, root missing closing, consecutive missing retained Tasks being skipped lazily, and non-missing failures retaining Retry. **Complete when:** focused Task Detail tests pass; one compact capture/restore seam reuses existing local state; no deletion event or history predicate is emitted; and Task Detail production scope is 230–290 LoC.
 
-- [x] **Write Task Detail retained-state tests, then move capture/restoration
-  behind the Task adapter.** Cover title/body, new-comment, edited-comment,
-  description expansion, selected tab, and scroll; exclude Question responses,
-  projections, query pages, mutation/loading state, observers, and
-  subscriptions. Prove fresh server data remains the baseline, drafts layer
-  over it, submitted drafts are absent, failed drafts remain eligible, incoming
-  focus wins over saved scroll, switching location keys remounts mutation state,
-  and same-current refocus preserves the subtree. Inject Push/Add/capture only
-  into sidebar Task Detail and keep standalone route navigation. **Complete when:**
-  focused tests pass with one decoder, no global active-destination
-  inspection, no snapshot `kind` string check, and Task Detail/New Task
-  production projection remains within 270–330 LoC.
-  Progress (August 4, 2026): Kept retained-state capture and restoration in
-  the Task Detail feature boundary, removed feature-side snapshot-kind
-  narrowing, and covered dirty title/body/comment drafts, fresh server data
-  layering, and selected Activity-tab restoration across dependency Push/Back.
-  The focused sidebar navigation integration tests pass 2/2; no generic list
-  or query-cache ownership changed.
+- [ ] **Write related traversal and Inbox tests, then wire the mounted generic navigator.** Cover related Task Push, A→B→A truncation/restoration, draft discard from removed B, capacity behavior, save-pending Add/navigation availability, independent Remove, standalone fallback, and Inbox replace-only behavior. **Complete when:** focused tests pass, sidebar-local movement does not invoke main-screen navigation, feature equality remains outside sidebar code, and caller/policy production scope is 70–110 LoC.
 
-- [x] **Write scroll/live-resource tests, then restore through the existing Task
-  list seam.** Capture the current scroll element, apply one saved pixel offset
-  after restored rows mount, and accept browser clamping. Exercise Push/Back,
-  reconnect, repeated bounded cycles, and more than 50 unique Tasks through
-  rendered/API behavior; count mounted surfaces and requests without production
-  inspection seams. **Complete when:** focused tests prove one live Task Detail,
-  bounded snapshots, no restoration-driven pagination or duplicate refresh,
-  ordinary inactive query-cache lifecycle unchanged, and
-  `VirtualizedInfiniteList` byte-for-byte outside the final diff.
-  Progress (August 4, 2026): Restored one captured pixel offset through the
-  existing Task Detail list scroll-element callback after restored data is
-  ready, with browser clamping and no generic list changes. Integration
-  coverage proves scroll/draft restoration, one rendered live Task surface
-  while traversing, and A→B→A bounded traversal; the synthetic history suite
-  covers the 50-entry bound. Sidebar navigation integration passes 3/3 and
-  `VirtualizedInfiniteList` has no diff from `main`.
+- [ ] **Write related New Task and pop-out stale-completion tests, then keep settlement in each destination.** Cover unsubmitted Back/X discard, atomic related creation, current success replacement, failure recovery, success after Back/root replacement leaving the current sidebar unchanged, current pop-out close, and stale pop-out completion leaving the replacement open. **Complete when:** focused form/provider/pop-out tests pass with destination-owned pending and settlement state, no provider admission/deletion/route state, no cancellation protocol, and cumulative New Task/Pop out production scope is 80–120 LoC.
 
-- [x] **Write related traversal tests, then wire Task Push/dedup and Inbox
-  replace.** Cover new related Task Push, A→B→A return to retained A with later
-  entries removed, requested focus applied while A's saved drafts survive,
-  silent oldest-non-root eviction at capacity, Back restoration, Inbox
-  Previous/Next replace-only behavior, standalone route fallback, and
-  save-pending availability (Add/navigation blocked while Remove stays
-  available). **Complete when:** focused integration tests pass, browser route
-  search remains anchored to the root, and Task/Workflow/Board logic exists only
-  in the concrete adapter/feature callers.
-  Progress (August 4, 2026): Related Task selection pushes through the typed
-  sidebar adapter, same-Task traversal returns to the retained earlier entry
-  and truncates the branch, Inbox navigation remains replace-only, and
-  save-pending dependency navigation/Add are separated from Remove. Focused
-  dependency and sidebar integration tests pass.
+- [ ] **Write screen-root ownership tests, then remove every route and deletion coordinator.** Cover initial Board Task open, selected root change, Board/screen unmount, unrelated root replacement, and stale old-screen release without asserting URLs or browser history. Delete Board selected-deletion hooks, provider invalidation methods, AppChrome stack inspection, Task/Project membership fields added only for invalidation, router subscriptions, route-transition state, and the large route test harness. **Complete when:** product-boundary tests pass; Task/Project deletion has zero sidebar call sites; browser URL/history has zero KENT-356 product assertions; and screen/root integration production scope is 50–80 LoC.
 
-- [x] **Write related New Task admission/completion tests, then wire the existing
-  atomic mutation.** Delay validation and the close timer. Prove synchronous
-  Back/X/route/open changes the history/key before validation returns, so the
-  scoped admission action starts no request; admitted
-  mutation synchronously blocks direct X/Back but is not canceled by route/open;
-  controlled failure/non-success settlement releases X/Back only while the same
-  history/key remains current; current success replaces only the form and
-  preserves the origin; and same-kind open, invalidation, route change, or
-  replacing open makes later settlement inert while an admitted server mutation
-  and query invalidation continue. Reuse
-  `pendingRelationship` and existing mutation/query invalidation. **Complete when:**
-  focused form/sidebar tests prove failure unlocks X/Back, pre-admission
-  invalidation starts no request, invalidation during an admitted mutation
-  leaves the server operation intact but cannot unlock/replace a newer host, and
-  every admission/exit/stale path works without a second lifecycle state
-  machine; the cumulative Task Detail/New Task production scope remains within
-  270–330 LoC.
-  Progress (August 4, 2026): Added one opaque-key scoped mutation admission
-  action, synchronous stale-admission rejection, host X/Back blocking, failure
-  release, and current-only related creation replacement. New Task admission
-  tests pass 3/3 and provider admission tests pass 9/9.
+- [ ] **Stop and measure the final implementation projection before documentation cleanup.** Classify the complete diff from merge-base, scan for duplicated helpers and feature leakage, and remove superseded tests rather than carrying both architectures. **Complete when:** production is at most 1,080 changed LoC with no more than 120 projected documentation/correction LoC remaining, tests are at most 950 changed LoC, and file counts remain within the approved card. Return to Design before crossing the 1,200 production hard stop.
 
-- [x] **Write Task invalidation and Board typed-selector coordinator tests, then
-  centralize the operation.** Cover current, inactive, root, and final Task
-  removal; repeated
-  events; Back skipping deleted entries; only typed `workflowTaskNotFound`
-  invalidating while other errors retain Retry; and final removal settling the
-  ordinary closed result. Prove initial non-empty `taskId=A` opens exactly A as
-  a fresh root and a same-selector rerender performs no sidebar operation. Add
-  controlled cases from the same `/projects/P?taskId=A` route and unrelated open
-  Task B: selected A deletion to absence records/consumes the typed Board cause
-  and preserves B; ordinary A-to-absence has no cause and closes B with no
-  replacement; ordinary A-to-C first destroys B and then ends with exactly C as
-  a fresh sidebar root/lifecycle. Assert no transient or final close can destroy
-  C after it opens and no independent selected-Task open effect remains. Cover
-  transition mismatch, navigation failure cleanup, repeated deletion, typed
-  Workflow search change, and pathname change. Add a Workflow Editor regression
-  that changes
-  only its validated `projectId` search value and closes a notification-opened
-  Task sidebar. Verify Home, Workflow Library, and standalone Task have no
-  main-window search contract, while native-dialog routes remain separate
-  windows. Propagate navigation failure to the existing localized boundary.
-  **Complete when:** focused history/Task Detail/Board/Workflow Editor tests pass
-  with every current main-window search route assigned to a typed owner, exactly
-  one Board coordinator owning selected-Task close/open ordering, and no sidebar
-  ID/token, pathname/search parsing, token cleanup, error swallowing, text
-  parsing, or absence sentinel.
-  Progress (August 4, 2026): Centralized typed Task invalidation through the
-  sidebar facade, retained the Board deletion cause across the exact selector
-  transition, and made Board workflow/Task selector close/open ordering
-  synchronous at the typed route owner. Full Desktop automation passes 77 test
-  files / 355 tests, including Board and sidebar regressions.
+- [ ] **Update the owning Desktop specification and regenerate the complete PR review ledger.** Replace browser URL/history and proactive history-wide deletion requirements with visible screen ownership, destination-owned typed missing handling, lazy skipping, root Back closure, and generic root replacement. Use `~/.agents/scripts/gh_pr_threads.sh` to audit all review threads. Keep all 65 resolved threads resolved. Regenerate each report row with the exact reviewed recurrence condition, the concrete superseded path removed, the replacement owner that makes it unreachable, and a deterministic test/type/lint/scope gate. **Complete when:** spec-writing review passes, all 90 first-comment IDs and 65/25 statuses match the comment CLI, no row uses a generic fallback, and resolved threads were not reopened.
 
-- [x] **Write Project invalidation and notification-origin tests, then finish
-  scope/spec cleanup.** Exercise current/inactive Project entries, unrelated
-  survivors when the route stays put, ordinary full close when deletion
-  navigates away, and asynchronous cleanup that re-reads current history instead
-  of a stale match. Keep AppChrome free of destination/query inspection and
-  verify every Task open origin supplies membership, including API resolution
-  for a notification that omits it. Revert legacy selector migration/copy/tests,
-  unrelated route refactors, server/worktree timeout edits, generic scrolling
-  changes, hardcoded facade copy, and redundant wrappers/aliases. Update only
-  the approved Desktop spec prose and regenerate the 90-row ledger from the
-  comment CLI with all 65 resolved threads closed and row-specific prevention
-  proof. **Complete when:** focused Project/notification/route tests, spec
-  review, typecheck, architecture lint, 90-row ID/status audit, and scope-diff
-  checks pass; route/invalidation/notification production scope is 90–130 LoC
-  and styles/i18n is 40–60 LoC.
-  Progress (August 4, 2026): Project deletion now invalidates typed complete
-  sidebar history after asynchronous query cleanup; AppChrome no longer
-  inspects destination shape, and ProjectDeleteButton uses the same operation.
-  Board selector ownership is typed and synchronous for workflow and Task
-  search transitions, with deletion-cause preservation. Notification Task
-  openings populate immutable Project membership or resolve it through the
-  Task API. Focused route/sidebar/deletion-adjacent tests and typecheck pass;
-  no server, wire, or generic-list changes are present.
-
-- [x] **Run the final product-boundary matrix and automated verification.** Add
-  only missing coverage for whole-stack X/route/reconnect, same-Task truncation,
-  bounded cycles, fresh activation keys, controlled activation-ABA rejection,
-  two-level same-natural-key identity, delayed validation/current-action/close
-  ordering,
-  retained drafts, admission failure unlock, validation/mutation invalidation,
-  initial selector opening, same-selector no-op, paired Board
-  deletion-vs-ordinary-absence causes, ordinary A-to-C close-then-fresh-open,
-  one live surface, Task/Project invalidation, Project and Workflow Editor
-  search-only route changes, scoped Pop out, width continuity, and the public
-  architecture boundary. Audit for
-  duplicate utilities/matchers, strings or error parsing, sentinels,
-  AbortController/work-signal coordination, test-only production seams,
-  query-cache ownership, feature imports in generic history,
-  Kent-generated identity, and KENT-369/KENT-372 expansion. Run
-  `pnpm install --frozen-lockfile`, `pnpm lint`, and `pnpm typecheck` from
-  `apps/`, then `./scripts/test.sh desktop` and `./scripts/build.sh desktop`
-  from the repository root once. **Complete when:** every command passes, all 90
-  review barriers have concrete proof without reopening resolved threads, final
-  scope is 18–25 production files / 900–2,000 LoC, 10–16 test files /
-  850–1,300 LoC, docs 1 / 40–80, generated 0, and product browser/manual QA
-  remains absent.
-  Progress (August 4, 2026): Initial automated verification completed:
-  `pnpm install --frozen-lockfile`, full Apps lint (0 errors; 5 existing
-  warnings), Apps typecheck, `./scripts/test.sh desktop` (77 files / 355
-  tests), and Desktop build passed. Browser/manual QA was not run as explicitly
-  excluded. During remediation, the human approved a revised production-scope
-  cap exception to preserve the complete behavior contract; the exact current
-  production measurement and remediation verification remain the final
-  handoff evidence. Second remediation completed: Project deletion re-reads
-  the current typed route after cleanup, Board deletion causes track
-  operation-scoped attempts, generic VirtualizedInfiniteList changes were
-  removed, and route/deletion regression coverage was added. Final automated
-  verification passed: `./scripts/test.sh desktop` (81 files / 367 tests) and
-  `./scripts/build.sh desktop`. Following the user's August 5 decision to
-  revise the Design, the current remediation restores one typed offset request
-  at the VirtualizedInfiniteList owner, where it updates both the DOM position
-  and TanStack Virtual range/load-more state; Task Detail supplies the request
-  without direct scroll mutation. The immediate-navigation result wrapper is
-  unified, and committed Board deletion now dismisses its confirmation after a
-  typed navigation failure while surfacing the error. Focused regression tests
-  cover the virtual range/load-more behavior and deletion confirmation
-  settlement. Latest remediation routes mutation-driven and subscription-driven
-  selected-Task deletion through the same provider-owned typed operation.
-  `SidebarProvider` keeps the pending operation through selector absence,
-  defers reconciliation, and preserves or closes only after the matching
-  completed/failed outcome while checking the original activation's current
-  history/key. Product-boundary tests cover parsed Board selectors,
-  selector-before-outcome delayed success/failure, unrelated-survivor
-  preservation, replacement activation after stale failure, and same-history
-  invalidation after replacement without literal-text control flow.
-  Focused route and deletion-coordinator tests pass; full verification is
-  recorded below after the final remediation round.
-  Progress (August 5, 2026): Remediated the compliance boundary by making
-  Project `taskId` optional and non-empty when present, omitting it from
-  project navigation and route restoration when absent, and carrying
-  `string | undefined` through Board selector and subscription contracts.
-  Board deletion navigation now receives only the Design-owned selected
-  workflow selector; the redundant workflow fallback was removed. Product
-  boundary tests cover omitted task selectors, rejection of empty selectors,
-  and success/failure after selector absence commits without empty-string
-  absence values. Final remediation verification passed: full Apps lint
-  (0 errors; 4 existing warnings), Apps typecheck,
-  `./scripts/test.sh desktop` (82 files / 377 tests), and
-  `./scripts/build.sh desktop`. Browser/manual QA remains excluded.
-
-- [x] **Close the complete sidebar from one router transition owner.**
-  `SidebarProvider` now consumes one structured router-location contract for
-  normal links, browser history, View Transition updates, Board workflow/task
-  search changes, and Workflow Editor project changes. Sidebar-local Push/Back
-  never changes the router location and remains independent. The Board
-  selector coordinator reports selected-Task deletion start/outcome through
-  the provider's typed pending operation; the provider preserves an unrelated
-  survivor only for a matching completed deletion transition and closes
-  ordinary or failed route changes. Pathname closure is subscribed to the
-  provider's router-history lifecycle boundary before route loading; that
-  same callback derives the typed search transitions. Regression coverage
-  uses real router transitions for every route case, including delayed
-  success/failure after selector absence, the AppChrome Home View Transition
-  path, and the deletion-survivor exception.
-  Progress (August 5, 2026): QA reproduced a live sidebar after top-level Home
-  navigation. Restored the provider-owned `onBeforeLoad` pathname close
-  subscription and retained structured search-transition reconciliation.
-  Full Desktop verification passed again: 82 files / 377 tests.
-  Progress (August 5, 2026): Completed the compliance remediation by making
-  the provider's single typed dispatch derive both pathname and
-  validated Board/Workflow Editor search locations through one typed
-  `SidebarRouteTransition` model. The same callback owns deletion-operation
-  reconciliation and sidebar closure; no React location observer or separate
-  pathname writer remains. The structural router-match adapter preserves
-  typed optional search values without parsing route strings.
-  Progress (August 5, 2026): QA reproduced a native browser View Transition
-  that changed the pathname while leaving the sidebar live. The single
-  provider dispatch now runs at TanStack Router's earlier
-  `onBeforeNavigate` lifecycle event, before route loading and View Transition
-  mounting can replace the route shell. This keeps pathname, Board search,
-  Workflow Editor search, deletion reconciliation, and closure in the same
-  typed path while covering the real top-level Home navigation timing.
-  Progress (August 5, 2026): Added a product-boundary guard that mounts a
-  Home route probe during View Transition navigation and observes the sidebar
-  `data-state` as `closing` at destination mount. Sidebar closure commits
-  synchronously at this lifecycle boundary so the test reproduces the
-  pre-mount ordering defect rather than asserting router event names. Focused
-  route-transition coverage passes 12/12; the full Desktop suite passes 82
-  files / 377 tests after adding the combined guard. Apps lint remains 0 errors with
-  4 existing warnings, Apps typecheck passes, and the Desktop build passes.
-  Progress (August 5, 2026): Fresh browser QA still found the complete sidebar
-  stack mounted after Home navigation because only the closing phase had been
-  flushed synchronously; current history and outgoing state were deferred
-  separately. The route-close owner now commits current-history removal,
-  outgoing close-animation state, and closing phase together in one synchronous
-  flush. This preserves the one dispatch owner and removes the stale complete
-  stack at the route lifecycle boundary. Focused coverage remains 12/12 and
-  full Desktop coverage remains 82 files / 377 tests.
-  Progress (August 5, 2026): Replaced the synchronized presentation setters
-  with one discriminated `SidebarLifecycle` state. Open, closing, and closed
-  transitions now derive current history, outgoing animation content, and
-  phase from that single authority; route closure performs one lifecycle
-  transition. Push, Back, replacement, and invalidation no longer write phase
-  independently. Strengthened the combined product guard to build a two-entry
-  stack, then observe the public `canGoBack` contract at Home-route mount:
-  it must already be false while phase is closing, followed by complete
-  sidebar removal. This fails the prior phase-only flush because the old
-  current stack would still report Back available.
-  Progress (August 5, 2026): Consolidated the route-test harness into one
-  typed `SidebarFixture` that owns an explicit non-empty destination sequence.
-  Existing single-destination cases use its default sequence, while the Home
-  guard supplies two destinations; no copied opener, pushed flag, or
-  one-off outlet boolean remains. The route helper now accepts one coherent
-  root-composition callback for placing the public route probe inside
-  AppChrome.
-  Progress (August 5, 2026): QA's browser evidence isolated the remaining
-  ordering defect to the Router Transitioner boundary: `onBeforeNavigate`
-  callbacks ran inside route loading, after the browser View Transition could
-  retain the old sidebar shell. The provider now subscribes directly to
-  `router.history` from a layout effect, before the Router Transitioner load
-  subscriber. It parses the history location once, matches only the target
-  pathname for structural route identity, and adapts the target query through
-  `URLSearchParams` into the existing typed Board/Workflow Editor location
-  model. This keeps pathname, search, deletion reconciliation, and closure in
-  one provider dispatch without deprecated Router overloads or separate route
-  observers. Focused route-transition coverage remains 12/12, including
-  Home/View Transition ordering, browser Back, search-only changes, Board
-  workflow/task changes, Workflow Editor project changes, and deletion
-  survivors.
-  Progress (August 5, 2026): QA's repeated browser finding was adjudicated
-  invalid after auditing the harness source. Its `cmd_browser` starts Vite
-  from the harness `REPO_ROOT` (`/Users/nek/Dev/kent`), whose checkout was
-  `b335f635`, while this task worktree was `161f2594c` and contained the
-  history-boundary implementation under review. A manual reproduction through
-  that same harness served the main checkout and reproduced the stale sidebar;
-  the current worktree's route callback was not in the served source. The user
-  chose to record the source mismatch and request fresh QA against this
-  worktree. No production workaround or scope expansion was authorized.
-  Progress (August 5, 2026): Fresh QA later verified the current worktree
-  source and reproduced the blocker, so the prior source-mismatch disposition
-  is superseded. Manual instrumentation on the current worktree showed the
-  history callback does run for Home (`transition.kind = pathname`) with both
-  current history and pending lifecycle present, but the mounted sidebar
-  remained `data-state="open"` after `setLifecycle({ kind: "closing" })`.
-  Temporary browser instrumentation was removed; the remaining root boundary
-  is lifecycle state ownership/remount or transition scheduling after the
-  callback, not history subscription registration.
-  Progress (August 5, 2026): Compliance review correctly rejected the
-  temporary raw-query adapter. The root cause was type erasure in
-  `createNativeDialogRoutes(rootRoute: AnyRootRoute)`, which made the
-  registered router expose `ParsedLocation<any>`. The route factory now
-  preserves its concrete root-route generic. The history owner consequently
-  passes TanStack's structured `parseLocation(...).search` directly into
-  `matchRoutes(pathname, search)`, receiving validated route matches and
-  projecting only the typed Board/Workflow search fields. The raw query
-  parser and duplicate query authority are removed; pathname, validated
-  search, deletion reconciliation, and closure remain one dispatch.
-  Progress (August 5, 2026): The valid current-worktree QA reproduction
-  showed that the history callback reaches the provider with the active
-  history and pending lifecycle, but React can retain the open lifecycle when
-  the callback runs inside the browser View Transition scheduling boundary.
-  Route closure now schedules its one guarded lifecycle commit in the next
-  microtask, after that boundary's synchronous work, while preserving the
-  existing single provider-owned dispatch and replacement guard. Focused route
-  coverage remains green; a fresh browser acceptance rerun is still required
-  before completion.
-
-- [x] **Keep the complete production diff within the approved cap.**
-  The complete non-test Desktop source/resource diff from
-  `origin/main...HEAD`, including styles, is now 1,667 additions plus 333
-  deletions: **2,000 changed lines**, within the Design boundary. The final
-  remediation restores readable CSS and stack formatting, consolidates the
-  two directional animations into one parameterized motion path, removes
-  dead adapter-only identity/narrowing helpers and an unused production test
-  seam, and consolidates generic currentness/rebase logic. Approved behavior,
-  ownership, and guarantees are unchanged.
-  Progress (August 5, 2026): Re-measured after single-owner pathname
-  reconciliation: Apps lint (0 errors; 4 existing warnings), Apps typecheck,
-  Desktop build, and `./scripts/test.sh desktop` (82 files / 377 tests) all
-  passed. The final non-test Desktop diff is 1,667 additions plus 330
-  deletions, totaling 1,997 changed lines.
-  Progress (August 5, 2026): Re-measured after unified typed dispatch
-  remediation and the ordering guard: 1,669 additions plus 331 deletions,
-  totaling 2,000 changed production lines, exactly within the cap. The full
-  Desktop suite passed 82 files / 378 tests. Final verification passed with
-  Apps lint at 0 errors and 4 existing warnings, Apps typecheck, and
-  `./scripts/build.sh desktop`; browser/manual QA remains excluded.
-  Progress (August 5, 2026): Re-measured after the single-lifecycle
-  presentation refactor: 1,667 additions plus 332 deletions, totaling 1,999
-  changed production lines. Full Desktop tests passed 82 files / 377 tests;
-  lint, typecheck, and build remain passing.
-  Progress (August 5, 2026): The history-boundary remediation and typed query
-  adapter measure 1,668 additions plus 332 deletions, totaling 2,000 changed
-  production lines, within the approved cap. Final remediation verification
-  passed: `./scripts/test.sh desktop` completed with 82 test files and 377
-  tests, Apps lint completed with 0 errors and 4 existing warnings, Apps
-  typecheck passed, `./scripts/build.sh desktop` passed, and `git diff
-  --check` passed. Browser/manual QA remains excluded.
-  Progress (August 5, 2026): After removing the non-compliant query adapter
-  and restoring concrete router typing, the production scope is 1,667
-  additions plus 333 deletions, totaling 2,000 changed lines. Focused route
-  coverage remains 12/12 and typecheck/lint pass for the remediation. Final
-  full verification also passed: `./scripts/test.sh desktop` completed with
-  82 test files and 377 tests, Apps lint completed with 0 errors and 4
-  existing warnings, Apps typecheck passed, `./scripts/build.sh desktop`
-  passed, and `git diff --check` passed. Browser/manual QA remains excluded.
+- [ ] **Run final automated verification once.** Run the frozen Apps install, Apps lint and typecheck, `./scripts/test.sh desktop`, `./scripts/build.sh desktop`, architecture/scope guards, duplicate scan, and `git diff --check`. **Complete when:** every command passes; production is 12–18 files / 820–1,120 changed LoC and never above 1,200; tests are 8–13 files / 650–1,000 changed LoC; docs are 1 file / 35–65 changed LoC; generated files are 0; no server/worktree/native payload change exists; and the final code contains no superseded provider hub, deletion coordinator, proactive invalidation, router observer, browser-history contract, or sidebar feature terminology.
