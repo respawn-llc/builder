@@ -4241,18 +4241,16 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	return items, nil
 }
 
-const listManagedWorktreeRootsByProject = `-- name: ListManagedWorktreeRootsByProject :many
+const listManagedWorktreeRoots = `-- name: ListManagedWorktreeRoots :many
 SELECT wt.canonical_root_path
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
-WHERE w.project_id = ?1
-  AND wt.managed <> 0
+WHERE wt.managed <> 0
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
 `
 
-func (q *Queries) ListManagedWorktreeRootsByProject(ctx context.Context, projectID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listManagedWorktreeRootsByProject, projectID)
-	err = recordQueryError(ctx, err, listManagedWorktreeRootsByProject, 1)
+func (q *Queries) ListManagedWorktreeRoots(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listManagedWorktreeRoots)
+	err = recordQueryError(ctx, err, listManagedWorktreeRoots, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -4260,15 +4258,15 @@ func (q *Queries) ListManagedWorktreeRootsByProject(ctx context.Context, project
 	var items []string
 	for rows.Next() {
 		var canonical_root_path string
-		if err := recordQueryError(ctx, rows.Scan(&canonical_root_path), listManagedWorktreeRootsByProject, 1); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&canonical_root_path), listManagedWorktreeRoots, 0); err != nil {
 			return nil, err
 		}
 		items = append(items, canonical_root_path)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listManagedWorktreeRootsByProject, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listManagedWorktreeRoots, 0); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listManagedWorktreeRootsByProject, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listManagedWorktreeRoots, 0); err != nil {
 		return nil, err
 	}
 	return items, nil

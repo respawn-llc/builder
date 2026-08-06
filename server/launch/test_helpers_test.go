@@ -46,7 +46,7 @@ func (r testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(cont
 	}, nil
 }
 
-func (r testProjectBoundaryResolver) ResolveProjectManagedWorktreeRoots(context.Context, string) ([]string, error) {
+func (r testProjectBoundaryResolver) ResolveManagedWorktreeRoots(context.Context) ([]string, error) {
 	return nil, nil
 }
 

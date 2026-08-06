@@ -287,6 +287,47 @@ func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *tes
 	}
 }
 
+func TestCreateWorktreeRejectsExplicitRootNestedInManagedWorktreeFromOtherProject(t *testing.T) {
+	env := newServiceTestEnv(t)
+	otherWorkspaceRoot := filepath.Join(env.baseDir, "other-workspace")
+	if err := os.MkdirAll(otherWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other workspace: %v", err)
+	}
+	otherBinding, err := env.store.CreateProjectForWorkspace(env.ctx, otherWorkspaceRoot, "Other")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	otherManagedRoot := filepath.Join(env.baseDir, "other-managed-root")
+	if err := os.MkdirAll(otherManagedRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other managed root: %v", err)
+	}
+	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
+		ID:            "other-project-managed-root",
+		WorkspaceID:   otherBinding.WorkspaceID,
+		CanonicalRoot: otherManagedRoot,
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-other-project-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(otherManagedRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-other-project-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a root nested in another project's managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed cross-project nested creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
 func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")

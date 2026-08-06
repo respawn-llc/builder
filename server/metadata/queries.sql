@@ -2293,12 +2293,10 @@ JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.workspace_id = sqlc.arg(workspace_id)
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC;
 
--- name: ListManagedWorktreeRootsByProject :many
+-- name: ListManagedWorktreeRoots :many
 SELECT wt.canonical_root_path
 FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
-WHERE w.project_id = sqlc.arg(project_id)
-  AND wt.managed <> 0
+WHERE wt.managed <> 0
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC;
 
 -- name: GetWorktreeByID :one

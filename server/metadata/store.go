@@ -474,17 +474,13 @@ func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceI
 	return out, nil
 }
 
-func (s *Store) ListManagedWorktreeRootsByProject(ctx context.Context, projectID string) ([]string, error) {
+func (s *Store) ListManagedWorktreeRoots(ctx context.Context) ([]string, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" {
-		return nil, errors.New("project id is required")
-	}
-	rows, err := s.queries.ListManagedWorktreeRootsByProject(ctx, projectID)
+	rows, err := s.queries.ListManagedWorktreeRoots(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list managed worktree roots by project: %w", err)
+		return nil, fmt.Errorf("list managed worktree roots: %w", err)
 	}
 	roots := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -497,8 +493,8 @@ func (s *Store) ListManagedWorktreeRootsByProject(ctx context.Context, projectID
 	return roots, nil
 }
 
-func (s *Store) ResolveProjectManagedWorktreeRoots(ctx context.Context, projectID string) ([]string, error) {
-	return s.ListManagedWorktreeRootsByProject(ctx, projectID)
+func (s *Store) ResolveManagedWorktreeRoots(ctx context.Context) ([]string, error) {
+	return s.ListManagedWorktreeRoots(ctx)
 }
 
 func (s *Store) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (WorktreeRecord, error) {

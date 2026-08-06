@@ -121,7 +121,7 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	if err != nil {
 		return AgentRuntimePlan{}, err
 	}
-	managedWorktreeRoots, err := s.metadataStore.ResolveProjectManagedWorktreeRoots(ctx, projectWorkspaceBoundary.ProjectID)
+	managedWorktreeRoots, err := s.metadataStore.ResolveManagedWorktreeRoots(ctx)
 	if err != nil {
 		return AgentRuntimePlan{}, err
 	}
