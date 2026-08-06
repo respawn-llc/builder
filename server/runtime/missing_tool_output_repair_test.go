@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -126,16 +127,15 @@ func TestNormalGenerationLive400RepairWaitsForMatchingStartThenRetriesOnce(t *te
 	}
 	firstRepairAttempt := client.calls[1]
 	retry := client.calls[2]
-	if firstRepairAttempt.Model != retry.Model ||
-		firstRepairAttempt.SessionID != retry.SessionID ||
-		firstRepairAttempt.ToolChoiceMode != retry.ToolChoiceMode ||
-		firstRepairAttempt.PromptCacheKey != retry.PromptCacheKey ||
-		firstRepairAttempt.PromptCacheScope != retry.PromptCacheScope ||
-		firstRepairAttempt.EnableNativeWebSearch != retry.EnableNativeWebSearch {
+	firstMetadata := firstRepairAttempt
+	firstMetadata.Items = nil
+	retryMetadata := retry
+	retryMetadata.Items = nil
+	if !reflect.DeepEqual(firstMetadata, retryMetadata) {
 		t.Fatalf(
 			"normal generation retry changed provider operation identity: first=%+v retry=%+v",
-			firstRepairAttempt,
-			retry,
+			firstMetadata,
+			retryMetadata,
 		)
 	}
 	if !repairRequestHasToolCall(firstRepairAttempt.Items, call.ID) ||
