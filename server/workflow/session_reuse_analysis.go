@@ -76,7 +76,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		nodeID: input.CompletedCurrentNode.Reference.NodeID,
 		branch: reuseBranchForReference(input.CompletedCurrentNode.Reference),
 	}
-	visited := map[referenceState]struct{}{initial: {}}
+	visited := make(map[referenceState]struct{})
 	queue := make([]referenceState, 0, len(input.AcceptedBranches))
 
 	appendContextReference := func(sourceState referenceState, targetBranch reuseBranch, edge Edge, target Node) {

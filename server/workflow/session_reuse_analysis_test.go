@@ -106,6 +106,67 @@ func TestSessionReuseAssociationReferencesIncludesLaterFanoutBranches(t *testing
 	}
 }
 
+func TestSessionReuseAssociationReferencesFollowsCycleBackToCompletedNode(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_reference_cycle")
+	sessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-reference-cycle", "node_a", nil)
+	if err != nil {
+		t.Fatalf("completed reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &sessionID, nil)
+	if err != nil {
+		t.Fatalf("completed node: %v", err)
+	}
+
+	nodeA := testAgentNode(workflowID, "node_a", "a", "A", workflow.NodeFields{SubagentRole: "coder"})
+	nodeB := testAgentNode(workflowID, "node_b", "b", "B", workflow.NodeFields{SubagentRole: "reviewer"})
+	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "reviewer"})
+	nodeC := testAgentNode(workflowID, "node_c", "c", "C", workflow.NodeFields{SubagentRole: "reviewer"})
+	toB := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_b", Key: "b",
+		TransitionGroupID: "group_a", TargetNodeID: "node_b",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	toA := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_b_a", Key: "a",
+		TransitionGroupID: "group_b", TargetNodeID: "node_a",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	afterCycle := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_c", Key: "c",
+		TransitionGroupID: "group_a_after_cycle", TargetNodeID: "node_c",
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "worker"},
+	}
+
+	references := workflow.SessionReuseAssociationReferences(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          workflowID,
+			DisplayName: "Reference Cycle",
+			Nodes:       []workflow.Node{nodeA, nodeB, worker, nodeC},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_a", SourceNodeID: "node_a"},
+				{WorkflowID: workflowID, ID: "group_b", SourceNodeID: "node_b"},
+				{WorkflowID: workflowID, ID: "group_a_after_cycle", SourceNodeID: "node_a"},
+			},
+			Edges: []workflow.Edge{toB, toA, afterCycle},
+		},
+		AcceptedBranches:     []workflow.Edge{toB},
+		CompletedCurrentNode: completedNode,
+	})
+
+	workerReference, err := workflow.NewCurrentNodeReference("task-reference-cycle", "node_worker", nil)
+	if err != nil {
+		t.Fatalf("worker reference: %v", err)
+	}
+	for _, reference := range references {
+		if reference.Equal(workerReference) {
+			return
+		}
+	}
+	t.Fatalf("references omitted context source reachable after cycle: %+v", references)
+}
+
 func TestClassifyWorkflowSessionReuseFindsAReachableSerialLoop(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_serial_loop")
 	completedSessionID := runtimeids.NewSessionID()
