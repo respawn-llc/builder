@@ -1,14 +1,13 @@
 package workflowstore
 
 import (
-	"bytes"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"sort"
 	"testing"
 	"time"
 
+	"core/server/internal/testsupport"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -462,10 +461,7 @@ func TestLoadSessionReuseAssociationsTreatsMissingReferencesAsNormalWithoutDiagn
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
 
-	var diagnostics bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	diagnostics := testsupport.CaptureSlog(t)
 
 	associations, err := store.LoadSessionReuseAssociations(
 		metadata.WithQueryFailureDiagnostics(ctx),

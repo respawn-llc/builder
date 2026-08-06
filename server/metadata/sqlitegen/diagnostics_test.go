@@ -1,35 +1,58 @@
 package sqlitegen
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"testing"
+
+	"core/server/internal/testsupport"
 )
 
-func TestRecordQueryErrorSkipsMissingRowsButReportsDatabaseFailures(t *testing.T) {
-	var diagnostics bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+type noRowsQueryDB struct {
+	*sql.DB
+}
 
+func (db noRowsQueryDB) QueryRowContext(ctx context.Context, _ string, _ ...interface{}) *sql.Row {
+	return db.DB.QueryRowContext(ctx, "SELECT 1 WHERE 0")
+}
+
+type queryErrorDB struct {
+	*sql.DB
+}
+
+func (db queryErrorDB) QueryRowContext(ctx context.Context, _ string, _ ...interface{}) *sql.Row {
+	return db.DB.QueryRowContext(ctx, "SELECT no_such_function()")
+}
+
+func TestGeneratedSingleRowNoRowsDiagnosticsArePolicyScoped(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	diagnostics := testsupport.CaptureSlog(t)
 	ctx := WithQueryFailureDiagnostics(context.Background())
-	missing := errors.New("retained association absent: " + sql.ErrNoRows.Error())
-	missing = errors.Join(missing, sql.ErrNoRows)
-	if got := recordQueryError(ctx, missing, "missing-association", 1); got != missing {
-		t.Fatalf("missing-row error = %v, want original error", got)
-	}
-	if diagnostics.Len() != 0 {
-		t.Fatalf("missing-row diagnostics = %q, want none", diagnostics.String())
-	}
+	queries := New(noRowsQueryDB{DB: db})
 
-	operational := errors.New("database unavailable")
-	if got := recordQueryError(ctx, operational, "operational-query", 1); got != operational {
-		t.Fatalf("operational error = %v, want original error", got)
+	if _, err := queries.GetTask(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unexpected generated no-row error = %v, want sql.ErrNoRows", err)
 	}
 	if diagnostics.Len() == 0 {
-		t.Fatal("operational query failure emitted no diagnostics")
+		t.Fatal("unexpected generated no-row failure emitted no diagnostics")
+	}
+
+	diagnostics.Reset()
+	if _, err := queries.GetTask(WithExpectedNoRows(ctx), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected generated no-row error = %v, want sql.ErrNoRows", err)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("expected optional no-row diagnostics = %q, want none", diagnostics.String())
+	}
+
+	diagnostics.Reset()
+	queries = New(queryErrorDB{DB: db})
+	if _, err := queries.GetTask(WithExpectedNoRows(ctx), "unexpected"); err == nil {
+		t.Fatal("unexpected generated query failure returned nil error")
+	}
+	if diagnostics.Len() == 0 {
+		t.Fatal("unexpected generated query failure emitted no diagnostics")
 	}
 }

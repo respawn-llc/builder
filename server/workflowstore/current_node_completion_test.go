@@ -1,14 +1,13 @@
 package workflowstore
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
+	"core/server/internal/testsupport"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
@@ -22,10 +21,7 @@ func TestCompleteCurrentNodeWithoutApprovalDoesNotEmitQueryFailureDiagnostics(t 
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
 
-	var diagnostics bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	diagnostics := testsupport.CaptureSlog(t)
 
 	if _, err := store.CompleteCurrentNode(metadata.WithQueryFailureDiagnostics(ctx), CurrentNodeCompletionRequest{
 		Source:       source.Reference,

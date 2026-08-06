@@ -215,6 +215,7 @@ func (s *Store) LoadSessionReuseAssociations(
 ) ([]workflow.SessionReuseAssociation, error) {
 	associations := make([]workflow.SessionReuseAssociation, 0, len(references))
 	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
+	lookupCtx := sqlitegen.WithExpectedNoRows(ctx)
 	for _, reference := range references {
 		key, err := reference.Key()
 		if err != nil {
@@ -224,7 +225,7 @@ func (s *Store) LoadSessionReuseAssociations(
 			continue
 		}
 		seen[key] = struct{}{}
-		association, err := s.LatestTaskSessionForNode(ctx, reference)
+		association, err := s.LatestTaskSessionForNode(lookupCtx, reference)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
