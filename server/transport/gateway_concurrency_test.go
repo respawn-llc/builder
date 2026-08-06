@@ -239,10 +239,11 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()
 
+	panicCause := errors.New("gateway debug test panic")
 	workflow := &gatewayConcurrencyWorkflowService{
 		WorkflowService: appCore.WorkflowClient(),
 		getWorkflowTask: func(_ context.Context, _ serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-			panic("gateway debug test panic")
+			panic(panicCause)
 		},
 	}
 	deps := &gatewayConcurrencyDependencies{
@@ -263,8 +264,26 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	state := &connectionState{handshakeDone: true}
 	stopped := false
 	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatal("debug panic was recovered instead of re-panicked")
+		recovered := recover()
+		diagnostic, ok := recovered.(gatewayRequestPanicDiagnostic)
+		if !ok {
+			t.Fatalf("recovered panic = %#v, want gatewayRequestPanicDiagnostic", recovered)
+		}
+		if diagnostic.Operation != gatewayOrdinaryRequestOperation {
+			t.Fatalf("diagnostic operation = %q, want %q", diagnostic.Operation, gatewayOrdinaryRequestOperation)
+		}
+		if diagnostic.Method != protocol.MethodWorkflowTaskGet {
+			t.Fatalf("diagnostic method = %q, want %q", diagnostic.Method, protocol.MethodWorkflowTaskGet)
+		}
+		if diagnostic.RequestID != "panic" {
+			t.Fatalf("diagnostic request id = %q, want panic", diagnostic.RequestID)
+		}
+		cause, ok := diagnostic.Cause.(error)
+		if !ok || !errors.Is(cause, panicCause) {
+			t.Fatalf("diagnostic cause = %#v, want original panic cause", diagnostic.Cause)
+		}
+		if diagnostic.Stack == "" {
+			t.Fatal("diagnostic stack is empty")
 		}
 		if !stopped {
 			t.Fatal("debug panic did not close the connection")

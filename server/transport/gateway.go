@@ -152,6 +152,27 @@ type gatewayRequestSchedule struct {
 	progressRoute apicontract.Route
 }
 
+const gatewayOrdinaryRequestOperation = "gateway.ordinary_request"
+
+type gatewayRequestPanicDiagnostic struct {
+	Operation string
+	Method    string
+	RequestID string
+	Cause     any
+	Stack     string
+}
+
+func (p gatewayRequestPanicDiagnostic) Error() string {
+	return fmt.Sprintf(
+		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
+		p.Operation,
+		p.Method,
+		p.RequestID,
+		p.Cause,
+		p.Stack,
+	)
+}
+
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
 func RuntimeLiveControlRoutesExecutable() bool {
@@ -371,7 +392,13 @@ func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Con
 			)
 			stop()
 			if g.debug {
-				panic(recovered)
+				panic(gatewayRequestPanicDiagnostic{
+					Operation: gatewayOrdinaryRequestOperation,
+					Method:    req.Method,
+					RequestID: req.ID,
+					Cause:     recovered,
+					Stack:     stack,
+				})
 			}
 		}
 	}()
