@@ -795,8 +795,19 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 		t.Fatalf("pending Approvals after finalization diagnostic = %+v, want original Approval", pending)
 	}
 	f.waitForControllerCurrentNodeFinalized(t, implementation)
-	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
-		t.Fatalf("apply CAC target Approval after finalization diagnostic: %v", err)
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for {
+		_, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+			t.Fatalf("apply CAC target Approval after finalization diagnostic: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("CAC target Approval remained blocked after finalization diagnostic: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	requests := f.waitForModelRequests(t, 2)
 	if len(client.CompactionCalls()) != 1 {
