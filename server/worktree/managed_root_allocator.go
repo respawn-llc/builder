@@ -165,6 +165,29 @@ func (a *managedRootAllocator) validateResolvedRoot(resolved string, sourceWorks
 	return resolved, nil
 }
 
+func (a *managedRootAllocator) validateNoManagedRootOverlap(candidate string, existingRoots []string, exemptRoot string) error {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return errors.New("managed worktree root is required")
+	}
+	exemptRoot = strings.TrimSpace(exemptRoot)
+	for _, existingRoot := range existingRoots {
+		existingRoot = strings.TrimSpace(existingRoot)
+		if existingRoot == "" {
+			return errors.New("existing managed worktree root is required")
+		}
+		if exemptRoot != "" &&
+			sameOrDescendantPath(existingRoot, exemptRoot) &&
+			sameOrDescendantPath(exemptRoot, existingRoot) {
+			continue
+		}
+		if sameOrDescendantPath(existingRoot, candidate) || sameOrDescendantPath(candidate, existingRoot) {
+			return fmt.Errorf("managed worktree root %q overlaps existing managed worktree root %q", candidate, existingRoot)
+		}
+	}
+	return nil
+}
+
 func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (string, error) {
 	base, err := a.automaticBase()
 	if err != nil {

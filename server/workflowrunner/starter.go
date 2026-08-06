@@ -700,13 +700,14 @@ func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, in
 }
 
 func (s *Starter) currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
-	if root.Managed == nil {
-		return nil, nil
-	}
 	if strings.TrimSpace(s.cfg.Settings.Worktrees.BaseDir) == "" {
 		return nil, nil
 	}
-	return askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, &root.Managed.Root)
+	var currentRoot *string
+	if root.Managed != nil {
+		currentRoot = &root.Managed.Root
+	}
+	return askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, currentRoot)
 }
 
 func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {

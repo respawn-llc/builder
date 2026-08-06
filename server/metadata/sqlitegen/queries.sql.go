@@ -4241,6 +4241,39 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	return items, nil
 }
 
+const listManagedWorktreeRootsByProject = `-- name: ListManagedWorktreeRootsByProject :many
+SELECT wt.canonical_root_path
+FROM worktrees wt
+JOIN workspaces w ON w.id = wt.workspace_id
+WHERE w.project_id = ?1
+  AND wt.managed <> 0
+ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC
+`
+
+func (q *Queries) ListManagedWorktreeRootsByProject(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listManagedWorktreeRootsByProject, projectID)
+	err = recordQueryError(ctx, err, listManagedWorktreeRootsByProject, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var canonical_root_path string
+		if err := recordQueryError(ctx, rows.Scan(&canonical_root_path), listManagedWorktreeRootsByProject, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, canonical_root_path)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listManagedWorktreeRootsByProject, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listManagedWorktreeRootsByProject, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMetadataSchemaDefinitions = `-- name: ListMetadataSchemaDefinitions :many
 SELECT
     type AS object_kind,

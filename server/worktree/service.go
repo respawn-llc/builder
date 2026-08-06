@@ -610,6 +610,17 @@ func (s *Service) registeredWorktreeRoot(ctx context.Context, workspaceRoot stri
 	return false, nil
 }
 
+func (s *Service) validateManagedRootForCreation(ctx context.Context, projectID string, root string, kind managedRootKind, exemptRoot string) error {
+	existingRoots, err := s.metadata.ListManagedWorktreeRootsByProject(ctx, projectID)
+	if err == nil {
+		err = s.managedRoots.validateNoManagedRootOverlap(root, existingRoots, exemptRoot)
+	}
+	if err != nil && kind == managedRootKindAutomatic {
+		err = errors.Join(err, removeEmptyManagedRootAfterAddFailure(root))
+	}
+	return err
+}
+
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
 	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
 	if err != nil {
@@ -636,6 +647,13 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
+	}
+	exemptRoot := ""
+	if req.ExistingRecord != nil {
+		exemptRoot = req.ExistingRecord.CanonicalRoot
+	}
+	if err := s.validateManagedRootForCreation(ctx, req.Task.ProjectID, worktreeRoot, rootKind, exemptRoot); err != nil {
+		return TaskWorktreeMaterialization{}, err
 	}
 	cleanup := failedCreateCleanup{
 		workspaceID:   req.Workspace.WorkspaceID,
@@ -1137,6 +1155,9 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
+	}
+	if err := s.validateManagedRootForCreation(ctx, workspaceCtx.projectID, worktreeRoot, rootKind, ""); err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
 	}
 	createdBranch, err := s.addManagedWorktree(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec, rootKind)
 	if err != nil {

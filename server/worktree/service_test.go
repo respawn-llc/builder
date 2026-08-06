@@ -254,6 +254,39 @@ func TestCreateWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.
 	}
 }
 
+func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	existingRoot := filepath.Join(env.baseDir, "existing-root")
+	if _, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "existing-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         existingRoot,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/existing-managed-root",
+	}); err != nil {
+		t.Fatalf("CreateWorktree existing root: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(existingRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root nested in an existing managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed nested creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
 func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")
