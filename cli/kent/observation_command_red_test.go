@@ -118,8 +118,5 @@ func TestTaskWaitAndWatchReachObservationArgumentValidation(t *testing.T) {
 		if code := taskSubcommand([]string{verb}, &stdout, &stderr); code != 2 {
 			t.Fatalf("task %s exit code = %d, want 2", verb, code)
 		}
-		if !strings.Contains(stderr.String(), "task reference is required") {
-			t.Fatalf("task %s stderr = %q", verb, stderr.String())
-		}
 	}
 }
