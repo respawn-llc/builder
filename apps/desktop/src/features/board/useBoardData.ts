@@ -17,7 +17,7 @@ import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
-import { useRetainedQueryData } from "@/app-facade";
+import { useRetainedQueryData } from "./useRetainedQueryData";
 import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {

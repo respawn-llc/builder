@@ -23,7 +23,6 @@ import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useCurrentWindowChromeTitle } from "@/app-facade";
-import { BoardTaskSearchChrome } from "@/shared/task-search";
 
 export type AppChromeProps = Readonly<{
   children: ReactNode;
@@ -60,14 +59,6 @@ export function AppChrome({ children }: AppChromeProps) {
         data-testid="app-chrome-navigation"
       >
         {!macOS ? <AppUpdateChip state={update} /> : null}
-        <BoardTaskSearchChrome
-          compact
-          enableShortcuts
-          onOpenTask={(taskID) => {
-            void navigation.openTask(taskID);
-          }}
-          projectID={null}
-        />
         {stack.hasHistory && !macOS ? (
           <HistoryButtons
             backLabel={t("app.back")}

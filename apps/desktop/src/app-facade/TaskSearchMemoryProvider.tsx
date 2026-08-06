@@ -8,7 +8,7 @@ import {
 
 export function TaskSearchMemoryProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [query, setQuery] = useState("");
-  const [selections, setSelections] = useState<ReadonlyMap<string | null, TaskSearchMemorySelection>>(
+  const [selections, setSelections] = useState<ReadonlyMap<string, TaskSearchMemorySelection>>(
     () => new Map(),
   );
   const rememberSelection = useCallback(
@@ -26,7 +26,7 @@ export function TaskSearchMemoryProvider({ children }: Readonly<{ children: Reac
     [setSelections],
   );
   const selectionFor = useCallback(
-    (projectID: string | null): TaskSearchMemorySelection | null => selections.get(projectID) ?? null,
+    (projectID: string): TaskSearchMemorySelection | null => selections.get(projectID) ?? null,
     [selections],
   );
   const memory = useMemo<TaskSearchMemory>(

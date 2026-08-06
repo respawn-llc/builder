@@ -73,7 +73,9 @@ describe("ApiClient task search", () => {
   it("sends the exact literal search payload and maps the grouped response", async () => {
     const transport = new FakeRpcTransport([{ method: "workflow.task.search", result: literalResponse }]);
     const client = new ApiClient(transport);
-    await expect(client.searchTasks(literalInput)).resolves.toEqual({
+    const controller = new AbortController();
+
+    await expect(client.searchTasks(literalInput, controller.signal)).resolves.toEqual({
       mode: "literal",
       groups: [
         {
@@ -119,7 +121,8 @@ describe("ApiClient task search", () => {
       nextOffset: 25,
     });
 
-    expect(transport.calls).toEqual([
+    expect(transport.calls).toEqual([]);
+    expect(transport.dedicatedCalls).toEqual([
       {
         method: "workflow.task.search",
         params: {
@@ -132,6 +135,7 @@ describe("ApiClient task search", () => {
           page_size: 25,
           offset: 5,
         },
+        options: { signal: controller.signal },
       },
     ]);
   });
@@ -235,7 +239,8 @@ describe("ApiClient task search", () => {
       code: -32052,
       method: "workflow.task.search",
     });
-    expect(transport.calls).toEqual([
+    expect(transport.calls).toEqual([]);
+    expect(transport.dedicatedCalls).toEqual([
       {
         method: "workflow.task.search",
         params: {

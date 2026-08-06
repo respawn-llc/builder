@@ -2,14 +2,14 @@ import { createContext, useContext } from "react";
 
 export type TaskSearchMemorySelection = Readonly<{
   key: string;
-  projectID: string | null;
+  projectID: string;
   query: string;
 }>;
 
 export type TaskSearchMemory = Readonly<{
   query: string;
   rememberSelection(selection: TaskSearchMemorySelection): void;
-  selectionFor(projectID: string | null): TaskSearchMemorySelection | null;
+  selectionFor(projectID: string): TaskSearchMemorySelection | null;
   setQuery(query: string): void;
 }>;
 

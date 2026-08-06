@@ -30,5 +30,4 @@ export * from "./viewTransitions";
 export * from "./windowChromeTitle";
 export * from "./WindowChromeTitleProvider";
 export * from "./TaskSearchMemoryProvider";
-export { useRetainedQueryData } from "./useRetainedQueryData";
 export * from "./workflowProjectEvents";

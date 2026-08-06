@@ -14,7 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { TaskSearchError, errorMessage, type TaskSearchGroup, type TaskSearchResponse } from "@/api";
-import { queryKeys, useAppServices, useRetainedQueryData, useTaskSearchMemory } from "@/app-facade";
+import { queryKeys, useAppServices, useTaskSearchMemory } from "@/app-facade";
 import {
   Button,
   CommandPaletteDialog,
@@ -29,6 +29,7 @@ import {
   useTaskSearchSelection,
   type TaskSearchScrollRequest,
 } from "./taskSearchSelection";
+import { useRetainedQueryData } from "./useRetainedQueryData";
 import { TaskSearchResultRow, type TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
 
 const searchDebounceMs = 300;
@@ -44,20 +45,16 @@ const taskSearchErrorDialogHeight = 240;
 
 type SearchPage = Readonly<{
   offset: number | null;
-  projectID: string | null;
+  projectID: string;
   query: string;
   response: TaskSearchResponse;
 }>;
 
 export function BoardTaskSearchChrome({
-  compact = false,
-  enableShortcuts = true,
   projectID,
   onOpenTask,
 }: Readonly<{
-  compact?: boolean;
-  enableShortcuts?: boolean;
-  projectID: string | null;
+  projectID: string;
   onOpenTask(taskID: string): void;
 }>) {
   const { t } = useTranslation();
@@ -92,7 +89,7 @@ export function BoardTaskSearchChrome({
     revealActiveSelection();
     setOpen(true);
   }, [revealActiveSelection]);
-  useTaskSearchShortcuts(enableShortcuts ? openSearch : null);
+  useTaskSearchShortcuts(openSearch);
   const moveSelection = useCallback(
     (direction: -1 | 1): void => {
       const next = adjacentSearchResult(search.results, selection.activeKey, direction);
@@ -113,7 +110,7 @@ export function BoardTaskSearchChrome({
         tone={open ? "primary" : "neutral"}
       >
         <SearchIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-        {compact ? null : t("taskSearch.open")}
+        {t("taskSearch.open")}
       </InteractiveChip>
       <TaskSearchDialog
         onActivate={activate}
@@ -130,10 +127,10 @@ export function BoardTaskSearchChrome({
   );
 }
 
-function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
+function useTaskSearchShortcuts(onOpen: () => void): void {
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (onOpen === null || !isTaskSearchShortcut(event)) {
+      if (!isTaskSearchShortcut(event)) {
         return;
       }
       event.preventDefault();
@@ -169,7 +166,7 @@ function useDebouncedText(value: string, delayMs: number): string {
   return debounced;
 }
 
-function useBoardTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
+function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: string) {
   const { api } = useAppServices();
   const trimmedQuery = debouncedQuery.trim();
   const searchable = Array.from(trimmedQuery).length >= 3;
@@ -177,11 +174,11 @@ function useBoardTaskSearch(projectID: string | null, open: boolean, debouncedQu
     SearchPage,
     Error,
     InfiniteData<SearchPage, number | null>,
-    readonly (string | null)[],
+    readonly string[],
     number | null
   >({
     queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
-    queryFn: async ({ pageParam }) => ({
+    queryFn: async ({ pageParam, signal }) => ({
       offset: pageParam,
       projectID,
       query: trimmedQuery,
@@ -192,10 +189,11 @@ function useBoardTaskSearch(projectID: string | null, open: boolean, debouncedQu
           context: taskSearchContext,
           caseSensitive: false,
           includeComments: true,
-          ...(projectID === null ? {} : { projectIDs: [projectID] }),
+          projectIDs: [projectID],
           pageSize: taskSearchPageSize,
           offset: pageParam ?? undefined,
         },
+        signal,
       ),
     }),
     initialPageParam: null,
@@ -500,7 +498,11 @@ function TaskSearchResultList({
       initialScrollRequestKey={immediateScrollRequest?.requestID.toString()}
       isFetchingNextPage={search.paginationUsesVisibleData && search.request.isFetchingNextPage}
       items={search.results}
-      loadMoreKey={search.paginationUsesVisibleData ? taskSearchNextOffset(search) : undefined}
+      loadMoreKey={
+        search.paginationUsesVisibleData
+          ? search.request.data?.pages.at(-1)?.response.nextOffset?.toString()
+          : undefined
+      }
       loadingLabel={t("taskSearch.searching")}
       nextBoundary={searchBoundaryState(search, boundaryCopy)}
       onLoadMore={() => {
@@ -541,11 +543,6 @@ function taskSearchDialogHeight(resultCount: number, loadingVisible: boolean, er
     return taskSearchLoadingDialogHeight;
   }
   return errorVisible ? taskSearchErrorDialogHeight : taskSearchInputHeight;
-}
-
-function taskSearchNextOffset(search: ReturnType<typeof useBoardTaskSearch>): string | undefined {
-  const nextOffset = search.request.data?.pages.at(-1)?.response.nextOffset;
-  return nextOffset == null ? undefined : nextOffset.toString();
 }
 
 function SearchRefreshError({
@@ -589,7 +586,7 @@ function taskSearchResultKey(page: SearchPage, group: TaskSearchGroup, groupInde
     throw new Error(`Task Search group ${group.taskID} at offset ${String(page.offset)} has no hits.`);
   }
   return [
-    group.projectID,
+    page.projectID,
     page.query,
     String(page.offset),
     groupIndex.toString(),
@@ -613,8 +610,8 @@ function searchSelectionDirection(key: string): -1 | 1 | null {
 }
 
 function sameTaskSearchProject(
-  left: Readonly<{ projectID: string | null }>,
-  right: Readonly<{ projectID: string | null }>,
+  left: Readonly<{ projectID: string }>,
+  right: Readonly<{ projectID: string }>,
 ): boolean {
   return left.projectID === right.projectID;
 }
