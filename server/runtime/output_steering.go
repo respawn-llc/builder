@@ -511,9 +511,36 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 			if err := e.applySteeringItem(stepID, item); err != nil {
 				return err
 			}
+			if item.historyReplace == nil && steeringItemConsumesWorkflowPostCompletionBoundary(item) {
+				e.compactionRuntimeState().ConsumeWorkflowPostCompletionBoundary()
+			}
 		}
 	}
 	return nil
+}
+
+func steeringItemConsumesWorkflowPostCompletionBoundary(item steeringItem) bool {
+	if item.message != nil {
+		if item.message.message.MessageType != nil {
+			switch *item.message.message.MessageType {
+			case llm.MessageTypeAgentsMD, llm.MessageTypeSkills, llm.MessageTypeSubagents,
+				llm.MessageTypeEnvironment, llm.MessageTypeWorkflowMode,
+				llm.MessageTypeCompactionSoonReminder:
+				return false
+			}
+		}
+		return true
+	}
+	return item.message != nil ||
+		item.assistantCommit != nil ||
+		item.committedAssistant != nil ||
+		item.completedResponseResolution != nil ||
+		item.localEntry != nil ||
+		item.reviewerFeedback != nil ||
+		item.reviewerError != nil ||
+		item.toolCompletion != nil ||
+		item.queuedFlush != nil ||
+		item.queuedRestore != nil
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -903,6 +930,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		&projectedStart,
 		replacement.projectedEntries,
 	)
+	e.compactionRuntimeState().SetHistoryReplacementMode(replacement.payload.Mode)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,

@@ -188,6 +188,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				replacement.CommittedEntryStart,
 				projectedEntries,
 			)
+			e.compactionRuntimeState().SetHistoryReplacementMode(string(replacement.Mode))
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,
@@ -204,6 +205,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
 			}
 			reminderIssued = false
+		}
+		if sessionRecordConsumesWorkflowPostCompletionBoundary(payload) {
+			e.compactionRuntimeState().ConsumeWorkflowPostCompletionBoundary()
 		}
 	}
 	for _, generations := range generationsByStep {
@@ -239,6 +243,25 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.handoffRuntimeState().QueueRequest(req.summarizerPrompt, req.futureAgentMessage)
 	}
 	return nil
+}
+
+func sessionRecordConsumesWorkflowPostCompletionBoundary(payload any) bool {
+	switch record := payload.(type) {
+	case session.MessageRecord:
+		if record.MessageType != nil {
+			switch *record.MessageType {
+			case session.MessageTypeAgentsMD, session.MessageTypeSkills, session.MessageTypeSubagents,
+				session.MessageTypeEnvironment, session.MessageTypeWorkflowMode,
+				session.MessageTypeCompactionSoonReminder:
+				return false
+			}
+		}
+		return true
+	case session.ToolCompletionRecord, session.CacheRequestObservationRecord:
+		return true
+	default:
+		return false
+	}
 }
 
 func isUserInitiatedShellCall(call llm.ToolCall) bool {

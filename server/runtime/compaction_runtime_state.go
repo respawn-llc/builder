@@ -6,11 +6,13 @@ import (
 )
 
 type compactionRuntimeState struct {
-	mu                 sync.Mutex
-	count              int
-	soonReminderIssued bool
-	manualEligible     bool
-	active             *TranscriptCompactionState
+	mu                             sync.Mutex
+	count                          int
+	soonReminderIssued             bool
+	manualEligible                 bool
+	historyReplacementMode         *string
+	workflowPostCompletionBoundary bool
+	active                         *TranscriptCompactionState
 }
 
 func (s *compactionRuntimeState) ManualCompactionEligible() bool {
@@ -119,4 +121,54 @@ func (s *compactionRuntimeState) SetSoonReminderIssued(issued bool) {
 	s.mu.Lock()
 	s.soonReminderIssued = issued
 	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) SetHistoryReplacementMode(mode string) {
+	if s == nil {
+		return
+	}
+	normalized := strings.TrimSpace(mode)
+	s.mu.Lock()
+	if normalized == "" {
+		s.historyReplacementMode = nil
+	} else {
+		s.historyReplacementMode = &normalized
+	}
+	s.workflowPostCompletionBoundary = normalized == string(compactionModeWorkflowPostCompletion)
+	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) HistoryReplacementMode() (*string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.historyReplacementMode == nil {
+		return nil, false
+	}
+	value := *s.historyReplacementMode
+	return &value, true
+}
+
+func (s *compactionRuntimeState) WorkflowPostCompletionBoundary() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workflowPostCompletionBoundary
+}
+
+func (s *compactionRuntimeState) ConsumeWorkflowPostCompletionBoundary() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.workflowPostCompletionBoundary {
+		return false
+	}
+	s.workflowPostCompletionBoundary = false
+	return true
 }

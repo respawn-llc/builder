@@ -104,7 +104,7 @@ func normalizeHistoryReplacementRecord(record HistoryReplacementRecord) (History
 		return HistoryReplacementRecord{}, fmt.Errorf("unsupported compaction engine %q", record.Engine)
 	}
 	switch record.Mode {
-	case CompactionModeAuto, CompactionModeHandoff, CompactionModeManual:
+	case CompactionModeAuto, CompactionModeHandoff, CompactionModeManual, CompactionModeWorkflowPostCompletion:
 	default:
 		return HistoryReplacementRecord{}, fmt.Errorf("unsupported compaction mode %q", record.Mode)
 	}

@@ -393,15 +393,45 @@ func (s *Starter) startCurrentNodeAgent(
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
-						return err
+					if !engine.ConsumeWorkflowPostCompletionBoundary() {
+						if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+							return err
+						}
 					}
 				}
-				_, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
-				return err
+				if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+					return err
+				}
+				turnEngine = engine
+				return nil
 			})
+			if turnErr == nil && turnEngine != nil {
+				if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
+					sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
+					if err != nil {
+						return err
+					}
+					preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
+					if err != nil {
+						return err
+					}
+					turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
+						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
+						PreCompactionTokens: preCompactionTokens,
+						CompactionMode:      turnEngine.CompactionMode(),
+						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
+							result := turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
+							return workflowruntime.PostCompletionCompactionResult{
+								CommitReceipt: result.CommitReceipt,
+								Diagnostic:    result.Diagnostic,
+							}
+						},
+					})
+				}
+			}
 			if turnErr == nil {
 				return nil
 			}

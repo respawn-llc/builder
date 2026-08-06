@@ -502,6 +502,12 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS",
 			nil,
 			settingDocOptions{}),
+		rootOnlySetting[*int]{newOptionalIntSetting("workflow.pre_compaction_tokens",
+			func(state *settingsState, value *int) { state.Settings.Workflow.PreCompactionTokens = value },
+			func(state settingsState) *int { return state.Settings.Workflow.PreCompactionTokens },
+			settingDocOptions{defaultValue: func(state settingsState) any {
+				return state.Settings.ContextCompactionThresholdTokens * 70 / 100
+			}})},
 		newBoolSetting("workflow.use_required_tool_calls", defaultWorkflowUseRequiredToolCalls,
 			func(state *settingsState, value bool) { state.Settings.Workflow.UseRequiredToolCalls = value },
 			func(state settingsState) bool { return state.Settings.Workflow.UseRequiredToolCalls },
@@ -1146,6 +1152,38 @@ func newIntSetting(
 		},
 		decodeCLI: decodeCLI,
 		doc:       doc,
+	}
+}
+
+func newOptionalIntSetting(
+	key string,
+	apply func(*settingsState, *int),
+	get func(settingsState) *int,
+	doc settingDocOptions,
+) scalarSetting[*int] {
+	return scalarSetting[*int]{
+		key:          key,
+		defaultValue: nil,
+		apply:        apply,
+		get:          get,
+		equal: func(left *int, right *int) bool {
+			switch {
+			case left == nil && right == nil:
+				return true
+			case left == nil || right == nil:
+				return false
+			default:
+				return *left == *right
+			}
+		},
+		decodeFile: func(raw settingsFile, path []string) (*int, bool, error) {
+			value, ok, err := lookupFileInt(raw, path)
+			if err != nil || !ok {
+				return nil, ok, err
+			}
+			return &value, true, nil
+		},
+		doc: doc,
 	}
 }
 

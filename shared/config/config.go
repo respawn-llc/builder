@@ -36,6 +36,7 @@ type WorkflowSettings struct {
 	CompletionMode               WorkflowCompletionMode
 	Concurrency                  int
 	MaxInvalidCompletionAttempts int
+	PreCompactionTokens          *int
 	UseRequiredToolCalls         bool
 	Subagents                    bool
 }
@@ -148,6 +149,17 @@ func ResolveSkillPolicy(settings Settings) SkillPolicy {
 		disabledNames = nil
 	}
 	return SkillPolicy{disabledNames: disabledNames}
+}
+
+// ResolveWorkflowPreCompactionTokens returns the effective Workflow
+// Pre-Compaction threshold. An authored value takes precedence; otherwise the
+// threshold is seventy percent of the ordinary compaction threshold, rounded
+// down to a whole token.
+func ResolveWorkflowPreCompactionTokens(settings Settings) int {
+	if settings.Workflow.PreCompactionTokens != nil {
+		return *settings.Workflow.PreCompactionTokens
+	}
+	return settings.ContextCompactionThresholdTokens * 70 / 100
 }
 
 func (p SkillPolicy) SkillEnabled(name string) bool {
