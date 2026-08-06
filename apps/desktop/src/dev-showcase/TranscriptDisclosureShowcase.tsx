@@ -42,14 +42,16 @@ export function TranscriptDisclosureShowcase() {
   }, [theme]);
 
   useEffect(() => {
-    const originalMatchMedia = window.matchMedia;
+    const originalMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    const matchMediaHost: Readonly<{ matchMedia?: Window["matchMedia"] }> = window;
+    const originalMatchMedia = matchMediaHost.matchMedia?.bind(window);
     const rootStyle = document.documentElement.style;
     const previousMotionFast = rootStyle.getPropertyValue("--motion-fast");
     const previousMotionFastPriority = rootStyle.getPropertyPriority("--motion-fast");
     const controlledMatchMedia = (query: string) =>
       query === "(prefers-reduced-motion: reduce)"
         ? createMediaQueryList(query, reducedMotion)
-        : originalMatchMedia.call(window, query);
+        : (originalMatchMedia?.(query) ?? createMediaQueryList(query, false));
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: controlledMatchMedia,
@@ -58,10 +60,11 @@ export function TranscriptDisclosureShowcase() {
       rootStyle.setProperty("--motion-fast", "0ms ease");
     }
     return () => {
-      Object.defineProperty(window, "matchMedia", {
-        configurable: true,
-        value: originalMatchMedia,
-      });
+      if (originalMatchMediaDescriptor === undefined) {
+        Reflect.deleteProperty(window, "matchMedia");
+      } else {
+        Object.defineProperty(window, "matchMedia", originalMatchMediaDescriptor);
+      }
       if (previousMotionFast.length === 0) {
         rootStyle.removeProperty("--motion-fast");
       } else {

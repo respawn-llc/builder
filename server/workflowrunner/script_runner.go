@@ -1,9 +1,11 @@
 package workflowrunner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 
 	"core/server/sessionruntime"
@@ -62,7 +64,13 @@ func (s *Starter) startCurrentNodeScript(
 		},
 		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
 			if runErr != nil || result.Canceled || result.StdoutOverflow {
-				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptExecutionFailed, runErr)
+				return s.failCurrentNodeScope(
+					finalizeCtx,
+					controller,
+					scope,
+					ReasonScriptExecutionFailed,
+					scriptExecutionFailure(result, runErr),
+				)
 			}
 			contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
 			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
@@ -79,6 +87,24 @@ func (s *Starter) startCurrentNodeScript(
 		},
 	})
 	return err
+}
+
+func scriptExecutionFailure(result sessionruntime.ScriptResult, runErr error) error {
+	cause := runErr
+	stderr := bytes.TrimSpace(result.Stderr)
+	if len(stderr) > 0 {
+		label := "script stderr"
+		if result.StderrOverflow {
+			label = "script stderr (truncated)"
+		}
+		cause = errors.Join(cause, fmt.Errorf("%s: %s", label, stderr))
+	} else if result.StderrOverflow {
+		cause = errors.Join(cause, errors.New("script stderr exceeded its capture limit"))
+	}
+	if result.StdoutOverflow {
+		cause = errors.Join(cause, errors.New("script stdout exceeded its capture limit"))
+	}
+	return cause
 }
 
 func currentNodeScriptStdin(input workflowstore.CurrentNodeStartContext) ([]byte, error) {

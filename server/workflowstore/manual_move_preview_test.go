@@ -632,6 +632,49 @@ func TestManualMovePreviewReportsUnavailableImmediateContext(t *testing.T) {
 	}
 }
 
+func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	sessionID := associateTaskSessionForTest(
+		t, ctx, store, binding, cfg, started.Mutation.Created[0].Reference, time.UnixMilli(1_700_000_000_000).UTC(),
+	)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	done := nodeByKey(t, definition, "done")
+	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)}); err != nil {
+		t.Fatalf("move to done: %v", err)
+	}
+
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "retained plan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove backward: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
+		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove backward: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID != sessionID {
+		t.Fatalf("manual move = %+v, want retained source Session %q", moved, sessionID)
+	}
+}
+
 func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
