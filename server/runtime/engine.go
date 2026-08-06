@@ -133,6 +133,7 @@ type Config struct {
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
+	DurabilityObserver    ResultGroupDurabilityObserver
 }
 
 type ReviewerConfig struct {

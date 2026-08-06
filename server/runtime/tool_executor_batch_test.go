@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -301,6 +303,116 @@ type toolExecutionProbe struct {
 	called   bool
 	calls    atomic.Int32
 	warnings []tools.ModelWarning
+}
+
+type toolDurabilityObservationRecorder struct {
+	mu      sync.Mutex
+	appends []session.EventLogAppendObservation
+	syncs   []session.EventLogSyncObservation
+}
+
+func (r *toolDurabilityObservationRecorder) ObserveEventLogAppend(observation session.EventLogAppendObservation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appends = append(r.appends, observation)
+}
+
+func (r *toolDurabilityObservationRecorder) ObserveEventLogSync(observation session.EventLogSyncObservation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.syncs = append(r.syncs, observation)
+}
+
+func (r *toolDurabilityObservationRecorder) snapshot() ([]session.EventLogAppendObservation, []session.EventLogSyncObservation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]session.EventLogAppendObservation(nil), r.appends...),
+		append([]session.EventLogSyncObservation(nil), r.syncs...)
+}
+
+type durabilityToolHandler struct{}
+
+func (durabilityToolHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+	}, nil
+}
+
+func TestToolExecutionDurabilityObservationBaseline(t *testing.T) {
+	for _, count := range []int{1, 3} {
+		t.Run(fmt.Sprintf("%d tools", count), func(t *testing.T) {
+			observer := &toolDurabilityObservationRecorder{}
+			store := mustCreateTestSessionAt(
+				t,
+				t.TempDir(),
+				session.WithDurabilityObserver(observer),
+			)
+			engine := mustNewTestEngine(
+				t,
+				store,
+				&fakeClient{},
+				tools.NewRegistry(tools.HandlerRegistration{
+					ID:      toolspec.ToolExecCommand,
+					Handler: durabilityToolHandler{},
+				}),
+				Config{Model: "gpt-5"},
+			)
+			calls := make([]llm.ToolCall, count)
+			for index := range calls {
+				calls[index] = llm.ToolCall{
+					ID:    fmt.Sprintf("baseline-%d", index),
+					Name:  string(toolspec.ToolExecCommand),
+					Input: json.RawMessage(`{"cmd":"true"}`),
+				}
+			}
+
+			results, err := engine.executeToolCalls(context.Background(), "step", calls)
+			if err != nil {
+				t.Fatalf("execute tools: %v", err)
+			}
+			if len(results) != count {
+				t.Fatalf("tool results = %d, want %d", len(results), count)
+			}
+			appends, syncs := observer.snapshot()
+			if len(appends) != count || len(syncs) != count {
+				t.Fatalf(
+					"durability observations = %d appends/%d syncs, want %d/%d",
+					len(appends),
+					len(syncs),
+					count,
+					count,
+				)
+			}
+			for index, appendObservation := range appends {
+				if appendObservation.RecordCount != 1 || !appendObservation.Succeeded {
+					t.Fatalf("append observation %d = %+v, want one successful record", index, appendObservation)
+				}
+			}
+			for index, syncObservation := range syncs {
+				if !syncObservation.Succeeded {
+					t.Fatalf("sync observation %d = %+v, want success", index, syncObservation)
+				}
+			}
+			appendLatencies := make([]time.Duration, len(appends))
+			for index, observation := range appends {
+				appendLatencies[index] = observation.Latency
+			}
+			syncLatencies := make([]time.Duration, len(syncs))
+			for index, observation := range syncs {
+				syncLatencies[index] = observation.Latency
+			}
+			t.Logf(
+				"baseline tools=%d append_transactions=%d physical_syncs=%d append_latencies=%v sync_latencies=%v",
+				count,
+				len(appends),
+				len(syncs),
+				appendLatencies,
+				syncLatencies,
+			)
+		})
+	}
 }
 
 func (p *toolExecutionProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {
