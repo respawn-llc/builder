@@ -223,6 +223,12 @@ func TestTopLevelPreCommitCloseFatalMakesOneAppendAndNoDiagnostic(t *testing.T) 
 	if !errors.As(err, &fatal) || fatal.Committed {
 		t.Fatalf("top-level close error = %v, want uncommitted collector fatal", err)
 	}
+	if store.Meta().PendingModelRecovery == nil {
+		t.Fatal("top-level collector fatal cleared PendingModelRecovery")
+	}
+	if _, projected := engine.transcriptRuntimeState().ToolCompletionSnapshot("fatal-close"); projected {
+		t.Fatal("uncommitted collector fatal projected a tool outcome")
+	}
 	appendsAfter, _ := durability.snapshot()
 	if len(appendsAfter) != len(appendsBefore)+1 {
 		t.Fatalf(
@@ -240,6 +246,179 @@ func TestTopLevelPreCommitCloseFatalMakesOneAppendAndNoDiagnostic(t *testing.T) 
 		if ok && entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 			t.Fatalf("top-level collector fatal persisted semantic diagnostic: %+v", entry)
 		}
+	}
+	if snapshot := engine.ChatSnapshot(); snapshot.StreamingError == "" {
+		t.Fatal("top-level collector fatal did not publish transient failed live state")
+	}
+	if _, submitErr := engine.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
+		t.Fatalf("later same-Engine submission error = %v, want ErrEngineClosed", submitErr)
+	}
+	if closeErr := engine.Close(); closeErr != nil {
+		t.Fatalf("close failed Engine: %v", closeErr)
+	}
+	appendsAfterClose, _ := durability.snapshot()
+	if len(appendsAfterClose) != len(appendsAfter) {
+		t.Fatalf(
+			"Engine.Close append attempts = %d, want unchanged %d",
+			len(appendsAfterClose),
+			len(appendsAfter),
+		)
+	}
+}
+
+func TestTopLevelCommittedObserverCloseFatalRetainsProjectionAndClosesAdmission(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("committed observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+		session.WithDurabilityObserver(durability),
+	)
+	handler := &semanticCloseBlockingTool{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{responses: []llm.Response{commentaryResponse(
+			"working",
+			llm.ToolCall{
+				ID:    "observer-close",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{}`),
+			},
+		)}},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "continue")
+		done <- err
+	}()
+
+	<-handler.started
+	appendsBefore, _ := durability.snapshot()
+	gate.FailNext(failure)
+	close(handler.release)
+	err := <-done
+
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		!fatal.Committed ||
+		!errors.Is(fatal.Cause, failure) {
+		t.Fatalf("top-level observer close error = %v, want exact committed collector fatal", err)
+	}
+	if store.Meta().PendingModelRecovery == nil {
+		t.Fatal("committed observer fatal cleared PendingModelRecovery")
+	}
+	if _, projected := engine.transcriptRuntimeState().ToolCompletionSnapshot("observer-close"); !projected {
+		t.Fatal("committed observer fatal did not retain its projected group")
+	}
+	if _, submitErr := engine.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
+		t.Fatalf("later same-Engine submission error = %v, want ErrEngineClosed", submitErr)
+	}
+	appendsAfter, _ := durability.snapshot()
+	if len(appendsAfter) != len(appendsBefore)+1 {
+		t.Fatalf("observer fatal append attempts = %d, want one after %d", len(appendsAfter), len(appendsBefore))
+	}
+	if closeErr := engine.Close(); closeErr != nil {
+		t.Fatalf("close failed Engine: %v", closeErr)
+	}
+	appendsAfterClose, _ := durability.snapshot()
+	if len(appendsAfterClose) != len(appendsAfter) {
+		t.Fatalf("Engine.Close append attempts = %d, want unchanged %d", len(appendsAfterClose), len(appendsAfter))
+	}
+}
+
+func TestTopLevelCommittedProjectionCloseFatalRehydratesOnceAndClosesAdmission(t *testing.T) {
+	t.Parallel()
+	callbackObserver := newCallbackPersistenceObserver(runtimeTestSessionPersistence)
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(callbackObserver),
+		session.WithDurabilityObserver(durability),
+	)
+	handler := &semanticCloseBlockingTool{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{responses: []llm.Response{commentaryResponse(
+			"working",
+			llm.ToolCall{
+				ID:    "projection-close",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{}`),
+			},
+		)}},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "continue")
+		done <- err
+	}()
+
+	<-handler.started
+	appendsBefore, _ := durability.snapshot()
+	callbackObserver.Arm(func() {
+		engine.transcriptRuntimeState().CompleteLiveTool("projection-close")
+	})
+	close(handler.release)
+	err := <-done
+
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) || !fatal.Committed {
+		t.Fatalf("top-level projection close error = %v, want committed collector fatal", err)
+	}
+	if store.Meta().PendingModelRecovery == nil {
+		t.Fatal("committed projection fatal cleared PendingModelRecovery")
+	}
+	if _, projected := engine.transcriptRuntimeState().ToolCompletionSnapshot("projection-close"); projected {
+		t.Fatal("committed projection fatal partially projected its group")
+	}
+	if _, submitErr := engine.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
+		t.Fatalf("later same-Engine submission error = %v, want ErrEngineClosed", submitErr)
+	}
+	appendsAfter, _ := durability.snapshot()
+	if len(appendsAfter) != len(appendsBefore)+1 {
+		t.Fatalf("projection fatal append attempts = %d, want one after %d", len(appendsAfter), len(appendsBefore))
+	}
+	if closeErr := engine.Close(); closeErr != nil {
+		t.Fatalf("close failed Engine: %v", closeErr)
+	}
+	appendsAfterClose, _ := durability.snapshot()
+	if len(appendsAfterClose) != len(appendsAfter) {
+		t.Fatalf("Engine.Close append attempts = %d, want unchanged %d", len(appendsAfterClose), len(appendsAfter))
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(
+		t,
+		reopened,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	snapshot := mustTranscriptHydrationSnapshot(t, restored)
+	if rows := countHydratedToolRows(snapshot, "projection-close"); rows != 1 {
+		t.Fatalf("rehydrated projection-close tool rows = %d, want one", rows)
 	}
 }
 

@@ -649,6 +649,10 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
+	if fatal, ok := resultGroupFatalFromError(err); ok {
+		e.SetStreamingError(runtimeAbortFeedbackMessage(fatal))
+		return
+	}
 	message := e.persistRunErrorFeedback(err)
 	if message == "" {
 		return
@@ -706,6 +710,20 @@ func runErrorFeedbackMessage(err error) (string, bool) {
 		message = err.Error()
 	}
 	return message, true
+}
+
+func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
+	if fatal == nil {
+		return ""
+	}
+	message := strings.TrimSpace(llm.UserFacingError(fatal.Cause))
+	if message == "" && fatal.Cause != nil {
+		message = fatal.Cause.Error()
+	}
+	if message == "" {
+		message = fatal.Error()
+	}
+	return message
 }
 
 func (e *Engine) withRunErrorFeedbackBeforeStepClose(

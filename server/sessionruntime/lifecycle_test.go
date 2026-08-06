@@ -106,6 +106,23 @@ func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context
 
 type lifecycleRequestCaptureClient chan llm.Request
 
+type lifecycleRuntimeAbort struct {
+	committed bool
+	cause     error
+}
+
+func (e *lifecycleRuntimeAbort) Error() string {
+	return e.cause.Error()
+}
+
+func (e *lifecycleRuntimeAbort) Unwrap() error {
+	return e.cause
+}
+
+func (e *lifecycleRuntimeAbort) RuntimeAbortDisposition() (bool, error) {
+	return e.committed, e.cause
+}
+
 func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
 	*c <- request
 	return llm.Response{
@@ -122,6 +139,126 @@ func (c lifecycleRequestCaptureClient) await(t *testing.T) llm.Request {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for queued user work to reach the model")
 		return llm.Request{}
+	}
+}
+
+func TestRuntimeAbortRetiresCurrentOpenAndReplaceResourceGenerations(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selection AgentResourceSelection
+		prepare   bool
+	}{
+		{name: "current", selection: CurrentAgentResource{}, prepare: true},
+		{name: "open", selection: OpenAgentResource{}},
+		{name: "replace", selection: ReplaceAgentResource{}, prepare: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 2)}
+			authority := NewAuthority(AuthorityOptions{
+				PersistenceRoot:   fixture.config.PersistenceRoot,
+				StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+				ResourceLifecycle: lifecycle,
+			})
+			t.Cleanup(func() {
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			if test.prepare {
+				openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+			}
+			cause := errors.New("result group durability failure")
+			abort := &lifecycleRuntimeAbort{committed: true, cause: cause}
+			if _, current := test.selection.(CurrentAgentResource); current {
+				authority.mu.Lock()
+				failedResource := authority.resources[sessionID]
+				authority.mu.Unlock()
+				failedRef := failedResource.ref
+				runErr := authority.RunCurrentAgentExecution(
+					context.Background(),
+					mustOpenSessionDescriptor(t, sessionID),
+					func(context.Context, *runtime.Engine) error {
+						return abort
+					},
+				)
+				assertRuntimeAbortResourceRetired(
+					t,
+					authority,
+					lifecycle,
+					sessionID,
+					failedResource,
+					failedRef,
+					runErr,
+					abort,
+					&plan,
+				)
+				return
+			}
+			handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+				Descriptor: mustOpenSessionDescriptor(t, sessionID),
+				Runtime:    &plan,
+				Resource:   test.selection,
+				Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+					return abort
+				},
+			})
+			if err != nil {
+				t.Fatalf("start aborting execution: %v", err)
+			}
+			execution := handle.(executionHandle).execution
+			failedResource := execution.resource
+			failedRef := failedResource.ref
+			_, waitErr := handle.Wait(context.Background())
+			assertRuntimeAbortResourceRetired(
+				t,
+				authority,
+				lifecycle,
+				sessionID,
+				failedResource,
+				failedRef,
+				waitErr,
+				abort,
+				&plan,
+			)
+		})
+	}
+}
+
+func assertRuntimeAbortResourceRetired(
+	t *testing.T,
+	authority *Authority,
+	lifecycle *authorityLifecycleProbe,
+	sessionID runtimeids.SessionID,
+	failedResource *agentResource,
+	failedRef runtimeids.SessionResourceRef,
+	runErr error,
+	abort error,
+	plan *AgentRuntimePlan,
+) {
+	t.Helper()
+	if runErr != abort {
+		t.Fatalf("execution error = %v, want exact runtime abort %p", runErr, abort)
+	}
+	if state := failedResource.descriptor().State; state != AgentResourceClosed {
+		t.Fatalf("failed resource state = %v, want closed", state)
+	}
+	select {
+	case <-lifecycle.draining:
+	default:
+		t.Fatal("failed resource did not publish Ready to Draining retirement")
+	}
+	authority.mu.Lock()
+	admitted := authority.resources[sessionID]
+	authority.mu.Unlock()
+	if admitted == failedResource {
+		t.Fatal("failed resource generation remained admitted")
+	}
+	reopened := openLifecycleRuntime(t, authority, sessionID, "owner-b", plan)
+	if reopened.Resource() == failedRef {
+		t.Fatal("later open reused the failed resource generation")
 	}
 }
 

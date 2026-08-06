@@ -461,6 +461,14 @@ func (e *Engine) Close() error {
 	return interruptErr
 }
 
+func (e *Engine) closeAdmissionAfterRuntimeAbort() {
+	if e == nil {
+		return
+	}
+	e.closed.Store(true)
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
+}
+
 func (e *Engine) ensureLifecycle() {
 	if e == nil {
 		return
@@ -474,9 +482,12 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	if e == nil || task == nil {
 		return false
 	}
+	if e.closed.Load() {
+		return false
+	}
 	e.ensureLifecycle()
 	e.lifecycleMu.Lock()
-	if e.lifecycleClosed {
+	if e.lifecycleClosed || e.closed.Load() {
 		e.lifecycleMu.Unlock()
 		return false
 	}

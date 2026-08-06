@@ -726,6 +726,62 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 }
 
+func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	var idleSchedules int
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: eng,
+		background: &stubBackgroundNoticeScheduler{
+			scheduleIfIdle: func() {
+				idleSchedules++
+			},
+		},
+	}
+	cause := errors.New("result group persistence failed")
+	fatal := &resultGroupFatal{Committed: false, Cause: cause}
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{
+			ActiveKind:   ActiveKindUserTurn,
+			EmitRunState: true,
+		},
+		func(_ context.Context, stepID string) error {
+			if markerErr := store.SetPendingModelRecovery(session.PendingModelRecovery{
+				RecoveryID: "runtime-abort",
+				StepID:     stepID,
+				Reason:     "test",
+				CreatedAt:  time.Now().UTC(),
+			}); markerErr != nil {
+				t.Fatalf("set pending model recovery: %v", markerErr)
+			}
+			return fatal
+		},
+	)
+	if err != fatal {
+		t.Fatalf("runtime abort error = %v, want exact fatal %p", err, fatal)
+	}
+	if marker := store.Meta().PendingModelRecovery; marker == nil {
+		t.Fatal("runtime abort cleared PendingModelRecovery")
+	}
+	if idleSchedules != 0 {
+		t.Fatalf("runtime abort idle schedules = %d, want none", idleSchedules)
+	}
+	if _, submitErr := eng.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
+		t.Fatalf("later submission error = %v, want ErrEngineClosed", submitErr)
+	}
+	if snapshot := eng.ChatSnapshot(); snapshot.StreamingError == "" {
+		t.Fatal("runtime abort did not publish transient streaming failure")
+	}
+}
+
 func collectRunStateEvents(events []Event) []RunState {
 	runEvents := make([]RunState, 0, len(events))
 	for _, evt := range events {

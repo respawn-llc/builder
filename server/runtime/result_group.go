@@ -101,6 +101,18 @@ func (f resultGroupFatal) Unwrap() error {
 	return f.Cause
 }
 
+func (f resultGroupFatal) RuntimeAbortDisposition() (bool, error) {
+	return f.Committed, f.Cause
+}
+
+func resultGroupFatalFromError(err error) (*resultGroupFatal, bool) {
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) {
+		return nil, false
+	}
+	return fatal, true
+}
+
 type resultGroupCollector struct {
 	slots  []resultGroupSlot
 	cursor int
