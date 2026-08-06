@@ -350,13 +350,15 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if workdir := fixture.runtimeWorkdir(t); workdir != result.Binding.CanonicalRoot {
 		t.Fatalf("runtime workdir = %q, want %q", workdir, result.Binding.CanonicalRoot)
 	}
+	var foreign bool
 	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
-		if maintenance.PreviousFilesystemContext.ManagedWorktree != nil {
-			return errors.New("retargeted Workspace retained managed-worktree policy without a metadata-managed Worktree")
-		}
+		foreign = maintenance.PreviousFilesystemContext.ManagedWorktree.IsForeignManagedWorktreePath(result.Binding.CanonicalRoot, result.Binding.CanonicalRoot)
 		return nil
 	}); err != nil {
 		t.Fatalf("inspect retargeted filesystem context: %v", err)
+	}
+	if !foreign {
+		t.Fatal("retargeted Workspace was not protected by managed-worktree policy")
 	}
 }
 
