@@ -307,6 +307,99 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 	t.Fatalf("interactive sibling edit data = %q, read error = %v", data, readErr)
 }
 
+func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	binding, err := fixture.metadata.ResolveSessionNavigationBinding(context.Background(), fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
+	}
+	managedBase := t.TempDir()
+	currentRoot := filepath.Join(managedBase, "current")
+	foreignRoot := filepath.Join(managedBase, "foreign")
+	for _, root := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", root, err)
+		}
+	}
+	currentRoot, err = config.CanonicalWorkspaceRoot(currentRoot)
+	if err != nil {
+		t.Fatalf("canonical current worktree: %v", err)
+	}
+	foreignRoot, err = config.CanonicalWorkspaceRoot(foreignRoot)
+	if err != nil {
+		t.Fatalf("canonical foreign worktree: %v", err)
+	}
+	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID: "interactive-current", WorkspaceID: binding.WorkspaceID, CanonicalRoot: currentRoot,
+		DisplayName: "current", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord current: %v", err)
+	}
+	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID: "interactive-foreign", WorkspaceID: binding.WorkspaceID, CanonicalRoot: foreignRoot,
+		DisplayName: "foreign", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord foreign: %v", err)
+	}
+	if err := fixture.metadata.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{
+		SessionID:  fixture.store.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "interactive-current"},
+		CwdRelpath: ".",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, foreignRoot); err != nil {
+		t.Fatalf("AttachWorkspaceToProject foreign: %v", err)
+	}
+	target := filepath.Join(foreignRoot, "foreign.txt")
+	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write foreign fixture: %v", err)
+	}
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("editing"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{ID: "call-foreign-edit", Name: string(toolspec.ToolEdit), Input: json.RawMessage(`{"path":"` + target + `","old_string":"before","new_string":"forbidden-direct"}`)}},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}},
+	}}
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
+	})
+	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
+		ActiveSettings: config.Settings{
+			Model: "gpt-5", ModelContextWindow: 200000,
+			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
+			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		EnabledToolIDs: []string{string(toolspec.ToolEdit)}, Source: config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-foreign-edit", Attachment: activation.Attachment, OwnerID: "interactive-owner", DropOwner: true,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtimepkg.Engine) error {
+		_, err := engine.SubmitUserMessage(context.Background(), "edit the foreign worktree")
+		return err
+	}); err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "before\n" {
+		t.Fatalf("foreign managed edit data = %q, error = %v", data, err)
+	}
+}
+
 func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	bootstrapRunner, err := postprocess.NewRunner(postprocess.Settings{

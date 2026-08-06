@@ -151,8 +151,18 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	var managedWorktreePathContext *tools.ManagedWorktreePathContext
-	if strings.TrimSpace(req.ActiveSettings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+	managedWorktreeRecords, err := s.metadataStore.ListWorktreeRecordsByWorkspaceID(ctx, target.WorkspaceID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	managedRoots := make([]string, 0, len(managedWorktreeRecords))
+	for _, record := range managedWorktreeRecords {
+		if record.Managed {
+			managedRoots = append(managedRoots, record.CanonicalRoot)
+		}
+	}
+	if len(managedRoots) > 0 {
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContextForRoots(managedRoots, currentWorktreeRoot)
 		if err != nil {
 			return AgentRuntimePlan{}, err
 		}
