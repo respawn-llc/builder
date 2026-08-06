@@ -42,7 +42,7 @@ type SessionProjectWorkspaceBoundaryResolver interface {
 }
 
 type SessionManagedWorktreeRootsResolver interface {
-	ResolveManagedWorktreeRoots(ctx context.Context) ([]string, error)
+	ListManagedWorktreeRoots(ctx context.Context) ([]string, error)
 }
 
 // MetadataExecutionTargetStore is the metadata subset needed to copy a parent
@@ -464,7 +464,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if !ok {
 		return SessionPlan{}, errors.New("project managed worktree roots resolver is required")
 	}
-	managedWorktreeRoots, err := managedRootsResolver.ResolveManagedWorktreeRoots(ctx)
+	managedWorktreeRoots, err := managedRootsResolver.ListManagedWorktreeRoots(ctx)
 	if err != nil {
 		return SessionPlan{}, err
 	}

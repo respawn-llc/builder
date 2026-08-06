@@ -285,7 +285,7 @@ func (r fixedProjectWorkspaceBoundaryResolver) ResolveSessionProjectWorkspaceBou
 	}, nil
 }
 
-func (r fixedProjectWorkspaceBoundaryResolver) ResolveManagedWorktreeRoots(context.Context) ([]string, error) {
+func (r fixedProjectWorkspaceBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
 	return nil, nil
 }
 

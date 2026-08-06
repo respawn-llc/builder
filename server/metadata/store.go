@@ -493,10 +493,6 @@ func (s *Store) ListManagedWorktreeRoots(ctx context.Context) ([]string, error) 
 	return roots, nil
 }
 
-func (s *Store) ResolveManagedWorktreeRoots(ctx context.Context) ([]string, error) {
-	return s.ListManagedWorktreeRoots(ctx)
-}
-
 func (s *Store) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (WorktreeRecord, error) {
 	if s == nil || s.queries == nil {
 		return WorktreeRecord{}, errors.New("metadata store is required")
