@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -166,7 +167,7 @@ func assertNoBoundedInterruptionRecord(t *testing.T, store *session.Store) {
 	}
 }
 
-func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
+func TestNewRepairsRecoveredDanglingToolBeforeReturningReadyEngine(t *testing.T) {
 	t.Parallel()
 	const (
 		stepID = "interrupted-tool-step"
@@ -194,23 +195,27 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 
 	reopened := mustOpenTestSession(t, store.Dir())
 	var events []Event
-	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
 		},
 	})
 
+	if !repairRequestHasToolOutput(engine.transcriptRuntimeState().SnapshotItems(), callID) {
+		t.Fatal("fresh runtime returned before appending a neutral output for the dangling tool call")
+	}
+	if live := engine.transcriptRuntimeState().LiveToolSnapshot(); len(live) != 0 {
+		t.Fatalf("fresh runtime restored stale live tool starts: %+v", live)
+	}
 	for _, event := range events {
-		if event.Kind == EventToolCallStarted &&
-			event.StepID == stepID &&
-			event.ToolCall != nil &&
-			event.ToolCall.ID == callID &&
-			event.ToolCall.Name == string(toolspec.ToolExecCommand) {
-			return
+		if event.Kind == EventToolCallStarted && event.ToolCall != nil && event.ToolCall.ID == callID {
+			t.Fatalf("fresh runtime published a stale recovered tool start: %+v", event)
 		}
 	}
-	t.Fatalf("reopen events contain no recovered tool start: %+v", events)
+	if reopened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("fresh runtime retained pending recovery after neutral repair: %+v", reopened.Meta().PendingModelRecovery)
+	}
 }
 
 func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
@@ -490,9 +495,9 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 	}
 }
 
-func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
+func TestReopenRepairsAskQuestionToolAttemptBeforeNextModelRequest(t *testing.T) {
 	t.Parallel()
-	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+	testReopenRepairsToolAttemptBeforeNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-question-call",
 		Name:  string(toolspec.ToolAskQuestion),
 		Input: json.RawMessage(`{"question":"continue?"}`),
@@ -541,18 +546,18 @@ func (s *finishFailureLifecycleSink) StepEnded(
 	return nil
 }
 
-func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing.T) {
+func TestReopenRepairsShellToolAttemptBeforeNextModelRequest(t *testing.T) {
 	t.Parallel()
-	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+	testReopenRepairsToolAttemptBeforeNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-shell-call",
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"command":"pwd"}`),
 	})
 }
 
-func TestReopenCarriesInterruptedApprovalBackedPatchToolAttemptIntoNextModelRequest(t *testing.T) {
+func TestReopenRepairsApprovalBackedPatchToolAttemptBeforeNextModelRequest(t *testing.T) {
 	t.Parallel()
-	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+	testReopenRepairsToolAttemptBeforeNextModelRequest(t, llm.ToolCall{
 		ID:          "interrupted-patch-call",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
@@ -560,7 +565,7 @@ func TestReopenCarriesInterruptedApprovalBackedPatchToolAttemptIntoNextModelRequ
 	})
 }
 
-func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(
+func testReopenRepairsToolAttemptBeforeNextModelRequest(
 	t *testing.T,
 	call llm.ToolCall,
 ) {
@@ -607,6 +612,7 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(
 	}
 	foundCall := false
 	foundOutput := false
+	var output json.RawMessage
 	for _, item := range client.calls[0].Items {
 		if item.CallID == nil || *item.CallID != call.ID {
 			continue
@@ -618,9 +624,13 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(
 		}
 		if item.Type == llm.ToolOutputItemType(call.Custom) {
 			foundOutput = true
+			output = append(json.RawMessage(nil), item.Output...)
 		}
 	}
-	if !foundCall || foundOutput {
-		t.Fatalf("resumed tool attempt preservation = call:%t output:%t", foundCall, foundOutput)
+	if !foundCall || !foundOutput {
+		t.Fatalf("resumed neutral repair = call:%t output:%t", foundCall, foundOutput)
+	}
+	if !bytes.Equal(output, missingToolOutputUnavailableOutput) {
+		t.Fatalf("resumed repair output = %s, want neutral fresh-resource disposition", output)
 	}
 }

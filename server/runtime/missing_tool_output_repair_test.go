@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -18,12 +19,6 @@ import (
 func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		responses: []llm.Response{{
@@ -32,6 +27,7 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
 	message, err := eng.SubmitUserMessage(context.Background(), "continue")
 	if err != nil {
@@ -78,6 +74,9 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	if completion == nil || !completion.IsError {
 		t.Fatalf("missing synthetic error completion: %+v", completion)
 	}
+	if !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
+		t.Fatalf("live generation repair selected the wrong typed disposition: %s", completion.Output)
+	}
 	if warning == nil || strings.TrimSpace(warning.Text) == "" {
 		t.Fatalf("missing operator-facing repair warning: %+v", warning)
 	}
@@ -86,12 +85,6 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 
 	queued := false
 	var eng *Engine
@@ -117,6 +110,7 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 		},
 	}
 	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
 		t.Fatalf("submit user message: %v", err)
@@ -157,12 +151,6 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	client := &fakeClient{
 		errors: []error{
 			&llm.APIStatusError{StatusCode: 400},
@@ -178,6 +166,7 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 			CompletionMode: workflowruntime.CompletionModeTool,
 		}},
 	)
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); !llm.HasHTTPStatus(err, 401) {
 		t.Fatalf("submit error = %v, want unrepaired HTTP 401 after repaired retry", err)
@@ -198,19 +187,14 @@ func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T)
 func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
-	first, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
+	first, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400)
 	if err != nil {
 		t.Fatalf("first repair: %v", err)
 	}
-	second, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
+	second, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400)
 	if err != nil {
 		t.Fatalf("second repair: %v", err)
 	}
@@ -222,15 +206,10 @@ func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, chatStoreTestStepID, llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, chatStoreTestStepID, llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
-	if _, err := eng.repairMissingToolOutputsByAppending(nil); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(nil, missingToolOutputRepairLiveProvider400); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	record, _ := repairCompletionRecord(t, store, "missing")
@@ -243,19 +222,10 @@ func TestRepairMissingToolOutputsRetainsDanglingCallStepIdentity(t *testing.T) {
 func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	legacyMessage, err := sessionMessageRecordFromLLM(llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	})
-	if err != nil {
-		t.Fatalf("adapt unowned dangling tool call: %v", err)
-	}
-	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecord(nil, legacyMessage); err != nil {
-		t.Fatalf("append unowned dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "", llm.ToolCall{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
-	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value(chatStoreTestStepID)); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value(chatStoreTestStepID), missingToolOutputRepairLiveProvider400); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	record, _ := repairCompletionRecord(t, store, "unowned")
@@ -268,25 +238,11 @@ func TestRepairMissingToolOutputsUsesRepairStepForUnownedLegacyCall(t *testing.T
 func TestRepairMissingToolOutputsRejectsUnownedCallsBeforeAppending(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, chatStoreTestStepID, llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "owned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append owned dangling tool call: %v", err)
-	}
-	legacyMessage, err := sessionMessageRecordFromLLM(llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	})
-	if err != nil {
-		t.Fatalf("adapt unowned dangling tool call: %v", err)
-	}
-	if _, _, err := mustMaterializeTestEventLog(t, store).AppendRecord(nil, legacyMessage); err != nil {
-		t.Fatalf("append unowned dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, chatStoreTestStepID, llm.ToolCall{ID: "owned", Name: "exec_command", Input: json.RawMessage(`{}`)})
+	steerDanglingToolCall(t, eng, "", llm.ToolCall{ID: "unowned", Name: "exec_command", Input: json.RawMessage(`{}`)})
 
-	repaired, err := eng.repairMissingToolOutputsByAppending(nil)
+	repaired, err := eng.repairMissingToolOutputsByAppending(nil, missingToolOutputRepairLiveProvider400)
 	if err == nil {
 		t.Fatal("repair accepted a dangling tool call with no recoverable step identity")
 	}
@@ -326,19 +282,26 @@ func repairCompletionRecord(
 	return session.EventRecord{}, storedToolCompletion{}
 }
 
+func steerDanglingToolCall(t *testing.T, engine *Engine, stepID string, call llm.ToolCall) {
+	t.Helper()
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
+	)); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+}
+
 func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	eng.rememberPendingToolCallStarts(map[string]int{"missing": 1})
 
-	repaired, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"))
+	repaired, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400)
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
@@ -353,19 +316,12 @@ func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:    "missing",
-			Name:  "exec_command",
-			Input: json.RawMessage(`{"cmd":"true"}`),
-		}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{
+		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`),
+	})
 
-	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step")); err != nil {
+	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	_, completion := repairCompletionRecord(t, store, "missing")
@@ -377,12 +333,6 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	client := &fakeCompactionClient{
 		compactionErrors: []error{&llm.APIStatusError{StatusCode: 400}, nil},
 		compactionResponses: []llm.CompactionResponse{{
@@ -390,6 +340,7 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
 		SessionID:  store.Meta().SessionID,
@@ -406,17 +357,15 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 		!repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
 		t.Fatal("repaired compaction retry did not preserve the call with its synthetic output")
 	}
+	_, completion := repairCompletionRecord(t, store, "missing")
+	if !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
+		t.Fatalf("live compaction repair selected the wrong typed disposition: %s", completion.Output)
+	}
 }
 
 func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
-	}); err != nil {
-		t.Fatalf("append dangling tool call: %v", err)
-	}
 	client := &fakeCompactionClient{
 		compactionErrors: []error{
 			&llm.APIStatusError{StatusCode: 400},
@@ -424,6 +373,7 @@ func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 		},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
 		SessionID:  store.Meta().SessionID,

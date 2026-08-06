@@ -21,15 +21,56 @@ import (
 // merely interrupted; that is an unreachable state, not one to silently repair.
 const missingToolOutputAfterCollapseInvariant = "compaction request still has a tool call without an output after overflow collapse; collapse preserves output items, so a missing-tool-output provider error here is an invariant violation"
 
-// missingToolOutputRepairWarningTemplate is the operator-facing notice appended
-// when the repair closes one or more interrupted tool calls.
-const missingToolOutputRepairWarningTemplate = "Closed %d interrupted tool call(s) with a synthetic result to repair the transcript after a provider error"
+const (
+	// missingToolOutputLiveRepairWarningTemplate is the operator-facing notice
+	// appended when a live provider rejection closes interrupted tool calls.
+	missingToolOutputLiveRepairWarningTemplate = "Closed %d interrupted tool call(s) with a synthetic result to repair the transcript after a provider error"
+	// missingToolOutputFreshRepairWarningTemplate is deliberately neutral about
+	// why a fresh resource found no committed output.
+	missingToolOutputFreshRepairWarningTemplate = "Closed %d tool call(s) with no committed output while restoring the session"
+)
 
 // missingToolOutputInterruptedOutput is the honest result recorded for a tool
 // call that was left unanswered (typically interrupted) and can no longer be
 // re-executed. It tells the model the call never produced a result rather than
 // fabricating a successful one or silently erasing the call from history.
 var missingToolOutputInterruptedOutput = json.RawMessage(`{"error":"Tool execution was interrupted before a result was produced. No output is available for this call."}`)
+
+// missingToolOutputUnavailableOutput is the cause-independent result recorded
+// by fresh-resource recovery. It describes only the durable fact available at
+// startup and does not infer whether execution began or completed.
+var missingToolOutputUnavailableOutput = json.RawMessage(`{"error":"No committed output is available for this tool call."}`)
+
+type missingToolOutputRepairDisposition uint8
+
+const (
+	missingToolOutputRepairFreshResource missingToolOutputRepairDisposition = iota + 1
+	missingToolOutputRepairLiveProvider400
+)
+
+type missingToolOutputRepairPolicy struct {
+	output                   json.RawMessage
+	warningTemplate          string
+	deferToPendingToolStarts bool
+}
+
+func missingToolOutputPolicy(disposition missingToolOutputRepairDisposition) (missingToolOutputRepairPolicy, error) {
+	switch disposition {
+	case missingToolOutputRepairFreshResource:
+		return missingToolOutputRepairPolicy{
+			output:          missingToolOutputUnavailableOutput,
+			warningTemplate: missingToolOutputFreshRepairWarningTemplate,
+		}, nil
+	case missingToolOutputRepairLiveProvider400:
+		return missingToolOutputRepairPolicy{
+			output:                   missingToolOutputInterruptedOutput,
+			warningTemplate:          missingToolOutputLiveRepairWarningTemplate,
+			deferToPendingToolStarts: true,
+		}, nil
+	default:
+		return missingToolOutputRepairPolicy{}, fmt.Errorf("unsupported missing tool output repair disposition %d", disposition)
+	}
+}
 
 // danglingToolCall identifies a persisted tool call that lacks an output.
 type danglingToolCall struct {
@@ -52,12 +93,19 @@ type danglingToolCall struct {
 // Step owns only legacy calls whose persisted message has no Step; without
 // either identity, validation fails before any completion is appended.
 //
-// It is a fallback for the resume path, which re-executes interrupted tool calls
-// to obtain real outputs; when there are still pending tool-call starts to
-// re-execute, this no-ops so it never pre-empts a real result.
-func (e *Engine) repairMissingToolOutputsByAppending(repairStepID *string) (int, error) {
+// Fresh-resource repair runs before the resource is ready and therefore never
+// defers to stale live starts. Live provider-400 repair keeps the existing
+// guard so it cannot pre-empt a handler that may still produce the real result.
+func (e *Engine) repairMissingToolOutputsByAppending(
+	repairStepID *string,
+	disposition missingToolOutputRepairDisposition,
+) (int, error) {
 	if e == nil || e.store == nil {
 		return 0, nil
+	}
+	policy, err := missingToolOutputPolicy(disposition)
+	if err != nil {
+		return 0, err
 	}
 	if repairStepID != nil {
 		normalized := strings.TrimSpace(*repairStepID)
@@ -66,7 +114,7 @@ func (e *Engine) repairMissingToolOutputsByAppending(repairStepID *string) (int,
 		}
 		repairStepID = textutil.Value(normalized)
 	}
-	if e.pendingToolCallStartStore().Len() > 0 {
+	if policy.deferToPendingToolStarts && e.pendingToolCallStartStore().Len() > 0 {
 		return 0, nil
 	}
 	chat := e.transcriptRuntimeState().chatProjection()
@@ -91,7 +139,7 @@ func (e *Engine) repairMissingToolOutputsByAppending(repairStepID *string) (int,
 			CallID:  call.callID,
 			Name:    toolspec.ID(call.name),
 			IsError: true,
-			Output:  append(json.RawMessage(nil), missingToolOutputInterruptedOutput...),
+			Output:  append(json.RawMessage(nil), policy.output...),
 		})); err != nil {
 			return repaired, err
 		}
@@ -100,7 +148,7 @@ func (e *Engine) repairMissingToolOutputsByAppending(repairStepID *string) (int,
 	warning := steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-		Text:       fmt.Sprintf(missingToolOutputRepairWarningTemplate, len(dangling)),
+		Text:       fmt.Sprintf(policy.warningTemplate, len(dangling)),
 	})
 	if repairStepID == nil {
 		if err := e.steer("", warning); err != nil {

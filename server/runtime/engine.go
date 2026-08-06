@@ -354,12 +354,19 @@ func New(
 	// stores reconcile event-derived metadata there, so subsequent metadata
 	// reads must use the refreshed authoritative snapshot.
 	meta = store.Meta()
-	recoveryStepID := ""
+	var recoveryStepID *string
 	if meta.PendingModelRecovery != nil {
-		recoveryStepID = meta.PendingModelRecovery.StepID
+		recoveryStepID = textutil.OptionalTrimmedString(meta.PendingModelRecovery.StepID)
 	}
-	if err := eng.seedTranscriptLiveToolsFromDanglingToolCalls(recoveryStepID); err != nil {
-		return nil, err
+	repairedDangling, err := eng.repairMissingToolOutputsByAppending(
+		recoveryStepID,
+		missingToolOutputRepairFreshResource,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("repair missing tool outputs during runtime construction: %w", err)
+	}
+	if dangling := eng.pendingRecoveryDanglingToolCallIDs(); len(dangling) > 0 {
+		return nil, fmt.Errorf("runtime construction retained %d dangling tool call(s) after repair", len(dangling))
 	}
 	eng.restorePersistedUsageState(meta.UsageState)
 	if meta.PendingModelRecovery != nil {
@@ -370,13 +377,15 @@ func New(
 			}
 			return eng, nil
 		}
-		needsMarker, err := eng.pendingModelRecoveryNeedsInterruptionMarker(&recovery)
-		if err != nil {
-			return nil, err
-		}
-		if needsMarker {
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
+		if repairedDangling == 0 {
+			needsMarker, err := eng.pendingModelRecoveryNeedsInterruptionMarker(&recovery)
+			if err != nil {
 				return nil, err
+			}
+			if needsMarker {
+				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
+					return nil, err
+				}
 			}
 		}
 		if err := store.ClearPendingModelRecovery(); err != nil {
@@ -422,47 +431,6 @@ func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
 		}
 	}
 	return out
-}
-
-func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) error {
-	if e == nil {
-		return nil
-	}
-	chat := e.transcriptRuntimeState().chatProjection()
-	if chat == nil {
-		return nil
-	}
-	dangling := chat.danglingToolCalls()
-	if len(dangling) == 0 {
-		return nil
-	}
-	stepID = strings.TrimSpace(stepID)
-	starts := make([]TranscriptLiveToolStart, 0, len(dangling))
-	for _, call := range dangling {
-		starts = append(starts, TranscriptLiveToolStart{
-			StepID:     stepID,
-			ToolCallID: strings.TrimSpace(call.callID),
-			ToolName:   strings.TrimSpace(call.name),
-		})
-	}
-	if stepID == "" {
-		e.transcriptRuntimeState().SeedLiveTools(starts)
-		return nil
-	}
-	for _, start := range starts {
-		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
-		if restored, ok := e.transcriptRuntimeState().ToolCallSnapshot(start.ToolCallID); ok {
-			call = restored
-		}
-		if err := e.steer(stepID, steerEventIntent(Event{
-			Kind:     EventToolCallStarted,
-			StepID:   stepID,
-			ToolCall: &call,
-		})); err != nil {
-			return fmt.Errorf("publish recovered tool start %q: %w", start.ToolCallID, err)
-		}
-	}
-	return nil
 }
 
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
@@ -935,7 +903,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		if emitted.Load() && onAttemptReset != nil {
 			onAttemptReset()
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(
+			textutil.OptionalTrimmedString(stepID),
+			missingToolOutputRepairLiveProvider400,
+		)
 		if repairErr != nil {
 			return llm.Response{}, errors.Join(err, repairErr)
 		}

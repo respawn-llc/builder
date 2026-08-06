@@ -76,6 +76,34 @@ func twoQuestionBarrierAcceptedCalls() acceptedResponseCalls {
 	return calls
 }
 
+func persistAcceptedToolCallIntents(
+	t *testing.T,
+	engine *Engine,
+	stepID string,
+	calls acceptedResponseCalls,
+) {
+	t.Helper()
+	ordered := make([]llm.ToolCall, 0, len(calls.order))
+	for _, ref := range calls.order {
+		switch ref.source {
+		case acceptedResponseCallHosted:
+			ordered = append(ordered, calls.hosted[ref.index].Call)
+		case acceptedResponseCallLocal:
+			ordered = append(ordered, calls.local[ref.index])
+		default:
+			t.Fatalf("unsupported accepted response call source %d", ref.source)
+		}
+	}
+	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: ordered}},
+	)); err != nil {
+		t.Fatalf("persist accepted tool-call intents: %v", err)
+	}
+}
+
 func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T) {
 	store := mustCreateTestSession(t)
 	broker := tools.NewAskQuestionBroker()
@@ -331,6 +359,7 @@ func TestQuestionBarrierCommittedObserverFailureRetainsPrefixAndBlocksInteractio
 			},
 		},
 	)
+	persistAcceptedToolCallIntents(t, engine, "step", questionBarrierAcceptedCalls())
 	appendsBefore, _ := durability.snapshot()
 	gate.FailNext(observerErr)
 
@@ -368,6 +397,7 @@ func TestQuestionBarrierCommittedObserverFailureRetainsPrefixAndBlocksInteractio
 			len(appendsBefore),
 		)
 	}
+	assertFreshResourceRepairExactlyOnce(t, store, "question")
 }
 
 func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPrefix(t *testing.T) {
@@ -401,6 +431,7 @@ func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPr
 			},
 		},
 	)
+	persistAcceptedToolCallIntents(t, engine, "step", questionBarrierAcceptedCalls())
 	appendsBefore, _ := durability.snapshot()
 	callbackObserver.Arm(func() {
 		engine.transcriptRuntimeState().CompleteLiveTool("hosted")
@@ -450,6 +481,8 @@ func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPr
 	); rows != 1 {
 		t.Fatalf("rehydrated committed sibling rows = %d, want one", rows)
 	}
+	assertFreshResourceRepairOnEngine(t, restored, reopened, "question")
+	assertFreshResourceRepairExactlyOnce(t, reopened, "question")
 }
 
 func TestQuestionBarrierOrdinaryBrokerErrorRemainsSemantic(t *testing.T) {

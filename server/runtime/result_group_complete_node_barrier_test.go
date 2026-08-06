@@ -235,6 +235,9 @@ func TestCompleteNodeBarrierPreCommitFailureBlocksWorkflowMutationAndResult(t *t
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 		},
 	)
+	persistAcceptedToolCallIntents(t, engine, "step", completeNodeBarrierAcceptedCalls(
+		json.RawMessage(`{"summary":"done"}`),
+	))
 	appendsBefore, _ := durability.snapshot()
 	blocker := mustBlockTestEventLogAppends(t, store)
 
@@ -295,6 +298,9 @@ func TestCompleteNodeBarrierCommittedObserverFailureRetainsPrefixAndBlocksMutati
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 		},
 	)
+	persistAcceptedToolCallIntents(t, engine, "step", completeNodeBarrierAcceptedCalls(
+		json.RawMessage(`{"summary":"done"}`),
+	))
 	appendsBefore, _ := durability.snapshot()
 	gate.FailNext(observerErr)
 
@@ -331,6 +337,7 @@ func TestCompleteNodeBarrierCommittedObserverFailureRetainsPrefixAndBlocksMutati
 			len(appendsBefore),
 		)
 	}
+	assertFreshResourceRepairExactlyOnce(t, store, "complete-node")
 }
 
 func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMutation(t *testing.T) {
@@ -353,6 +360,9 @@ func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMut
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 		},
 	)
+	persistAcceptedToolCallIntents(t, engine, "step", completeNodeBarrierAcceptedCalls(
+		json.RawMessage(`{"summary":"done"}`),
+	))
 	appendsBefore, _ := durability.snapshot()
 	callbackObserver.Arm(func() {
 		engine.transcriptRuntimeState().CompleteLiveTool("hosted")
@@ -401,4 +411,6 @@ func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMut
 	); rows != 1 {
 		t.Fatalf("rehydrated complete_node sibling rows = %d, want one", rows)
 	}
+	assertFreshResourceRepairOnEngine(t, restored, reopened, "complete-node")
+	assertFreshResourceRepairExactlyOnce(t, reopened, "complete-node")
 }

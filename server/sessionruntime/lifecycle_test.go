@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 func lifecycleSessionID(t *testing.T, fixture sessionRuntimeFixture) runtimeids.SessionID {
@@ -238,6 +240,27 @@ type authorityStartBarrierLifecycle struct {
 	*testsetup.StartBarrier
 }
 
+type startupRepairReadyProbe struct {
+	ready atomic.Int32
+}
+
+func (p *startupRepairReadyProbe) ResourceReady(
+	context.Context,
+	AgentResourceDescriptor,
+	*runtime.Engine,
+	AgentResourceRetainer,
+) error {
+	p.ready.Add(1)
+	return nil
+}
+
+func (*startupRepairReadyProbe) ResourceDraining(
+	context.Context,
+	AgentResourceDescriptor,
+) error {
+	return nil
+}
+
 func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, _ AgentResourceRetainer) error {
 	return l.ArriveAndWait(ctx)
 }
@@ -260,6 +283,55 @@ func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer
 		}
 	})
 	return authority
+}
+
+func TestFreshResourceRepairFailureDoesNotPublishResourceReady(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	eventLog, err := fixture.store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, _, err := eventLog.AppendRecord(nil, session.MessageRecord{
+		Role: session.MessageRoleAssistant,
+		ToolCalls: []session.MessageToolCallRecord{{
+			CallID: "unowned-dangling",
+			Name:   string(toolspec.ToolAskQuestion),
+			Kind:   session.ToolCallKindFunction,
+			Input:  json.RawMessage(`{}`),
+		}},
+	}); err != nil {
+		t.Fatalf("append unowned dangling call: %v", err)
+	}
+
+	ready := &startupRepairReadyProbe{}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: ready,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close recovery authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	if _, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "owner-a",
+		Runtime:   &plan,
+	}); err == nil {
+		t.Fatal("fresh resource startup accepted a failed dangling-output repair")
+	}
+	if count := ready.ready.Load(); count != 0 {
+		t.Fatalf("ResourceReady publications = %d, want zero after startup repair failure", count)
+	}
+	authority.mu.Lock()
+	resource := authority.resources[sessionID]
+	authority.mu.Unlock()
+	if resource != nil {
+		t.Fatalf("failed startup repair installed a resource: %+v", resource)
+	}
 }
 
 func TestAuthorityTryBlockSessionStartsRejectsInFlightStart(t *testing.T) {
