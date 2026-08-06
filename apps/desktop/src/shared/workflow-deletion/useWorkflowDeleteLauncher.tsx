@@ -11,9 +11,7 @@ import {
   useAppNavigation,
   useAppServices,
   useConnectionSnapshot,
-  useSidebar,
   useStatusController,
-  type SidebarDestination,
 } from "@/app-facade";
 import { Dialog } from "@/ui";
 import { WorkflowDeleteConfirmationContent } from "./WorkflowDeleteConfirmationContent";
@@ -38,7 +36,6 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
   const navigation = useAppNavigation();
   const queryClient = useQueryClient();
   const matchRoute = useMatchRoute();
-  const { activeDestination, closeSidebar } = useSidebar();
   const { push } = useStatusController();
   const [pending, setPending] = useState<DeleteOperation | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -46,14 +43,12 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
   const [openingOwner, setOpeningOwner] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const workflowIDRef = useRef(workflowID);
-  const activeDestinationRef = useRef(activeDestination);
   const previewAdmissionRef = useRef<PreviewAdmission | null>(null);
   const submitAdmissionRef = useRef<DeleteOperation | null>(null);
   const committedOwnerRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     workflowIDRef.current = workflowID;
-    activeDestinationRef.current = activeDestination;
-  }, [activeDestination, workflowID]);
+  }, [workflowID]);
 
   useEffect(() => {
     const stalePreview = previewAdmissionRef.current;
@@ -115,9 +110,6 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
       setPending((current) => (current === operation ? null : current));
       try {
         await invalidateWorkflowDeleteQueries(queryClient, operation.ownerWorkflowID);
-        if (sidebarReferencesWorkflow(activeDestinationRef.current, operation.ownerWorkflowID)) {
-          closeSidebar("closed");
-        }
         const routeMatches =
           matchRoute({
             to: "/workflows/$workflowId/editor",
@@ -154,7 +146,7 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
         });
       }
     },
-    [api, closeSidebar, matchRoute, navigation, push, queryClient, t],
+    [api, matchRoute, navigation, push, queryClient, t],
   );
 
   const openWorkflowDelete = useCallback(async (): Promise<void> => {
@@ -230,22 +222,6 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
   };
 }
 
-function sidebarReferencesWorkflow(destination: SidebarDestination | null, workflowID: string): boolean {
-  if (destination === null) return false;
-  switch (destination.kind) {
-    case "newTask":
-    case "workflowInspect":
-    case "workflowEditor":
-      return destination.workflowID === workflowID;
-    case "linkWorkflow":
-      return destination.selectedWorkflowID === workflowID;
-    case "taskDetail":
-    case "workflowCreate":
-    case "projectEdit":
-    case "custom":
-      return false;
-  }
-}
 
 async function invalidateWorkflowDeleteQueries(queryClient: QueryClient, workflowID: string): Promise<void> {
   queryClient.removeQueries({ queryKey: queryKeys.workflowDefinition(workflowID) });

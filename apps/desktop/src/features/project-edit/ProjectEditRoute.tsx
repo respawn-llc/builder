@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
 import type { ProjectEdit, WorkspaceSummary } from "@/api";
-import { errorMessage } from "@/api";
+import { errorMessage, isProjectMissingError } from "@/api";
+import type { SidebarPageNavigator } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -34,7 +35,7 @@ import {
 
 const projectEditContentMaxWidthClassName = "max-w-[1200px]";
 
-export function ProjectEditRoute({ projectId }: Readonly<{ projectId: string }>) {
+export function ProjectEditRoute({ navigator, projectId }: Readonly<{ navigator?: SidebarPageNavigator; projectId: string }>) {
   const { t } = useTranslation();
   const query = useProjectEdit(projectId);
   const pages = query.data?.pages;
@@ -47,6 +48,9 @@ export function ProjectEditRoute({ projectId }: Readonly<{ projectId: string }>)
   }
 
   if (query.isError || project === undefined) {
+    if (navigator !== undefined && query.isError && isProjectMissingError(query.error)) {
+      return <MissingProjectDismissal navigator={navigator} />;
+    }
     return (
       <ErrorState
         body={query.isError ? errorMessage(query.error) : t("projectEdit.missingProject")}
@@ -68,6 +72,13 @@ export function ProjectEditRoute({ projectId }: Readonly<{ projectId: string }>)
       workspaces={workspaces}
     />
   );
+}
+
+function MissingProjectDismissal({ navigator }: Readonly<{ navigator: SidebarPageNavigator }>) {
+  useEffect(() => {
+    navigator.back();
+  }, [navigator]);
+  return null;
 }
 
 function ProjectEditContent({

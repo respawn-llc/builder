@@ -1,9 +1,11 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type TaskDetail, type TaskLabelAssignment } from "@/api";
+import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssignment } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
+import type { SidebarPageNavigator } from "@/app-facade";
+import type { SidebarRootController } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
@@ -15,9 +17,20 @@ export type TaskDetailSurfaceProps = Readonly<{
   enabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
+  navigator?: SidebarPageNavigator | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
+  retainedState?: unknown;
 }>;
 
-export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: TaskDetailSurfaceProps) {
+export function TaskDetailSurface({
+  taskId,
+  enabled,
+  initialFocus,
+  navigator,
+  onMutated,
+  openSidebar,
+  retainedState,
+}: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const reportLabelError = useCallback(
@@ -42,6 +55,9 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
   if (detail.isError) {
+    if (navigator !== undefined && isTaskMissingError(detail.error)) {
+      return <MissingTaskDismissal navigator={navigator} />;
+    }
     return <ErrorState body={errorMessage(detail.error)} reveal={false} title={t("states.error")} />;
   }
   const content = (
@@ -53,8 +69,11 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
           comments={comments}
           detail={detail.data}
           initialFocus={initialFocus}
+          navigator={navigator}
           onMutated={onMutated}
+          openSidebar={openSidebar}
           openLink={openLink}
+          retainedState={retainedState}
         />
       </TaskDetailAssignmentScope>
     </ProjectLabelsProvider>
@@ -77,6 +96,13 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
       <div className="min-h-0">{content}</div>
     </div>
   );
+}
+
+function MissingTaskDismissal({ navigator }: Readonly<{ navigator: SidebarPageNavigator }>) {
+  useEffect(() => {
+    navigator.back();
+  }, [navigator]);
+  return null;
 }
 
 function TaskDetailAssignmentScope({

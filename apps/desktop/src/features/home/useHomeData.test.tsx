@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import type { JsonValue } from "@/api";
-import { SidebarContext, type SidebarDestination } from "@/app-facade";
+import { SidebarRootContext, type SidebarDestination } from "@/app-facade";
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRpcTransport, FakeRoute } from "@/test-support/api";
 import { flushQueuedWork, installAnimationFrameTestSupport } from "@/test-support/scheduling";
-import { createTestSidebarController } from "@/test-support/sidebar";
+import {
+  createTestSidebarController,
+  createTestSidebarNavigator,
+} from "@/test-support/sidebar";
 import { workflowAttentionCalls, workflowAttentionRpcMethods } from "@/test-support/workflow-attention";
 import { SidebarInboxNav } from "./SidebarInboxNav";
 import { useGlobalAttentionEvents, useGlobalAttentionPages } from "./useHomeData";
@@ -104,10 +107,10 @@ describe("Home global attention data", () => {
 
     view.rerender(
       <TestAppProviders services={services}>
-        <SidebarContext.Provider value={sidebarController}>
+        <SidebarRootContext.Provider value={sidebarController}>
           <HomeAttentionQueryHarness />
-          <SidebarInboxNav destination={taskDetailDestination} />
-        </SidebarContext.Provider>
+          <SidebarInboxNav destination={taskDetailDestination} navigator={sidebarNavigator} />
+        </SidebarRootContext.Provider>
       </TestAppProviders>,
     );
     await flushQueuedWork();
@@ -117,7 +120,7 @@ describe("Home global attention data", () => {
 
   it("loads a cold cache when Sidebar is the only global attention observer", async () => {
     const services = createAttentionServices();
-    renderHome(services, <SidebarInboxNav destination={taskDetailDestination} />);
+    renderHome(services, <SidebarInboxNav destination={taskDetailDestination} navigator={sidebarNavigator} />);
 
     await expectAttentionCalls(services.transport, 1);
     expect(attentionPageTokens(services.transport)).toEqual([""]);
@@ -136,6 +139,13 @@ describe("Home global attention data", () => {
     const controller = createTestSidebarController((destination) => {
       openedDestinations.push(destination);
     });
+    const navigator = {
+      ...sidebarNavigator,
+      replace: (destination: SidebarDestination) => {
+        controller.open(destination);
+        return "accepted" as const;
+      },
+    };
     let homeAttention: ReturnType<typeof useGlobalAttentionPages> | undefined;
     const view = renderHome(
       services,
@@ -152,16 +162,16 @@ describe("Home global attention data", () => {
     });
     view.rerender(
       <TestAppProviders services={services}>
-        <SidebarContext.Provider value={sidebarController}>
+        <SidebarRootContext.Provider value={sidebarController}>
           <div />
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </TestAppProviders>,
     );
     view.rerender(
       <TestAppProviders services={services}>
-        <SidebarContext.Provider value={controller}>
-          <SidebarInboxNav destination={taskDetailDestination} />
-        </SidebarContext.Provider>
+        <SidebarRootContext.Provider value={controller}>
+          <SidebarInboxNav destination={taskDetailDestination} navigator={navigator} />
+        </SidebarRootContext.Provider>
       </TestAppProviders>,
     );
 
@@ -218,7 +228,7 @@ describe("Home global attention data", () => {
 function renderHome(services: TestAppServices, children: ReactNode) {
   return render(
     <TestAppProviders services={services}>
-      <SidebarContext.Provider value={sidebarController}>{children}</SidebarContext.Provider>
+      <SidebarRootContext.Provider value={sidebarController}>{children}</SidebarRootContext.Provider>
     </TestAppProviders>,
   );
 }
@@ -309,6 +319,7 @@ const taskDetailDestination = {
 } as const;
 
 const sidebarController = createTestSidebarController();
+const sidebarNavigator = createTestSidebarNavigator();
 const workflowID = "11111111-1111-4111-8111-111111111111";
 
 const attentionChangingProjectEvent = {

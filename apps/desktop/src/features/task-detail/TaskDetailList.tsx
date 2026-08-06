@@ -7,7 +7,7 @@ import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import type { TaskDependencyPair } from "@/shared/task-dependencies";
-import { ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
+import { ErrorState, LoadingState, VirtualizedInfiniteList, type VirtualizedPixelOffsetRequest } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskInbox } from "./TaskDetailInbox";
@@ -58,9 +58,12 @@ export function TaskDetailList({
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
+  onScrollElementChange,
   onSaveDraft,
   openLink,
+  pixelOffsetRequest,
   questionSelections,
+  relationshipNavigationAvailable,
   selectedTab,
   setTab,
   updateError,
@@ -85,9 +88,12 @@ export function TaskDetailList({
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
+  pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -168,8 +174,10 @@ export function TaskDetailList({
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
+      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
+      pixelOffsetRequest={pixelOffsetRequest}
       rowSpacing="compact"
       renderItem={(item) => (
         <TaskDetailListRow
@@ -203,6 +211,7 @@ export function TaskDetailList({
           onSaveDraft={onSaveDraft}
           openLink={openLink}
           questionSelections={questionSelections}
+          relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
           setTab={setTab}
           updateError={updateError}
@@ -245,6 +254,7 @@ type TaskDetailListRowProps = Readonly<{
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -337,14 +347,24 @@ function BodyRow({
 function DependenciesRow({
   detail,
   disabled,
+  mutations,
   onAddDependency,
   onRemoveDependency,
   onSelectDependencyTask,
+  relationshipNavigationAvailable,
+  updatePending,
 }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskDependenciesArea
       dependencies={detail.dependencies}
       disabled={disabled}
+      navigationDisabled={
+        disabled ||
+        !relationshipNavigationAvailable ||
+        updatePending ||
+        mutations.addComment.isPending ||
+        mutations.replaceComment.isPending
+      }
       onAdd={onAddDependency}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}

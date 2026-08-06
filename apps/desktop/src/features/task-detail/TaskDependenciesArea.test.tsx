@@ -71,6 +71,7 @@ describe("TaskDependenciesArea", () => {
           })),
         }}
         disabled={false}
+        navigationDisabled={false}
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
@@ -98,6 +99,7 @@ describe("TaskDependenciesArea", () => {
           ),
         }}
         disabled={false}
+        navigationDisabled={false}
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
@@ -115,6 +117,7 @@ describe("TaskDependenciesArea", () => {
       <TaskDependenciesArea
         dependencies={dependencies}
         disabled
+        navigationDisabled
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
@@ -136,6 +139,7 @@ describe("TaskDependenciesArea", () => {
       <TaskDependenciesArea
         dependencies={dependencies}
         disabled={false}
+        navigationDisabled={false}
         onAdd={onAdd}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
@@ -169,5 +173,33 @@ describe("TaskDependenciesArea", () => {
       blockerTaskID: "task-2",
       blockedTaskID: "task-1",
     });
+  });
+
+  it("blocks relationship navigation while keeping Remove independently available", async () => {
+    const onAdd = vi.fn();
+    const onRemove = vi.fn();
+    const onSelectTask = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <TaskDependenciesArea
+        dependencies={dependencies}
+        disabled={false}
+        navigationDisabled
+        onAdd={onAdd}
+        onRemove={onRemove}
+        onSelectTask={onSelectTask}
+        taskID="task-1"
+      />,
+    );
+
+    expect(screen.getByTestId("dependency-add-blocked-by")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /KENT-2\s*Prepare release/ })).toBeDisabled();
+    expect(screen.getByTestId("dependency-remove-task-2")).toBeEnabled();
+
+    await user.click(screen.getByTestId("dependency-remove-task-2"));
+    expect(onRemove).toHaveBeenCalledOnce();
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(onSelectTask).not.toHaveBeenCalled();
   });
 });

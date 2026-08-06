@@ -1,12 +1,36 @@
 import {
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
+  isProjectMissingError,
+  isTaskMissingError,
   RpcError,
   WorkflowLabelError,
   WorkflowTaskDependencyError,
 } from "./errors";
+import { rpcErrorCodes } from "./rpcErrorCodes";
 
 const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
+
+describe("sidebar missing-entity errors", () => {
+  it("recognizes typed Task and Project missing errors without parsing messages", () => {
+    expect(
+      isTaskMissingError(
+        new RpcError({ code: rpcErrorCodes.workflowTaskNotFound, message: "changed", method: "workflow.task.get" }),
+      ),
+    ).toBe(true);
+    expect(
+      isProjectMissingError(
+        new RpcError({
+          code: -32000,
+          data: { reason: "project_not_found", project_id: "project-1" },
+          message: "changed",
+          method: "workflow.project.get",
+        }),
+      ),
+    ).toBe(true);
+    expect(isProjectMissingError(new Error("project_not_found"))).toBe(false);
+  });
+});
 
 describe("workflow label RPC errors", () => {
   it.each([

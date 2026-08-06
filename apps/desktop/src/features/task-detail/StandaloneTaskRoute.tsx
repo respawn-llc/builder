@@ -1,6 +1,10 @@
 import { useTranslation } from "react-i18next";
 
-import { useAppNavigation } from "@/app-facade";
+import {
+  SidebarRootOwner,
+  useAppNavigation,
+  useOwnedSidebarRoots,
+} from "@/app-facade";
 import { Button } from "@/ui";
 import { TaskDetailSurface } from "./TaskDetailSurface";
 
@@ -9,8 +13,17 @@ export type StandaloneTaskRouteProps = Readonly<{
 }>;
 
 export function StandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
+  return (
+    <SidebarRootOwner>
+      <OwnedStandaloneTaskRoute taskId={taskId} />
+    </SidebarRootOwner>
+  );
+}
+
+function OwnedStandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
   const { t } = useTranslation();
   const navigation = useAppNavigation();
+  const { open } = useOwnedSidebarRoots();
   return (
     <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-[var(--space-3)] p-[var(--space-3)]">
       <header className="flex items-center justify-end gap-[var(--space-2)]">
@@ -19,7 +32,7 @@ export function StandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
           {t("app.backHome")}
         </Button>
       </header>
-      <TaskDetailSurface enabled taskId={taskId} />
+      <TaskDetailSurface enabled openSidebar={open} taskId={taskId} />
     </section>
   );
 }

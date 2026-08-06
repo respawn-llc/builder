@@ -5,7 +5,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, type TaskDependencyCreateIntent } from "@/api";
+import { errorMessage, isProjectMissingError, type TaskDependencyCreateIntent } from "@/api";
 import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
@@ -101,7 +101,9 @@ export function NewTaskForm({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitted: () => void;
+  onSubmitted: (taskID: string) => void;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  onProjectMissing?: (() => void) | undefined;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -142,6 +144,8 @@ function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
   onSubmitted,
+  onPendingChange,
+  onProjectMissing,
   initialSourceWorkspaceID,
   pendingRelationship,
   projectID,
@@ -149,7 +153,9 @@ function NewTaskFormContent({
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitted: () => void;
+  onSubmitted: (taskID: string) => void;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  onProjectMissing?: (() => void) | undefined;
   projectID: string;
   workflowID: string;
   initialSourceWorkspaceID?: string | undefined;
@@ -165,6 +171,10 @@ function NewTaskFormContent({
   const workspaces = useWorkspaces(projectID);
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
+  useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
+  useEffect(() => {
+    if (workspaces.isError && isProjectMissingError(workspaces.error)) onProjectMissing?.();
+  }, [onProjectMissing, workspaces.error, workspaces.isError]);
   const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
   const [labelCreatePending, setLabelCreatePending] = useState(false);
   const effectiveSelectedLabelIDs = useMemo(() => {
@@ -209,7 +219,7 @@ function NewTaskFormContent({
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
-      await createTask.mutateAsync({
+      const taskID = await createTask.mutateAsync({
         projectID,
         workflowID,
         title: values.title,
@@ -224,7 +234,7 @@ function NewTaskFormContent({
                 newTaskRole: pendingRelationship.newTaskRole,
               },
       });
-      onSubmitted();
+      onSubmitted(taskID);
     } catch {
       // The mutation state renders the persistent failure without clearing form input.
     }

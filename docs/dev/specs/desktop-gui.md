@@ -271,11 +271,36 @@
 - `queued` and `running` use a spinner.
 - `waiting_approval` and `interrupted` use a secondary-colored circle.
 - `waiting_question` uses a primary-colored circle.
-- Selecting a related-Task row replaces the current Task Detail with that Task
-  in the same sidebar or Task Detail presentation.
-- Dependency navigation has no sidebar-local Back or Forward action.
-- Closing Task Detail after dependency navigation closes the current Task Detail
-  as usual.
+- The Desktop sidebar owns a navigation stack for sidebar-local movement.
+- Opening a root sidebar destination replaces the prior sidebar stack.
+- Selecting a related Task pushes Task Detail onto the sidebar stack.
+- Selecting a Task already retained in the stack returns to that Task and discards every later destination.
+- Dependency Add pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Successful related-Task creation atomically creates the Task and relationship, then replaces New Task with the created Task Detail.
+- Back returns to the preceding sidebar destination.
+- Back is hidden at the root.
+- X closes the complete sidebar stack.
+- The sidebar has no Forward action.
+- The sidebar retains at most 50 destinations.
+- A push beyond the limit preserves the root and evicts the oldest non-root destination.
+- Only the current destination remains mounted and live.
+- Back restores Task Detail scroll position, description expansion, selected Comments or Activity tab, unsaved Task title and body edits, unsaved new-comment text, and one edited-comment draft.
+- Restored Task Detail refreshes server-authoritative data and layers retained unsaved input over it.
+- Inactive Task Detail data follows the ordinary Desktop query-cache lifetime.
+- A mounted Task or Project destination that receives a typed missing result goes Back, including closing when it is the root.
+- Missing retained destinations are skipped lazily when Back reveals them.
+- Leaving the Desktop screen that owns a root sidebar closes that root unless another root has replaced it.
+- Completion from a replaced destination does not close or change the replacement sidebar.
+- Related New Task disables header Back and X only while its atomic creation request is pending.
+- Ordinary New Task keeps header Back and X available while its request is pending.
+- A failed related creation restores header Back and X and preserves the form recovery path.
+- Successful Project deletion from Project Edit closes that mounted Project Edit sidebar.
+- Scroll restoration resumes at the nearest available loaded position and ordinary edge-driven loading continues from there.
+- Inbox Previous and Next replace the current Inbox Task without adding sidebar history.
+- Related-Task navigation and Dependency Add are unavailable while a Task or comment save is pending.
+- Relationship Remove keeps its independent availability while another Task Detail save is pending.
+- Pop out opens only the current Task and closes its originating sidebar after the separate window opens.
+- A pop-out completion from a replaced destination leaves the replacement sidebar open.
 - Each relationship row has an accessible trailing Remove action rendered as a
   minimal uncircled red `X`.
 - Remove acts immediately without confirmation.

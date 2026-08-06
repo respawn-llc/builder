@@ -37,7 +37,7 @@ import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
 import type { KanbanCardVM, KanbanColumnVM, KanbanGroupVM } from "./BoardColumnViewModel";
 import { useBoardCardMotion } from "./BoardCardMotionContext";
 import { BoardDependencyProgressChip } from "./BoardDependencyProgressChip";
-import { useSidebar } from "@/app-facade";
+import { useOwnedSidebarRoots } from "@/app-facade";
 
 export type KanbanColumnProps = Readonly<{
   cards: readonly KanbanCardVM[];
@@ -502,14 +502,14 @@ const TaskCard = memo(function TaskCard({
 });
 
 function TaskCardDependencyProgress({ card }: Readonly<{ card: KanbanCardVM }>): ReactNode {
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   if (card.dependencyProgress === null) {
     return null;
   }
   return (
     <BoardDependencyProgressChip
       onActivate={() => {
-        void openSidebar({
+        open({
           kind: "taskDetail",
           initialFocus: { kind: "dependencies" },
           mode: "overlay",

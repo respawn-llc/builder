@@ -1,32 +1,12 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
 export type SidebarMode = "overlay" | "shift";
 export type SidebarPhase = "closing" | "open";
-
-export type SidebarCancelReason = "closed" | "replaced" | "route_change";
-
-export type SidebarCanceledResult = Readonly<{
-  status: "canceled";
-  reason: SidebarCancelReason;
-}>;
-
-export type SidebarNewTaskResult = Readonly<{
-  status: "submitted";
-  destination: "newTask";
-}>;
-
-export type SidebarTaskDetailResult = Readonly<{
-  status: "closed";
-  destination: "taskDetail";
-}>;
-
-export type SidebarWorkflowResult = Readonly<{
-  status: "completed";
-  destination: "workflow";
-  workflowID: string;
-}>;
+export type SidebarTransitionDirection = "back" | "push" | "replace";
+export type SidebarRootOutcome = "closed" | "released" | "replaced";
+export type SidebarNavigationOutcome = "accepted" | "stale" | "unavailable";
 
 export type WorkflowInspectorSelection =
   | Readonly<{ kind: "workflow" }>
@@ -41,9 +21,6 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "approval"; approvalID: string }>
   | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
-
-export type SidebarResult =
-  SidebarCanceledResult | SidebarNewTaskResult | SidebarTaskDetailResult | SidebarWorkflowResult;
 
 export type SidebarDestination =
   | Readonly<{
@@ -66,8 +43,6 @@ export type SidebarDestination =
       initialFocus?: TaskDetailInitialFocus | undefined;
       taskID: string;
       onMutated?: (() => void) | undefined;
-      // Set when opened from the Home inbox so the sidebar header exposes live
-      // Previous/Next navigation across the attention feed.
       inboxNav?: boolean | undefined;
     }>
   | Readonly<{
@@ -108,23 +83,89 @@ export type SidebarDestination =
       content: ReactNode;
     }>;
 
-export type SidebarController = Readonly<{
-  activeDestination: SidebarDestination | null;
-  closeSidebar(reason?: SidebarCancelReason): void;
-  openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
-  replaceSidebar(destination: SidebarDestination): void;
-  phase: SidebarPhase;
-  resolveSidebar(result: Exclude<SidebarResult, SidebarCanceledResult>): void;
-  resizeSidebar(width: ResolvedSidebarWidth): void;
-  sidebarWidthPx: number;
+export type SidebarDestinationPolicy = Readonly<{
+  equals(left: SidebarDestination, right: SidebarDestination): boolean;
+  retainedState(destination: SidebarDestination, state: unknown): unknown;
 }>;
 
-export const SidebarContext = createContext<SidebarController | null>(null);
+export type SidebarPageNavigator = Readonly<{
+  back(): Exclude<SidebarNavigationOutcome, "unavailable">;
+  close(): Exclude<SidebarNavigationOutcome, "unavailable">;
+  push(destination: SidebarDestination): SidebarNavigationOutcome;
+  replace(destination: SidebarDestination): Exclude<SidebarNavigationOutcome, "unavailable">;
+  registerAvailability(availability: Readonly<{ back: boolean; close: boolean }>): () => void;
+  registerCapture(capture: () => unknown): () => void;
+}>;
 
-export function useSidebar(): SidebarController {
-  const value = useContext(SidebarContext);
+export type SidebarRootHandle = Readonly<{
+  lifecycle: Promise<SidebarRootOutcome>;
+  release(): void;
+}>;
+
+export type SidebarRootController = Readonly<{
+  open(destination: SidebarDestination): SidebarRootHandle;
+}>;
+
+export type SidebarShellController = Readonly<{
+  activeDestination: SidebarDestination | null;
+  back(): SidebarNavigationOutcome;
+  backAvailable: boolean;
+  canGoBack: boolean;
+  close(): SidebarNavigationOutcome;
+  closeAvailable: boolean;
+  phase: SidebarPhase;
+  resize(width: ResolvedSidebarWidth): void;
+  sidebarWidthPx: number;
+  transitionDirection: SidebarTransitionDirection | null;
+}>;
+
+export const SidebarRootContext = createContext<SidebarRootController | null>(null);
+export const SidebarShellContext = createContext<SidebarShellController | null>(null);
+const SidebarRootOwnerContext = createContext<SidebarRootController | null>(null);
+
+export function useSidebarRoots(): SidebarRootController {
+  const value = useContext(SidebarRootContext);
   if (value === null) {
     throw new Error("SidebarProvider is required");
   }
+  return value;
+}
+
+export function useSidebarShell(): SidebarShellController {
+  const value = useContext(SidebarShellContext);
+  if (value === null) {
+    throw new Error("SidebarProvider is required");
+  }
+  return value;
+}
+
+export function SidebarRootOwner({ children }: Readonly<{ children: ReactNode }>) {
+  const roots = useSidebarRoots();
+  const [handles] = useState(() => new Set<SidebarRootHandle>());
+  const open = useCallback(
+    (destination: SidebarDestination) => {
+      const handle = roots.open(destination);
+      handles.add(handle);
+      void handle.lifecycle.finally(() => {
+        handles.delete(handle);
+      });
+      return handle;
+    },
+    [handles, roots],
+  );
+  useEffect(
+    () => () => {
+      for (const handle of handles) handle.release();
+      handles.clear();
+    },
+    [handles],
+  );
+  const value = useMemo(() => ({ open }), [open]);
+  return createElement(SidebarRootOwnerContext.Provider, { value }, children);
+}
+
+export function useOwnedSidebarRoots(): SidebarRootController {
+  const value = useContext(SidebarRootOwnerContext);
+  if (value === null) throw new Error("SidebarRootOwner is required");
   return value;
 }
