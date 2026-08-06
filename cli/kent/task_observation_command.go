@@ -54,11 +54,14 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			}
 			return 1
 		}
-		return writeTaskObservation(stdout, response, *project)
+		return writeTaskObservation(stdout, stderr, response, *project)
 	})
 }
 
-func writeTaskObservation(stdout io.Writer, response serverapi.WorkflowTaskObservationResponse, projectRef string) int {
+func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi.WorkflowTaskObservationResponse, projectRef string) int {
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	exitCode := 0
 	questionCount := 0
 	for _, outcome := range response.Outcomes {
@@ -75,24 +78,26 @@ func writeTaskObservation(stdout io.Writer, response serverapi.WorkflowTaskObser
 			fmt.Fprintf(stdout, "Task %s entered Done status\n", response.TaskShortID)
 		case serverapi.WorkflowTaskObservationQuestion:
 			if outcome.Question == nil {
+				fmt.Fprintf(stderr, "invalid task observation response: %s outcome has no question payload\n", outcome.Kind)
 				return 1
 			}
-			hint := "kent question answer --task " + response.TaskShortID
+			hintArgs := []string{config.Command, "question", "answer", "--task", response.TaskShortID}
 			if questionCount > 1 && outcome.SessionID != nil {
-				hint = "kent question answer --session " + *outcome.SessionID
+				hintArgs = []string{config.Command, "question", "answer", "--session", *outcome.SessionID}
 			}
 			if outcome.Question.Approval != nil || outcome.Question.Ask != nil && len(outcome.Question.Ask.Suggestions) > 0 {
-				hint += " --option <number>"
+				hintArgs = append(hintArgs, "--option", "<number>")
 			} else {
-				hint += " --commentary \"<answer>\""
+				hintArgs = append(hintArgs, "--commentary", "<answer>")
 			}
 			if strings.TrimSpace(projectRef) != "" && projectRef != "." && questionCount == 1 {
-				hint += " --project " + shellQuote(projectRef)
+				hintArgs = append(hintArgs, "--project", projectRef)
 			}
 			writeTaskOutcomeDiscriminator(stdout, outcome)
-			writeObservedQuestion(stdout, *outcome.Question, hint)
+			writeObservedQuestion(stdout, *outcome.Question, commandString(hintArgs))
 		case serverapi.WorkflowTaskObservationExecutionError, serverapi.WorkflowTaskObservationInterrupted:
 			if outcome.Failure == nil {
+				fmt.Fprintf(stderr, "invalid task observation response: %s outcome has no failure payload\n", outcome.Kind)
 				return 1
 			}
 			writeTaskOutcomeDiscriminator(stdout, outcome)

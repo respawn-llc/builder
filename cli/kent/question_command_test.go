@@ -114,6 +114,17 @@ func (r *stubQuestionCommandRemote) AnswerAsk(_ context.Context, req serverapi.A
 	return nil
 }
 
+func (r *stubQuestionCommandRemote) ListPendingApprovalsBySession(
+	_ context.Context,
+	_ serverapi.ApprovalListPendingBySessionRequest,
+) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return serverapi.ApprovalListPendingBySessionResponse{}, nil
+}
+
+func (r *stubQuestionCommandRemote) AnswerApproval(_ context.Context, _ serverapi.ApprovalAnswerRequest) error {
+	return nil
+}
+
 func (r *stubQuestionCommandRemote) Close() error {
 	return nil
 }

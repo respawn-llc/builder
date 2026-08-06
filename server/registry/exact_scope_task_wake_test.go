@@ -187,7 +187,9 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	if projected := events.snapshot(); len(projected) != 1 {
 		t.Fatalf("non-workflow wake events = %+v, want workflow event only", projected)
 	}
-	if err := nonWorkflowHandle.Stop(stopCtx); err != nil {
+	nonWorkflowStopCtx, cancelNonWorkflowStop := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelNonWorkflowStop()
+	if err := nonWorkflowHandle.Stop(nonWorkflowStopCtx); err != nil {
 		t.Fatalf("stop non-workflow execution: %v", err)
 	}
 }

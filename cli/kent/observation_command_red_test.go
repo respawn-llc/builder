@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 	}
 	var output bytes.Buffer
 	projectRef := "workspace path/$branch"
-	if code := writeTaskObservation(&output, response, projectRef); code != 0 {
+	if code := writeTaskObservation(&output, io.Discard, response, projectRef); code != 0 {
 		t.Fatalf("writeTaskObservation exit code = %d", code)
 	}
 	text := output.String()
@@ -96,7 +97,7 @@ func TestTaskObservationUsesSessionTargetsForParallelQuestions(t *testing.T) {
 		},
 	}
 	var output bytes.Buffer
-	if code := writeTaskObservation(&output, response, "."); code != 0 {
+	if code := writeTaskObservation(&output, io.Discard, response, "."); code != 0 {
 		t.Fatalf("writeTaskObservation exit code = %d", code)
 	}
 	text := output.String()

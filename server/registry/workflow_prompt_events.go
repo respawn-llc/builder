@@ -33,8 +33,13 @@ func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntim
 	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
 	sessionID := resource.SessionID().String()
 	askID := strings.TrimSpace(snapshot.Request.ID)
-	if projectID == "" || taskID == "" || askID == "" {
-		return nil
+	switch {
+	case projectID == "":
+		return fmt.Errorf("workflow prompt scope %s has no project id", scope.ID())
+	case taskID == "":
+		return fmt.Errorf("workflow prompt scope %s has no task id", scope.ID())
+	case askID == "":
+		return fmt.Errorf("workflow prompt scope %s has a prompt without an id", scope.ID())
 	}
 	workflowID := ref.WorkflowID
 	if err := r.workflowEventPublisher(context.Background(), serverapi.WorkflowProjectEvent{

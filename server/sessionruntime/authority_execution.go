@@ -432,6 +432,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		s.mu.Lock()
 		delete(s.pending, requestID)
 		s.mu.Unlock()
+		close(entry.publicationDone)
 		return tools.AskQuestionResponse{}, err
 	}
 	close(entry.publicationDone)

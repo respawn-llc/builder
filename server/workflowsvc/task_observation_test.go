@@ -27,8 +27,86 @@ type observationApprovalViewStub struct {
 	approvals []clientui.PendingApproval
 }
 
+type observationTaskDetailStub struct {
+	detail serverapi.WorkflowTaskDetail
+	nodes  []workflow.CurrentNode
+}
+
+func (s observationTaskDetailStub) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return s.detail, nil
+}
+
+func (s observationTaskDetailStub) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return s.detail, nil
+}
+
+func (s observationTaskDetailStub) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return s.detail, nil
+}
+
+func (s observationTaskDetailStub) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
+	return s.nodes, nil
+}
+
+type observationDefinitionStub struct{}
+
+func (observationDefinitionStub) GetDefinition(context.Context, runtimeids.WorkflowID) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
+	return serverapi.WorkflowDefinition{}, nil, nil
+}
+
+type observationAttentionStub struct{}
+
+func (observationAttentionStub) List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
+	return serverapi.WorkflowAttentionListResponse{}, nil
+}
+
+func (observationAttentionStub) ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
+	return serverapi.WorkflowTaskAttentionListResponse{}, nil
+}
+
 func (s observationApprovalViewStub) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	return serverapi.ApprovalListPendingBySessionResponse{Approvals: s.approvals}, nil
+}
+
+func TestObserveWorkflowTaskWaitReturnsInterruptedOutcome(t *testing.T) {
+	taskID := "task-1"
+	projectID := "project-1"
+	workflowID := runtimeids.NewWorkflowID()
+	currentNode, err := workflow.NewCurrentNodeReference(workflow.TaskID(taskID), "node-1", nil)
+	if err != nil {
+		t.Fatalf("current node reference: %v", err)
+	}
+	service := &Service{readModels: ReadModels{
+		Definitions: observationDefinitionStub{},
+		TaskDetail: observationTaskDetailStub{
+			detail: serverapi.WorkflowTaskDetail{Summary: serverapi.WorkflowTaskSummary{
+				ID: taskID, ProjectID: projectID, WorkflowID: workflowID, ShortID: "T-1",
+			}},
+			nodes: []workflow.CurrentNode{{
+				Reference: currentNode,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+					Interruption: &workflow.CurrentNodeInterruption{
+						Reason: workflow.CurrentNodeInterruptionReasonUserInterrupt,
+						Detail: workflow.NewCurrentNodeInterruptionDetail("user_interrupt", nil),
+					},
+				},
+			}},
+		},
+		Attention: observationAttentionStub{},
+	}}
+	response, ready, err := service.observeWorkflowTask(context.Background(), serverapi.WorkflowTaskObservationRequest{
+		TaskID: taskID, ProjectID: projectID, Mode: serverapi.WorkflowTaskObservationWait,
+	})
+	if err != nil {
+		t.Fatalf("observe workflow task: %v", err)
+	}
+	if !ready || len(response.Outcomes) != 1 {
+		t.Fatalf("response = %+v, ready=%v; want one ready interruption", response, ready)
+	}
+	if response.Outcomes[0].Kind != serverapi.WorkflowTaskObservationInterrupted {
+		t.Fatalf("outcome kind = %q, want interruption", response.Outcomes[0].Kind)
+	}
 }
 
 func TestTaskCurrentNodeFailureUsesDefinitionIdentityAndDiagnostic(t *testing.T) {

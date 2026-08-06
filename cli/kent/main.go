@@ -639,7 +639,7 @@ func runLiveWatchSubcommandWithRunner(args []string, run liveWatchRunner) int {
 		}
 		return 1
 	}
-	return writeRunWatchResponse(os.Stdout, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
+	return writeRunWatchResponse(os.Stdout, os.Stderr, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
 }
 
 func runLiveFlagError(err error) int {

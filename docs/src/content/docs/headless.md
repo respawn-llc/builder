@@ -44,7 +44,7 @@ kent task wait KENT-335
 kent task watch KENT-335
 ```
 
-These commands are one-shot server-side waits. `wait` ignores Questions and interruptions until the Task is done or current work reports an error; `watch` reports the next Question, interruption, error, or terminal completion. A reported Question includes a runnable `kent question answer` command.
+These commands are one-shot server-side waits. `wait` ignores Questions but reports the next interruption, error, or terminal completion; `watch` reports the next Question, interruption, error, or terminal completion. A reported Question includes a runnable `kent question answer` command.
 
 Use exactly one of `--session` or `--task`. Task short IDs resolve in the current workspace's Project unless `--project` selects another Project. A Task with pending Questions in several Sessions is ambiguous; Kent answers nothing and lists each candidate Session name and ID.
 

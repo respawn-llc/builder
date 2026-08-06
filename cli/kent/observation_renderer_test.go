@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestRunWatchRendersInterruptedReasonAndDiagnostic(t *testing.T) {
 	reason := "interrupted"
 	diagnostic := "stop detail"
 	var output bytes.Buffer
-	code := writeRunWatchResponse(&output, serverapi.RuntimeLiveWatchResponse{
+	code := writeRunWatchResponse(&output, io.Discard, serverapi.RuntimeLiveWatchResponse{
 		SessionID: "session-dynamic",
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchInterrupted,

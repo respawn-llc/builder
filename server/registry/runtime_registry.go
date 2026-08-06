@@ -722,10 +722,11 @@ func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope
 	if projected && entry != nil {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
-		if err := r.publishTaskQuestionWaitingForScope(scope, snapshot); err != nil {
-			return err
-		}
+		wakeErr := r.publishTaskQuestionWaitingForScope(scope, snapshot)
 		r.publishCurrentRuntimeActivity(id)
+		if wakeErr != nil {
+			return wakeErr
+		}
 	}
 	return nil
 }

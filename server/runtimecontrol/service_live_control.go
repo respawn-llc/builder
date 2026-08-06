@@ -249,10 +249,12 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 	case terminal := <-terminalCh:
 		cancel()
 		wg.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return serverapi.RuntimeLiveWatchResponse{}, ctxErr
+		}
 		return liveWatchResult(id, name, terminal.result, terminal.err)
 	case err := <-attentionErrCh:
-		var streamFailure *liveWatchAttentionStreamFailure
-		if errors.As(err, &streamFailure) && errors.Is(streamFailure.cause, context.Canceled) && ctx.Err() == nil {
+		if ctx.Err() == nil {
 			select {
 			case terminal := <-terminalCh:
 				cancel()

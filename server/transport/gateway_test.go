@@ -117,8 +117,8 @@ func TestProtocolErrorMapsContextCanceled(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorMapsCanceledAttentionStreamAsStreamFailure(t *testing.T) {
-	source := fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)
+func TestProtocolErrorMapsStreamFailureAsStreamFailure(t *testing.T) {
+	source := serverapi.ErrStreamFailed
 	code, message := protocolError(source)
 	if code != protocol.ErrCodeStreamFailed {
 		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeStreamFailed)

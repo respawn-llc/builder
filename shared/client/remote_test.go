@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -482,6 +483,42 @@ func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
 		t.Fatal("timed out waiting for malformed update response")
 	}
 	requireNoHandlerError(t, handlerErrs)
+}
+
+func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Errorf("receive live watch request: %v", err)
+			return
+		}
+		if request.Method != protocol.MethodRuntimeLiveWatch {
+			t.Errorf("method = %q, want %q", request.Method, protocol.MethodRuntimeLiveWatch)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.RuntimeLiveWatchResponse{
+			SessionID: "session-1",
+			Outcome: serverapi.RuntimeLiveWatchOutcome{
+				Kind: serverapi.RuntimeLiveWatchQuestion,
+			},
+		})); err != nil {
+			t.Errorf("send malformed live watch response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: "session-1"})
+	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") {
+		t.Fatalf("LiveWatch error = %v, want response validation error", err)
+	}
 }
 
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {

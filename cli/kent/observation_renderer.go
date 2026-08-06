@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -35,18 +36,22 @@ func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, 
 
 func observationQuestionHint(sessionID string, question serverapi.ObservationQuestion) string {
 	if question.Approval != nil {
-		return "kent question answer --session " + sessionID + " --option <number>"
+		return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--option", "<number>"})
 	}
 	if question.Ask != nil && len(question.Ask.Suggestions) > 0 {
-		return "kent question answer --session " + sessionID + " --option <number>"
+		return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--option", "<number>"})
 	}
-	return "kent question answer --session " + sessionID + " --commentary \"<answer>\""
+	return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--commentary", "<answer>"})
 }
 
-func writeRunWatchResponse(w io.Writer, response serverapi.RuntimeLiveWatchResponse, continueHint string) int {
+func writeRunWatchResponse(w io.Writer, stderr io.Writer, response serverapi.RuntimeLiveWatchResponse, continueHint string) int {
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	switch response.Outcome.Kind {
 	case serverapi.RuntimeLiveWatchQuestion:
 		if response.Outcome.Question == nil {
+			fmt.Fprintf(stderr, "invalid live watch response: %s outcome has no question payload\n", response.Outcome.Kind)
 			return 1
 		}
 		writeObservedQuestion(w, *response.Outcome.Question, observationQuestionHint(response.SessionID, *response.Outcome.Question))
@@ -60,6 +65,7 @@ func writeRunWatchResponse(w io.Writer, response serverapi.RuntimeLiveWatchRespo
 		}
 	case serverapi.RuntimeLiveWatchNoFinalResult, serverapi.RuntimeLiveWatchExecutionError, serverapi.RuntimeLiveWatchInterrupted:
 		if response.Outcome.Failure == nil {
+			fmt.Fprintf(stderr, "invalid live watch response: %s outcome has no failure payload\n", response.Outcome.Kind)
 			return 1
 		}
 		fmt.Fprintln(w, response.Outcome.Failure.Reason)

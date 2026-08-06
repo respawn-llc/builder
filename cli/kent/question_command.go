@@ -37,6 +37,8 @@ const (
 type questionCommandRemote interface {
 	ListPendingAsksBySession(context.Context, serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error)
 	AnswerAsk(context.Context, serverapi.AskAnswerRequest) error
+	ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error)
+	AnswerApproval(context.Context, serverapi.ApprovalAnswerRequest) error
 	Close() error
 }
 
@@ -289,7 +291,12 @@ func answerTaskQuestion(
 		}
 		question := candidate.Questions[0]
 		if question.Approval != nil {
-			if err := answerApprovalQuestion(remote, candidate.SessionID, question.Approval, option, commentary); err != nil {
+			approvalRemote, ok := remote.(questionApprovalRemote)
+			if !ok {
+				fmt.Fprintln(stderr, "approval answer is unavailable")
+				return 1
+			}
+			if err := answerApprovalQuestion(approvalRemote, candidate.SessionID, question.Approval, option, commentary); err != nil {
 				fmt.Fprintln(stderr, err)
 				if isQuestionAnswerUsageError(err) {
 					return 2
@@ -343,7 +350,7 @@ func isQuestionAnswerUsageError(err error) bool {
 }
 
 func answerApprovalQuestion(
-	remote any,
+	approvalRemote questionApprovalRemote,
 	sessionID runtimeids.SessionID,
 	approval *clientui.PendingApproval,
 	option *int,
@@ -354,10 +361,6 @@ func answerApprovalQuestion(
 	}
 	if *option < 1 || *option > len(approval.Options) {
 		return &questionAnswerUsageError{message: "question answer option is out of range"}
-	}
-	approvalRemote, ok := remote.(questionApprovalRemote)
-	if !ok {
-		return errors.New("approval answer is unavailable")
 	}
 	answerCtx, stopAnswer := questionAnswerContext()
 	defer stopAnswer()
@@ -409,13 +412,11 @@ func listPendingSessionPrompt(remote questionCommandRemote, sessionID runtimeids
 		return questionCommandPendingQuestion{}, false, err
 	}
 	var approvals serverapi.ApprovalListPendingBySessionResponse
-	if approvalRemote, ok := remote.(questionApprovalRemote); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
-		approvals, err = approvalRemote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID.String()})
-		cancel()
-		if err != nil {
-			return questionCommandPendingQuestion{}, false, err
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
+	approvals, err = remote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID.String()})
+	cancel()
+	if err != nil {
+		return questionCommandPendingQuestion{}, false, err
 	}
 	prompt, ok := serverapi.FirstPendingPromptObservation(asks.Asks, approvals.Approvals)
 	if !ok {
@@ -440,6 +441,9 @@ func optionalQuestionCommentary(commentary *string) *string {
 		return nil
 	}
 	trimmed := strings.TrimSpace(*commentary)
+	if trimmed == "" {
+		return nil
+	}
 	return &trimmed
 }
 
@@ -552,7 +556,7 @@ func taskQuestionCandidatesWithRemote(ctx context.Context, remote workflowComman
 				continue
 			}
 		} else {
-			continue
+			return nil, errors.New("approval question cannot be read because the remote does not support approvals")
 		}
 		index, exists := candidateBySession[sessionID]
 		if !exists {

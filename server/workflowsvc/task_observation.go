@@ -90,7 +90,9 @@ func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.Workflo
 		if err != nil {
 			return serverapi.WorkflowTaskObservationResponse{}, false, err
 		}
-		if req.Mode == serverapi.WorkflowTaskObservationWatch || outcome.Kind == serverapi.WorkflowTaskObservationExecutionError {
+		if req.Mode == serverapi.WorkflowTaskObservationWatch ||
+			outcome.Kind == serverapi.WorkflowTaskObservationExecutionError ||
+			outcome.Kind == serverapi.WorkflowTaskObservationInterrupted {
 			response.Outcomes = append(response.Outcomes, outcome)
 		}
 	}
