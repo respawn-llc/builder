@@ -84,8 +84,8 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
   useBoardFilterGeneration: () => generationRuntime,
 }));
 
-vi.mock("./BoardTaskSearch", () => ({
-  BoardTaskSearchChrome: () => <button type="button" />,
+vi.mock("./TaskSearchChrome", () => ({
+  TaskSearchProjectTrigger: () => <button type="button" />,
 }));
 
 import { BoardFilterChrome } from "./BoardLabelFilter";
