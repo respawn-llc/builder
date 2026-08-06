@@ -1,14 +1,115 @@
 package runtime
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/toolspec"
 )
+
+type callbackPersistenceObserver struct {
+	delegate   session.PersistenceObserver
+	reconciler session.EventLogReconciliationObserver
+
+	mu       sync.Mutex
+	callback func()
+}
+
+func newCallbackPersistenceObserver(
+	delegate session.PersistenceObserver,
+) *callbackPersistenceObserver {
+	reconciler, _ := delegate.(session.EventLogReconciliationObserver)
+	return &callbackPersistenceObserver{
+		delegate:   delegate,
+		reconciler: reconciler,
+	}
+}
+
+func (o *callbackPersistenceObserver) Arm(callback func()) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.callback != nil {
+		panic("callback persistence observer is already armed")
+	}
+	o.callback = callback
+}
+
+func (o *callbackPersistenceObserver) ObservePersistedStore(
+	ctx context.Context,
+	snapshot session.PersistedStoreSnapshot,
+) error {
+	if err := o.delegate.ObservePersistedStore(ctx, snapshot); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	callback := o.callback
+	o.callback = nil
+	o.mu.Unlock()
+	if callback != nil {
+		callback()
+	}
+	return nil
+}
+
+func (o *callbackPersistenceObserver) ObserveEventLogReconciliation(
+	ctx context.Context,
+	reconciliation session.PersistedEventLogReconciliation,
+) error {
+	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
+}
+
+func prepareSimpleResultGroupCall(
+	t *testing.T,
+	engine *Engine,
+	stepID string,
+	callID string,
+) {
+	t.Helper()
+	call := normalizeToolCallForTranscript(llm.ToolCall{
+		ID:    callID,
+		Name:  string(toolspec.ToolExecCommand),
+		Input: []byte(`{"cmd":"true"}`),
+	}, engine.transcriptWorkingDir())
+	if err := engine.steer(
+		stepID,
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventNone,
+			true,
+			[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
+		),
+	); err != nil {
+		t.Fatalf("persist result group call %s: %v", callID, err)
+	}
+	if err := engine.transcriptRuntimeState().RecordLiveToolStart(stepID, call); err != nil {
+		t.Fatalf("record live result group call %s: %v", callID, err)
+	}
+}
+
+func reportAndFlushSimpleResultGroup(
+	engine *Engine,
+	stepID string,
+	collector *resultGroupCollector,
+	callID string,
+) error {
+	outcome := resultGroupReportOutcome(0)
+	return engine.steer(
+		stepID,
+		steerResultGroupReportIntent(
+			collector,
+			callID,
+			testResultGroupUnit(callID),
+			&outcome,
+		),
+		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
+	)
+}
 
 func testResultGroupCollector(t *testing.T, callIDs ...string) *resultGroupCollector {
 	t.Helper()
@@ -385,5 +486,227 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 	}
 	if len(completed) != 2 || completed[0] != "first" || completed[1] != "second" {
 		t.Fatalf("completion event order = %v, want first then second", completed)
+	}
+}
+
+func TestResultGroupFlushPreCommitFailureProjectsNothingAndDoesNotRetryOnClose(t *testing.T) {
+	observer := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithDurabilityObserver(observer),
+	)
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	prepareSimpleResultGroupCall(t, engine, "step", "failed")
+	events = nil
+	collector := testResultGroupCollector(t, "failed")
+	appendsBefore, _ := observer.snapshot()
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "failed")
+	var fatal resultGroupFatal
+	if !errors.As(err, &fatal) || fatal.Committed {
+		t.Fatalf("pre-commit result group error = %v, want uncommitted fatal", err)
+	}
+	if collector.cursor != 0 || len(events) != 0 {
+		t.Fatalf(
+			"pre-commit result group cursor=%d events=%+v, want no projection",
+			collector.cursor,
+			events,
+		)
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event-log blocker: %v", err)
+	}
+	appendsAfterFailure, _ := observer.snapshot()
+	if len(appendsAfterFailure) != len(appendsBefore)+1 {
+		t.Fatalf(
+			"pre-commit append attempts = %d, want one after %d",
+			len(appendsAfterFailure),
+			len(appendsBefore),
+		)
+	}
+	var closeFatal *resultGroupFatal
+	if closeErr := engine.steer(
+		"step",
+		steerResultGroupCloseIntent(collector),
+	); !errors.As(closeErr, &closeFatal) {
+		t.Fatalf("close aborted result group error = %v, want original fatal", closeErr)
+	}
+	appendsAfterClose, _ := observer.snapshot()
+	if len(appendsAfterClose) != len(appendsAfterFailure) {
+		t.Fatalf(
+			"close retried aborted result group: appends=%d, want %d",
+			len(appendsAfterClose),
+			len(appendsAfterFailure),
+		)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read pre-commit records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord:
+			if payload.CallID == "failed" {
+				t.Fatalf("pre-commit failure persisted completion: %+v", payload)
+			}
+		case session.MessageRecord:
+			if payload.Role == session.MessageRoleTool &&
+				payload.ToolCallID != nil &&
+				*payload.ToolCallID == "failed" {
+				t.Fatalf("pre-commit failure persisted output: %+v", payload)
+			}
+		}
+	}
+	if _, openErr := session.Open(
+		store.Dir(),
+		runtimeTestSessionPersistence.Options()...,
+	); openErr != nil {
+		t.Fatalf("reopen after pre-commit result group failure: %v", openErr)
+	}
+}
+
+func TestResultGroupCommittedObserverFailureProjectsOnceAndStoresFatal(t *testing.T) {
+	observerErr := errors.New("result group observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+		session.WithDurabilityObserver(durability),
+	)
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	prepareSimpleResultGroupCall(t, engine, "step", "observer")
+	events = nil
+	collector := testResultGroupCollector(t, "observer")
+	appendsBefore, _ := durability.snapshot()
+	gate.FailNext(observerErr)
+
+	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "observer")
+	var fatal resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		!fatal.Committed ||
+		!errors.Is(fatal.Cause, observerErr) {
+		t.Fatalf("committed observer result group error = %v", err)
+	}
+	if collector.cursor != 1 ||
+		len(events) != 1 ||
+		events[0].Kind != EventToolCallCompleted {
+		t.Fatalf(
+			"committed observer projection cursor=%d events=%+v",
+			collector.cursor,
+			events,
+		)
+	}
+	appendsAfterFailure, _ := durability.snapshot()
+	if len(appendsAfterFailure) != len(appendsBefore)+1 {
+		t.Fatalf(
+			"committed observer appends=%d, want one after %d",
+			len(appendsAfterFailure),
+			len(appendsBefore),
+		)
+	}
+	var closeFatal *resultGroupFatal
+	if closeErr := engine.steer(
+		"step",
+		steerResultGroupCloseIntent(collector),
+	); !errors.As(closeErr, &closeFatal) {
+		t.Fatalf("close committed-observer group error = %v", closeErr)
+	}
+	appendsAfterClose, _ := durability.snapshot()
+	if len(appendsAfterClose) != len(appendsAfterFailure) {
+		t.Fatalf(
+			"close reappended committed group: appends=%d, want %d",
+			len(appendsAfterClose),
+			len(appendsAfterFailure),
+		)
+	}
+}
+
+func TestResultGroupCommittedProjectionFailureEmitsNothingAndHydratesOnce(t *testing.T) {
+	callbackObserver := newCallbackPersistenceObserver(
+		runtimeTestSessionPersistence,
+	)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(callbackObserver),
+	)
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	prepareSimpleResultGroupCall(t, engine, "step", "projection")
+	events = nil
+	collector := testResultGroupCollector(t, "projection")
+	callbackObserver.Arm(func() {
+		engine.transcriptRuntimeState().CompleteLiveTool("projection")
+	})
+
+	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "projection")
+	var fatal resultGroupFatal
+	if !errors.As(err, &fatal) || !fatal.Committed {
+		t.Fatalf("committed projection result group error = %v", err)
+	}
+	if collector.cursor != 1 || len(events) != 0 {
+		t.Fatalf(
+			"committed projection failure cursor=%d events=%+v, want cursor 1 and no events",
+			collector.cursor,
+			events,
+		)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(
+		t,
+		reopened,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	snapshot := mustTranscriptHydrationSnapshot(t, restored)
+	toolRows := 0
+	for _, row := range snapshot.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactTool &&
+			row.Tool != nil &&
+			row.Tool.ToolCallID == "projection" {
+			toolRows++
+		}
+	}
+	if toolRows != 1 {
+		t.Fatalf(
+			"rehydrated projection-failure tool rows = %d, want 1: %+v",
+			toolRows,
+			snapshot.CommittedRows,
+		)
 	}
 }

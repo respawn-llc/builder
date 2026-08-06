@@ -557,6 +557,16 @@ func (e *Engine) applyResultGroupProjection(
 	}
 	projected := make([]projectedResultGroupUnit, 0, len(plan.units))
 	for _, unit := range plan.units {
+		if _, live := e.transcriptRuntimeState().liveToolLedger().Lookup(
+			unit.completion.Result.CallID,
+		); !live {
+			return fmt.Errorf(
+				"project committed result group: live tool call %q is unavailable",
+				unit.completion.Result.CallID,
+			)
+		}
+	}
+	for _, unit := range plan.units {
 		completionProvenance, err := transcriptProvenanceFromRecord(
 			records[unit.completionRecordIndex],
 		)
