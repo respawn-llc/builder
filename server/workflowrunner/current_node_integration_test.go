@@ -695,6 +695,13 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 			)
 		}
 	}
+	for _, item := range requests[2].Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeCompactionSoonReminder {
+			t.Fatal("loop reassignment request included a same-assignment compaction reminder")
+		}
+	}
 }
 
 func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) {
@@ -934,7 +941,7 @@ func TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	threshold := 1
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
-	workflowID := createCurrentNodeThreeStepWorkflowWithFinalTransition(
+	workflowID := createCurrentNodeThreeStepWorkflowWithTransition(
 		t,
 		f.store,
 		"Ordinary post-turn continuation",
@@ -1813,18 +1820,6 @@ func createCurrentNodeThreeStepWorkflow(
 			requiresApproval: true,
 			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
 		},
-	)
-}
-
-func createCurrentNodeThreeStepWorkflowWithFinalTransition(
-	t *testing.T,
-	store *workflowstore.Store,
-	name string,
-	first, second, third currentNodeWorkflowStep,
-	finalTransition currentNodeLinearTransition,
-) runtimeids.WorkflowID {
-	return createCurrentNodeThreeStepWorkflowWithTransition(
-		t, store, name, first, second, third, finalTransition,
 	)
 }
 
