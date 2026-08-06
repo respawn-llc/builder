@@ -1,5 +1,4 @@
 import { canonicalBoardFilter, type BoardFilterInput } from "@/api";
-import type { TaskSearchScope } from "./taskSearchScope";
 
 const attentionKey = ["attention"] as const;
 
@@ -47,7 +46,6 @@ export const queryKeys = {
   allTasks: ["task"],
   allTaskLists: ["task-list"],
   allTaskSearches: ["task-search"],
-  globalTaskSearches: ["task-search", "global"],
   allBoardNodeCards: ["board-node-cards"],
   allProjectLabels: ["project-labels"],
   allTaskLabels: ["task-labels"],
@@ -113,13 +111,8 @@ export const queryKeys = {
     nodeID,
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
-  projectTaskSearches: (projectID: string) => ["task-search", "project", projectID],
-  taskSearch: (scope: TaskSearchScope, query: string) => [
-    "task-search",
-    scope.kind,
-    scope.kind === "project" ? scope.projectID : null,
-    query,
-  ],
+  projectTaskSearches: (projectID: string) => ["task-search", projectID],
+  taskSearch: (projectID: string | null, query: string) => ["task-search", projectID, query],
   task: (taskID: string) => ["task", taskID],
   taskDependencies: (taskID: string, direction?: string) => ["task-dependencies", taskID, direction ?? null],
   taskAttention: (taskID: string) => ["task-attention", taskID],

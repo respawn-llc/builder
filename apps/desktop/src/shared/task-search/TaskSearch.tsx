@@ -1,9 +1,7 @@
 import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { SearchIcon } from "lucide-react";
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useId,
   useMemo,
@@ -11,223 +9,90 @@ import {
   useState,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
   type RefObject,
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { TaskSearchError, errorMessage } from "@/api";
+import { TaskSearchError, errorMessage, type TaskSearchGroup, type TaskSearchResponse } from "@/api";
+import { queryKeys, useAppServices, useRetainedQueryData, useTaskSearchMemory } from "@/app-facade";
 import {
-  queryKeys,
-  taskSearchScopesEqual,
-  useSidebar,
-  useAppServices,
-  useTaskSearchMemory,
-  type TaskSearchScope,
-} from "@/app-facade";
-import {
+  Button,
   CommandPaletteDialog,
   ErrorState,
   InfiniteListBoundary,
   InteractiveChip,
   VirtualizedInfiniteList,
-  useStableCallback,
+  type VirtualizedInfiniteListBoundaryState,
 } from "@/ui";
-import { useRetainedQueryData } from "@/app-facade";
 import {
   adjacentSearchResult,
   useTaskSearchSelection,
   type TaskSearchScrollRequest,
 } from "./taskSearchSelection";
 import { TaskSearchResultRow, type TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
-import {
-  flattenSearchResults,
-  SearchRefreshError,
-  searchBoundaryState,
-  searchSelectionDirection,
-  taskSearchDialogHeight,
-  taskSearchOptionID,
-  taskSearchResultEstimatedHeight,
-  type SearchPage,
-} from "./taskSearchPresentation";
-import { useDebouncedText, useTaskSearchShortcuts } from "./taskSearchShortcuts";
 
 const searchDebounceMs = 300;
 const taskSearchPageSize = 40;
 const retainedTaskSearchPages = 3;
 const taskSearchContext = 20;
+const taskSearchInputHeight = 56;
+const taskSearchResultEstimatedHeight = 154;
+const taskSearchResultAreaPadding = 16;
+const taskSearchDialogMaximumHeight = 560;
+const taskSearchLoadingDialogHeight = 176;
+const taskSearchErrorDialogHeight = 240;
 
-export type TaskSearchActivationPolicy =
-  | Readonly<{ kind: "project"; onOpenTask(taskID: string): void; ownerKey: string }>
-  | Readonly<{ kind: "sidebar" }>;
-
-export type TaskSearchInvocation = Readonly<{
-  scope: TaskSearchScope;
-  activation: TaskSearchActivationPolicy;
+type SearchPage = Readonly<{
+  offset: number | null;
+  projectID: string | null;
+  query: string;
+  response: TaskSearchResponse;
 }>;
 
-type TaskSearchController = Readonly<{
-  activeInvocation: TaskSearchInvocation | null;
-  cancelSearch(): void;
-  closeSearch(): void;
-  openSearch(invocation: TaskSearchInvocation): void;
-  searchOpen: boolean;
-}>;
-
-const TaskSearchControllerContext = createContext<TaskSearchController | null>(null);
-
-export function TaskSearchProvider({ children }: Readonly<{ children: ReactNode }>) {
-  const [state, setState] = useState<Pick<TaskSearchController, "activeInvocation" | "searchOpen">>({
-    activeInvocation: null,
-    searchOpen: false,
-  });
-  const cancelSearch = useCallback(() => {
-    setState({ activeInvocation: null, searchOpen: false });
-  }, []);
-  const closeSearch = useCallback(() => {
-    setState((current) => ({ ...current, searchOpen: false }));
-  }, []);
-  const openSearch = useCallback((activeInvocation: TaskSearchInvocation) => {
-    setState({ activeInvocation, searchOpen: true });
-  }, []);
-  return (
-    <TaskSearchControllerContext.Provider
-      value={useMemo(
-        () => ({ ...state, cancelSearch, closeSearch, openSearch }),
-        [cancelSearch, closeSearch, openSearch, state],
-      )}
-    >
-      {children}
-    </TaskSearchControllerContext.Provider>
-  );
-}
-
-function useTaskSearchController(): TaskSearchController {
-  const controller = useContext(TaskSearchControllerContext);
-  if (controller === null) {
-    throw new Error("Task Search requires TaskSearchProvider.");
-  }
-  return controller;
-}
-
-export function TaskSearchProjectTrigger({
-  ownerKey,
+export function BoardTaskSearchChrome({
+  compact = false,
+  enableShortcuts = true,
   projectID,
   onOpenTask,
 }: Readonly<{
-  ownerKey: string;
-  projectID: string;
+  compact?: boolean;
+  enableShortcuts?: boolean;
+  projectID: string | null;
   onOpenTask(taskID: string): void;
 }>) {
   const { t } = useTranslation();
-  const { activeInvocation, cancelSearch, openSearch, searchOpen } = useTaskSearchController();
-  const scope: TaskSearchScope = { kind: "project", projectID };
-  const isOpen =
-    searchOpen && activeInvocation !== null && taskSearchScopesEqual(activeInvocation.scope, scope);
-  const activeInvocationRef = useRef(activeInvocation);
-  useEffect(() => {
-    activeInvocationRef.current = activeInvocation;
-  }, [activeInvocation]);
-  useEffect(
-    () => () => {
-      const current = activeInvocationRef.current;
-      if (
-        current?.activation.kind === "project" &&
-        current.activation.ownerKey === ownerKey
-      ) {
-        cancelSearch();
-      }
-    },
-    [cancelSearch, ownerKey],
-  );
-
-  return (
-    <InteractiveChip
-      aria-label={t("taskSearch.open")}
-      onClick={() => {
-        openSearch({
-          activation: { kind: "project", onOpenTask, ownerKey },
-          scope,
-        });
-      }}
-      selected={isOpen}
-      style={{ paddingInline: "var(--space-3)" }}
-      tone={isOpen ? "primary" : "neutral"}
-    >
-      <SearchIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-      {t("taskSearch.open")}
-    </InteractiveChip>
-  );
-}
-
-export function TaskSearchGlobalTrigger() {
-  const { t } = useTranslation();
-  const { openSearch } = useTaskSearchController();
-  return (
-    <button
-      aria-label={t("taskSearch.open")}
-      className="grid h-6 w-6 place-items-center rounded-full border border-transparent bg-transparent text-[var(--color-on-island)]"
-      data-testid="app-chrome-search"
-      onClick={() => {
-        openSearch({ activation: { kind: "sidebar" }, scope: { kind: "global" } });
-      }}
-      type="button"
-    >
-      <SearchIcon aria-hidden="true" size={16} strokeWidth={1.25} />
-    </button>
-  );
-}
-
-export function TaskSearchHost() {
-  const { activeInvocation, closeSearch, openSearch, searchOpen } = useTaskSearchController();
-  const { activeDestination, openSidebar, phase, replaceSidebar } = useSidebar();
   const memory = useTaskSearchMemory();
+  const [open, setOpen] = useState(false);
   const pendingTaskIDRef = useRef<string | null>(null);
-  const invocation = activeInvocation ?? {
-    activation: { kind: "sidebar" as const },
-    scope: { kind: "global" as const },
-  };
   const query = memory.query;
   const debouncedQuery = useDebouncedText(query, searchDebounceMs);
-  const search = useTaskSearch(invocation.scope, searchOpen, debouncedQuery);
-  const selection = useTaskSearchSelection(invocation.scope, search.displayedQuery, search.results);
-  useEffect(() => {
-    pendingTaskIDRef.current = null;
-  }, [activeInvocation]);
-  const restoreToken = searchOpen
-    ? invocation.scope.kind === "project"
-      ? `project:${invocation.scope.projectID}`
-      : "global"
-    : "closed";
+  const search = useBoardTaskSearch(projectID, open, debouncedQuery);
+  const selection = useTaskSearchSelection(projectID, search.displayedQuery, search.results);
+  const revealActiveSelection = selection.revealActive;
+
+  const close = useCallback((): void => {
+    setOpen(false);
+  }, []);
   const activate = useCallback(
     (result: SearchResult): void => {
       pendingTaskIDRef.current = result.group.taskID;
-      closeSearch();
+      close();
     },
-    [closeSearch],
+    [close],
   );
   const completeClose = useCallback((): void => {
     const taskID = pendingTaskIDRef.current;
     pendingTaskIDRef.current = null;
-    if (taskID === null || activeInvocation === null) {
-      return;
+    if (taskID !== null) {
+      onOpenTask(taskID);
     }
-    if (activeInvocation.activation.kind === "project") {
-      activeInvocation.activation.onOpenTask(taskID);
-      return;
-    }
-    const destination = { kind: "taskDetail" as const, mode: "overlay" as const, taskID };
-    if (activeDestination?.kind === "taskDetail" && phase === "open") {
-      replaceSidebar(destination);
-      return;
-    }
-    void openSidebar(destination);
-  }, [activeDestination, activeInvocation, openSidebar, phase, replaceSidebar]);
-  const openGlobalSearch = useCallback((): void => {
+  }, [onOpenTask]);
+  const openSearch = useCallback((): void => {
     pendingTaskIDRef.current = null;
-    openSearch({ activation: { kind: "sidebar" }, scope: { kind: "global" } });
-  }, [openSearch]);
-  useTaskSearchShortcuts(openGlobalSearch);
+    revealActiveSelection();
+    setOpen(true);
+  }, [revealActiveSelection]);
+  useTaskSearchShortcuts(enableShortcuts ? openSearch : null);
   const moveSelection = useCallback(
     (direction: -1 | 1): void => {
       const next = adjacentSearchResult(search.results, selection.activeKey, direction);
@@ -238,26 +103,73 @@ export function TaskSearchHost() {
     [search.results, selection],
   );
 
-  if (activeInvocation === null) {
-    return null;
-  }
   return (
-    <TaskSearchDialog
-      onActivate={activate}
-      onClose={closeSearch}
-      onExitComplete={completeClose}
-      onMoveSelection={moveSelection}
-      onQueryChange={memory.setQuery}
-      open={searchOpen}
-      query={query}
-      restoreToken={restoreToken}
-      search={search}
-      selection={selection}
-    />
+    <>
+      <InteractiveChip
+        aria-label={t("taskSearch.open")}
+        onClick={openSearch}
+        selected={open}
+        style={{ paddingInline: "var(--space-3)" }}
+        tone={open ? "primary" : "neutral"}
+      >
+        <SearchIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
+        {compact ? null : t("taskSearch.open")}
+      </InteractiveChip>
+      <TaskSearchDialog
+        onActivate={activate}
+        onClose={close}
+        onExitComplete={completeClose}
+        onMoveSelection={moveSelection}
+        onQueryChange={memory.setQuery}
+        open={open}
+        query={query}
+        search={search}
+        selection={selection}
+      />
+    </>
   );
 }
 
-function useTaskSearch(scope: TaskSearchScope, open: boolean, debouncedQuery: string) {
+function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (onOpen === null || !isTaskSearchShortcut(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (!event.repeat) {
+        onOpen();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onOpen]);
+}
+
+function isTaskSearchShortcut(event: globalThis.KeyboardEvent): boolean {
+  const saveShortcut =
+    (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyS";
+  const altSpaceShortcut =
+    event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && event.code === "Space";
+  return saveShortcut || altSpaceShortcut;
+}
+
+function useDebouncedText(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebounced(value);
+    }, delayMs);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [delayMs, value]);
+  return debounced;
+}
+
+function useBoardTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
   const { api } = useAppServices();
   const trimmedQuery = debouncedQuery.trim();
   const searchable = Array.from(trimmedQuery).length >= 3;
@@ -265,13 +177,13 @@ function useTaskSearch(scope: TaskSearchScope, open: boolean, debouncedQuery: st
     SearchPage,
     Error,
     InfiniteData<SearchPage, number | null>,
-    readonly unknown[],
+    readonly (string | null)[],
     number | null
   >({
-    queryKey: queryKeys.taskSearch(scope, trimmedQuery),
-    queryFn: async ({ pageParam, signal }) => ({
+    queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
+    queryFn: async ({ pageParam }) => ({
       offset: pageParam,
-      scope,
+      projectID,
       query: trimmedQuery,
       response: await api.searchTasks(
         {
@@ -280,11 +192,10 @@ function useTaskSearch(scope: TaskSearchScope, open: boolean, debouncedQuery: st
           context: taskSearchContext,
           caseSensitive: false,
           includeComments: true,
-          ...(scope.kind === "project" ? { projectIDs: [scope.projectID] } : {}),
+          ...(projectID === null ? {} : { projectIDs: [projectID] }),
           pageSize: taskSearchPageSize,
           offset: pageParam ?? undefined,
         },
-        signal,
       ),
     }),
     initialPageParam: null,
@@ -293,7 +204,7 @@ function useTaskSearch(scope: TaskSearchScope, open: boolean, debouncedQuery: st
     maxPages: retainedTaskSearchPages,
     retry: (failureCount, error) => !(error instanceof TaskSearchError) && failureCount < 1,
   });
-  const retainedData = useRetainedQueryData(scope, request.data, taskSearchScopesEqual);
+  const retainedData = useRetainedQueryData({ projectID }, request.data, sameTaskSearchProject);
   const normalizedTooShort = request.error instanceof TaskSearchError;
   const visibleData = searchable && !normalizedTooShort ? retainedData : undefined;
   const paginationUsesVisibleData = visibleData !== undefined && visibleData === request.data;
@@ -316,7 +227,6 @@ function TaskSearchDialog({
   onQueryChange,
   open,
   query,
-  restoreToken,
   search,
   selection,
 }: Readonly<{
@@ -327,14 +237,12 @@ function TaskSearchDialog({
   onQueryChange(value: string): void;
   open: boolean;
   query: string;
-  restoreToken: string;
-  search: ReturnType<typeof useTaskSearch>;
+  search: ReturnType<typeof useBoardTaskSearch>;
   selection: ReturnType<typeof useTaskSearchSelection>;
 }>) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listID = useId();
-  const restoreSelection = useStableCallback(selection.revealActive);
   const resultsVisible = search.results.length > 0;
   const loadingVisible = search.searchable && search.request.isFetching && search.results.length === 0;
   const errorVisible = search.request.isError && !search.normalizedTooShort && search.results.length === 0;
@@ -372,8 +280,6 @@ function TaskSearchDialog({
         listID={listID}
         onActivate={onActivate}
         onSelect={selection.select}
-        restoreSelection={restoreSelection}
-        restoreToken={restoreToken}
         search={search}
         scrollRequest={selection.scrollRequest}
         selectedKey={selection.activeKey}
@@ -479,8 +385,6 @@ function TaskSearchResults({
   listID,
   onActivate,
   onSelect,
-  restoreSelection,
-  restoreToken,
   search,
   scrollRequest,
   selectedKey,
@@ -488,9 +392,7 @@ function TaskSearchResults({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
-  restoreSelection(): void;
-  restoreToken: string;
-  search: ReturnType<typeof useTaskSearch>;
+  search: ReturnType<typeof useBoardTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
 }>) {
@@ -528,8 +430,6 @@ function TaskSearchResults({
       listID={listID}
       onActivate={onActivate}
       onSelect={onSelect}
-      restoreSelection={restoreSelection}
-      restoreToken={restoreToken}
       search={search}
       scrollRequest={scrollRequest}
       selectedKey={selectedKey}
@@ -541,8 +441,6 @@ function TaskSearchResultList({
   listID,
   onActivate,
   onSelect,
-  restoreSelection,
-  restoreToken,
   search,
   scrollRequest,
   selectedKey,
@@ -550,9 +448,7 @@ function TaskSearchResultList({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
-  restoreSelection(): void;
-  restoreToken: string;
-  search: ReturnType<typeof useTaskSearch>;
+  search: ReturnType<typeof useBoardTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
 }>) {
@@ -590,9 +486,6 @@ function TaskSearchResultList({
     [onSelect, selectedKey],
   );
   const immediateScrollRequest = scrollRequest?.behavior === "auto" ? scrollRequest : null;
-  useEffect(() => {
-    restoreSelection();
-  }, [restoreSelection, restoreToken]);
   return (
     <VirtualizedInfiniteList
       ariaLabel={t("taskSearch.results")}
@@ -607,11 +500,7 @@ function TaskSearchResultList({
       initialScrollRequestKey={immediateScrollRequest?.requestID.toString()}
       isFetchingNextPage={search.paginationUsesVisibleData && search.request.isFetchingNextPage}
       items={search.results}
-      loadMoreKey={
-        search.paginationUsesVisibleData
-          ? search.request.data?.pages.at(-1)?.response.nextOffset?.toString()
-          : undefined
-      }
+      loadMoreKey={search.paginationUsesVisibleData ? taskSearchNextOffset(search) : undefined}
       loadingLabel={t("taskSearch.searching")}
       nextBoundary={searchBoundaryState(search, boundaryCopy)}
       onLoadMore={() => {
@@ -639,4 +528,145 @@ function TaskSearchResultList({
       testId={listID}
     />
   );
+}
+
+function taskSearchDialogHeight(resultCount: number, loadingVisible: boolean, errorVisible: boolean): number {
+  if (resultCount > 0) {
+    return Math.min(
+      taskSearchDialogMaximumHeight,
+      taskSearchInputHeight + taskSearchResultAreaPadding + resultCount * taskSearchResultEstimatedHeight,
+    );
+  }
+  if (loadingVisible) {
+    return taskSearchLoadingDialogHeight;
+  }
+  return errorVisible ? taskSearchErrorDialogHeight : taskSearchInputHeight;
+}
+
+function taskSearchNextOffset(search: ReturnType<typeof useBoardTaskSearch>): string | undefined {
+  const nextOffset = search.request.data?.pages.at(-1)?.response.nextOffset;
+  return nextOffset == null ? undefined : nextOffset.toString();
+}
+
+function SearchRefreshError({
+  message,
+  onRetry,
+}: Readonly<{
+  message: string;
+  onRetry(): void;
+}>) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex items-center justify-between gap-[var(--space-3)] px-[var(--space-3)] py-[var(--space-2)] text-sm text-[var(--color-error)]"
+      role="alert"
+    >
+      <span className="min-w-0 truncate">{message}</span>
+      <Button className="shrink-0 font-semibold" onClick={onRetry} variant="ghost">
+        {t("app.retry")}
+      </Button>
+    </div>
+  );
+}
+
+function flattenSearchResults(
+  data: InfiniteData<SearchPage, number | null> | undefined,
+): readonly SearchResult[] {
+  if (data === undefined) {
+    return [];
+  }
+  return data.pages.flatMap((page) =>
+    page.response.groups.map((group, groupIndex) => ({
+      key: taskSearchResultKey(page, group, groupIndex),
+      group,
+    })),
+  );
+}
+
+function taskSearchResultKey(page: SearchPage, group: TaskSearchGroup, groupIndex: number): string {
+  const firstOrdinal = group.hits[0]?.ordinal;
+  if (firstOrdinal === undefined) {
+    throw new Error(`Task Search group ${group.taskID} at offset ${String(page.offset)} has no hits.`);
+  }
+  return [
+    group.projectID,
+    page.query,
+    String(page.offset),
+    groupIndex.toString(),
+    group.taskID,
+    firstOrdinal.toString(),
+  ].join(":");
+}
+
+function taskSearchOptionID(listID: string, resultKey: string): string {
+  return `${listID}-option-${resultKey}`;
+}
+
+function searchSelectionDirection(key: string): -1 | 1 | null {
+  if (key === "ArrowDown") {
+    return 1;
+  }
+  if (key === "ArrowUp") {
+    return -1;
+  }
+  return null;
+}
+
+function sameTaskSearchProject(
+  left: Readonly<{ projectID: string | null }>,
+  right: Readonly<{ projectID: string | null }>,
+): boolean {
+  return left.projectID === right.projectID;
+}
+
+function searchBoundaryState(
+  search: ReturnType<typeof useBoardTaskSearch>,
+  copy: Readonly<{
+    errorMessage: string;
+    loadingLabel: string;
+    retryLabel: string;
+  }>,
+): VirtualizedInfiniteListBoundaryState | undefined {
+  if (!search.paginationUsesVisibleData) {
+    return undefined;
+  }
+  return taskSearchBoundaryState({
+    error: search.request.isFetchNextPageError ? search.request.error : null,
+    loading: search.request.isFetchingNextPage,
+    loadingLabel: copy.loadingLabel,
+    errorMessage: copy.errorMessage,
+    retryLabel: copy.retryLabel,
+    onRetry: () => {
+      void search.request.fetchNextPage();
+    },
+  });
+}
+
+function taskSearchBoundaryState({
+  error,
+  loading,
+  loadingLabel,
+  errorMessage: boundaryErrorMessage,
+  retryLabel,
+  onRetry,
+}: Readonly<{
+  error: Error | null;
+  loading: boolean;
+  loadingLabel: string;
+  errorMessage: string;
+  retryLabel: string;
+  onRetry(): void;
+}>): VirtualizedInfiniteListBoundaryState | undefined {
+  if (loading) {
+    return { state: "loading", label: loadingLabel };
+  }
+  if (error !== null) {
+    return {
+      state: "error",
+      message: `${boundaryErrorMessage} ${errorMessage(error)}`,
+      retryLabel,
+      onRetry,
+    };
+  }
+  return undefined;
 }

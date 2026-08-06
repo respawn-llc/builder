@@ -59,7 +59,6 @@ export {
   createTauriCapabilities,
   normalizeNativePlatform,
   type NativeCapabilityState,
-  type NativeHostPlatform,
   type NativePlatform,
 } from "./capabilities";
 export { NativeNotificationIDMapper, type NativeNotificationBackendID } from "./notificationIds";

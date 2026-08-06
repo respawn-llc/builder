@@ -10,10 +10,6 @@ export async function invalidateProjectTaskSearches(
     queryKey: queryKeys.projectTaskSearches(projectID),
     refetchType: "active",
   });
-  await queryClient.invalidateQueries({
-    queryKey: queryKeys.globalTaskSearches,
-    refetchType: "active",
-  });
 }
 
 export async function invalidateAllTaskSearches(queryClient: QueryClient): Promise<void> {
@@ -23,13 +19,6 @@ export async function invalidateAllTaskSearches(queryClient: QueryClient): Promi
   });
 }
 
-export async function removeProjectTaskSearches(
-  queryClient: QueryClient,
-  projectID: string,
-): Promise<void> {
+export function removeProjectTaskSearches(queryClient: QueryClient, projectID: string): void {
   queryClient.removeQueries({ queryKey: queryKeys.projectTaskSearches(projectID) });
-  await queryClient.invalidateQueries({
-    queryKey: queryKeys.globalTaskSearches,
-    refetchType: "active",
-  });
 }

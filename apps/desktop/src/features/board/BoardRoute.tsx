@@ -44,7 +44,7 @@ import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { BoardFilterChrome, BoardMembershipRefreshBinding } from "./BoardLabelFilter";
-import { TaskSearchProjectTrigger } from "@/shared/task-search";
+import { BoardTaskSearchChrome } from "@/shared/task-search/TaskSearch";
 import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
@@ -567,11 +567,7 @@ function BoardContent({
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
         <BoardFilterChrome />
-        <TaskSearchProjectTrigger
-          onOpenTask={openTask}
-          ownerKey={`${board.projectID}:${board.selectedWorkflow.id}`}
-          projectID={board.projectID}
-        />
+        <BoardTaskSearchChrome enableShortcuts={false} onOpenTask={openTask} projectID={board.projectID} />
       </div>
       <div className="relative min-h-0 min-w-0 flex-1">
         <div

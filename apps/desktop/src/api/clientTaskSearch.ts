@@ -8,13 +8,12 @@ import type { RpcTransport } from "./transport";
 export async function searchTasks(
   transport: RpcTransport,
   input: TaskSearchInput,
-  signal?: AbortSignal,
 ): Promise<TaskSearchResponse> {
   try {
     return parseRpcResponse(
       "workflow.task.search",
       taskSearchResponseSchema,
-      await transport.callDedicated(
+      await transport.call(
         "workflow.task.search",
         compactJsonObject({
           mode: input.mode,
@@ -27,7 +26,6 @@ export async function searchTasks(
           page_size: input.pageSize,
           offset: input.offset,
         }),
-        signal === undefined ? undefined : { signal },
       ),
     );
   } catch (error) {

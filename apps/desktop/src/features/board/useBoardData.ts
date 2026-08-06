@@ -16,8 +16,8 @@ import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
-import { useRetainedQueryData } from "@/app-facade";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
+import { useRetainedQueryData } from "@/app-facade";
 import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {

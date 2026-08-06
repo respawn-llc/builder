@@ -1,9 +1,7 @@
 export type NativePlatform = "browser" | "linux" | "macos" | "unknown" | "windows";
-export type NativeHostPlatform = Exclude<NativePlatform, "browser">;
 
 export type NativeCapabilityState = Readonly<{
   platform: NativePlatform;
-  hostPlatform: NativeHostPlatform;
   clipboard: Readonly<{
     writeText: boolean;
     readText: boolean;
@@ -38,7 +36,6 @@ export type NativeCapabilityState = Readonly<{
 
 const unavailableCapabilities: NativeCapabilityState = {
   platform: "browser",
-  hostPlatform: "unknown",
   clipboard: {
     writeText: false,
     readText: false,
@@ -72,17 +69,11 @@ const unavailableCapabilities: NativeCapabilityState = {
 };
 
 export function createBrowserCapabilities(platform: NativePlatform): NativeCapabilityState {
-  return {
-    ...unavailableCapabilities,
-    hostPlatform: platform === "browser" ? detectBrowserHostPlatform() : platform,
-    platform,
-    settings: true,
-  };
+  return { ...unavailableCapabilities, platform, settings: true };
 }
 
 export function createTauriCapabilities(platform: NativePlatform): NativeCapabilityState {
   return {
-    hostPlatform: nativeHostPlatform(platform),
     platform,
     clipboard: {
       writeText: true,
@@ -124,26 +115,6 @@ export function tauriPlatformSupportsNativeNotifications(platform: NativePlatfor
 export function normalizeNativePlatform(platform: string): NativePlatform {
   if (platform === "linux" || platform === "macos" || platform === "windows") {
     return platform;
-  }
-  return "unknown";
-}
-
-function nativeHostPlatform(platform: NativePlatform): NativeHostPlatform {
-  return platform === "browser" ? "unknown" : platform;
-}
-
-function detectBrowserHostPlatform(): NativeHostPlatform {
-  if (typeof navigator === "undefined") {
-    return "unknown";
-  }
-  if (navigator.platform === "MacIntel") {
-    return "macos";
-  }
-  if (navigator.platform === "Win32") {
-    return "windows";
-  }
-  if (navigator.platform === "Linux x86_64" || navigator.platform === "Linux armv8l") {
-    return "linux";
   }
   return "unknown";
 }
