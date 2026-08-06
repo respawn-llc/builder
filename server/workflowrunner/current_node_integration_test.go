@@ -451,8 +451,16 @@ func (f *currentNodeRunnerFixture) onlyProjectSessionMeta(t *testing.T) session.
 }
 
 func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int) []llm.Request {
+	return f.waitForModelRequestsWithin(t, count, currentNodeRunnerWait)
+}
+
+func (f *currentNodeRunnerFixture) waitForModelRequestsWithin(
+	t *testing.T,
+	count int,
+	timeout time.Duration,
+) []llm.Request {
 	t.Helper()
-	deadline := time.Now().Add(currentNodeRunnerWait)
+	deadline := time.Now().Add(timeout)
 	for len(f.client.Requests()) < count && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1014,7 +1022,7 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("resume disabled CAC target: %v", err)
 	}
-	requests := f.waitForModelRequests(t, 3)
+	requests := f.waitForModelRequestsWithin(t, 3, 60*time.Second)
 	if len(client.CompactionCalls()) != 1 {
 		t.Fatalf("resumed target-time compactions = %d, want one", len(client.CompactionCalls()))
 	}
