@@ -992,6 +992,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)

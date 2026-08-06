@@ -538,6 +538,7 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
@@ -848,6 +849,7 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)

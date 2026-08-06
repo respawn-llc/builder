@@ -488,6 +488,7 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     "task",
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
@@ -729,6 +730,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		CanonicalRoot:   worktreeRoot,
 		DisplayName:     filepath.Base(worktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
