@@ -822,9 +822,12 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 	if len(client.CompactionCalls()) != 1 {
 		t.Fatalf("CAC continuation compactions = %d, want committed source replacement only", len(client.CompactionCalls()))
 	}
-	if requests[2].PromptCacheKey == "" || requests[2].PromptCacheKey == requests[1].PromptCacheKey {
+	if requests[2].PromptCacheKey == "" ||
+		requests[2].PromptCacheKey == requests[0].PromptCacheKey ||
+		requests[2].PromptCacheKey == requests[1].PromptCacheKey {
 		t.Fatalf(
-			"CAC continuation cache keys = %q/%q, want one fresh key after committed replacement",
+			"CAC continuation cache keys = %q/%q/%q, want fresh key distinct from prior requests",
+			requests[0].PromptCacheKey,
 			requests[1].PromptCacheKey,
 			requests[2].PromptCacheKey,
 		)
@@ -2143,12 +2146,13 @@ func createCurrentNodeTwoStepWorkflow(
 	first currentNodeWorkflowStep,
 	second currentNodeWorkflowStep,
 ) runtimeids.WorkflowID {
-	return createCurrentNodeLinearWorkflow(
+	return createCurrentNodeTwoStepWorkflowWithTransition(
 		t,
 		store,
 		name,
-		[]currentNodeWorkflowStep{first, second},
-		[]currentNodeLinearTransition{{id: "next", mode: mode}},
+		first,
+		second,
+		currentNodeLinearTransition{id: "next", mode: mode},
 	)
 }
 
