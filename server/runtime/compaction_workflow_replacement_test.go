@@ -322,6 +322,15 @@ func TestWorkflowContinuationPreservesBoundaryAcrossFailedCACAttempt(t *testing.
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set post-completion replacement mode: %v", err)
 	}
+	headlessType := llm.MessageTypeHeadlessMode
+	if err := engine.steer("meta", steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleDeveloper, MessageType: &headlessType}},
+	)); err != nil {
+		t.Fatalf("steer canonical meta context: %v", err)
+	}
 
 	if _, err := engine.SubmitWorkflowContinuationTurn(context.Background()); !errors.Is(err, requestErr) {
 		t.Fatalf("first CAC attempt error = %v, want %v", err, requestErr)
@@ -373,22 +382,32 @@ func TestHistoryReplacementModeRejectsEmptyPresentValue(t *testing.T) {
 
 func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t *testing.T) {
 	t.Parallel()
-	preservedMessageTypes := []string{
-		string(llm.MessageTypeAgentsMD),
-		string(llm.MessageTypeSkills),
-		string(llm.MessageTypeSubagents),
-		string(llm.MessageTypeEnvironment),
-		string(llm.MessageTypeWorkflowMode),
-		string(llm.MessageTypeCompactionSoonReminder),
+	preservedMessageTypes := []llm.MessageType{
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeSkills,
+		llm.MessageTypeSubagents,
+		llm.MessageTypeEnvironment,
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeHeadlessModeExit,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeWorktreeModeExit,
+		llm.MessageTypeCompactionSoonReminder,
 	}
 	for _, messageType := range preservedMessageTypes {
-		t.Run(messageType, func(t *testing.T) {
+		t.Run(string(messageType), func(t *testing.T) {
 			state := newCompactionRuntimeState()
 			mode := session.CompactionModeWorkflowPostCompletion
 			if err := state.SetHistoryReplacementMode(&mode); err != nil {
 				t.Fatalf("set replacement mode: %v", err)
 			}
-			if activity := workflowPostCompletionMessageActivity(messageType); activity != workflowPostCompletionNoActivity {
+			message := llm.Message{
+				Role:        llm.RoleDeveloper,
+				MessageType: &messageType,
+				SourcePath:  textutil.Value("workflow-test"),
+			}
+			if activity := workflowPostCompletionMessageActivity(message); activity != workflowPostCompletionNoActivity {
 				t.Fatalf("meta message activity = %d, want no activity", activity)
 			}
 			state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionNoActivity)
@@ -403,12 +422,32 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 	if err := state.SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set replacement mode: %v", err)
 	}
-	if activity := workflowPostCompletionMessageActivity(""); activity != workflowPostCompletionDurableActivity {
+	if activity := workflowPostCompletionMessageActivity(llm.Message{Role: llm.RoleUser}); activity != workflowPostCompletionDurableActivity {
 		t.Fatalf("ordinary message activity = %d, want durable activity", activity)
 	}
 	if !state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity) ||
 		state.WorkflowPostCompletionBoundary() {
 		t.Fatal("ordinary activity did not consume the boundary exactly once")
+	}
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		queuedRestore: &steeringQueuedUserMessageRestore{},
+	}); activity != workflowPostCompletionNoActivity {
+		t.Fatalf("queued restore activity = %d, want no activity", activity)
+	}
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		goalNoticeAndStatus: &steeringGoalNoticeAndStatus{},
+	}); activity != workflowPostCompletionDurableActivity {
+		t.Fatalf("goal notice activity = %d, want durable activity", activity)
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set engine replacement mode: %v", err)
+	}
+	if err := engine.steer("restore", steerQueuedUserMessageRestoreIntent(nil)); err != nil {
+		t.Fatalf("steer queued restore: %v", err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("queued restore consumed the boundary")
 	}
 }
 

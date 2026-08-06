@@ -17,18 +17,17 @@ const (
 	workflowPostCompletionDurableActivity
 )
 
-func workflowPostCompletionMessageActivity(messageType string) workflowPostCompletionActivity {
-	switch llm.MessageType(messageType) {
-	case llm.MessageTypeAgentsMD,
-		llm.MessageTypeSkills,
-		llm.MessageTypeSubagents,
-		llm.MessageTypeEnvironment,
-		llm.MessageTypeWorkflowMode,
-		llm.MessageTypeCompactionSoonReminder:
-		return workflowPostCompletionNoActivity
-	default:
+func workflowPostCompletionMessageActivity(message llm.Message) workflowPostCompletionActivity {
+	if message.MessageType == nil {
 		return workflowPostCompletionDurableActivity
 	}
+	if *message.MessageType == llm.MessageTypeCompactionSoonReminder {
+		return workflowPostCompletionNoActivity
+	}
+	if _, ok := classifyMetaContextMessage(message); ok {
+		return workflowPostCompletionNoActivity
+	}
+	return workflowPostCompletionDurableActivity
 }
 
 type compactionRuntimeState struct {

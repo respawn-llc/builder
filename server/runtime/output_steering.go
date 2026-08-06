@@ -523,20 +523,16 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 
 func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPostCompletionActivity {
 	if item.message != nil {
-		messageType := ""
-		if item.message.message.MessageType != nil {
-			messageType = string(*item.message.message.MessageType)
-		}
-		return workflowPostCompletionMessageActivity(messageType)
+		return workflowPostCompletionMessageActivity(item.message.message)
 	}
 	if item.assistantCommit != nil ||
 		item.committedAssistant != nil ||
 		item.completedResponseResolution != nil ||
+		item.goalNoticeAndStatus != nil ||
 		item.reviewerFeedback != nil ||
 		item.reviewerError != nil ||
 		item.toolCompletion != nil ||
-		item.queuedFlush != nil ||
-		item.queuedRestore != nil {
+		item.queuedFlush != nil {
 		return workflowPostCompletionDurableActivity
 	}
 	return workflowPostCompletionNoActivity

@@ -59,6 +59,25 @@ type currentNodeRunnerClient interface {
 	Requests() []llm.Request
 }
 
+func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
+	return llm.CompactionResponse{
+		OutputItems: []llm.ResponseItem{
+			{
+				Type:        llm.ResponseItemTypeMessage,
+				Role:        textutil.Value(llm.RoleUser),
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value(summary),
+			},
+			{
+				Type:             llm.ResponseItemTypeCompaction,
+				ID:               textutil.Value("workflow-post-completion"),
+				EncryptedContent: textutil.Value("encrypted"),
+			},
+		},
+		Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+	}
+}
+
 type currentNodeRunnerStepLifecycle struct {
 	runtimes *registry.RuntimeRegistry
 }
@@ -884,6 +903,68 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	}
 }
 
+func TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("ordinary continuation")},
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_1","commentary":"first done"}`),
+			},
+		),
+		ScriptedToolBatch(
+			"complete second node",
+			llm.ToolCall{
+				ID:    "complete-second",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_2","commentary":"second done"}`),
+			},
+		),
+		ScriptedFinalAnswer(`{"commentary":"continued target done"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	threshold := 1
+	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
+	workflowID := createCurrentNodeThreeStepWorkflowWithFinalTransition(
+		t,
+		f.store,
+		"Ordinary post-turn continuation",
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the second node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Continue the work."},
+		currentNodeLinearTransition{
+			id:               "next_2",
+			mode:             workflow.ContextModeContinueSession,
+			requiresApproval: true,
+			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply ordinary continuation Approval: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 3)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("ordinary continuation post-completions = %d, want one", len(client.CompactionCalls()))
+	}
+	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
+		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
+		t.Fatalf("ordinary continuation cache keys = %q/%q, want replacement key after source key", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+	}
+}
+
 func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
@@ -1689,6 +1770,13 @@ type currentNodeWorkflowStep struct {
 	completionMode string
 }
 
+type currentNodeLinearTransition struct {
+	id               string
+	mode             workflow.ContextMode
+	requiresApproval bool
+	contextSource    workflow.ContextSource
+}
+
 func createCurrentNodeTwoStepWorkflow(
 	t *testing.T,
 	store *workflowstore.Store,
@@ -1697,74 +1785,13 @@ func createCurrentNodeTwoStepWorkflow(
 	first currentNodeWorkflowStep,
 	second currentNodeWorkflowStep,
 ) runtimeids.WorkflowID {
-	t.Helper()
-	ctx := context.Background()
-	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name})
-	if err != nil {
-		t.Fatalf("create workflow: %v", err)
-	}
-	definition, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("get workflow: %v", err)
-	}
-	var startID, doneID workflow.NodeID
-	for _, node := range definition.Nodes {
-		switch node.Kind() {
-		case workflow.NodeKindStart:
-			startID = workflow.NodeIDOf(node)
-		case workflow.NodeKindTerminal:
-			doneID = workflow.NodeIDOf(node)
-		}
-	}
-	firstID := workflow.NodeID("node-first-" + created.ID.String())
-	secondID := workflow.NodeID("node-second-" + created.ID.String())
-	for _, node := range []workflowstore.NodeRecord{
-		{
-			ID: firstID, WorkflowID: created.ID, Key: "first", Kind: first.kind, DisplayName: "First",
-			SubagentRole: first.role, ScriptPath: first.scriptPath,
-			CompletionMode: first.completionMode,
-		},
-		{
-			ID: secondID, WorkflowID: created.ID, Key: "second", Kind: second.kind, DisplayName: "Second",
-			SubagentRole: second.role, ScriptPath: second.scriptPath,
-			CompletionMode: second.completionMode,
-		},
-	} {
-		if _, err := store.AddNode(ctx, node); err != nil {
-			t.Fatalf("add node: %v", err)
-		}
-	}
-	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
-	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
-	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
-		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: firstID, TransitionID: "next", DisplayName: "Next"},
-		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: secondID, TransitionID: "done", DisplayName: "Done"},
-	} {
-		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
-			t.Fatalf("add transition group: %v", err)
-		}
-	}
-	for _, edge := range []workflowstore.EdgeRecord{
-		{
-			ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
-			TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID,
-			ContextMode: workflow.ContextModeNewSession, PromptTemplate: first.prompt,
-		},
-		{
-			ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID,
-			TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
-			ContextMode: mode, PromptTemplate: second.prompt,
-		},
-		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
-	} {
-		edge = normalizeWorkflowEdgeRecordForTest(edge)
-		if _, err := store.AddEdge(ctx, edge); err != nil {
-			t.Fatalf("add edge: %v", err)
-		}
-	}
-	return created.ID
+	return createCurrentNodeLinearWorkflow(
+		t,
+		store,
+		name,
+		[]currentNodeWorkflowStep{first, second},
+		[]currentNodeLinearTransition{{id: "next", mode: mode}},
+	)
 }
 
 func createCurrentNodeThreeStepWorkflow(
@@ -1773,7 +1800,64 @@ func createCurrentNodeThreeStepWorkflow(
 	name string,
 	first, second, third currentNodeWorkflowStep,
 ) runtimeids.WorkflowID {
+	return createCurrentNodeThreeStepWorkflowWithTransition(
+		t,
+		store,
+		name,
+		first,
+		second,
+		third,
+		currentNodeLinearTransition{
+			id:               "next_2",
+			mode:             workflow.ContextModeCompactAndContinueSession,
+			requiresApproval: true,
+			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		},
+	)
+}
+
+func createCurrentNodeThreeStepWorkflowWithFinalTransition(
+	t *testing.T,
+	store *workflowstore.Store,
+	name string,
+	first, second, third currentNodeWorkflowStep,
+	finalTransition currentNodeLinearTransition,
+) runtimeids.WorkflowID {
+	return createCurrentNodeThreeStepWorkflowWithTransition(
+		t, store, name, first, second, third, finalTransition,
+	)
+}
+
+func createCurrentNodeThreeStepWorkflowWithTransition(
+	t *testing.T,
+	store *workflowstore.Store,
+	name string,
+	first, second, third currentNodeWorkflowStep,
+	finalTransition currentNodeLinearTransition,
+) runtimeids.WorkflowID {
+	return createCurrentNodeLinearWorkflow(
+		t,
+		store,
+		name,
+		[]currentNodeWorkflowStep{first, second, third},
+		[]currentNodeLinearTransition{
+			{id: "next_1", mode: workflow.ContextModeNewSession},
+			finalTransition,
+		},
+	)
+}
+
+func createCurrentNodeLinearWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+	name string,
+	steps []currentNodeWorkflowStep,
+	transitions []currentNodeLinearTransition,
+) runtimeids.WorkflowID {
 	t.Helper()
+	if len(steps) < 2 || len(transitions) != len(steps)-1 {
+		t.Fatalf("linear workflow needs at least two steps and one transition per edge: steps=%d transitions=%d", len(steps), len(transitions))
+	}
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name})
 	if err != nil {
@@ -1792,16 +1876,13 @@ func createCurrentNodeThreeStepWorkflow(
 			doneID = workflow.NodeIDOf(node)
 		}
 	}
-	workflowSuffix := created.ID.String()
-	nodeIDs := []workflow.NodeID{
-		workflow.NodeID("node-first-" + workflowSuffix),
-		workflow.NodeID("node-second-" + workflowSuffix),
-		workflow.NodeID("node-third-" + workflowSuffix),
-	}
-	steps := []currentNodeWorkflowStep{first, second, third}
+	suffix := created.ID.String()
+	nodeIDs := make([]workflow.NodeID, len(steps))
 	for index, step := range steps {
+		nodeIDs[index] = workflow.NodeID(fmt.Sprintf("node-step-%d-%s", index+1, suffix))
 		if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
-			ID: nodeIDs[index], WorkflowID: created.ID, Key: workflow.ModelKey(fmt.Sprintf("step_%d", index+1)),
+			ID: nodeIDs[index], WorkflowID: created.ID,
+			Key:  workflow.ModelKey(fmt.Sprintf("step_%d", index+1)),
 			Kind: step.kind, DisplayName: fmt.Sprintf("Step %d", index+1),
 			SubagentRole: step.role, ScriptPath: step.scriptPath,
 			CompletionMode: step.completionMode,
@@ -1809,46 +1890,52 @@ func createCurrentNodeThreeStepWorkflow(
 			t.Fatalf("add workflow step %d: %v", index+1, err)
 		}
 	}
-	groupIDs := []workflow.TransitionGroupID{
-		workflow.TransitionGroupID("group-start-" + workflowSuffix),
-		workflow.TransitionGroupID("group-first-" + workflowSuffix),
-		workflow.TransitionGroupID("group-second-" + workflowSuffix),
-		workflow.TransitionGroupID("group-third-" + workflowSuffix),
+	groupIDs := make([]workflow.TransitionGroupID, len(steps)+1)
+	groupIDs[0] = workflow.TransitionGroupID("group-start-" + suffix)
+	for index, transition := range transitions {
+		groupIDs[index+1] = workflow.TransitionGroupID(fmt.Sprintf("group-%s-%s", transition.id, suffix))
 	}
-	groupSources := []workflow.NodeID{startID, nodeIDs[0], nodeIDs[1], nodeIDs[2]}
-	groupTransitions := []string{"start", "next_1", "next_2", "done"}
-	for index := range groupIDs {
+	groupIDs[len(steps)] = workflow.TransitionGroupID("group-done-" + suffix)
+	for index, groupID := range groupIDs {
+		sourceID := startID
+		transitionID := "start"
+		displayName := "Start"
+		if index > 0 && index <= len(transitions) {
+			sourceID = nodeIDs[index-1]
+			transitionID = transitions[index-1].id
+			displayName = transitionID
+		} else if index == len(groupIDs)-1 {
+			sourceID = nodeIDs[len(nodeIDs)-1]
+			transitionID = "done"
+			displayName = "Done"
+		}
 		if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
-			ID: groupIDs[index], WorkflowID: created.ID, SourceNodeID: groupSources[index],
-			TransitionID: workflow.TransitionID(groupTransitions[index]), DisplayName: groupTransitions[index],
+			ID: groupID, WorkflowID: created.ID, SourceNodeID: sourceID,
+			TransitionID: workflow.TransitionID(transitionID), DisplayName: displayName,
 		}); err != nil {
 			t.Fatalf("add workflow transition group %d: %v", index+1, err)
 		}
 	}
-	edges := []workflowstore.EdgeRecord{
-		{
-			ID: workflow.EdgeID("edge-start-" + workflowSuffix), WorkflowID: created.ID,
-			TransitionGroupID: groupIDs[0], Key: "start", TargetNodeID: nodeIDs[0],
-			ContextMode: workflow.ContextModeNewSession, PromptTemplate: first.prompt,
-		},
-		{
-			ID: workflow.EdgeID("edge-first-second-" + workflowSuffix), WorkflowID: created.ID,
-			TransitionGroupID: groupIDs[1], Key: "next_1", TargetNodeID: nodeIDs[1],
-			ContextMode: workflow.ContextModeNewSession, PromptTemplate: second.prompt,
-		},
-		{
-			ID: workflow.EdgeID("edge-second-third-" + workflowSuffix), WorkflowID: created.ID,
-			TransitionGroupID: groupIDs[2], Key: "next_2", TargetNodeID: nodeIDs[2],
-			ContextMode: workflow.ContextModeCompactAndContinueSession, RequiresApproval: true,
-			ContextSource:  workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
-			PromptTemplate: third.prompt,
-		},
-		{
-			ID: workflow.EdgeID("edge-third-done-" + workflowSuffix), WorkflowID: created.ID,
-			TransitionGroupID: groupIDs[3], Key: "done", TargetNodeID: doneID,
-			ContextMode: workflow.ContextModeNewSession,
-		},
+	edges := make([]workflowstore.EdgeRecord, 0, len(steps)+1)
+	edges = append(edges, workflowstore.EdgeRecord{
+		ID: workflow.EdgeID("edge-start-" + suffix), WorkflowID: created.ID,
+		TransitionGroupID: groupIDs[0], Key: "start", TargetNodeID: nodeIDs[0],
+		ContextMode: workflow.ContextModeNewSession, PromptTemplate: steps[0].prompt,
+	})
+	for index, transition := range transitions {
+		edges = append(edges, workflowstore.EdgeRecord{
+			ID:         workflow.EdgeID(fmt.Sprintf("edge-%s-%s", transition.id, suffix)),
+			WorkflowID: created.ID, TransitionGroupID: groupIDs[index+1],
+			Key: workflow.ModelKey(transition.id), TargetNodeID: nodeIDs[index+1],
+			ContextMode: transition.mode, RequiresApproval: transition.requiresApproval,
+			ContextSource: transition.contextSource, PromptTemplate: steps[index+1].prompt,
+		})
 	}
+	edges = append(edges, workflowstore.EdgeRecord{
+		ID: workflow.EdgeID("edge-done-" + suffix), WorkflowID: created.ID,
+		TransitionGroupID: groupIDs[len(groupIDs)-1], Key: "done",
+		TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession,
+	})
 	for _, edge := range edges {
 		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {

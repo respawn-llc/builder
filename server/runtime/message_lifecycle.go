@@ -251,11 +251,16 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 func workflowPostCompletionActivityForSessionRecord(payload any) workflowPostCompletionActivity {
 	switch record := payload.(type) {
 	case session.MessageRecord:
-		messageType := ""
-		if record.MessageType != nil {
-			messageType = string(*record.MessageType)
+		message := llm.Message{
+			Role:            llm.Role(record.Role),
+			SourcePath:      textutil.Pointer(record.SourcePath),
+			WorktreeContext: session.CloneWorktreeContext(record.WorktreeContext),
 		}
-		return workflowPostCompletionMessageActivity(messageType)
+		if record.MessageType != nil {
+			messageType := llm.MessageType(*record.MessageType)
+			message.MessageType = &messageType
+		}
+		return workflowPostCompletionMessageActivity(message)
 	case session.ToolCompletionRecord, session.CacheRequestObservationRecord:
 		return workflowPostCompletionDurableActivity
 	default:
