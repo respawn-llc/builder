@@ -127,6 +127,120 @@ func TestClassifyWorkflowSessionReuseExcludesImmediateNonDormantContinuation(t *
 	}
 }
 
+func TestClassifyWorkflowSessionReuseDoesNotEagerlyCompactAfterImmediateContinuation(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_immediate_then_cac")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-immediate-then-cac", "node_a", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+
+	nodeA := testAgentNode(workflowID, "node_a", "a", "A", workflow.NodeFields{SubagentRole: "coder"})
+	nodeB := testAgentNode(workflowID, "node_b", "b", "B", workflow.NodeFields{SubagentRole: "reviewer"})
+	done := testTerminalNode(workflowID, "node_done", "done", "Done")
+	toB := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_b", Key: "b",
+		TransitionGroupID: "group_a", TargetNodeID: "node_b",
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+	}
+	toA := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_b_a", Key: "a",
+		TransitionGroupID: "group_b", TargetNodeID: "node_a",
+		ContextMode:   workflow.ContextModeCompactAndContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "a"},
+	}
+	toDone := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_b_done", Key: "done",
+		TransitionGroupID: "group_b_done", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID: workflowID, DisplayName: "Immediate Then CAC",
+			Nodes: []workflow.Node{nodeA, nodeB, done},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_a", SourceNodeID: "node_a"},
+				{WorkflowID: workflowID, ID: "group_b", SourceNodeID: "node_b"},
+				{WorkflowID: workflowID, ID: "group_b_done", SourceNodeID: "node_b"},
+			},
+			Edges: []workflow.Edge{toB, toA, toDone},
+		},
+		AcceptedBranches:     []workflow.Edge{toB},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+
+	if classification != workflow.SessionReuseNone {
+		t.Fatalf("classification = %q, want none for non-dormant immediate continuation", classification)
+	}
+}
+
+func TestClassifyWorkflowSessionReuseDowngradesOverwrittenRetainedAssociation(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_overwritten_association")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-overwritten-association", "node_a", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+
+	nodeA := testAgentNode(workflowID, "node_a", "a", "A", workflow.NodeFields{SubagentRole: "coder"})
+	nodeB := testAgentNode(workflowID, "node_b", "b", "B", workflow.NodeFields{SubagentRole: "reviewer"})
+	nodeC := testAgentNode(workflowID, "node_c", "c", "C", workflow.NodeFields{SubagentRole: "reviewer"})
+	done := testTerminalNode(workflowID, "node_done", "done", "Done")
+	toB := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_b", Key: "b",
+		TransitionGroupID: "group_a", TargetNodeID: "node_b",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	toA := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_b_a", Key: "a",
+		TransitionGroupID: "group_b", TargetNodeID: "node_a",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	toC := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_c", Key: "c",
+		TransitionGroupID: "group_a_again", TargetNodeID: "node_c",
+		ContextMode:   workflow.ContextModeCompactAndContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "a"},
+	}
+	toDone := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_c_done", Key: "done",
+		TransitionGroupID: "group_c", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID: workflowID, DisplayName: "Overwritten Association",
+			Nodes: []workflow.Node{nodeA, nodeB, nodeC, done},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_a", SourceNodeID: "node_a"},
+				{WorkflowID: workflowID, ID: "group_b", SourceNodeID: "node_b"},
+				{WorkflowID: workflowID, ID: "group_a_again", SourceNodeID: "node_a"},
+				{WorkflowID: workflowID, ID: "group_c", SourceNodeID: "node_c"},
+			},
+			Edges: []workflow.Edge{toB, toA, toC, toDone},
+		},
+		AcceptedBranches:     []workflow.Edge{toB},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+
+	if classification != workflow.SessionReuseNone {
+		t.Fatalf("classification = %q, want none after new-session overwrite", classification)
+	}
+}
+
 func TestClassifyWorkflowSessionReuseFollowsTransitiveImmediateSourceAfterApproval(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_immediate_transitive")
 	completedSessionID := runtimeids.NewSessionID()

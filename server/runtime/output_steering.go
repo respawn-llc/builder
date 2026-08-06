@@ -535,7 +535,6 @@ func steeringItemConsumesWorkflowPostCompletionBoundary(item steeringItem) bool 
 		item.assistantCommit != nil ||
 		item.committedAssistant != nil ||
 		item.completedResponseResolution != nil ||
-		item.localEntry != nil ||
 		item.reviewerFeedback != nil ||
 		item.reviewerError != nil ||
 		item.toolCompletion != nil ||

@@ -702,6 +702,40 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	}
 }
 
+func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next","commentary":"first done"}`),
+			},
+		),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Post-turn diagnostic successor",
+		workflow.ContextModeCompactAndContinueSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+
+	target := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			!nodes[0].Reference.Equal(source)
+	})[0].Reference
+	f.waitForControllerCurrentNodeFinalized(t, source)
+	if target.NodeID == source.NodeID {
+		t.Fatalf("successor reference = %v, want a distinct target", target)
+	}
+}
+
 func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,

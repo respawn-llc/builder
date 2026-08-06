@@ -15,6 +15,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaContext(t *testing.T) {
@@ -217,6 +218,132 @@ func TestWorkflowPostCompletionCompactionKeepsCommittedReceiptAfterFinalizationD
 	}
 	if len(fixture.client.compactionCalls) != 1 {
 		t.Fatalf("compaction calls = %d, want one", len(fixture.client.compactionCalls))
+	}
+}
+
+func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t *testing.T) {
+	t.Parallel()
+	fixture := newCommittedRemoteCompactionFixture(t, runtimeTestSessionPersistence, nil)
+	blocker := mustBlockTestEventLogAppends(t, fixture.store)
+	t.Cleanup(func() {
+		if err := blocker.Restore(); err != nil {
+			t.Errorf("restore event-log appends: %v", err)
+		}
+	})
+
+	result := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if result.CommitReceipt.Committed || result.Diagnostic == nil {
+		t.Fatalf("pre-commit workflow post-completion result = %+v", result)
+	}
+	if fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed workflow replacement created a post-completion boundary")
+	}
+}
+
+func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+	steer, err := engine.SteerWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
+	if err != nil {
+		t.Fatalf("steer workflow assignment: %v", err)
+	}
+	receipt, err := steer.Wait(context.Background())
+	if err != nil || !receipt.Committed {
+		t.Fatalf("workflow assignment receipt: %+v error=%v", receipt, err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("workflow assignment steering consumed the post-completion boundary")
+	}
+}
+
+func TestWorkflowPostCompletionBoundarySurvivesFailedWorkflowRequest(t *testing.T) {
+	t.Parallel()
+	requestErr := errors.New("workflow request construction failed")
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{errors: []error{requestErr}},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: mustTestCurrentNodeReference(t, "task", "node", nil),
+			},
+		},
+		Config{Model: "gpt-5"},
+	)
+	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); !errors.Is(err, requestErr) {
+		t.Fatalf("failed workflow request error = %v, want %v", err, requestErr)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed workflow request consumed the post-completion boundary")
+	}
+}
+
+func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+
+	if err := engine.steer("diagnostic", steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text: "internal compaction repair",
+	})); err != nil {
+		t.Fatalf("persist local diagnostic: %v", err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("local diagnostic steering consumed the post-completion boundary")
+	}
+}
+
+func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{
+		caps: llm.ProviderCapabilities{
+			ProviderID:               "local",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: false,
+		},
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("local workflow summary"),
+			},
+		}},
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", CompactionMode: "local"},
+	)
+	if err := engine.steer("terminal", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("completed terminal output"),
+		}},
+	)); err != nil {
+		t.Fatalf("persist terminal output: %v", err)
+	}
+
+	result := engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if !result.CommitReceipt.Committed || result.Diagnostic != nil {
+		t.Fatalf("local workflow post-completion result = %+v", result)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("local Generate calls = %d, want one", len(client.calls))
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("local workflow compaction did not commit its post-completion boundary")
 	}
 }
 

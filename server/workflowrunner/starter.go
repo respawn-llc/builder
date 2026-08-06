@@ -405,6 +405,9 @@ func (s *Starter) startCurrentNodeAgent(
 				if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
 					return err
 				}
+				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+					engine.ConsumeWorkflowPostCompletionBoundary()
+				}
 				turnEngine = engine
 				return nil
 			})
