@@ -336,6 +336,10 @@ func (r appTestProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(c
 	return metadata.ProjectWorkspaceBoundary{ProjectID: "project-test", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
 }
 
+func (r appTestProjectBoundaryResolver) ResolveProjectManagedWorktreeRoots(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if s.sessionLifecycle != nil {
 		return s.sessionLifecycle
