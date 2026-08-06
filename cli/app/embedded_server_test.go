@@ -336,7 +336,7 @@ func (r appTestProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(c
 	return metadata.ProjectWorkspaceBoundary{ProjectID: "project-test", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
 }
 
-func (r appTestProjectBoundaryResolver) ResolveManagedWorktreeRoots(context.Context) ([]string, error) {
+func (r appTestProjectBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
 	return nil, nil
 }
 
