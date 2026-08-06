@@ -381,11 +381,15 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 		tools:  &defaultToolExecutor{engine: eng},
 	}
 
-	_, _, err := executor.materializeFinalAnswerToolCalls(context.Background(), "step-1", []llm.ToolCall{{
-		ID:    "call-1",
-		Name:  string(toolspec.ToolExecCommand),
-		Input: json.RawMessage(`{"cmd":"pwd"}`),
-	}}, nil)
+	_, _, err := executor.materializeFinalAnswerToolCalls(
+		context.Background(),
+		"step-1",
+		acceptedResponseCalls{local: []llm.ToolCall{{
+			ID:    "call-1",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}}},
+	)
 	if err != nil {
 		t.Fatalf("materialize final-answer tool calls: %v", err)
 	}

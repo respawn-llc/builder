@@ -125,8 +125,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	if _, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
 		"step",
-		[]llm.ToolCall{call},
-		nil,
+		acceptedResponseCalls{local: []llm.ToolCall{call}},
 	); err != nil {
 		t.Fatalf("materialize final-answer tool call: %v", err)
 	}
