@@ -3,6 +3,7 @@ import { isValidElement } from "react";
 import type { SidebarDestination } from "@/app-facade";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import { SidebarDestinationView } from "./sidebarDestinations";
+import { sidebarDestinationPolicy } from "./sidebarDestinationPolicy";
 const headerAction = vi.hoisted(() => vi.fn<(action: unknown) => void>());
 const fixture = vi.hoisted(() => ({
   openWindow: vi.fn(async () => undefined),
@@ -11,15 +12,9 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock("@/app-facade", () => ({
   sidebarTitle: () => "",
-  useAppNavigation: () => ({
-    openProject: fixture.openProject,
-    openWorkflowEditor: fixture.openWorkflowEditor,
-  }),
+  useAppNavigation: () => ({ openProject: fixture.openProject, openWorkflowEditor: fixture.openWorkflowEditor }),
   useAppServices: () => ({
-    nativeBridge: {
-      capabilities: { dialogWindows: true },
-      dialogs: { openWindow: fixture.openWindow },
-    },
+    nativeBridge: { capabilities: { dialogWindows: true }, dialogs: { openWindow: fixture.openWindow } },
   }),
   usePublishSidebarHeaderAction: headerAction,
   useStatusController: () => ({ push: vi.fn() }),
@@ -31,17 +26,11 @@ vi.mock("@/features/project-edit", () => ({
   ProjectDeleteButton: () => <div />,
   ProjectEditRoute: () => <div />,
 }));
-
 vi.mock("@/features/home", () => ({
   SidebarInboxNav: () => <div />,
 }));
-
 vi.mock("@/features/tasks", () => ({
-  NewTaskForm: (props: Readonly<{
-    onPendingChange?: (pending: boolean) => void;
-    onProjectMissing?: () => void;
-    onSubmitted: (taskID: string) => void;
-  }>) => (
+  NewTaskForm: (props: Readonly<{ onPendingChange?: (pending: boolean) => void; onProjectMissing?: () => void; onSubmitted: (taskID: string) => void }>) => (
     <>
       <button data-testid="new-task-pending" onClick={() => { props.onPendingChange?.(true); }} />
       <button data-testid="new-task-settled" onClick={() => { props.onPendingChange?.(false); }} />
@@ -73,13 +62,10 @@ vi.mock("@/features/workflows", () => ({
 
 vi.mock("@/features/workflow-editor", () => ({
   WorkflowEditorRoute: () => <div />,
-  WorkflowInspectorSidebar: () => <div />,
+  WorkflowInspectorSidebar: ({ onMissingSelectedNode }: Readonly<{ onMissingSelectedNode: () => void }>) => <button data-testid="workflow-inspector-missing" onClick={onMissingSelectedNode} />,
 }));
 
-function mountDestination(
-  destination: SidebarDestination,
-  pageNavigator = createTestSidebarNavigator(),
-) {
+function mountDestination(destination: SidebarDestination, pageNavigator = createTestSidebarNavigator()) {
   render(<SidebarDestinationView destination={destination} navigator={pageNavigator} />);
   return pageNavigator;
 }
@@ -89,7 +75,12 @@ describe("Sidebar destination completion ownership", () => {
     for (const mock of Object.values(fixture)) mock.mockClear();
     headerAction.mockClear();
   });
-
+  it("deduplicates only Task Detail destinations", () => {
+    const task = { kind: "taskDetail", taskID: "task-1" } as const;
+    const custom = { kind: "custom", title: "same", content: null } as const;
+    expect(sidebarDestinationPolicy.equals(task, task)).toBe(true);
+    expect(sidebarDestinationPolicy.equals(custom, custom)).toBe(false);
+  });
   it("locks header exit only for a pending related New Task and replaces it on success", () => {
     const pageNavigator = mountDestination({
       boardQueryWorkflowID: "workflow-1",
@@ -107,7 +98,6 @@ describe("Sidebar destination completion ownership", () => {
     expect(pageNavigator.replace).toHaveBeenCalledWith({ kind: "taskDetail", taskID: "task-created" });
     expect(pageNavigator.close).not.toHaveBeenCalled();
   });
-
   it("keeps ordinary New Task exit available while pending and scopes success/missing dismissal", () => {
     const pageNavigator = mountDestination({
       boardQueryWorkflowID: "workflow-1",
@@ -123,7 +113,6 @@ describe("Sidebar destination completion ownership", () => {
     expect(pageNavigator.back).toHaveBeenCalledOnce();
     expect(pageNavigator.close).toHaveBeenCalledOnce();
   });
-
   it.each([
     { destination: { kind: "workflowCreate", projectID: "project-1" } satisfies SidebarDestination, trigger: "workflow-create-success", follow: () => fixture.openWorkflowEditor },
     { destination: { kind: "linkWorkflow", creating: true, projectID: "project-1" } satisfies SidebarDestination, trigger: "workflow-created", follow: () => fixture.openWorkflowEditor },
@@ -143,18 +132,24 @@ describe("Sidebar destination completion ownership", () => {
     expect(follow()).toHaveBeenCalledOnce();
   });
 
+  it("closes Workflow Inspector through its scoped navigator when the selected node is missing", () => {
+    const navigator = mountDestination({ kind: "workflowInspect", selection: { kind: "workflow" }, workflowID: "workflow-1" });
+    fireEvent.click(screen.getByTestId("workflow-inspector-missing"));
+    expect(navigator.close).toHaveBeenCalledOnce();
+  });
+
   it.each<Readonly<{ outcome: "accepted" | "stale" }>>([{ outcome: "accepted" }, { outcome: "stale" }])("keeps pop-out completion scoped when close is $outcome", async ({ outcome }) => {
     const navigator = createTestSidebarNavigator({ close: vi.fn(() => outcome) });
     mountDestination({ kind: "taskDetail", taskID: "task-1" }, navigator);
     const action = headerAction.mock.lastCall?.[0];
     if (!isValidElement(action)) throw new Error("Expected the Task Detail header action.");
     render(action);
-
     fireEvent.click(screen.getByRole("button", { name: "app.popOut" }));
     await waitFor(() => {
       expect(fixture.openWindow).toHaveBeenCalledOnce();
     });
 
+    expect(fixture.openWindow).toHaveBeenCalledWith(expect.objectContaining({ params: { taskID: "task-1" }, route: "/native-dialog/task-detail" }));
     expect(navigator.close).toHaveBeenCalledOnce();
   });
 });

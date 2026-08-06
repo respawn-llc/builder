@@ -2,8 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { SidebarDestination } from "@/app-facade";
-import { createTestSidebarNavigator } from "@/test-support/sidebar";
-import { createTestSidebarController } from "@/test-support/sidebar";
+import { createTestSidebarController, createTestSidebarNavigator } from "@/test-support/sidebar";
 import {
   commentListResponse,
   emptyTaskAttentionResponse,
@@ -81,6 +80,18 @@ describe("Task Detail retained sidebar state", () => {
       onMutated,
       taskID: "task-2",
     });
+  });
+
+  it("ignores malformed retained state and preserves first-open focus", async () => {
+    const navigator = createTestSidebarNavigator();
+    mountTaskDetailSurface(taskDetailResponse, { initialFocus: { kind: "dependencies" }, navigator, retainedState: { scrollOffsetPx: -1 } });
+    expect(await screen.findByDisplayValue("Resolve blocker")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(navigator.registerCapture).toHaveBeenCalled();
+    });
+    const capture = vi.mocked(navigator.registerCapture).mock.lastCall?.[0];
+    if (capture === undefined) throw new Error("Expected fallback-state capture.");
+    expect(capture()).toEqual(expect.objectContaining({ draft: { body: "Need operator input", title: "Resolve blocker" }, selectedTab: "comments" }));
   });
 
   it("opens related creation through the standalone Task Detail root owner", async () => {

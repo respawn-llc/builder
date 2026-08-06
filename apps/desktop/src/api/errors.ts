@@ -31,12 +31,10 @@ export function isTaskMissingError(error: unknown): boolean {
 }
 
 const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_found") });
-const projectNotFoundRpcErrorCode = -32014;
-
 export function isProjectMissingError(error: unknown): boolean {
   return (
     error instanceof RpcError &&
-    (error.code === projectNotFoundRpcErrorCode ||
+    (error.code === rpcErrorCodes.projectNotFound ||
       projectMissingDataSchema.safeParse(error.data).success)
   );
 }
