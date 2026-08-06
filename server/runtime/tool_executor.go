@@ -233,14 +233,29 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 		tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: t.engine.cfg.AskQuestionBatchSkipped},
 	)
 	if err != nil {
-		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) &&
+			ctx.Err() != nil &&
+			!toolResultHasCompletedOutcome(result) {
 			return nil, err
 		}
-		result = tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
+		if !toolResultHasCompletedOutcome(result) {
+			result = tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
+		}
 	}
 	result.CallID = call.ID
 	result.Name = toolID
 	return &completedToolResult{result: tools.MaterializeModelWarnings(result)}, err
+}
+
+func toolResultHasCompletedOutcome(result tools.Result) bool {
+	return len(result.Output) > 0 ||
+		result.IsError ||
+		result.Terminal ||
+		result.Summary != nil ||
+		result.CondensedText != nil ||
+		len(result.ModelWarnings) > 0 ||
+		result.Presentation != nil ||
+		result.PresentationDelta != nil
 }
 
 type executorToolCall struct {

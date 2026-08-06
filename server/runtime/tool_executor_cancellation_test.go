@@ -50,8 +50,12 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("execute tool calls error = %v, want context cancellation", err)
 	}
-	if _, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot("canceled-call"); !ok {
+	completion, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot("canceled-call")
+	if !ok {
 		t.Fatal("canceled tool completion was not persisted before returning")
+	}
+	if !bytes.Equal(completion.Output, json.RawMessage(`{"error":"canceled"}`)) {
+		t.Fatalf("completed cancellation output = %s, want handler's honest result", completion.Output)
 	}
 }
 
@@ -90,10 +94,16 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 				CustomInput: textutil.Value("first"),
 			},
 			{
-				ID:          "interrupted",
+				ID:          "honest-error",
 				Name:        string(toolspec.ToolPatch),
 				Custom:      true,
 				CustomInput: textutil.Value("second"),
+			},
+			{
+				ID:          "interrupted",
+				Name:        string(toolspec.ToolPatch),
+				Custom:      true,
+				CustomInput: textutil.Value("third"),
 			},
 		})
 		done <- struct {
@@ -108,11 +118,14 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 	if !errors.Is(outcome.err, context.Canceled) {
 		t.Fatalf("execute error = %v, want cancellation after semantic close", outcome.err)
 	}
-	if len(outcome.results) != 2 ||
+	if len(outcome.results) != 3 ||
 		outcome.results[0].CallID != "completed" ||
-		outcome.results[1].CallID != "interrupted" ||
+		outcome.results[1].CallID != "honest-error" ||
 		!outcome.results[1].IsError ||
-		!bytes.Equal(outcome.results[1].Output, missingToolOutputInterruptedOutput) {
+		!bytes.Equal(outcome.results[1].Output, json.RawMessage(`{"error":"honest"}`)) ||
+		outcome.results[2].CallID != "interrupted" ||
+		!outcome.results[2].IsError ||
+		!bytes.Equal(outcome.results[2].Output, missingToolOutputInterruptedOutput) {
 		t.Fatalf("semantic close results = %+v", outcome.results)
 	}
 
@@ -123,14 +136,18 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 	var completionIDs []string
 	for _, record := range window.Records {
 		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
-		if ok && (completion.CallID == "completed" || completion.CallID == "interrupted") {
+		if ok &&
+			(completion.CallID == "completed" ||
+				completion.CallID == "honest-error" ||
+				completion.CallID == "interrupted") {
 			completionIDs = append(completionIDs, completion.CallID)
 		}
 	}
-	if len(completionIDs) != 2 ||
+	if len(completionIDs) != 3 ||
 		completionIDs[0] != "completed" ||
-		completionIDs[1] != "interrupted" {
-		t.Fatalf("semantic close completion order = %v, want completed then interrupted once", completionIDs)
+		completionIDs[1] != "honest-error" ||
+		completionIDs[2] != "interrupted" {
+		t.Fatalf("semantic close completion order = %v", completionIDs)
 	}
 	foundCustomOutput := false
 	for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
@@ -178,7 +195,15 @@ func (t *orderedCancellationTool) Call(ctx context.Context, call tools.Call) (to
 			Summary: textutil.Value("complete"),
 		}, nil
 	}
-	close(t.secondStarted)
-	<-ctx.Done()
+	if t.calls.Load() == 2 {
+		close(t.secondStarted)
+		<-ctx.Done()
+		return tools.Result{
+			CallID:  call.ID,
+			Name:    call.Name,
+			IsError: true,
+			Output:  json.RawMessage(`{"error":"honest"}`),
+		}, ctx.Err()
+	}
 	return tools.Result{}, ctx.Err()
 }

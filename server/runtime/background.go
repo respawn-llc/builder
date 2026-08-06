@@ -273,9 +273,7 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
-			b.engine.surfaceRunError(errors.Join(err, steerErr))
-		}
+		b.engine.finishRunErrorFeedback(err)
 	}
 }
 
@@ -284,7 +282,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}
-	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
+	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, b.engine.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
 		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -298,7 +296,8 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	})
+	}))
+	b.engine.finishRunErrorFeedback(err)
 	if err != nil && b.HasPendingNotices() {
 		b.clearScheduled()
 	}

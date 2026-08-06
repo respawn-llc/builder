@@ -605,7 +605,6 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 				}
 				continue
 			}
-			e.surfaceRunError(err)
 			return
 		}
 		appendNudge = true
@@ -614,7 +613,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 
 func (e *Engine) runGoalTurn(ctx context.Context, appendNudge bool) (assistant llm.Message, err error) {
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindGoalLoop}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindGoalLoop}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -630,7 +629,8 @@ func (e *Engine) runGoalTurn(ctx context.Context, appendNudge bool) (assistant l
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	})
+	}))
+	e.finishRunErrorFeedback(err)
 	if errors.Is(err, errGoalLoopInactive) {
 		return llm.Message{}, nil
 	}
@@ -692,11 +692,13 @@ func (e *Engine) finishRunErrorFeedback(err error) {
 }
 
 func runErrorFeedbackMessage(err error) (string, bool) {
+	var collectorFatal *resultGroupFatal
 	if err == nil ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, ErrAgentBusy) ||
 		errors.Is(err, errGoalLoopInactive) ||
-		errors.Is(err, ErrEngineClosed) {
+		errors.Is(err, ErrEngineClosed) ||
+		errors.As(err, &collectorFatal) {
 		return "", false
 	}
 	message := strings.TrimSpace(llm.UserFacingError(err))

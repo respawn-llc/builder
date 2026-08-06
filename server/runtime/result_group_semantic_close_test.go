@@ -49,7 +49,9 @@ func (c *semanticCloseWorkflowController) ObserveCurrentNodeCompletion(
 	if c.onObserve != nil {
 		c.onObserve()
 	}
-	return workflowruntime.CompletionObservationResult{Completed: true}, nil
+	return workflowruntime.CompletionObservationResult{
+		Completed: c.completedExternally.Load(),
+	}, nil
 }
 
 func TestSemanticClosePrecedesGoalDrainAndWorkflowObservation(t *testing.T) {
@@ -133,6 +135,7 @@ func TestSemanticClosePrecedesGoalDrainAndWorkflowObservation(t *testing.T) {
 	); err != nil || !queued {
 		t.Fatalf("queue Goal during tools = queued:%t err:%v", queued, err)
 	}
+	controller.completedExternally.Store(true)
 	close(handler.release)
 	got := <-done
 	if got.err != nil || got.applied || !got.terminal {
@@ -170,6 +173,73 @@ func TestSemanticClosePrecedesGoalDrainAndWorkflowObservation(t *testing.T) {
 			toolOutputIndex,
 			goalNoticeIndex,
 		)
+	}
+}
+
+func TestTopLevelPreCommitCloseFatalMakesOneAppendAndNoDiagnostic(t *testing.T) {
+	t.Parallel()
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithDurabilityObserver(durability),
+	)
+	handler := &semanticCloseBlockingTool{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{responses: []llm.Response{commentaryResponse(
+			"working",
+			llm.ToolCall{
+				ID:    "fatal-close",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{}`),
+			},
+		)}},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "continue")
+		done <- err
+	}()
+
+	<-handler.started
+	appendsBefore, _ := durability.snapshot()
+	blocker := mustBlockTestEventLogAppends(t, store)
+	close(handler.release)
+	err := <-done
+	if restoreErr := blocker.Restore(); restoreErr != nil {
+		t.Fatalf("restore event-log blocker: %v", restoreErr)
+	}
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) || fatal.Committed {
+		t.Fatalf("top-level close error = %v, want uncommitted collector fatal", err)
+	}
+	appendsAfter, _ := durability.snapshot()
+	if len(appendsAfter) != len(appendsBefore)+1 {
+		t.Fatalf(
+			"top-level fatal append attempts = %d, want one after %d",
+			len(appendsAfter),
+			len(appendsBefore),
+		)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if readErr != nil {
+		t.Fatalf("read top-level fatal records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
+		if ok && entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			t.Fatalf("top-level collector fatal persisted semantic diagnostic: %+v", entry)
+		}
 	}
 }
 
@@ -504,6 +574,67 @@ func TestAcceptedResponseValidationFailurePersistsDiagnosticBeforeTerminal(t *te
 		t.Fatal("accepted-response validation unexpectedly succeeded")
 	}
 	assertRunFailureDiagnosticPrecedesTerminal(t, engine, events)
+}
+
+func TestQueuedProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
+	t.Parallel()
+	engine, events := newProviderFailureOrderingEngine(t, Config{Model: "gpt-5"})
+	engine.QueueUserMessage("queued input")
+	if _, err := engine.SubmitQueuedUserMessages(context.Background()); !llm.HasHTTPStatus(err, 401) {
+		t.Fatalf("queued submission error = %v, want provider failure", err)
+	}
+	assertRunFailureDiagnosticPrecedesTerminal(t, engine, *events)
+}
+
+func TestGoalProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
+	t.Parallel()
+	engine, events := newProviderFailureOrderingEngine(t, Config{
+		Model:        "gpt-5",
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	if _, err := engine.SetGoal("exercise Goal failure ordering", session.GoalActorUser); err != nil {
+		t.Fatalf("set Goal: %v", err)
+	}
+	if _, err := engine.runGoalTurn(context.Background(), false); !llm.HasHTTPStatus(err, 401) {
+		t.Fatalf("Goal turn error = %v, want provider failure", err)
+	}
+	assertRunFailureDiagnosticPrecedesTerminal(t, engine, *events)
+}
+
+func TestBackgroundProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
+	t.Parallel()
+	engine, events := newProviderFailureOrderingEngine(t, Config{Model: "gpt-5"})
+	scheduler := &defaultBackgroundNoticeScheduler{
+		engine: engine,
+		steps:  engine.stepLifecycle,
+	}
+	scheduler.QueueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("background continuation"),
+	})
+	if _, err := scheduler.runQueuedNotices(context.Background()); !llm.HasHTTPStatus(err, 401) {
+		t.Fatalf("background continuation error = %v, want provider failure", err)
+	}
+	assertRunFailureDiagnosticPrecedesTerminal(t, engine, *events)
+}
+
+func newProviderFailureOrderingEngine(
+	t *testing.T,
+	config Config,
+) (*Engine, *[]Event) {
+	t.Helper()
+	var events []Event
+	config.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{errors: []error{&llm.APIStatusError{StatusCode: 401}}},
+		tools.NewRegistry(),
+		config,
+	)
+	return engine, &events
 }
 
 func assertRunFailureDiagnosticPrecedesTerminal(

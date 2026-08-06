@@ -47,7 +47,6 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // (for example manual compaction) completes while queued steering is waiting.
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
 	assistant, _, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
-	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -67,7 +66,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return llm.Message{}, receipt, consumedQueueItemIDs, err
 			}
 		}
-		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
 			if onActive != nil {
 				onActive()
 			}
@@ -96,7 +95,8 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			})
 			assistant = msg
 			return runErr
-		})
+		}))
+		e.finishRunErrorFeedback(err)
 		if receipt.Committed || !errors.Is(err, ErrAgentBusy) {
 			return assistant, receipt, consumedQueueItemIDs, err
 		}
@@ -267,7 +267,6 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
 	if err != nil {
-		e.surfaceRunError(err)
 		return
 	}
 	e.completeLiveRunQueueItems(consumedQueueItemIDs)
