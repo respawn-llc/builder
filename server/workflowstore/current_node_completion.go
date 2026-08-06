@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 type CurrentNodeCompletionRequest struct {
@@ -201,6 +202,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		if len(result.Mutation.Removed) > 0 {
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
+		}
 		return result, nil
 	}
 	target := targets[0]
@@ -226,6 +232,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
+		if len(result.Mutation.Removed) > 0 {
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
+		}
 		return result, nil
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
@@ -311,6 +322,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
+	}
+	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+		return CurrentNodeCompletionResult{}, err
 	}
 	return result, nil
 }

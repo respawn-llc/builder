@@ -181,6 +181,67 @@ func TestClassifyWorkflowSessionReuseDoesNotEagerlyCompactAfterImmediateContinua
 	}
 }
 
+func TestClassifyWorkflowSessionReuseDoesNotRetroactivelyDormantAfterDirectContinuation(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_direct_then_new")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-direct-then-new", "node_a", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+
+	nodeA := testAgentNode(workflowID, "node_a", "a", "A", workflow.NodeFields{SubagentRole: "coder"})
+	nodeB := testAgentNode(workflowID, "node_b", "b", "B", workflow.NodeFields{SubagentRole: "reviewer"})
+	nodeC := testAgentNode(workflowID, "node_c", "c", "C", workflow.NodeFields{SubagentRole: "reviewer"})
+	done := testTerminalNode(workflowID, "node_done", "done", "Done")
+	toB := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_a_b", Key: "b",
+		TransitionGroupID: "group_a", TargetNodeID: "node_b",
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+	}
+	toC := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_b_c", Key: "c",
+		TransitionGroupID: "group_b", TargetNodeID: "node_c",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	toA := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_c_a", Key: "a",
+		TransitionGroupID: "group_c", TargetNodeID: "node_a",
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "a"},
+	}
+	toDone := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_c_done", Key: "done",
+		TransitionGroupID: "group_c_done", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID: workflowID, DisplayName: "Direct Then New Session",
+			Nodes: []workflow.Node{nodeA, nodeB, nodeC, done},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_a", SourceNodeID: "node_a"},
+				{WorkflowID: workflowID, ID: "group_b", SourceNodeID: "node_b"},
+				{WorkflowID: workflowID, ID: "group_c", SourceNodeID: "node_c"},
+				{WorkflowID: workflowID, ID: "group_c_done", SourceNodeID: "node_c"},
+			},
+			Edges: []workflow.Edge{toB, toC, toA, toDone},
+		},
+		AcceptedBranches:     []workflow.Edge{toB},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+
+	if classification != workflow.SessionReuseNone {
+		t.Fatalf("classification = %q, want none after direct same-session continuation", classification)
+	}
+}
+
 func TestClassifyWorkflowSessionReuseDowngradesOverwrittenRetainedAssociation(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_overwritten_association")
 	completedSessionID := runtimeids.NewSessionID()

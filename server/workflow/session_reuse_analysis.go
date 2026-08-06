@@ -169,6 +169,7 @@ type reusePathState struct {
 	branch           reuseBranch
 	currentLineage   reuseLineage
 	completedDormant bool
+	dormancyBlocked  bool
 	overwritten      map[NodeID]struct{}
 }
 
@@ -203,7 +204,14 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}
 
 	completedDormant := state.completedDormant
-	if edge.RequiresApproval || targetLineage != reuseLineageCompleted {
+	dormancyBlocked := state.dormancyBlocked
+	if !state.completedDormant &&
+		state.currentLineage == reuseLineageCompleted &&
+		targetLineage == reuseLineageCompleted &&
+		!edge.RequiresApproval {
+		dormancyBlocked = true
+	}
+	if !dormancyBlocked && (edge.RequiresApproval || targetLineage != reuseLineageCompleted) {
 		completedDormant = true
 	}
 	targetState := reusePathState{
@@ -211,6 +219,7 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		branch:           a.nextBranch(state.branch, edge, target, len(groupEdges)),
 		currentLineage:   targetLineage,
 		completedDormant: completedDormant,
+		dormancyBlocked:  dormancyBlocked,
 		overwritten:      cloneOverwritten(state.overwritten),
 	}
 	if target.Kind() == NodeKindAgent &&
@@ -222,10 +231,11 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		targetState.overwritten[edge.TargetNodeID] = struct{}{}
 	}
 	selectedCompleted := targetLineage == reuseLineageCompleted || targetLineage == reuseLineageUnknown
-	possibleReuse := selectedCompleted && completedDormant
+	possibleReuse := selectedCompleted && completedDormant && !dormancyBlocked
 	guaranteedCAC := edge.ContextMode == ContextModeCompactAndContinueSession &&
 		targetLineage == reuseLineageCompleted &&
-		state.completedDormant
+		state.completedDormant &&
+		!state.dormancyBlocked
 	return reuseTransition{
 		target:        targetState,
 		possibleReuse: possibleReuse,
@@ -496,6 +506,7 @@ func sameReusePathState(left, right reusePathState) bool {
 		left.branch != right.branch ||
 		left.currentLineage != right.currentLineage ||
 		left.completedDormant != right.completedDormant ||
+		left.dormancyBlocked != right.dormancyBlocked ||
 		len(left.overwritten) != len(right.overwritten) {
 		return false
 	}
