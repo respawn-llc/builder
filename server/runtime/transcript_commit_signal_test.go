@@ -108,7 +108,7 @@ func TestPatchToolCallStartedUsesTranscriptWorkingDir(t *testing.T) {
 	}
 }
 
-func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssistantMessage(t *testing.T) {
+func TestHostedToolOnlyTurnUsesCommittedToolCompletionBeforeFollowUpAssistantMessage(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
@@ -150,18 +150,18 @@ func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssist
 	if messageContent(msg) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
-	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 1 {
-		t.Fatalf("committed conversation_updated count after hosted-tool-only turn = %d, want 1; events=%+v", got, events)
+	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
+		t.Fatalf("committed conversation_updated count after hosted-tool-only turn = %d, want 0; events=%+v", got, events)
 	}
-	if !hasEventKind(events, EventConversationUpdated) {
-		t.Fatalf("expected committed conversation_updated event, got %+v", events)
+	if !hasEventKind(events, EventToolCallCompleted) {
+		t.Fatalf("expected committed hosted tool completion event, got %+v", events)
 	}
 	if !hasEventKind(events, EventAssistantMessage) {
 		t.Fatalf("expected assistant message event after hosted-tool-only turn, got %+v", events)
 	}
 }
 
-func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHostedPersistence(t *testing.T) {
+func TestHostedToolOnlyMissingPhaseTurnUsesCommittedToolCompletion(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
@@ -204,8 +204,11 @@ func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHos
 	if messageContent(msg) != "done" {
 		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
-	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 1 {
-		t.Fatalf("committed conversation_updated count after missing-phase hosted-only turn = %d, want 1; events=%+v", got, events)
+	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
+		t.Fatalf("committed conversation_updated count after missing-phase hosted-only turn = %d, want 0; events=%+v", got, events)
+	}
+	if !hasEventKind(events, EventToolCallCompleted) {
+		t.Fatalf("expected committed hosted tool completion event, got %+v", events)
 	}
 }
 

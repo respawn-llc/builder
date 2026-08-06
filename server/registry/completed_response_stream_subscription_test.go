@@ -50,14 +50,9 @@ func TestSessionTranscriptSubscriptionContinuesAfterConcurrentLocalToolsWithoutS
 	handler.waitEntered(t, "call-b")
 
 	handler.release("call-b")
-	for fixture.lifecycle.toolCompletions["call-b"] == nil {
-		fixture.next()
-		if fixture.lifecycle.toolCompletions["call-a"] != nil {
-			t.Fatalf("call-a completed before release: %+v", fixture.lifecycle.toolCompletions)
-		}
-	}
 	handler.release("call-a")
-	for fixture.lifecycle.toolCompletions["call-a"] == nil {
+	for fixture.lifecycle.toolCompletions["call-a"] == nil ||
+		fixture.lifecycle.toolCompletions["call-b"] == nil {
 		fixture.next()
 	}
 	for fixture.lifecycle.finalAssistant == nil {
@@ -70,9 +65,9 @@ func TestSessionTranscriptSubscriptionContinuesAfterConcurrentLocalToolsWithoutS
 			t.Fatalf("%s start position = %d, want after abort position %d", callID, start.position, fixture.lifecycle.abort.position)
 		}
 	}
-	if fixture.lifecycle.toolCompletions["call-b"].position <= fixture.lifecycle.toolStarts["call-b"].position ||
-		fixture.lifecycle.toolCompletions["call-a"].position <= fixture.lifecycle.toolCompletions["call-b"].position ||
-		fixture.lifecycle.resumedDelta.position <= fixture.lifecycle.toolCompletions["call-a"].position {
+	if fixture.lifecycle.toolCompletions["call-a"].position <= fixture.lifecycle.toolStarts["call-a"].position ||
+		fixture.lifecycle.toolCompletions["call-b"].position <= fixture.lifecycle.toolCompletions["call-a"].position ||
+		fixture.lifecycle.resumedDelta.position <= fixture.lifecycle.toolCompletions["call-b"].position {
 		t.Fatalf("tool continuation lifecycle = starts:%+v completions:%+v resumed:%+v", fixture.lifecycle.toolStarts, fixture.lifecycle.toolCompletions, fixture.lifecycle.resumedDelta)
 	}
 	fixture.awaitSubmission(submitDone)

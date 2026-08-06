@@ -14,7 +14,14 @@ import (
 func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing.T) {
 	t.Parallel()
 	allowedCallers := map[string]map[string]bool{
-		"sessionMessageRecordFromLLM": {"appendPersistedMessageEvent": true},
+		"sessionMessageRecordFromLLM": {
+			"appendPersistedMessageEvent": true,
+			"resultGroupMessageRecord":    true,
+		},
+		"resultGroupMessageRecord": {"prepareResultGroupProjection": true},
+		"prepareResultGroupProjection": {
+			"flushResultGroup": true,
+		},
 		"appendPersistedMessageEvent": {
 			"appendMessageRaw":             true,
 			"appendQueuedUserMessageFlush": true,

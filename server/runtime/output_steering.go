@@ -1050,3 +1050,31 @@ func cloneToolResult(result tools.Result) tools.Result {
 	copyResult.Presentation = clonePersistedToolCallMeta(result.Presentation)
 	return copyResult
 }
+
+func resultGroupMessageRecord(output llm.Message) (session.EventRecordPayload, error) {
+	return sessionMessageRecordFromLLM(output)
+}
+
+func (e *Engine) appendResultGroupFeedbackProjection(
+	entry ChatEntry,
+	afterToolCallID *string,
+	provenance *TranscriptCommittedRowProvenance,
+) {
+	e.transcriptRuntimeState().AppendLocalEntryRecord(
+		entry,
+		afterToolCallID,
+		provenance,
+	)
+}
+
+func (e *Engine) appendResultGroupOutputProjection(
+	stepID string,
+	output llm.Message,
+	provenance *TranscriptCommittedRowProvenance,
+) error {
+	return e.transcriptRuntimeState().AppendMessage(stepID, output, provenance)
+}
+
+func (e *Engine) emitResultGroupProjectionEvent(event Event) error {
+	return e.emitRaw(event)
+}

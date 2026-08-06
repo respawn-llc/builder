@@ -546,7 +546,7 @@ func (e *Engine) prepareResultGroupProjection(
 				err,
 			)
 		}
-		outputRecord, err := sessionMessageRecordFromLLM(output)
+		outputRecord, err := resultGroupMessageRecord(output)
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf(
 				"adapt result group output %q: %w",
@@ -578,6 +578,10 @@ func (e *Engine) applyResultGroupProjection(
 		unit                 resultGroupPreparedUnit
 		completionProvenance TranscriptCommittedRowProvenance
 		feedbackProvenance   *TranscriptCommittedRowProvenance
+		completionStart      int
+		completionCount      int
+		feedbackStart        int
+		feedbackCount        int
 	}
 	projected := make([]projectedResultGroupUnit, 0, len(plan.units))
 	for _, unit := range plan.units {
@@ -591,6 +595,7 @@ func (e *Engine) applyResultGroupProjection(
 		}
 	}
 	for _, unit := range plan.units {
+		unitStart := e.CommittedTranscriptEntryCount()
 		completionProvenance, err := transcriptProvenanceFromRecord(
 			records[unit.completionRecordIndex],
 		)
@@ -620,9 +625,10 @@ func (e *Engine) applyResultGroupProjection(
 			&completionProvenance,
 		)
 		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.Result.CallID)
+		completionCount := e.CommittedTranscriptEntryCount()
 		if unit.feedback != nil {
 			entry := localEntryChatEntryForStep(*unit.feedback, stepID)
-			e.transcriptRuntimeState().AppendLocalEntryRecord(
+			e.appendResultGroupFeedbackProjection(
 				*entry,
 				unit.feedback.AfterToolCallID,
 				feedbackProvenance,
@@ -633,7 +639,7 @@ func (e *Engine) applyResultGroupProjection(
 		} else {
 			e.markCurrentRequestShapeDirty()
 		}
-		if err := e.transcriptRuntimeState().AppendMessage(
+		if err := e.appendResultGroupOutputProjection(
 			stepID,
 			unit.output,
 			&outputProvenance,
@@ -648,26 +654,36 @@ func (e *Engine) applyResultGroupProjection(
 			unit:                 unit,
 			completionProvenance: completionProvenance,
 			feedbackProvenance:   feedbackProvenance,
+			completionStart:      unitStart,
+			completionCount:      completionCount,
+			feedbackStart:        completionCount,
+			feedbackCount:        e.CommittedTranscriptEntryCount(),
 		})
 	}
 	for _, projection := range projected {
 		result := cloneToolResult(projection.unit.completion.Result)
-		if err := e.emitRaw(Event{
+		if err := e.emitResultGroupProjectionEvent(Event{
 			Kind:                       EventToolCallCompleted,
 			StepID:                     stepID,
 			ToolResult:                 &result,
 			CommittedTranscriptChanged: true,
+			CommittedEntryStart:        projection.completionStart,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        projection.completionCount,
 			CommittedProvenance:        &projection.completionProvenance,
 		}); err != nil {
 			return err
 		}
 		if projection.unit.feedback != nil {
 			entry := localEntryChatEntryForStep(*projection.unit.feedback, stepID)
-			if err := e.emitRaw(Event{
+			if err := e.emitResultGroupProjectionEvent(Event{
 				Kind:                       EventLocalEntryAdded,
 				StepID:                     stepID,
 				LocalEntry:                 entry,
 				CommittedTranscriptChanged: true,
+				CommittedEntryStart:        projection.feedbackStart,
+				CommittedEntryStartSet:     true,
+				CommittedEntryCount:        projection.feedbackCount,
 				CommittedProvenance:        projection.feedbackProvenance,
 			}); err != nil {
 				return err

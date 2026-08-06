@@ -788,10 +788,17 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 		ToolCalls: []llm.ToolCall{
 			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
 		},
-		OutputItems: []llm.ResponseItem{{
-			Type: llm.ResponseItemTypeOther,
-			Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
-		}},
+		OutputItems: []llm.ResponseItem{
+			{
+				Type:   llm.ResponseItemTypeFunctionCall,
+				ID:     textutil.Value("call_complete"),
+				CallID: textutil.Value("call_complete"),
+			},
+			{
+				Type: llm.ResponseItemTypeOther,
+				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+			},
+		},
 		Usage: llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
