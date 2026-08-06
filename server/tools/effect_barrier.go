@@ -10,6 +10,7 @@ type EffectBarrierReason uint8
 const (
 	EffectBarrierQuestion EffectBarrierReason = iota + 1
 	EffectBarrierApproval
+	EffectBarrierCompleteNode
 )
 
 type EffectBarrier func(EffectBarrierReason) error

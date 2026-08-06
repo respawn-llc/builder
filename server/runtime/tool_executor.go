@@ -192,6 +192,8 @@ func resultGroupFlushReasonForEffect(
 		return ResultGroupFlushQuestion, nil
 	case tools.EffectBarrierApproval:
 		return ResultGroupFlushApproval, nil
+	case tools.EffectBarrierCompleteNode:
+		return ResultGroupFlushCompleteNode, nil
 	default:
 		return 0, fmt.Errorf("unknown tool effect barrier reason %d", reason)
 	}
@@ -354,6 +356,15 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
+	}
+	if barrier, ok := tools.EffectBarrierFromContext(ctx); ok {
+		if err := barrier(tools.EffectBarrierCompleteNode); err != nil {
+			return tools.ErrorResult(tools.Call{
+				ID:    call.ID,
+				Name:  toolspec.ToolCompleteNode,
+				Input: call.Input,
+			}, err.Error())
+		}
 	}
 	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil {
