@@ -633,7 +633,7 @@
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
 - `kent task wait <task>` and `kent task watch <task>` resolve a Project-scoped Task and observe it through server-owned event notification. They never poll read commands or mutate the Task.
-- Task wait ignores Questions, access requests, interruptions, transition approvals, and successful intermediate node completion. It returns for Task `done` or a current Session or Script execution error.
+- Task wait ignores Questions, access requests, transition approvals, and successful intermediate node completion. It returns for a current-work interruption, a current Session or Script execution error, or Task `done`.
 - Task watch returns for a Task Question or access request, current-work interruption, current Session or Script execution error, or Task `done`. It ignores Workflow Transition Approvals and successful intermediate completion.
 - Task Search pagination is defined exclusively by the owning Task Search specification.
 - Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.

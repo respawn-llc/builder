@@ -35,6 +35,18 @@ func TestRunWatchMalformedSessionStillUsesWatchRoute(t *testing.T) {
 	}
 }
 
+func TestLiveControlSubcommandPreservesHeadlessControlVerbPrompts(t *testing.T) {
+	for _, args := range [][]string{
+		{"wait", "for", "CI", "to", "finish"},
+		{"stop", "the", "run", "after", "CI"},
+		{"steer", "the", "agent", "toward", "the", "fix"},
+	} {
+		if got := liveControlSubcommand(args); got != "" {
+			t.Fatalf("liveControlSubcommand(%v) = %q, want headless prompt", args, got)
+		}
+	}
+}
+
 func TestRunWatchStreamFailureDoesNotUseInterruptExitCode(t *testing.T) {
 	run := func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
 		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)

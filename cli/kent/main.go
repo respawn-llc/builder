@@ -415,10 +415,24 @@ func liveControlSubcommand(args []string) string {
 	if help || len(args) == 1 || len(positionals) == 0 {
 		return verb
 	}
-	if verb == "steer" && len(positionals) < 2 {
+	if verb == "watch" {
+		return verb
+	}
+	sessionID, err := runtimeids.ParseSessionID(positionals[0])
+	if err != nil || !sessionID.IsCanonicalUUIDv4() {
 		return ""
 	}
-	return verb
+	switch verb {
+	case "steer":
+		if len(positionals) >= 2 {
+			return verb
+		}
+	case "stop", "wait":
+		if len(positionals) == 1 {
+			return verb
+		}
+	}
+	return ""
 }
 
 func liveControlPositionals(verb string, args []string) ([]string, bool) {
