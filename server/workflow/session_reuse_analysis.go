@@ -79,7 +79,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 	visited := map[referenceState]struct{}{initial: {}}
 	queue := make([]referenceState, 0, len(input.AcceptedBranches))
 
-	appendContextReference := func(state referenceState, edge Edge, target Node) {
+	appendContextReference := func(sourceState referenceState, targetBranch reuseBranch, edge Edge, target Node) {
 		if target == nil {
 			return
 		}
@@ -88,12 +88,16 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		default:
 			return
 		}
+		source := CanonicalContextSource(edge.ContextSource)
+		lookupBranch, usesAssociation := reuseContextLookupBranch(sourceState.branch, targetBranch, source)
+		if !usesAssociation {
+			return
+		}
 		var branch *TransitionBranchKey
-		if state.branch.scoped {
-			value := state.branch.key
+		if lookupBranch.scoped {
+			value := lookupBranch.key
 			branch = &value
 		}
-		source := CanonicalContextSource(edge.ContextSource)
 		switch source.Kind {
 		case ContextSourceSelectedNode:
 			if nodeID, ok := nodeIDsByKey[source.NodeKey]; ok {
@@ -115,7 +119,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 			target,
 			len(topology.edgesByGroup[edge.TransitionGroupID]),
 		)
-		appendContextReference(referenceState{nodeID: state.nodeID, branch: targetBranch}, edge, target)
+		appendContextReference(state, targetBranch, edge, target)
 		next := referenceState{nodeID: edge.TargetNodeID, branch: targetBranch}
 		if _, exists := visited[next]; exists {
 			return
@@ -216,13 +220,20 @@ type reusePathState struct {
 	currentLineage   reuseLineage
 	completedDormant bool
 	dormancyBlocked  bool
-	overwritten      map[reuseOverwriteKey]struct{}
+	overwritten      map[reuseOverwriteKey]reuseOverwriteStatus
 }
 
 type reuseOverwriteKey struct {
 	nodeID NodeID
 	branch reuseBranch
 }
+
+type reuseOverwriteStatus uint8
+
+const (
+	reuseOverwriteMaybe reuseOverwriteStatus = iota
+	reuseOverwriteDefinite
+)
 
 type reuseTransition struct {
 	target        reusePathState
@@ -250,9 +261,7 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}
 	groupEdges := a.edgesByGroup[edge.TransitionGroupID]
 	targetBranch := a.nextBranch(state.branch, edge, target, len(groupEdges))
-	lookupState := state
-	lookupState.branch = targetBranch
-	targetLineage, selected := a.targetLineage(lookupState, edge, target)
+	targetLineage, selected := a.targetLineage(state, edge, target, targetBranch)
 	if !selected {
 		return reuseTransition{}, false
 	}
@@ -280,12 +289,12 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		targetLineage != reuseLineageAbsent &&
 		targetLineage != reuseLineageCompleted {
 		if targetState.overwritten == nil {
-			targetState.overwritten = make(map[reuseOverwriteKey]struct{})
+			targetState.overwritten = make(map[reuseOverwriteKey]reuseOverwriteStatus)
 		}
 		targetState.overwritten[reuseOverwriteKey{
 			nodeID: edge.TargetNodeID,
 			branch: targetBranch,
-		}] = struct{}{}
+		}] = reuseOverwriteDefinite
 	}
 	selectedCompleted := targetLineage == reuseLineageCompleted || targetLineage == reuseLineageUnknown
 	possibleReuse := selectedCompleted && completedDormant && !dormancyBlocked
@@ -300,7 +309,7 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}, true
 }
 
-func (a sessionReuseAnalyzer) targetLineage(state reusePathState, edge Edge, target Node) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) targetLineage(state reusePathState, edge Edge, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
 	if target.Kind() != NodeKindAgent {
 		return reuseLineageAbsent, true
 	}
@@ -308,13 +317,13 @@ func (a sessionReuseAnalyzer) targetLineage(state reusePathState, edge Edge, tar
 	case ContextModeNewSession:
 		return reuseLineageOther, true
 	case ContextModeContinueSession, ContextModeCompactAndContinueSession:
-		return a.resolveContextSource(state, edge.ContextSource, target)
+		return a.resolveContextSource(state, edge.ContextSource, target, targetBranch)
 	default:
 		return reuseLineageUnknown, true
 	}
 }
 
-func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source ContextSource, target Node) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source ContextSource, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
 	canonical := CanonicalContextSource(source)
 	switch canonical.Kind {
 	case ContextSourceImmediateSource:
@@ -324,11 +333,14 @@ func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source 
 		if !exists {
 			return reuseLineageUnknown, true
 		}
-		return a.associatedLineage(state.branch, state.overwritten, nodeID, true)
+		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
+		return a.associatedLineage(lookupBranch, state.overwritten, nodeID, true)
 	case ContextSourcePreviousTarget:
-		return a.associatedLineage(state.branch, state.overwritten, NodeIDOf(target), false)
+		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
+		return a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), false)
 	case ContextSourcePreviousTargetOrNew:
-		lineage, found := a.associatedLineage(state.branch, state.overwritten, NodeIDOf(target), true)
+		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
+		lineage, found := a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), true)
 		if !found {
 			return reuseLineageOther, true
 		}
@@ -338,8 +350,20 @@ func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source 
 	}
 }
 
-func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[reuseOverwriteKey]struct{}, nodeID NodeID, optional bool) (reuseLineage, bool) {
-	if _, exists := overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]; exists {
+func reuseContextLookupBranch(sourceBranch, targetBranch reuseBranch, source ContextSource) (reuseBranch, bool) {
+	switch CanonicalContextSource(source).Kind {
+	case ContextSourceSelectedNode:
+		return sourceBranch, true
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+		return targetBranch, true
+	default:
+		return reuseBranch{}, false
+	}
+}
+
+func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[reuseOverwriteKey]reuseOverwriteStatus, nodeID NodeID, optional bool) (reuseLineage, bool) {
+	status, overwrittenPath := overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
+	if overwrittenPath && status == reuseOverwriteDefinite {
 		return reuseLineageOther, true
 	}
 	for index := len(a.input.RetainedAssociations) - 1; index >= 0; index-- {
@@ -350,8 +374,14 @@ func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten 
 			continue
 		}
 		if association.SessionID == a.completedSessionID {
+			if overwrittenPath && status == reuseOverwriteMaybe {
+				return reuseLineageUnknown, true
+			}
 			return reuseLineageCompleted, true
 		}
+		return reuseLineageOther, true
+	}
+	if overwrittenPath {
 		return reuseLineageOther, true
 	}
 	if optional {
@@ -601,34 +631,62 @@ func graphStateID(state reusePathState, states []reusePathState) (int, bool) {
 	return 0, false
 }
 
-func cloneOverwritten(value map[reuseOverwriteKey]struct{}) map[reuseOverwriteKey]struct{} {
+func cloneOverwritten(value map[reuseOverwriteKey]reuseOverwriteStatus) map[reuseOverwriteKey]reuseOverwriteStatus {
 	if len(value) == 0 {
 		return nil
 	}
-	cloned := make(map[reuseOverwriteKey]struct{}, len(value))
-	for key := range value {
-		cloned[key] = struct{}{}
+	cloned := make(map[reuseOverwriteKey]reuseOverwriteStatus, len(value))
+	for key, status := range value {
+		cloned[key] = status
 	}
 	return cloned
 }
 
-func mergeOverwritten(left, right map[reuseOverwriteKey]struct{}) (map[reuseOverwriteKey]struct{}, bool) {
+func mergeOverwritten(left, right map[reuseOverwriteKey]reuseOverwriteStatus) (map[reuseOverwriteKey]reuseOverwriteStatus, bool) {
 	if len(right) == 0 {
 		return left, false
 	}
-	for key := range right {
-		if _, exists := left[key]; !exists {
-			merged := cloneOverwritten(left)
-			if merged == nil {
-				merged = make(map[reuseOverwriteKey]struct{}, len(right))
-			}
-			for key := range right {
-				merged[key] = struct{}{}
-			}
-			return merged, true
+	changed := false
+	for key, leftStatus := range left {
+		rightStatus, exists := right[key]
+		mergedStatus := reuseOverwriteMaybe
+		if exists && leftStatus == reuseOverwriteDefinite && rightStatus == reuseOverwriteDefinite {
+			mergedStatus = reuseOverwriteDefinite
+		}
+		if leftStatus != mergedStatus {
+			changed = true
+			break
 		}
 	}
-	return left, false
+	if !changed {
+		for key := range right {
+			if _, exists := left[key]; !exists {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return left, false
+	}
+	merged := cloneOverwritten(left)
+	if merged == nil {
+		merged = make(map[reuseOverwriteKey]reuseOverwriteStatus, len(right))
+	}
+	for key, leftStatus := range left {
+		rightStatus, exists := right[key]
+		if exists && leftStatus == reuseOverwriteDefinite && rightStatus == reuseOverwriteDefinite {
+			merged[key] = reuseOverwriteDefinite
+			continue
+		}
+		merged[key] = reuseOverwriteMaybe
+	}
+	for key := range right {
+		if _, exists := left[key]; !exists {
+			merged[key] = reuseOverwriteMaybe
+		}
+	}
+	return merged, true
 }
 
 func sameReusePathState(left, right reusePathState) bool {

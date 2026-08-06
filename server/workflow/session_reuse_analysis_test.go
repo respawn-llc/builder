@@ -117,7 +117,6 @@ func TestClassifyWorkflowSessionReuseFindsAReachableSerialLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completed current node: %v", err)
 	}
-
 	worker := testNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "coder"})
 	review := testNode(workflowID, "node_review", "review", "Review", workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "reviewer"})
 	done := testTerminalNode(workflowID, "node_done", "done", "Done")
@@ -1326,5 +1325,144 @@ func TestClassifyWorkflowSessionReuseUsesOneGuaranteedFanoutBranch(t *testing.T)
 
 	if classification != workflow.SessionReuseGuaranteedCACReuse {
 		t.Fatalf("classification = %q, want guaranteed_cac_reuse", classification)
+	}
+}
+
+func TestClassifyWorkflowSessionReuseSelectedNodeUsesSourceBranchAfterFanout(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_selected_source_branch")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-selected-source-branch", "node_source", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+
+	source := testAgentNode(workflowID, "node_source", "source", "Source", workflow.NodeFields{SubagentRole: "coder"})
+	reuse := testAgentNode(workflowID, "node_reuse", "reuse", "Reuse", workflow.NodeFields{SubagentRole: "reviewer"})
+	done := testTerminalNode(workflowID, "node_done", "done", "Done")
+	acceptedReuse := workflow.Edge{
+		WorkflowID:        workflowID,
+		ID:                "edge_source_reuse",
+		Key:               "reuse",
+		TransitionGroupID: "group_source",
+		TargetNodeID:      "node_reuse",
+		ContextMode:       workflow.ContextModeCompactAndContinueSession,
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "source"},
+	}
+	acceptedDone := acceptedReuse
+	acceptedDone.ID = "edge_source_done"
+	acceptedDone.Key = "done"
+	acceptedDone.TargetNodeID = "node_done"
+	input := workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          workflowID,
+			DisplayName: "Selected Source Branch",
+			Nodes:       []workflow.Node{source, reuse, done},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_source", SourceNodeID: "node_source"},
+			},
+			Edges: []workflow.Edge{acceptedReuse, acceptedDone},
+		},
+		AcceptedBranches:     []workflow.Edge{acceptedReuse, acceptedDone},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	}
+
+	if classification := workflow.ClassifyWorkflowSessionReuse(input); classification != workflow.SessionReuseGuaranteedCACReuse {
+		t.Fatalf("classification = %q, want guaranteed_cac_reuse", classification)
+	}
+	for _, reference := range workflow.SessionReuseAssociationReferences(input) {
+		if branch, scoped := reference.TransitionBranchKey(); scoped &&
+			reference.NodeID == "node_source" && branch == "reuse" {
+			t.Fatalf("selected-node lookup incorrectly used target branch: %+v", reference)
+		}
+	}
+}
+
+func TestClassifyWorkflowSessionReusePreservesReuseAcrossConvergedOverwritePaths(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_converged_overwrite")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-converged-overwrite", "node_source", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+	workerReference, err := workflow.NewCurrentNodeReference("task-converged-overwrite", "node_worker", nil)
+	if err != nil {
+		t.Fatalf("retained worker reference: %v", err)
+	}
+
+	source := testAgentNode(workflowID, "node_source", "source", "Source", workflow.NodeFields{SubagentRole: "coder"})
+	decision := testAgentNode(workflowID, "node_decision", "decision", "Decision", workflow.NodeFields{SubagentRole: "reviewer"})
+	pathA := testAgentNode(workflowID, "node_path_a", "path_a", "Path A", workflow.NodeFields{SubagentRole: "reviewer"})
+	pathB := testAgentNode(workflowID, "node_path_b", "path_b", "Path B", workflow.NodeFields{SubagentRole: "reviewer"})
+	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "coder"})
+	join := testJoinNode(workflowID, "node_join", "join", "Join")
+	start := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_source_decision", Key: "decision",
+		TransitionGroupID: "group_source", TargetNodeID: "node_decision",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	pathAEdge := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_decision_a", Key: "path_a",
+		TransitionGroupID: "group_decision_a", TargetNodeID: "node_path_a",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	pathBEdge := pathAEdge
+	pathBEdge.ID = "edge_decision_b"
+	pathBEdge.Key = "path_b"
+	pathBEdge.TransitionGroupID = "group_decision_b"
+	pathBEdge.TargetNodeID = "node_path_b"
+	pathAToWorker := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_path_a_worker", Key: "worker",
+		TransitionGroupID: "group_path_a_worker", TargetNodeID: "node_worker",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	pathAToJoin := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_worker_join", Key: "join",
+		TransitionGroupID: "group_worker_join", TargetNodeID: "node_join",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	pathBToJoin := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_path_b_join", Key: "join",
+		TransitionGroupID: "group_path_b_join", TargetNodeID: "node_join",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	joinToWorker := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_join_worker", Key: "worker",
+		TransitionGroupID: "group_join_worker", TargetNodeID: "node_worker",
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "worker"},
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          workflowID,
+			DisplayName: "Converged Overwrite Paths",
+			Nodes:       []workflow.Node{source, decision, pathA, pathB, worker, join},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_source", SourceNodeID: "node_source"},
+				{WorkflowID: workflowID, ID: "group_decision_a", SourceNodeID: "node_decision"},
+				{WorkflowID: workflowID, ID: "group_decision_b", SourceNodeID: "node_decision"},
+				{WorkflowID: workflowID, ID: "group_path_a_worker", SourceNodeID: "node_path_a"},
+				{WorkflowID: workflowID, ID: "group_worker_join", SourceNodeID: "node_worker"},
+				{WorkflowID: workflowID, ID: "group_path_b_join", SourceNodeID: "node_path_b"},
+				{WorkflowID: workflowID, ID: "group_join_worker", SourceNodeID: "node_join"},
+			},
+			Edges: []workflow.Edge{start, pathAEdge, pathBEdge, pathAToWorker, pathAToJoin, pathBToJoin, joinToWorker},
+		},
+		AcceptedBranches:     []workflow.Edge{start},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: workerReference}},
+	})
+
+	if classification != workflow.SessionReuseThresholdPossibleReuse {
+		t.Fatalf("classification = %q, want threshold_possible_reuse", classification)
 	}
 }
