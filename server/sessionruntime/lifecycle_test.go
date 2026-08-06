@@ -241,15 +241,37 @@ type authorityStartBarrierLifecycle struct {
 }
 
 type startupRepairReadyProbe struct {
-	ready atomic.Int32
+	callID   string
+	ready    atomic.Int32
+	observed atomic.Bool
 }
 
 func (p *startupRepairReadyProbe) ResourceReady(
-	context.Context,
-	AgentResourceDescriptor,
-	*runtime.Engine,
-	AgentResourceRetainer,
+	_ context.Context,
+	_ AgentResourceDescriptor,
+	engine *runtime.Engine,
+	_ AgentResourceRetainer,
 ) error {
+	if p.callID != "" {
+		if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+			for _, live := range snapshot.InFlightTools {
+				if live.ToolCallID == p.callID {
+					return errors.New("ResourceReady observed a stale live tool start")
+				}
+			}
+			for _, row := range snapshot.CommittedRows {
+				if row.Tool != nil &&
+					row.Tool.ToolCallID == p.callID &&
+					row.Tool.IsError {
+					p.observed.Store(true)
+					return nil
+				}
+			}
+			return errors.New("ResourceReady preceded the committed fresh-resource repair")
+		}); err != nil {
+			return err
+		}
+	}
 	p.ready.Add(1)
 	return nil
 }
@@ -331,6 +353,53 @@ func TestFreshResourceRepairFailureDoesNotPublishResourceReady(t *testing.T) {
 	authority.mu.Unlock()
 	if resource != nil {
 		t.Fatalf("failed startup repair installed a resource: %+v", resource)
+	}
+}
+
+func TestFreshResourceRepairCompletesBeforeResourceReady(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	eventLog, err := fixture.store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	const callID = "startup-repair"
+	if _, _, err := eventLog.AppendRecord(textutil.Value("recovery-step"), session.MessageRecord{
+		Role: session.MessageRoleAssistant,
+		ToolCalls: []session.MessageToolCallRecord{{
+			CallID: callID,
+			Name:   string(toolspec.ToolAskQuestion),
+			Kind:   session.ToolCallKindFunction,
+			Input:  json.RawMessage(`{}`),
+		}},
+	}); err != nil {
+		t.Fatalf("append dangling call: %v", err)
+	}
+
+	ready := &startupRepairReadyProbe{callID: callID}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: ready,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close recovery authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	if _, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "owner-a",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open repaired runtime: %v", err)
+	}
+	if count := ready.ready.Load(); count != 1 {
+		t.Fatalf("ResourceReady publications = %d, want one", count)
+	}
+	if !ready.observed.Load() {
+		t.Fatal("ResourceReady did not observe the committed neutral repair")
 	}
 }
 
