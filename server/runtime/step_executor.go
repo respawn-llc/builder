@@ -368,8 +368,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		resp = prepared.response
 		phaseTurn := prepared.phaseTurn
 		assistantMsg := prepared.assistant
-		localToolCalls := prepared.acceptedCalls.local
-		hostedToolExecutions := prepared.acceptedCalls.hosted
+		acceptedCalls := prepared.acceptedCalls
+		localToolCalls := acceptedCalls.local
+		hostedToolExecutions := acceptedCalls.hosted
 		noopFinalAnswer := prepared.noopFinalAnswer
 		assistantCommittedCoordinate := prepared.assistantCommittedCoordinate
 		assistantProvenance := cloneTranscriptCommittedRowProvenance(prepared.assistantProvenance)
@@ -382,13 +383,27 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				}
 			}
 		}
-		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
-			return stepLoopResult{}, err
-		}
-		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
+		if acceptedCalls.hasCalls() {
+			applied, terminal, err := s.executeAcceptedToolCallsAndAppendResults(
+				ctx,
+				stepID,
+				acceptedCalls,
+			)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
+			patchEditsApplied = patchEditsApplied || applied
+			if terminal {
+				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+				return stepLoopResult{ExecutedToolCall: true}, nil
+			}
+			if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				return stepLoopResult{}, err
+			}
+			continue
 		}
 
 		if responseOutputIsReasoningOnly(resp.OutputItems) {
@@ -398,9 +413,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if len(localToolCalls) == 0 &&
-			len(hostedToolExecutions) == 0 &&
-			phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
+		if phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
 			assistantMsg.Content != nil &&
 			strings.TrimSpace(*assistantMsg.Content) != "" {
 			handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, *assistantMsg.Content)
@@ -417,9 +430,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 
 		if len(localToolCalls) == 0 {
 			if phaseTurn.MissingAssistantPhase {
-				if len(hostedToolExecutions) > 0 {
-					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
-				}
 				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
@@ -576,21 +586,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
-		applied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
-		if err != nil {
-			return stepLoopResult{}, err
-		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return stepLoopResult{}, err
-		}
-		patchEditsApplied = patchEditsApplied || applied
-		if terminal {
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-			return stepLoopResult{ExecutedToolCall: true}, nil
-		}
-		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-			return stepLoopResult{}, err
-		}
 	}
 }
 
@@ -816,20 +811,12 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		}
 	}
 
-	patchEditsApplied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, calls.local)
+	patchEditsApplied, terminal, err := s.executeAcceptedToolCallsAndAppendResults(
+		ctx,
+		stepID,
+		calls,
+	)
 	if err != nil {
-		return false, false, err
-	}
-	if terminal {
-		if err := s.appendHostedToolExecutionResults(stepID, calls.hosted); err != nil {
-			return false, false, err
-		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return false, false, err
-		}
-		return patchEditsApplied, true, nil
-	}
-	if err := s.appendHostedToolExecutionResults(stepID, calls.hosted); err != nil {
 		return false, false, err
 	}
 	if calls.hasCalls() {
@@ -845,12 +832,16 @@ func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) err
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 
-func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.Context, stepID string, localToolCalls []llm.ToolCall) (bool, bool, error) {
-	if len(localToolCalls) == 0 {
+func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
+	ctx context.Context,
+	stepID string,
+	calls acceptedResponseCalls,
+) (bool, bool, error) {
+	if !calls.hasCalls() {
 		return false, false, nil
 	}
 	e := s.engine
-	results, err := e.executeToolCalls(ctx, stepID, localToolCalls)
+	results, err := e.executeAcceptedToolCalls(ctx, stepID, calls)
 	if err != nil {
 		return false, false, err
 	}
@@ -877,37 +868,6 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 		return false, err
 	}
 	return true, nil
-}
-
-func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, hostedToolExecutions []hostedToolExecution) error {
-	e := s.engine
-	for _, hosted := range hostedToolExecutions {
-		if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
-			return err
-		}
-		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
-			return err
-		}
-		msg := llm.Message{
-			Role: llm.RoleTool, Content: textutil.Value(string(hosted.Result.Output)),
-			ToolCallID: textutil.Value(hosted.Result.CallID),
-			Name:       textutil.Value(string(hosted.Result.Name)),
-		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
-	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
-	return s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:                       EventToolCallStarted,
-		StepID:                     stepID,
-		ToolCall:                   &normalized,
-		CommittedTranscriptChanged: true,
-	}))
 }
 
 func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Context, stepID string, content string) (bool, bool, error) {

@@ -346,6 +346,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
+	var startedCallIDs []string
 	localOne := llm.ToolCall{
 		ID:    "local-one",
 		Name:  string(toolspec.ToolExecCommand),
@@ -407,6 +408,11 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 			Model:         "gpt-5",
 			WebSearchMode: "native",
 			EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+			OnEvent: func(event Event) {
+				if event.Kind == EventToolCallStarted && event.ToolCall != nil {
+					startedCallIDs = append(startedCallIDs, event.ToolCall.ID)
+				}
+			},
 		},
 	)
 
@@ -419,6 +425,8 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 		t.Fatalf("read mixed-tool records: %v", err)
 	}
 	want := []string{"local-one", "hosted-middle", "local-two"}
+	var persistedResults []string
+	foundIntent := false
 	for _, record := range window.Records {
 		messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
 		if !ok {
@@ -429,6 +437,9 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 			t.Fatalf("restore mixed-tool assistant message: %v", err)
 		}
 		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
+			if message.Role == llm.RoleTool && message.ToolCallID != nil {
+				persistedResults = append(persistedResults, *message.ToolCallID)
+			}
 			continue
 		}
 		got := make([]string, len(message.ToolCalls))
@@ -438,9 +449,20 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("mixed-tool persisted order = %v, want %v", got, want)
 		}
-		return
+		foundIntent = true
 	}
-	t.Fatal("mixed-tool assistant intent was not persisted")
+	if !foundIntent {
+		t.Fatal("mixed-tool assistant intent was not persisted")
+	}
+	if !reflect.DeepEqual(persistedResults, want) {
+		t.Fatalf("mixed-tool result order = %v, want %v", persistedResults, want)
+	}
+	if len(startedCallIDs) < len(want) || startedCallIDs[0] != "hosted-middle" {
+		t.Fatalf(
+			"mixed-tool start order = %v, want hosted outcome materialized before local starts",
+			startedCallIDs,
+		)
+	}
 }
 
 func TestInvalidMixedAcceptedCallPositionsFailBeforeToolEffects(t *testing.T) {
@@ -562,7 +584,12 @@ func TestInvalidMixedAcceptedCallPositionsFailBeforeToolEffects(t *testing.T) {
 
 func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 	t.Parallel()
-	store := mustCreateTestSession(t)
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithDurabilityObserver(durability),
+	)
 	client := &fakeClient{
 		caps: openAIFirstPartyNativeWebSearchCaps(),
 		responses: []llm.Response{
@@ -612,6 +639,8 @@ func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 		t.Fatalf("read hosted-only records: %v", err)
 	}
 	want := []string{"hosted-one", "hosted-two"}
+	var persistedResults []string
+	foundIntent := false
 	for _, record := range window.Records {
 		messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
 		if !ok {
@@ -622,15 +651,47 @@ func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 			t.Fatalf("restore hosted-only message: %v", err)
 		}
 		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
+			if message.Role == llm.RoleTool && message.ToolCallID != nil {
+				persistedResults = append(persistedResults, *message.ToolCallID)
+			}
 			continue
 		}
 		got := []string{message.ToolCalls[0].ID, message.ToolCalls[1].ID}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("hosted-only persisted order = %v, want %v", got, want)
 		}
-		return
+		foundIntent = true
 	}
-	t.Fatal("hosted-only assistant intent was not persisted")
+	if !foundIntent {
+		t.Fatal("hosted-only assistant intent was not persisted")
+	}
+	if !reflect.DeepEqual(persistedResults, want) {
+		t.Fatalf("hosted-only result order = %v, want %v", persistedResults, want)
+	}
+	appends, _ := durability.snapshot()
+	groupAppends := 0
+	for _, observation := range appends {
+		if observation.RecordCount == len(want)*2 {
+			groupAppends++
+		}
+	}
+	if groupAppends != 1 {
+		t.Fatalf("hosted result-group appends = %d, want one: %+v", groupAppends, appends)
+	}
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(
+		t,
+		reopened,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	snapshot := mustTranscriptHydrationSnapshot(t, restored)
+	for _, callID := range want {
+		if rows := countHydratedToolRows(snapshot, callID); rows != 1 {
+			t.Fatalf("reopened hosted rows for %s = %d, want 1", callID, rows)
+		}
+	}
 }
 
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {

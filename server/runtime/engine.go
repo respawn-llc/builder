@@ -1057,20 +1057,74 @@ func providerFailureRetriesAllowed(req llm.Request) bool {
 }
 
 func (e *Engine) executeToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
+	accepted := acceptedResponseCalls{
+		local: append([]llm.ToolCall(nil), calls...),
+		order: make([]acceptedResponseCallRef, len(calls)),
+	}
+	for index := range calls {
+		accepted.order[index] = acceptedResponseCallRef{
+			source: acceptedResponseCallLocal,
+			index:  index,
+		}
+	}
+	return e.executeAcceptedToolCalls(ctx, stepID, accepted)
+}
+
+func (e *Engine) executeAcceptedToolCalls(
+	ctx context.Context,
+	stepID string,
+	calls acceptedResponseCalls,
+) ([]tools.Result, error) {
 	e.ensureOrchestrationCollaborators()
 	prepared, err := prepareExecutorToolCalls(
 		e,
 		stepID,
 		activeRunIDForStep(e, stepID),
 		e.currentNodeExecutionActive(),
-		calls,
+		calls.local,
 	)
 	if err != nil {
 		return nil, err
 	}
-	collector, err := newResultGroupCollector(resultGroupRosterFromPreparedCalls(prepared))
+	executionCalls := calls
+	executionCalls.local = make([]llm.ToolCall, len(prepared))
+	for index := range prepared {
+		executionCalls.local[index] = prepared[index].call
+	}
+	collector, err := newResultGroupCollector(resultGroupRosterFromAcceptedCalls(executionCalls))
 	if err != nil {
 		return nil, err
+	}
+	for _, ref := range executionCalls.order {
+		if ref.source != acceptedResponseCallHosted {
+			continue
+		}
+		hosted := executionCalls.hosted[ref.index]
+		normalized := normalizeToolCallForTranscript(hosted.Call, e.transcriptWorkingDir())
+		if err := e.steer(stepID, steerEventIntent(Event{
+			Kind:                       EventToolCallStarted,
+			StepID:                     stepID,
+			ToolCall:                   &normalized,
+			CommittedTranscriptChanged: true,
+		})); err != nil {
+			return nil, err
+		}
+		outcome := resultGroupReportOutcome(0)
+		if err := e.steer(stepID, steerResultGroupReportIntent(
+			collector,
+			hosted.Call.ID,
+			resultGroupUnit{result: hosted.Result},
+			&outcome,
+		)); err != nil {
+			return nil, err
+		}
+		if outcome != resultGroupReportAccepted {
+			return nil, fmt.Errorf(
+				"result group ignored hosted result without fatal (call_id=%s tool=%s)",
+				hosted.Call.ID,
+				hosted.Call.Name,
+			)
+		}
 	}
 	completed, executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
 	closeErr := e.steer(stepID, steerResultGroupCloseIntent(collector))
