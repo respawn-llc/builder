@@ -31,7 +31,23 @@
 - The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
 - One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
-- `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn. Pending steered user text becomes one user message, with submissions separated by blank lines.
+- `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
+- A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
+- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
+- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
+- A steer issued from another Session contains exactly:
+
+```text
+Agent from session <source-session-id> said:
+> <submitted steer text>
+
+To respond, run: kent run steer <source-session-id> "message"
+```
+
+- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
+- The message includes the source Session ID and omits its name.
+- A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
+- Prompt history stores the complete wrapped message.
 - Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
 - A dormant Goal command is the sole persisted-transcript exception outside an Active Session Runtime: the server atomically confirms that no current agent resource owns the Session, then persists the durable Goal transition and one Goal notice without creating a runtime, live event, transaction, rollback, repair, retry, or extra admission lock. A concurrent live release surfaces its error rather than re-admitting.
 - Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client refreshes authoritative Session state. A later explicit user submission creates a new Runtime Command.

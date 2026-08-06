@@ -692,6 +692,15 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
+	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageAgentSteer {
+		if mode != ModeDetailCollapsed && mode != ModeDetailExpanded && row.Diagnostic != nil {
+			return StyleRoleUser, row.Diagnostic.Detail
+		}
+		if mode == ModeDetailExpanded && row.Diagnostic != nil {
+			return StyleRoleUser, row.Diagnostic.Detail
+		}
+		return StyleRoleUser, firstNonEmpty(optionalString(row.CompactLabel), "agent steer")
+	}
 	if row.Reason == clientui.TranscriptNoticeCompaction && row.Compaction != nil {
 		text := compactionNoticeText(row.Compaction.Count)
 		if mode == ModeDetailExpanded && row.Compaction.Detail != nil {
@@ -796,6 +805,8 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 		return StyleRoleNotice
 	case clientui.TranscriptMessageGoal, clientui.TranscriptMessageWorkflowMode:
 		return StyleRoleNoticePrimary
+	case clientui.TranscriptMessageAgentSteer:
+		return StyleRoleUser
 	case clientui.TranscriptMessageBackgroundNotice:
 		return StyleRoleNoticeForeground
 	case clientui.TranscriptMessageWorktreeModeExit:
@@ -852,7 +863,8 @@ func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 		clientui.TranscriptMessageHeadlessMode,
 		clientui.TranscriptMessageHeadlessModeExit,
 		clientui.TranscriptMessageWorkflowMode,
-		clientui.TranscriptMessageActiveGoalContinuation:
+		clientui.TranscriptMessageActiveGoalContinuation,
+		clientui.TranscriptMessageAgentSteer:
 		return true
 	default:
 		return false

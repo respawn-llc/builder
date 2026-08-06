@@ -173,13 +173,13 @@ type steeringLiveToolAbort struct {
 }
 
 type steeringQueuedUserMessageFlush struct {
-	text       string
+	message    llm.Message
 	batch      []string
 	queueItems []QueuedUserMessage
 }
 
 type steeringQueuedUserMessageRestore struct {
-	items []queuedUserSteeringIntent
+	items []queuedUserMessage
 }
 
 type steeringMessageEventPolicy uint8
@@ -285,22 +285,22 @@ func steerToolCompletionIntent(result tools.Result) steeringIntent {
 	}
 }
 
-func steerQueuedUserMessageFlushIntent(text string, batch []string, queueItems []QueuedUserMessage) steeringIntent {
+func steerQueuedUserMessageFlushIntent(message llm.Message, batch []string, queueItems []QueuedUserMessage) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityUser,
 		items: []steeringItem{{queuedFlush: &steeringQueuedUserMessageFlush{
-			text:       text,
+			message:    message,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
 		}}},
 	}
 }
 
-func steerQueuedUserMessageRestoreIntent(items []queuedUserSteeringIntent) steeringIntent {
+func steerQueuedUserMessageRestoreIntent(items []queuedUserMessage) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityUser,
 		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
-			items: append([]queuedUserSteeringIntent(nil), items...),
+			items: append([]queuedUserMessage(nil), items...),
 		}}},
 	}
 }
@@ -698,7 +698,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return err
 	}
 	if item.queuedFlush != nil {
-		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
+		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.message, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
 		return err
 	}

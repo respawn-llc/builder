@@ -22,10 +22,12 @@ kent run --continue <session-id> "<follow-up>"
 Control an active shared run from another shell or agent:
 
 ```bash
-kent run steer <session-id> "adjust the next step" # inject a user message into a running agent
+kent run steer <session-id> "adjust the next step" # steer a running agent
 kent run stop <session-id> # gracefully interrupt the run
 kent run wait <session-id> # wait for the model's turn to end
 ```
+
+When a human invokes `kent run steer`, the running Session receives a user message. When another Kent Session invokes it, the running Session receives a developer-role agent steer that identifies the source Session and includes the command form for replying.
 
 Headless `kent run` Sessions cannot create Questions. To inspect or answer a pending Question from an interactive or Workflow Session:
 

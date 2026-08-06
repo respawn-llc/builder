@@ -995,7 +995,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		},
 	)
 
-	queued := engine.QueueUserMessageWithClientRequestID("queued user input", "request-id")
+	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued user input", "request-id")
 	completed, err := engine.observeWorkflowDurableCompletion(context.Background())
 	if err != nil {
 		t.Fatalf("observe durable workflow completion: %v", err)

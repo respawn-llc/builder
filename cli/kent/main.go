@@ -483,6 +483,10 @@ func runLiveSteerSubcommand(args []string) int {
 		emitRunUsageError(runOutputModeFinalText, err.Error())
 		return 2
 	}
+	if _, err := app.LiveSteerCallerSessionID(); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
 		emitRunUsageError(runOutputModeFinalText, err.Error())
 		return 2

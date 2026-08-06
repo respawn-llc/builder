@@ -41,8 +41,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 			t.Fatalf("tool %s: %v", call.ID, err)
 		}
 	}
-	first := engine.QueueUserMessageWithClientRequestID("first", "client-1")
-	second := engine.QueueUserMessageWithClientRequestID("second", "client-2")
+	first := mustQueueUserMessageWithClientRequestID(t, engine, "first", "client-1")
+	second := mustQueueUserMessageWithClientRequestID(t, engine, "second", "client-2")
 	snapshot := hydrationSnapshot(t, engine)
 	if snapshot.ActiveThinkingStatus == nil || snapshot.ActiveThinkingStatus.StepID != stepID ||
 		snapshot.ActiveThinkingStatus.Text != "Planning" ||
@@ -127,7 +127,7 @@ func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) 
 	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
 		t.Fatalf("prepare queue flush: %v", err)
 	}
-	queued := engine.QueueUserMessageWithClientRequestID("queued input", "request-id")
+	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
 	blocker := mustBlockTestEventLogAppends(t, store)
 	flushDone := make(chan error, 1)
 	go func() {

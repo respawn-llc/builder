@@ -447,8 +447,8 @@ func (e *Engine) shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 	return !completed
 }
 
-func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
-	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, e.transcriptWorkingDir())
+func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
+	msg := normalizeMessageForTranscript(message, e.transcriptWorkingDir())
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return session.CommitReceipt{}, nil
 	}
@@ -470,16 +470,26 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); projectionErr != nil {
 		return appended.CommitReceipt, errors.Join(appendErr, fmt.Errorf("append queued message projection: %w", projectionErr))
 	}
-	e.emitRaw(Event{
-		Kind:                         EventUserMessageFlushed,
-		StepID:                       stepID,
-		UserMessage:                  *msg.Content,
-		UserMessageBatch:             append([]string(nil), batch...),
-		UserMessageBatchQueueItemIDs: normalizedIDs,
-		UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
-		CommittedTranscriptChanged:   true,
-		CommittedProvenance:          &provenance,
-	})
+	event := Event{
+		Kind:                       EventConversationUpdated,
+		StepID:                     stepID,
+		CommittedTranscriptChanged: true,
+		Message:                    msg,
+		CommittedProvenance:        &provenance,
+	}
+	if msg.Role == llm.RoleUser {
+		event = Event{
+			Kind:                         EventUserMessageFlushed,
+			StepID:                       stepID,
+			UserMessage:                  *msg.Content,
+			UserMessageBatch:             append([]string(nil), batch...),
+			UserMessageBatchQueueItemIDs: normalizedIDs,
+			UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
+			CommittedTranscriptChanged:   true,
+			CommittedProvenance:          &provenance,
+		}
+	}
+	e.emitRaw(event)
 	for _, item := range normalizedItems {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitRaw(Event{
@@ -565,11 +575,16 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		Status:          status,
 		FailureReason:   reason,
 	}
+	text, err := item.DisplayText()
+	if err != nil {
+		e.surfaceRunError(fmt.Errorf("queued user message status: %w", err))
+		return
+	}
 	if restore {
-		event.RestoreText = item.Text
+		event.RestoreText = text
 	}
 	if status == QueuedUserMessageAccepted {
-		event.RestoreText = item.Text
+		event.RestoreText = text
 	}
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }

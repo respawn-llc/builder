@@ -168,7 +168,9 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	eng.liveRun.beginStep(snapshot)
 	eng.ensureOrchestrationCollaborators()
 	queueItemID := runtimeids.NewQueueItemID()
-	eng.messageFlow.QueueUserMessageWithID(QueuedUserMessage{ID: queueItemID.String(), Text: "steer pending", ClientRequestID: liveRunTestRequestID(t).String()})
+	if _, err := eng.messageFlow.QueueUserMessageWithID(queuedUserMessageWithID(queueItemID.String(), "steer pending", liveRunTestRequestID(t).String())); err != nil {
+		t.Fatalf("queue pending steer: %v", err)
+	}
 	eng.liveRun.mu.Lock()
 	eng.liveRun.current.trackQueuedItemForLiveRun(queueItemID)
 	delete(eng.liveRun.current.publishingItems, queueItemID)
@@ -327,7 +329,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 			<-releaseBefore
 			return nil
 		})
-		if err == nil && (!accepted || item.ID == "" || item.Text != "steer") {
+		if err == nil && (!accepted || item.ID == "" || mustQueuedUserMessageText(t, item) != "steer") {
 			err = errors.New("unexpected accepted queue item")
 		}
 		queueDone <- err
@@ -732,14 +734,18 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 		t.Fatal("timed out waiting for active step")
 	}
 
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "race-safe steer", ClientRequestID: "req-publishing"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "race-safe steer", "req-publishing")
 	tagged := eng.liveRun.beginQueueItemPublication(mustQueueItemID(item.ID), func(queueItemID string) {
 		eng.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
 	if !tagged || item.ID == "" {
 		t.Fatalf("publishing queue setup tagged=%t item=%+v", tagged, item)
 	}
-	item = eng.messageFlow.QueueUserMessageWithID(item)
+	var queueErr error
+	item, queueErr = eng.messageFlow.QueueUserMessageWithID(item)
+	if queueErr != nil {
+		t.Fatalf("queue publishing item: %v", queueErr)
+	}
 	stopped, err := eng.TryInterruptActiveRun()
 	if err != nil || !stopped {
 		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v, want active stop", stopped, err)
@@ -776,14 +782,14 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 			}
 		},
 	})
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "stopped drained", ClientRequestID: "req-stopped"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "stopped drained", "req-stopped")
 	queueItemID := mustQueueItemID(item.ID)
 	eng.markQueuedUserInjectionForAutoDrain(item.ID)
 	eng.liveRun.mu.Lock()
 	eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 	eng.liveRun.mu.Unlock()
 
-	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserSteeringIntent{{message: item}})
+	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserMessage{{message: item}})
 	if len(remaining) != 0 {
 		t.Fatalf("remaining stopped drained items = %+v, want none", remaining)
 	}
@@ -873,7 +879,10 @@ func TestCapturedActiveRunResultCompletesLateTaggedQueuedDrain(t *testing.T) {
 	if got := <-transitions; got != StepLifecycleTransitionEnded {
 		t.Fatalf("second transition = %q, want ended", got)
 	}
-	queued := eng.QueueUserMessageForAutoDrain("steer into drain", "initial-drain")
+	queued, queueErr := eng.QueueUserMessageForAutoDrain("steer into drain", "initial-drain")
+	if queueErr != nil {
+		t.Fatalf("queue auto-drain item: %v", queueErr)
+	}
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelWait()
 	handle, err := eng.CaptureActiveRunResult(waitCtx)

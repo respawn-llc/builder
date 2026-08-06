@@ -36,7 +36,10 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveThinkingStatus = transcriptThinkingStatusFromRuntime(runtimeSnapshot.ActiveThinkingStatus)
 	hydration.ActiveReasoningTraces = transcriptReasoningTracesFromRuntime(runtimeSnapshot.ActiveReasoningTraces)
 	hydration.InFlightTools = transcriptToolStartsFromRuntime(runtimeSnapshot.InFlightTools)
-	hydration.QueuedMessages = transcriptQueuedMessagesFromRuntime(runtimeSnapshot.QueuedMessages)
+	hydration.QueuedMessages, err = transcriptQueuedMessagesFromRuntime(runtimeSnapshot.QueuedMessages)
+	if err != nil {
+		return clientui.TranscriptHydration{}, err
+	}
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
@@ -72,20 +75,24 @@ func transcriptReasoningTracesFromRuntime(states []runtime.TranscriptReasoningTr
 	return out
 }
 
-func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) []clientui.TranscriptQueuedMessageState {
+func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) ([]clientui.TranscriptQueuedMessageState, error) {
 	if len(messages) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]clientui.TranscriptQueuedMessageState, 0, len(messages))
 	for index, message := range messages {
+		text, err := message.DisplayText()
+		if err != nil {
+			return nil, fmt.Errorf("queued message %d: %w", index, err)
+		}
 		out = append(out, clientui.TranscriptQueuedMessageState{
 			ClientRequestID: mustTranscriptClientRequestID(message.ClientRequestID, fmt.Sprintf("hydrated queued message %d", index)),
 			QueueItemID:     mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
 			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            textutil.Value(message.Text),
+			Text:            textutil.Value(text),
 		})
 	}
-	return out
+	return out, nil
 }
 
 func transcriptReviewerStateFromRuntime(state *runtime.TranscriptReviewerState) *clientui.TranscriptReviewerState {

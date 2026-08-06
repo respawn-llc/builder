@@ -2,6 +2,7 @@ package serverapi
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -160,9 +161,10 @@ type RuntimeInterruptResponse struct {
 }
 
 type RuntimeLiveSteerRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Text            string `json:"text"`
+	ClientRequestID string  `json:"client_request_id"`
+	SessionID       string  `json:"session_id"`
+	CallerSessionID *string `json:"caller_session_id,omitempty"`
+	Text            string  `json:"text"`
 }
 
 type RuntimeLiveSteerResponse struct {
@@ -403,6 +405,15 @@ func (r RuntimeInterruptRequest) Validate() error {
 func (r RuntimeLiveSteerRequest) Validate() error {
 	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
+	}
+	if r.CallerSessionID != nil {
+		callerSessionID, err := runtimeids.ParseSessionID(*r.CallerSessionID)
+		if err != nil {
+			return fmt.Errorf("caller_session_id: %w", err)
+		}
+		if !callerSessionID.IsCanonicalUUIDv4() {
+			return errors.New("caller_session_id: canonical UUIDv4 required")
+		}
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return errors.New("text is required")

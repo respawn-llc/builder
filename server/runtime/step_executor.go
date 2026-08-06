@@ -55,6 +55,15 @@ type completedResponsePreflightRejection struct {
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
+	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
+	var stopped *queuedUserFlushStoppedError
+	if errors.As(err, &stopped) {
+		return stepLoopResult{}, nil
+	}
+	return result, err
+}
+
+func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied := false
@@ -404,13 +413,25 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
 	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
-	return result.flushed, err
+	if err != nil {
+		return 0, err
+	}
+	if result.disposition == userInjectionFlushStopped {
+		return 0, &queuedUserFlushStoppedError{}
+	}
+	return result.flushed, nil
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
 	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
-	return err
+	if err != nil {
+		return err
+	}
+	if result.disposition == userInjectionFlushStopped {
+		return &queuedUserFlushStoppedError{}
+	}
+	return nil
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
