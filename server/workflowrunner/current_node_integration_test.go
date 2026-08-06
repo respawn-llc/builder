@@ -643,12 +643,22 @@ func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testin
 }
 
 func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceRetires(t *testing.T) {
-	f := newCurrentNodeRunnerFixture(
-		t,
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("completed review")},
 		ScriptedFinalAnswer(`{"transition":"review","commentary":"implementation complete"}`),
 		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes requested"}`),
 		ScriptedRuntimeError(ErrScriptedRuntime),
 	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	threshold := 1
+	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	implementation := f.startTask(t, task)
@@ -663,6 +673,9 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 		t.Fatalf("apply pending Approval: %v", err)
 	}
 	requests := f.waitForModelRequests(t, 3)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("loop post-completion compactions = %d, want one", len(client.CompactionCalls()))
+	}
 	targetNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].Reference.Equal(implementation) &&
@@ -680,9 +693,9 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	if len(initialAssignments) != 1 {
 		t.Fatalf("initial implementation assignments = %+v, want exactly one", initialAssignments)
 	}
-	if len(reassignedImplementation) != 2 {
+	if len(reassignedImplementation) != 1 {
 		t.Fatalf(
-			"approved implementation assignments = %+v, want initial plus exactly one reassignment",
+			"approved implementation assignments = %+v, want exactly one reassignment after replacement",
 			reassignedImplementation,
 		)
 	}
