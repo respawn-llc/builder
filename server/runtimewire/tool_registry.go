@@ -386,9 +386,8 @@ func requiredRootForPath(root string) (tools.FilesystemRoot, error) {
 }
 
 func validateFilesystemContext(context tools.FilesystemContext) error {
-	if strings.TrimSpace(context.Access.WorkingDirectory.LexicalPath) == "" ||
-		strings.TrimSpace(context.Access.ExecutionTargetRoot.LexicalPath) == "" {
-		return errWorkspaceRootRequired
+	if err := tools.ValidateFileAccessScope(context.Access); err != nil {
+		return errors.Join(errWorkspaceRootRequired, err)
 	}
 	if strings.TrimSpace(context.Access.ProjectWorkspace.ProjectID) == "" {
 		return errors.New("project workspace project id is required")
@@ -399,10 +398,6 @@ func validateFilesystemContext(context tools.FilesystemContext) error {
 			len(context.Access.ProjectWorkspace.Roots),
 			metadata.ProjectWorkspaceCollectionLimit,
 		)
-	}
-	if strings.TrimSpace(context.Access.WorkingDirectory.RealPath) == "" ||
-		strings.TrimSpace(context.Access.ExecutionTargetRoot.RealPath) == "" {
-		return errWorkspaceRootRequired
 	}
 	if context.Access.WorkingDirectory.Info == nil || context.Access.ExecutionTargetRoot.Info == nil {
 		return fmt.Errorf("%w: required filesystem root is unavailable", os.ErrNotExist)

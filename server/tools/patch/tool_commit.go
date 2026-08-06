@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"core/shared/config"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -57,6 +58,7 @@ func cleanupStagedFiles(states []*patchFileState) {
 }
 
 func commitStagedFiles(
+	tool *Tool,
 	states []*patchFileState,
 	deleteTargets map[string]wholeFileDeletionTarget,
 ) ([]patchformat.WholeFileDeletionFact, error) {
@@ -68,12 +70,20 @@ func commitStagedFiles(
 		var rollbackErr error
 		for i := len(committed) - 1; i >= 0; i-- {
 			entry := committed[i]
+			if err := revalidateCommitPath(tool, entry.Path); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+				continue
+			}
 			if err := restoreSnapshot(entry.Path, entry.Before); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore target %s: %w", entry.Path, err))
 			}
 		}
 		for i := len(removed) - 1; i >= 0; i-- {
 			entry := removed[i]
+			if err := revalidateCommitPath(tool, entry.Path); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+				continue
+			}
 			if err := restoreSnapshot(entry.Path, entry.Before); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore moved source %s: %w", entry.Path, err))
 			}
@@ -96,6 +106,9 @@ func commitStagedFiles(
 		removedPaths[path] = struct{}{}
 		if !before.Exists {
 			return before, nil
+		}
+		if err := revalidateCommitPath(tool, path); err != nil {
+			return fileSnapshot{}, err
 		}
 		if err := os.Remove(path); err != nil {
 			primary := fmt.Errorf("remove %s %s: %w", label, path, err)
@@ -143,6 +156,9 @@ func commitStagedFiles(
 	}
 
 	for _, s := range states {
+		if err := revalidateCommitPath(tool, s.NewPath); err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(filepath.Dir(s.NewPath), 0o755); err != nil {
 			primary := fmt.Errorf("create parent dir for %s: %w", s.NewPath, err)
 			if rollbackErr := rollback(); rollbackErr != nil {
@@ -157,6 +173,9 @@ func commitStagedFiles(
 				return nil, errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
 			}
 			return nil, primary
+		}
+		if err := revalidateCommitPath(tool, s.NewPath); err != nil {
+			return nil, err
 		}
 		if err := os.Rename(s.StagedPath, s.NewPath); err != nil {
 			primary := fmt.Errorf("commit write %s: %w", s.NewPath, err)
@@ -173,6 +192,17 @@ func commitStagedFiles(
 			deletionFacts[j].PhysicalGroup.FirstOperation.HunkOrdinal
 	})
 	return deletionFacts, nil
+}
+
+func revalidateCommitPath(tool *Tool, path string) error {
+	if tool == nil || tool.managedWorktreePathContext == nil {
+		return nil
+	}
+	resolved, err := config.ResolveExistingAncestorRealPath(path)
+	if err != nil {
+		return err
+	}
+	return tool.checkForeignManagedWorktreePath(resolved)
 }
 
 func createStagedFile(targetPath string, data []byte, mode os.FileMode) (string, error) {

@@ -643,7 +643,7 @@ func TestCommitStagedFilesRollsBackCommittedTargetsOnLaterFailure(t *testing.T) 
 		{Exists: true, NewPath: blockingDir, Original: blockingDir, StagedPath: secondStage},
 	}
 
-	_, err = commitStagedFiles(states, nil)
+	_, err = commitStagedFiles(nil, states, nil)
 	if err == nil {
 		t.Fatal("expected transactional commit failure")
 	}

@@ -185,5 +185,5 @@ func (t *Tool) apply(
 		return nil, err
 	}
 	defer cleanupStagedFiles(states)
-	return commitStagedFiles(states, state.deleteTargets)
+	return commitStagedFiles(t, states, state.deleteTargets)
 }
