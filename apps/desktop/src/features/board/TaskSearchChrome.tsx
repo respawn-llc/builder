@@ -159,11 +159,17 @@ export function TaskSearchHost() {
   const search = useTaskSearch(projectID, open, debouncedQuery);
   const selection = useTaskSearchSelection(projectID, search.displayedQuery, search.results);
   const revealActiveSelection = selection.revealActive;
+  const previousOpenRef = useRef(false);
+  const previousProjectIDRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) {
+    const scopeChanged = previousProjectIDRef.current !== projectID;
+    const opened = open && !previousOpenRef.current;
+    previousProjectIDRef.current = projectID;
+    previousOpenRef.current = open;
+    if (open && (opened || scopeChanged)) {
       revealActiveSelection();
     }
-  }, [invocation, open, revealActiveSelection]);
+  }, [open, projectID, revealActiveSelection]);
   const activate = useCallback(
     (result: SearchResult): void => {
       if (invocation === null) {
