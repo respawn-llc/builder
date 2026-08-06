@@ -1,12 +1,15 @@
 package workflowstore
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"sort"
 	"testing"
 	"time"
 
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -440,6 +443,42 @@ func TestLoadSessionReuseAssociationsUsesExistingSerialAndBranchLookups(t *testi
 		if !found {
 			t.Fatalf("missing retained association for %v: %+v", want, associations)
 		}
+	}
+}
+
+func TestLoadSessionReuseAssociationsTreatsMissingReferencesAsNormalWithoutDiagnostics(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	branchKey := workflow.TransitionBranchKey("missing")
+	branchReference, err := workflow.NewCurrentNodeReference(
+		task.ID,
+		started.Reference.NodeID,
+		&branchKey,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+
+	var diagnostics bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	associations, err := store.LoadSessionReuseAssociations(
+		metadata.WithQueryFailureDiagnostics(ctx),
+		[]workflow.CurrentNodeReference{started.Reference, branchReference},
+	)
+	if err != nil {
+		t.Fatalf("LoadSessionReuseAssociations: %v", err)
+	}
+	if len(associations) != 0 {
+		t.Fatalf("missing retained associations = %+v, want none", associations)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("missing retained association diagnostics = %q, want none", diagnostics.String())
 	}
 }
 

@@ -2,6 +2,8 @@ package sqlitegen
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"runtime/debug"
 )
@@ -18,6 +20,9 @@ func WithQueryFailureDiagnostics(ctx context.Context) context.Context {
 func recordQueryError(ctx context.Context, cause error, query string, argumentCount int) error {
 	if cause == nil {
 		return nil
+	}
+	if errors.Is(cause, sql.ErrNoRows) {
+		return cause
 	}
 	if ctx == nil || ctx.Value(queryFailureDiagnosticsContextKey{}) != true {
 		return cause
