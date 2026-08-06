@@ -222,6 +222,90 @@ func TestLocalToolRegistrySiblingWorkspaceBypassesNativeToolApprovals(t *testing
 	}
 }
 
+func TestLocalToolRegistryTemporaryPathsBypassNativeToolApprovals(t *testing.T) {
+	workspace := t.TempDir()
+	temporaryRoot := t.TempDir()
+	editPath := filepath.Join(temporaryRoot, "edit.txt")
+	if err := os.WriteFile(editPath, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write temporary edit fixture: %v", err)
+	}
+	imagePath := filepath.Join(temporaryRoot, "image.pdf")
+	if err := os.WriteFile(imagePath, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+		t.Fatalf("write temporary image fixture: %v", err)
+	}
+	filesystemContext, err := NewFilesystemContext(workspace, workspace, metadata.ProjectWorkspaceBoundary{
+		ProjectID: "project",
+	})
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		FilesystemContext:   filesystemContext,
+		Enabled:             []toolspec.ID{toolspec.ToolEdit, toolspec.ToolPatch, toolspec.ToolViewImage},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalToolRegistryBinding: %v", err)
+	}
+	var approvalRequests int
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		approvalRequests++
+		return askquestion.AskQuestionResponse{
+			Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny},
+		}, nil
+	})
+
+	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
+	if !ok {
+		t.Fatal("missing edit handler")
+	}
+	editInput, err := json.Marshal(map[string]any{
+		"path":       editPath,
+		"old_string": "before",
+		"new_string": "after",
+	})
+	if err != nil {
+		t.Fatalf("marshal edit input: %v", err)
+	}
+	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "temporary-edit", Name: toolspec.ToolEdit, Input: editInput})
+	if err != nil || editResult.IsError {
+		t.Fatalf("temporary edit result = %+v, error=%v", editResult, err)
+	}
+
+	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("missing patch handler")
+	}
+	patchInput, err := json.Marshal(map[string]any{
+		"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(temporaryRoot, "patch.txt") + "\n+patched\n*** End Patch\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal patch input: %v", err)
+	}
+	patchResult, err := patchHandler.Call(context.Background(), tools.Call{ID: "temporary-patch", Name: toolspec.ToolPatch, Input: patchInput})
+	if err != nil || patchResult.IsError {
+		t.Fatalf("temporary patch result = %+v, error=%v", patchResult, err)
+	}
+
+	viewImageHandler, ok := binding.Registry().Get(toolspec.ToolViewImage)
+	if !ok {
+		t.Fatal("missing view_image handler")
+	}
+	viewInput, err := json.Marshal(map[string]any{"path": imagePath})
+	if err != nil {
+		t.Fatalf("marshal view_image input: %v", err)
+	}
+	viewResult, err := viewImageHandler.Call(context.Background(), tools.Call{ID: "temporary-view-image", Name: toolspec.ToolViewImage, Input: viewInput})
+	if err != nil || viewResult.IsError {
+		t.Fatalf("temporary view_image result = %+v, error=%v", viewResult, err)
+	}
+	if approvalRequests != 0 {
+		t.Fatalf("temporary paths triggered %d approval requests", approvalRequests)
+	}
+}
+
 func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
 	configRoot := t.TempDir()
 	originalWorkspace := t.TempDir()
