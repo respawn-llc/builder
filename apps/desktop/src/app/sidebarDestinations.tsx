@@ -52,7 +52,7 @@ function TaskDetailDestination({ destination, navigator, retainedState }: Readon
   usePublishSidebarHeaderAction(
     <TaskDetailHeaderActions destination={destination} navigator={navigator} />,
   );
-  return <TaskDetailSurface enabled initialFocus={destination.initialFocus} navigator={navigator} onMutated={destination.onMutated} retainedState={retainedState} taskId={destination.taskID} />;
+  return <TaskDetailSurface enabled initialFocus={destination.initialFocus} navigator={navigator} onMutated={destination.onMutated} retainedState={retainedState} sidebarMode={destination.mode} taskId={destination.taskID} />;
 }
 
 function TaskDetailHeaderActions({ destination, navigator }: Readonly<{

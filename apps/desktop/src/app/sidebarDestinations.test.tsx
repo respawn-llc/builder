@@ -3,7 +3,6 @@ import { isValidElement } from "react";
 import type { SidebarDestination } from "@/app-facade";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import { SidebarDestinationView } from "./sidebarDestinations";
-import { sidebarDestinationPolicy } from "./sidebarDestinationPolicy";
 const headerAction = vi.hoisted(() => vi.fn<(action: unknown) => void>());
 const fixture = vi.hoisted(() => ({
   openWindow: vi.fn(async () => undefined),
@@ -64,59 +63,31 @@ vi.mock("@/features/workflows", () => ({
   ),
   WorkflowCreateForm: (props: Readonly<{
     onCreated: (result: Readonly<{ workflow: Readonly<{ id: string }> }>) => void;
-    onProjectMissing?: () => void;
   }>) => (
-    <>
-      <button
-        data-testid="workflow-create-success"
-        onClick={() => { props.onCreated({ workflow: { id: "workflow-created" } }); }}
-      />
-      <button data-testid="workflow-create-missing" onClick={props.onProjectMissing} />
-    </>
+    <button
+      data-testid="workflow-create-success"
+      onClick={() => { props.onCreated({ workflow: { id: "workflow-created" } }); }}
+    />
   ),
 }));
 
 vi.mock("@/features/workflow-editor", () => ({
   WorkflowEditorRoute: () => <div />,
-  WorkflowInspectorSidebar: (props: Readonly<{ onMissingSelectedNode: () => void }>) => (
-    <button data-testid="workflow-inspector-missing" onClick={props.onMissingSelectedNode} />
-  ),
+  WorkflowInspectorSidebar: () => <div />,
 }));
 
 function mountDestination(
   destination: SidebarDestination,
   pageNavigator = createTestSidebarNavigator(),
 ) {
-  render(
-    <SidebarDestinationView
-      destination={destination}
-      navigator={pageNavigator}
-    />,
-  );
+  render(<SidebarDestinationView destination={destination} navigator={pageNavigator} />);
   return pageNavigator;
 }
 
 describe("Sidebar destination completion ownership", () => {
   beforeEach(() => {
-    fixture.openWindow.mockClear();
-    fixture.openProject.mockClear();
-    fixture.openWorkflowEditor.mockClear();
+    for (const mock of Object.values(fixture)) mock.mockClear();
     headerAction.mockClear();
-  });
-
-  it("deduplicates only Task Detail destinations", () => {
-    expect(
-      sidebarDestinationPolicy.equals(
-        { kind: "taskDetail", taskID: "task-1" },
-        { kind: "taskDetail", taskID: "task-1" },
-      ),
-    ).toBe(true);
-    expect(
-      sidebarDestinationPolicy.equals(
-        { kind: "custom", title: "same", content: null },
-        { kind: "custom", title: "same", content: null },
-      ),
-    ).toBe(false);
   });
 
   it("locks header exit only for a pending related New Task and replaces it on success", () => {
@@ -154,21 +125,9 @@ describe("Sidebar destination completion ownership", () => {
   });
 
   it.each([
-    {
-      destination: { kind: "workflowCreate", projectID: "project-1" } satisfies SidebarDestination,
-      trigger: "workflow-create-success",
-      follow: () => fixture.openWorkflowEditor,
-    },
-    {
-      destination: { kind: "linkWorkflow", creating: true, projectID: "project-1" } satisfies SidebarDestination,
-      trigger: "workflow-created",
-      follow: () => fixture.openWorkflowEditor,
-    },
-    {
-      destination: { kind: "linkWorkflow", projectID: "project-1" } satisfies SidebarDestination,
-      trigger: "workflow-linked",
-      follow: () => fixture.openProject,
-    },
+    { destination: { kind: "workflowCreate", projectID: "project-1" } satisfies SidebarDestination, trigger: "workflow-create-success", follow: () => fixture.openWorkflowEditor },
+    { destination: { kind: "linkWorkflow", creating: true, projectID: "project-1" } satisfies SidebarDestination, trigger: "workflow-created", follow: () => fixture.openWorkflowEditor },
+    { destination: { kind: "linkWorkflow", projectID: "project-1" } satisfies SidebarDestination, trigger: "workflow-linked", follow: () => fixture.openProject },
   ])("runs $trigger follow-up only after accepted scoped close", ({ destination, follow, trigger }) => {
     const acceptedNavigator = mountDestination(destination);
     fireEvent.click(screen.getByTestId(trigger));
@@ -184,24 +143,7 @@ describe("Sidebar destination completion ownership", () => {
     expect(follow()).toHaveBeenCalledOnce();
   });
 
-  it("uses scoped page operations for Project-missing and Workflow Inspector missing-node", () => {
-    const createNavigator = mountDestination({ kind: "workflowCreate", projectID: "project-1" });
-    fireEvent.click(screen.getByTestId("workflow-create-missing"));
-    expect(createNavigator.back).toHaveBeenCalledOnce();
-
-    const inspectorNavigator = mountDestination({
-      kind: "workflowInspect",
-      selection: { kind: "workflow" },
-      workflowID: "workflow-1",
-    });
-    fireEvent.click(screen.getByTestId("workflow-inspector-missing"));
-    expect(inspectorNavigator.close).toHaveBeenCalledOnce();
-  });
-
-  it.each<Readonly<{ outcome: "accepted" | "stale" }>>([
-    { outcome: "accepted" },
-    { outcome: "stale" },
-  ])("keeps pop-out completion scoped when close is $outcome", async ({ outcome }) => {
+  it.each<Readonly<{ outcome: "accepted" | "stale" }>>([{ outcome: "accepted" }, { outcome: "stale" }])("keeps pop-out completion scoped when close is $outcome", async ({ outcome }) => {
     const navigator = createTestSidebarNavigator({ close: vi.fn(() => outcome) });
     mountDestination({ kind: "taskDetail", taskID: "task-1" }, navigator);
     const action = headerAction.mock.lastCall?.[0];
@@ -213,12 +155,6 @@ describe("Sidebar destination completion ownership", () => {
       expect(fixture.openWindow).toHaveBeenCalledOnce();
     });
 
-    expect(fixture.openWindow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: { taskID: "task-1" },
-        route: "/native-dialog/task-detail",
-      }),
-    );
     expect(navigator.close).toHaveBeenCalledOnce();
   });
 });

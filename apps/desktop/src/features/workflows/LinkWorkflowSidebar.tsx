@@ -80,11 +80,6 @@ function LinkWorkflowPicker({
     queryFn: async () => api.listProjectWorkflowLinks(normalizedProjectID),
     enabled: normalizedProjectID.length > 0,
   });
-  useEffect(() => {
-    if (navigator !== undefined && linksQuery.isError && isProjectMissingError(linksQuery.error)) {
-      navigator.back();
-    }
-  }, [linksQuery.error, linksQuery.isError, navigator]);
   const workflows = useMemo(
     () => workflowsQuery.data?.pages.flatMap((page) => page.workflows) ?? [],
     [workflowsQuery.data],
@@ -107,6 +102,10 @@ function LinkWorkflowPicker({
       onLinked(link.workflowID);
     },
   });
+  const projectMissing = [linksQuery.error, linkMutation.error].some(isProjectMissingError);
+  useEffect(() => {
+    if (projectMissing) navigator?.back();
+  }, [navigator, projectMissing]);
 
   if (workflowsQuery.isPending || linksQuery.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} title={title} />;

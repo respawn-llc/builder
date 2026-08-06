@@ -9,7 +9,9 @@ import {
 } from "@/api";
 import type {
   SidebarPageNavigator,
+  SidebarMode,
   SidebarRootController,
+  SidebarDestination,
   TaskDetailInitialFocus,
 } from "@/app-facade";
 import { useAppNavigation, useConnectionSnapshot, useStatusController } from "@/app-facade";
@@ -47,6 +49,7 @@ export function TaskDetailContent({
   openLink,
   navigator,
   retainedState,
+  sidebarMode,
   openSidebar,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
@@ -59,6 +62,7 @@ export function TaskDetailContent({
   navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -183,10 +187,7 @@ export function TaskDetailContent({
       }}
       onSelectDependencyTask={(taskID) => {
         if (navigator !== undefined) {
-          navigator.push({
-            kind: "taskDetail",
-            taskID,
-          });
+          navigator.push(dependencyDestination(taskID, sidebarMode, onMutated));
           return;
         }
         void navigation.replaceTask(taskID);
@@ -208,6 +209,19 @@ export function TaskDetailContent({
       />
     </TaskResumeProvider>
   );
+}
+
+function dependencyDestination(
+  taskID: string,
+  mode: SidebarMode | undefined,
+  onMutated: (() => void) | undefined,
+): Extract<SidebarDestination, { kind: "taskDetail" }> {
+  return {
+    kind: "taskDetail",
+    taskID,
+    ...(mode === undefined ? {} : { mode }),
+    ...(onMutated === undefined ? {} : { onMutated }),
+  };
 }
 
 function openRelatedTaskCreation({

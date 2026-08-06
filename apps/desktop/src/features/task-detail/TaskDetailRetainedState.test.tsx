@@ -53,26 +53,34 @@ describe("Task Detail retained sidebar state", () => {
     expect(latest()).not.toHaveProperty("questionSelections");
   });
 
-  it("ignores an invalid retained snapshot and preserves the first-open focus request", async () => {
+  it("preserves overlay composition while opening a dependency Task", async () => {
     const pageNavigator = createTestSidebarNavigator();
-    mountTaskDetailSurface(taskDetailResponse, {
-      initialFocus: { kind: "dependencies" },
-      navigator: pageNavigator,
-      retainedState: { scrollOffsetPx: -1 },
-    });
-
-    expect(await screen.findByDisplayValue("Resolve blocker")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(pageNavigator.registerCapture).toHaveBeenCalled();
-    });
-    const latest = vi.mocked(pageNavigator.registerCapture).mock.calls.at(-1)?.[0];
-    if (latest === undefined) throw new Error("Expected Task Detail fallback-state capture.");
-    expect(latest()).toEqual(
-      expect.objectContaining({
-        draft: { body: "Need operator input", title: "Resolve blocker" },
-        selectedTab: "comments",
-      }),
+    const onMutated = vi.fn();
+    const blockedBy = taskDetailResponse.task.dependencies.directions[0];
+    const blocks = taskDetailResponse.task.dependencies.directions[1];
+    if (blockedBy === undefined || blocks === undefined) throw new Error("Expected dependency directions.");
+    const item = {
+      task_id: "task-2", short_id: "T-2", title: "Prepare", workflow_id: "workflow-2",
+      status: { kind: "backlog", native_state: "active", node_ids: [], attention_types: [] },
+      satisfaction: "unsatisfied",
+    };
+    const dependencies = {
+      blocker_count: 1, unsatisfied_blocker_count: 1, directly_blocked_task_count: 0,
+      directions: [{ ...blockedBy, total_count: 1, unsatisfied_count: 1, items: [item] }, blocks],
+    };
+    mountTaskDetailSurface(
+      { task: { ...taskDetailResponse.task, dependencies } },
+      { navigator: pageNavigator, onMutated, sidebarMode: "overlay" },
     );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId("dependency-row-task-2"));
+    expect(pageNavigator.push).toHaveBeenCalledWith({
+      kind: "taskDetail",
+      mode: "overlay",
+      onMutated,
+      taskID: "task-2",
+    });
   });
 
   it("opens related creation through the standalone Task Detail root owner", async () => {

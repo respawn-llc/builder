@@ -14,6 +14,7 @@ import {
   SidebarRootContext,
   type SidebarPageNavigator,
   type SidebarRootController,
+  type SidebarMode,
   type TaskDetailInitialFocus,
 } from "@/app-facade";
 import { TaskDetailSurface } from "@/features/task-detail";
@@ -364,9 +365,11 @@ export type TaskDetailFixtureOptions = Readonly<{
   initialFocus?: TaskDetailInitialFocus | undefined;
   nativeBridge?: NativeBridge | undefined;
   navigator?: SidebarPageNavigator | undefined;
+  onMutated?: (() => void) | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   path?: string | undefined;
   retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
   routes?: readonly FakeRoute[] | undefined;
 }>;
 
@@ -424,8 +427,10 @@ export function mountTaskDetailSurface(
             enabled: true,
             initialFocus: options.initialFocus,
             navigator: options.navigator,
+            onMutated: options.onMutated,
             openSidebar: options.openSidebar,
             retainedState: options.retainedState,
+            sidebarMode: options.sidebarMode,
             taskId: "task-1",
           }),
           services,

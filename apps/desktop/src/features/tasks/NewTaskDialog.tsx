@@ -172,9 +172,10 @@ function NewTaskFormContent({
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
+  const projectMissing = [workspaces.error, createTask.error].some(isProjectMissingError);
   useEffect(() => {
-    if (workspaces.isError && isProjectMissingError(workspaces.error)) onProjectMissing?.();
-  }, [onProjectMissing, workspaces.error, workspaces.isError]);
+    if (projectMissing) onProjectMissing?.();
+  }, [onProjectMissing, projectMissing]);
   const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
   const [labelCreatePending, setLabelCreatePending] = useState(false);
   const effectiveSelectedLabelIDs = useMemo(() => {

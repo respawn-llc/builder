@@ -11,6 +11,7 @@
 - The Desktop root runs React 19.2.7 under `StrictMode`. Development effect replay performs setup → cleanup → setup while preserving component refs, so effect cleanup cannot be the semantic retirement boundary for a still-current page capability.
 - Prior review artifacts and thread state are historical evidence only. KENT-356 implementation does not regenerate an external review ledger or perform review-thread mutations; repository-owned product and architecture gates verify the replacement.
 - On August 6, 2026, the user raised the maximum production changed-LoC cap to 1,800. Implementation continues under the approved full behavior contract and returns to Design before exceeding 1,800.
+- On August 6, 2026, the user narrowed Project-missing behavior for Link Workflow and project-scoped Workflow Editor: fix raw-code classification and mutation races, but an idle surface may remain when its existing read cannot distinguish a deleted Project from a valid empty/unlinked result. Do not add a detection-only query or change server link-read semantics in KENT-356.
 
 ## Design Scope Card
 
@@ -159,3 +160,11 @@
 - [x] Remove browser-history wording from the Desktop product specification.
 - [x] Defer the broader mounted-owner guard expansion to KENT-457 by explicit user decision; retain in-cap standalone creation, stale Project Delete, stale pop-out, native deletion refetch, and rendered deep-range guards here.
 - [x] Run final automated verification and commit the complete review-remediation round.
+
+## Second review remediation
+
+- [x] Recognize raw and structured Project-missing RPC errors at the Desktop API boundary.
+- [x] Wire New Task and Link Workflow mutation failures to scoped Project-missing dismissal.
+- [x] Narrow the idle Link Workflow/project-scoped Workflow Editor contract by explicit user decision; do not add a detection-only query or server read-semantics change.
+- [x] Preserve Task Detail overlay mode and immutable composition metadata for dependency traversal.
+- [x] Run final automated verification and commit the second remediation round.

@@ -5,6 +5,7 @@ import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssign
 import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import type { SidebarPageNavigator } from "@/app-facade";
+import type { SidebarMode } from "@/app-facade";
 import type { SidebarRootController } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
@@ -20,6 +21,7 @@ export type TaskDetailSurfaceProps = Readonly<{
   navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
 }>;
 
 export function TaskDetailSurface({
@@ -30,6 +32,7 @@ export function TaskDetailSurface({
   onMutated,
   openSidebar,
   retainedState,
+  sidebarMode,
 }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -74,6 +77,7 @@ export function TaskDetailSurface({
           openSidebar={openSidebar}
           openLink={openLink}
           retainedState={retainedState}
+          sidebarMode={sidebarMode}
         />
       </TaskDetailAssignmentScope>
     </ProjectLabelsProvider>
