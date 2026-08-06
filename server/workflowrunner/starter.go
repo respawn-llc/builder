@@ -352,7 +352,7 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return prepared.cleanup(err)
 	}
-	pathContext, err := currentNodeManagedWorktreePathContext(prepared.plan, prepared.root)
+	pathContext, err := s.currentNodeManagedWorktreePathContext(prepared.plan, prepared.root)
 	if err != nil {
 		return prepared.cleanup(err)
 	}
@@ -658,7 +658,7 @@ func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, in
 	return s.mutationPermit.Run(ctx, func(ctx context.Context) error { return s.metadata.UpdateSessionExecutionTarget(ctx, update) })
 }
 
-func currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
+func (s *Starter) currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
 	if root.Managed == nil {
 		return nil, nil
 	}
