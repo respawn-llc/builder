@@ -26,6 +26,7 @@ type taskLabelFilterTemplateData struct {
 type taskDependencyFilterTemplateData struct {
 	DependencyFilter string
 	Indent           string
+	StatusRelation   string
 	TaskID           string
 }
 
@@ -258,10 +259,11 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, dependencySo
 		}
 		return rendered.String(), nil
 	}
-	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string) (string, error) {
+	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string, statusRelation string) (string, error) {
 		data := taskDependencyFilterTemplateData{
 			DependencyFilter: dependencyFilter,
 			Indent:           indent,
+			StatusRelation:   statusRelation,
 			TaskID:           taskID,
 		}
 		if err := data.validate(); err != nil {
@@ -293,6 +295,8 @@ func (d taskDependencyFilterTemplateData) validate() error {
 		return errors.New("task ID template expression is empty")
 	case strings.TrimSpace(d.DependencyFilter) == "":
 		return errors.New("dependency filter template expression is empty")
+	case strings.TrimSpace(d.StatusRelation) == "":
+		return errors.New("dependency filter status relation is empty")
 	default:
 		return nil
 	}

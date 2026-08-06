@@ -3,8 +3,10 @@ package workflowstore
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/workflow"
 	"core/shared/runtimeids"
 )
 
@@ -43,6 +45,12 @@ type WorkflowDeleteBlocker struct {
 	Count   int64
 }
 
+type preparedWorkflowDeletion struct {
+	*preparedSQLLifecycleMutation
+	result  WorkflowDeleteResult
+	taskIDs []workflow.TaskID
+}
+
 func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
 	if workflowID.IsZero() {
 		return WorkflowDeleteImpact{}, ErrWorkflowIDRequired
@@ -54,82 +62,105 @@ func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids
 	return workflowDeleteImpactFromRow(row), nil
 }
 
-func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (WorkflowDeleteResult, error) {
+func (s *Store) prepareWorkflowDeletion(
+	ctx context.Context,
+	req WorkflowDeleteRequest,
+) (WorkflowDeleteResult, *preparedWorkflowDeletion, error) {
 	if req.WorkflowID.IsZero() {
-		return WorkflowDeleteResult{}, ErrWorkflowIDRequired
+		return WorkflowDeleteResult{}, nil, ErrWorkflowIDRequired
 	}
 	impact, err := s.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
-		return WorkflowDeleteResult{}, err
+		return WorkflowDeleteResult{}, nil, err
 	}
 	if blockers := workflowDeleteBlockers(req, impact); len(blockers) > 0 {
-		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil
+		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil, nil
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return WorkflowDeleteResult{}, err
+		return WorkflowDeleteResult{}, nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = tx.Rollback()
+		}
+	}()
 	q := s.queries.WithTx(tx)
 	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("lock workflow dependency projects: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("lock workflow dependency projects: %w", err)
 	}
 	current, err := q.GetWorkflowDeleteImpact(ctx, req.WorkflowID)
 	if err != nil {
-		return WorkflowDeleteResult{}, err
+		return WorkflowDeleteResult{}, nil, err
 	}
 	impact = workflowDeleteImpactFromRow(current)
 	if blockers := workflowDeleteBlockers(req, impact); len(blockers) > 0 {
-		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil
+		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil, nil
+	}
+	rawTaskIDs, err := q.ListWorkflowTaskIDs(ctx, req.WorkflowID)
+	if err != nil {
+		return WorkflowDeleteResult{}, nil, err
+	}
+	taskIDs := make([]workflow.TaskID, 0, len(rawTaskIDs))
+	for _, rawTaskID := range rawTaskIDs {
+		taskID := workflow.TaskID(strings.TrimSpace(rawTaskID))
+		if taskID == "" {
+			return WorkflowDeleteResult{}, nil, fmt.Errorf("workflow %q has a blank Task id", req.WorkflowID)
+		}
+		taskIDs = append(taskIDs, taskID)
 	}
 
 	now := s.now().UnixMilli()
 	resolution, err := workflowAttentionResolution(ctx, q, req.WorkflowID)
 	if err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
 	if _, err := q.TouchWorkflowDependencySurvivors(ctx, sqlitegen.TouchWorkflowDependencySurvivorsParams{
 		WorkflowID:      req.WorkflowID,
 		UpdatedAtUnixMs: now,
 	}); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("touch workflow dependency survivors: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task dependencies: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow task dependencies: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task pending approvals: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow task pending approvals: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task current nodes: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow task current nodes: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTaskCommentsByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task comments: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow task comments: %w", err)
 	}
 	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow tasks: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow tasks: %w", err)
 	}
 	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: req.WorkflowID}); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("clear workflow default links: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("clear workflow default links: %w", err)
 	}
 	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, req.WorkflowID); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow project links: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow project links: %w", err)
 	}
 	deletedCount, err := q.DeleteWorkflowByID(ctx, req.WorkflowID)
 	if err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow: %w", err)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("delete workflow: %w", err)
 	}
 	if deletedCount != 1 {
-		return WorkflowDeleteResult{}, fmt.Errorf("workflow %q was not deleted", req.WorkflowID)
+		return WorkflowDeleteResult{}, nil, fmt.Errorf("workflow %q was not deleted", req.WorkflowID)
 	}
-	if err := tx.Commit(); err != nil {
-		return WorkflowDeleteResult{}, err
-	}
-	return WorkflowDeleteResult{
+	result := WorkflowDeleteResult{
 		Deleted:                 true,
 		Impact:                  impact,
 		TaskAttentionResolution: resolution,
+	}
+	handedOff = true
+	return result, &preparedWorkflowDeletion{
+		preparedSQLLifecycleMutation: newPreparedSQLLifecycleMutation(tx),
+		result:                       result,
+		taskIDs:                      taskIDs,
 	}, nil
 }
 

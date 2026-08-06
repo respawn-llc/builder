@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -156,7 +157,15 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	started, err := store.StartTask(ctx, task.ID)
+	publication, err := workflowstore.NewLifecyclePublication(store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	started, err := publication.PublishTaskStart(
+		ctx,
+		task.ID,
+		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
+	)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}

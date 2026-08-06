@@ -1,6 +1,7 @@
 package workflowview
 
 import (
+	"core/internal/testharness/workflowtest"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -16,7 +17,7 @@ import (
 func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T) {
 	approvalFixture := newCurrentNodeViewFixture(t, true)
 	approvalStarted := approvalFixture.startTask(t, "Approval task")
-	completed, err := approvalFixture.store.CompleteCurrentNode(approvalFixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(approvalFixture.store, approvalFixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalStarted.currentNode,
 		TransitionID: "done",
 		Commentary:   "Ready to merge.",
@@ -110,7 +111,7 @@ func requireAttentionMessageOmitted(t *testing.T, item serverapi.WorkflowAttenti
 func TestAttentionPaginatesDurableCurrentStateAndScopesTaskQuery(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, true)
 	approvalTask := fixture.startTask(t, "Approval")
-	completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalTask.currentNode,
 		TransitionID: "done",
 	})
@@ -189,6 +190,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		currentNodeViewStatusObservationSource{
 			authority:  question.authority,
 			quiescence: fixture.quiescence,
+			store:      fixture.store,
 		},
 	)
 	if err != nil {
@@ -235,11 +237,24 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce},
 		}},
 	}}
+	attentionProjection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		projector,
+		currentNodeViewStatusObservationSource{
+			authority:  question.authority,
+			quiescence: fixture.quiescence,
+			store:      fixture.store,
+			prompts:    prompts,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection attention: %v", err)
+	}
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		question.authority,
-		prompts,
+		attentionProjection,
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -273,7 +288,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if len(unrelatedAttention.Items) != 0 {
 		t.Fatalf("unrelated task attention = %+v, want none", unrelatedAttention.Items)
 	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection, fixture.dependencyCounter)
+	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -304,20 +319,10 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	if !ok {
 		t.Fatalf("approval execution target = %T, want agent", execution.target)
 	}
-	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
-		agentTarget.sessionID.String(): {{
-			ID:                request.ID,
-			CreatedAt:         time.UnixMilli(4_000).UTC(),
-			Question:          request.Question,
-			Approval:          true,
-			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny},
-		}},
-	}}
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		fixture.authority,
-		prompts,
+		surfaces.projection,
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -345,7 +350,7 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 }
 
-func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {
+func TestAttentionKeepsPublishedPromptWithoutASecondLivePromptLookup(t *testing.T) {
 	surfaces := newRealTaskStatusSurfaces(t, false)
 	fixture := surfaces.fixture
 	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Retired prompt")}
@@ -358,8 +363,7 @@ func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T)
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		fixture.authority,
-		currentNodeViewPrompts{},
+		surfaces.projection,
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -370,7 +374,11 @@ func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T)
 	if err != nil {
 		t.Fatalf("Attention.ListTask: %v", err)
 	}
-	if len(response.Items) != 0 {
-		t.Fatalf("retired prompt attention = %+v, want no items for session %s", response.Items, agentTarget.sessionID)
+	if len(response.Items) != 1 ||
+		response.Items[0].SessionID == nil ||
+		*response.Items[0].SessionID != agentTarget.sessionID.String() ||
+		response.Items[0].QuestionID == nil ||
+		*response.Items[0].QuestionID != request.ID {
+		t.Fatalf("published prompt attention = %+v, want prompt for session %s", response.Items, agentTarget.sessionID)
 	}
 }

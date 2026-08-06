@@ -62,10 +62,15 @@ func (s *Starter) startCurrentNodeScript(
 			Env:     env,
 			Stdin:   stdin,
 		},
+		RunningPublication: currentNodeRunningPublication(controller),
 		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
+			durableCtx := context.WithoutCancel(finalizeCtx)
+			if err := publishCurrentNodeFinalizing(durableCtx, controller, scope.ID()); err != nil {
+				return err
+			}
 			if runErr != nil || result.Canceled || result.StdoutOverflow {
 				return s.failCurrentNodeScope(
-					finalizeCtx,
+					durableCtx,
 					controller,
 					scope,
 					ReasonScriptExecutionFailed,
@@ -75,9 +80,9 @@ func (s *Starter) startCurrentNodeScript(
 			contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
 			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 			if err != nil {
-				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
+				return s.failCurrentNodeScope(durableCtx, controller, scope, ReasonScriptCompletionFailed, err)
 			}
-			_, err = controller.CompleteCurrentNode(finalizeCtx, workflowruntime.CompletionRequest{
+			_, err = controller.CompleteCurrentNode(durableCtx, workflowruntime.CompletionRequest{
 				ScopeID:      scope.ID(),
 				TransitionID: parsed.TransitionID,
 				OutputValues: parsed.OutputValues,

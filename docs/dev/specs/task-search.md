@@ -38,7 +38,7 @@
 - Command-local validation failures use exit code `2`. These include missing or extra positional queries, blank or overlong queries, malformed or unknown flags, invalid `--status`, invalid `--context`, invalid `--page-size`, invalid `--offset`, invalid flag combinations, and normalized-too-short literal queries. An unresolved Project selector, transport failure, schema or index failure, database busy or interruption, and every raw FTS5 evaluation failure use exit code `1`.
 - SQLite reports malformed raw FTS5 syntax and some FTS schema or configuration failures through the same runtime error class. Kent therefore reports every raw FTS5 SQLite evaluation error as one generic operational failure with exit code `1`.
 - Search uses the same authoritative Task status as Task lists and Task detail.
-- Persisted Task fields in one response use one point-in-time view. Live Task activity is observed separately.
-- Task status and status filtering combine that durable view with the separately captured live activity view.
-- If a Workflow transition overlaps the request, the response may briefly combine durable fields from before the transition with live status facts from after it, or the reverse. Search text, hit counts, filters, and source metadata remain internally consistent.
+- Each response uses one Lifecycle Publication capture that pins a compatible SQLite snapshot and immutable runtime root.
+- Search text, hit counts, source metadata, Task metadata, lifecycle status, status filtering, ranking, and pagination use that pinned pair for the full request.
+- If a Workflow publication overlaps capture, the response uses either the complete prior lifecycle view or the complete next lifecycle view. It never combines durable lifecycle facts from one publication with runtime lifecycle facts from another.
 - Search does not retain all matching Tasks, sources, or occurrences in memory.

@@ -88,21 +88,35 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			columnKeys: req.ColumnKeys,
 		}
 	}
-	observation, err := l.projection.Observe(nil)
-	if err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
-	page, err := l.queryRows(ctx, workflowTaskListQueryRequest{
-		projectID:          projectID,
-		narrowed:           narrowedQuery,
-		statusKinds:        req.StatusKinds,
-		attentionKinds:     req.AttentionKinds,
-		labelFilter:        labelFilter,
-		dependencyFilter:   req.DependencyFilter,
-		sortSelectors:      sortSelectors,
-		offset:             window.Offset,
-		limit:              window.Limit + 1,
-		liveTaskStatesJSON: observation.LiveTaskStatesJSON,
+	var page workflowTaskListPageResult
+	var labelIDsByTask map[string][]string
+	err = l.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+		var err error
+		page, err = l.queryRows(ctx, durable.queries, workflowTaskListQueryRequest{
+			projectID:          projectID,
+			narrowed:           narrowedQuery,
+			statusKinds:        req.StatusKinds,
+			attentionKinds:     req.AttentionKinds,
+			labelFilter:        labelFilter,
+			dependencyFilter:   req.DependencyFilter,
+			sortSelectors:      sortSelectors,
+			offset:             window.Offset,
+			limit:              window.Limit + 1,
+			liveTaskStatesJSON: observation.LiveTaskStatesJSON,
+		})
+		if err != nil {
+			return err
+		}
+		pageItems := page.rows
+		if len(pageItems) > window.Limit {
+			pageItems = pageItems[:window.Limit]
+		}
+		pageTaskIDs := make([]string, 0, len(pageItems))
+		for _, row := range pageItems {
+			pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
+		}
+		labelIDsByTask, err = loadTaskLabelIDsByTask(ctx, durable.queries, pageTaskIDs)
+		return err
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
@@ -115,14 +129,6 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	hasNext := len(pageItems) > window.Limit
 	if hasNext {
 		pageItems = pageItems[:window.Limit]
-	}
-	pageTaskIDs := make([]string, 0, len(pageItems))
-	for _, row := range pageItems {
-		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
-	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
-	if err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, row := range pageItems {

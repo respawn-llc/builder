@@ -18,15 +18,7 @@ import (
 )
 
 type TaskSearch struct {
-	metadata   *metadata.Store
-	queries    *sqlitegen.Queries
 	projection *TaskStatusProjection
-}
-
-type taskSearchReadSnapshot struct {
-	queries            *sqlitegen.Queries
-	liveTaskStatesJSON *string
-	close              func() error
 }
 
 func NewTaskSearch(
@@ -40,14 +32,12 @@ func NewTaskSearch(
 		return nil, errors.New("task status projection is required")
 	}
 	return &TaskSearch{
-		metadata:   metadataStore,
-		queries:    metadataStore.Queries(),
 		projection: projection,
 	}, nil
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
+	if s == nil || s.projection == nil {
 		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := req.Validate(); err != nil {
@@ -60,40 +50,40 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if req.Offset != nil {
 		offset = *req.Offset
 	}
-	snapshot, err := s.captureReadSnapshot(ctx, req)
+	var rows []sqlitegen.ListTaskSearchPageDescriptorsRow
+	var groups []serverapi.TaskSearchGroup
+	var hasNext bool
+	err = s.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+		if err := s.validateSchemaAndScope(ctx, durable.queries, req); err != nil {
+			return err
+		}
+		if _, err := durable.queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
+			return err
+		}
+		if req.Mode == serverapi.TaskSearchModeFTS5 {
+			if _, err := durable.queries.ValidateTaskSearchFTS5Expression(
+				ctx,
+				sql.NullString{String: req.Query, Valid: true},
+			); err != nil {
+				return err
+			}
+		}
+		var err error
+		rows, err = s.queryPage(ctx, durable.queries, observation.LiveTaskStatesJSON, req, offset)
+		if err != nil {
+			return err
+		}
+		hasNext = len(rows) > req.PageSize
+		if hasNext {
+			rows = rows[:req.PageSize]
+		}
+		groups, err = s.materializeGroups(ctx, durable.queries, req, rows)
+		return err
+	})
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
 		}
-		return serverapi.TaskSearchResponse{}, err
-	}
-	defer func() {
-		if closeErr := snapshot.Close(); closeErr != nil {
-			response = serverapi.TaskSearchResponse{}
-			err = errors.Join(err, fmt.Errorf("close task search read snapshot: %w", closeErr))
-		}
-	}()
-	if req.Mode == serverapi.TaskSearchModeFTS5 {
-		if _, validationErr := snapshot.queries.ValidateTaskSearchFTS5Expression(ctx, sql.NullString{String: req.Query, Valid: true}); validationErr != nil {
-			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(validationErr)
-		}
-	}
-	if snapshot.liveTaskStatesJSON == nil {
-		return serverapi.TaskSearchResponse{}, errors.New("task search read snapshot is closed")
-	}
-	rows, err := s.queryPage(ctx, snapshot.queries, *snapshot.liveTaskStatesJSON, req, offset)
-	if err != nil {
-		if req.Mode == serverapi.TaskSearchModeFTS5 {
-			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
-		}
-		return serverapi.TaskSearchResponse{}, err
-	}
-	hasNext := len(rows) > req.PageSize
-	if hasNext {
-		rows = rows[:req.PageSize]
-	}
-	groups, err := s.materializeGroups(ctx, snapshot.queries, req, rows)
-	if err != nil {
 		return serverapi.TaskSearchResponse{}, err
 	}
 	var next *int
@@ -106,48 +96,6 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
 	}
 	return response, nil
-}
-
-func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {
-	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("begin task search read transaction: %w", err)
-	}
-	closeTransaction := func() error {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			return nil
-		}
-		return rollbackErr
-	}
-	queries := s.queries.WithTx(tx)
-	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	observation, err := s.projection.Observe(nil)
-	if err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	liveTaskStatesJSON := observation.LiveTaskStatesJSON
-	return &taskSearchReadSnapshot{
-		queries:            queries,
-		liveTaskStatesJSON: &liveTaskStatesJSON,
-		close:              closeTransaction,
-	}, nil
-}
-
-func (s *taskSearchReadSnapshot) Close() error {
-	if s == nil || s.close == nil {
-		return nil
-	}
-	close := s.close
-	s.close = nil
-	s.queries = nil
-	s.liveTaskStatesJSON = nil
-	return close()
 }
 
 func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest) error {

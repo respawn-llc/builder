@@ -44,6 +44,9 @@ type Service struct {
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
+		RunTaskDeletion(context.Context, []workflow.TaskID, func(context.Context) error) error
+		DeleteTask(context.Context, workflow.TaskID) (workflowstore.DeleteTaskResult, error)
+		DeleteWorkflow(context.Context, workflowstore.WorkflowDeleteRequest) (workflowstore.WorkflowDeleteResult, error)
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResponse, error) (workflowexecution.WorkflowQuestionAcceptance, error)
@@ -166,6 +169,9 @@ func WithCurrentNodeExecution(execution interface {
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
+	RunTaskDeletion(context.Context, []workflow.TaskID, func(context.Context) error) error
+	DeleteTask(context.Context, workflow.TaskID) (workflowstore.DeleteTaskResult, error)
+	DeleteWorkflow(context.Context, workflowstore.WorkflowDeleteRequest) (workflowstore.WorkflowDeleteResult, error)
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResponse, error) (workflowexecution.WorkflowQuestionAcceptance, error)
@@ -583,27 +589,40 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
 	return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (serverapi.WorkflowDeleteResponse, error) {
-		if err := s.ensureWorkflowTasksQuiescent(ctx, req.WorkflowID); err != nil {
+		taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
+		if err != nil {
 			return serverapi.WorkflowDeleteResponse{}, err
 		}
-		return s.deleteWorkflow(ctx, req)
+		var response serverapi.WorkflowDeleteResponse
+		err = s.currentNodeExecution.RunTaskDeletion(ctx, taskIDs, func(ctx context.Context) error {
+			currentTaskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
+			if err != nil {
+				return err
+			}
+			if !sameWorkflowTaskIDs(taskIDs, currentTaskIDs) {
+				return errors.New("workflow Task set changed during deletion")
+			}
+			response, err = s.deleteWorkflow(ctx, req)
+			return err
+		})
+		return response, err
 	})
 }
 
-func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID runtimeids.WorkflowID) error {
-	if s == nil || s.currentNodeExecution == nil {
-		return errors.New("current node workflow execution is required")
+func sameWorkflowTaskIDs(left []workflow.TaskID, right []workflow.TaskID) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, workflowID)
-	if err != nil {
-		return err
+	seen := make(map[workflow.TaskID]struct{}, len(left))
+	for _, taskID := range left {
+		seen[taskID] = struct{}{}
 	}
-	for _, taskID := range taskIDs {
-		if err := s.currentNodeExecution.EnsureTaskQuiescent(taskID); err != nil {
-			return err
+	for _, taskID := range right {
+		if _, exists := seen[taskID]; !exists {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
@@ -622,7 +641,7 @@ func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
 	}
-	result, err := s.store.DeleteWorkflow(ctx, workflowstore.WorkflowDeleteRequest{
+	result, err := s.currentNodeExecution.DeleteWorkflow(ctx, workflowstore.WorkflowDeleteRequest{
 		WorkflowID:           req.WorkflowID,
 		Confirmed:            req.Confirmed,
 		ExpectedVersion:      req.ExpectedVersion,
@@ -1840,30 +1859,28 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	if s.taskWorktreeCleanup != nil {
-		if err := s.taskWorktreeCleanup.EnsureTaskWorktreeDeletable(ctx, req.TaskID); err != nil {
-			return err
-		}
-	}
 	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		if s.currentNodeExecution == nil {
 			return errors.New("current node workflow execution is required")
 		}
-		if err := s.currentNodeExecution.EnsureTaskQuiescent(workflow.TaskID(req.TaskID)); err != nil {
-			return err
-		}
-		if s.taskWorktreeCleanup != nil {
-			if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+		taskID := workflow.TaskID(req.TaskID)
+		return s.currentNodeExecution.RunTaskDeletion(ctx, []workflow.TaskID{taskID}, func(ctx context.Context) error {
+			if s.taskWorktreeCleanup != nil {
+				if err := s.taskWorktreeCleanup.EnsureTaskWorktreeDeletable(ctx, req.TaskID); err != nil {
+					return err
+				}
+				if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+					return err
+				}
+			}
+			result, err := s.currentNodeExecution.DeleteTask(ctx, taskID)
+			if err != nil {
 				return err
 			}
-		}
-		result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
-		if err != nil {
-			return err
-		}
-		s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
-		s.publishProjectWorkflowEvent(ctx, result.ProjectID, result.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
-		return nil
+			s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
+			s.publishProjectWorkflowEvent(ctx, result.ProjectID, result.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
+			return nil
+		})
 	})
 }
 

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/tools"
@@ -17,13 +19,14 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
 
 type taskStatusProjectionTestRunner struct{}
 
-type taskStatusProjectionTestAssignmentSteerer struct{}
+type taskStatusProjectionTestAssignmentEnsurer struct{}
 
 type taskStatusLiveTarget interface {
 	taskStatusLiveTarget()
@@ -46,8 +49,9 @@ type taskStatusScriptTarget struct {
 func (taskStatusScriptTarget) taskStatusLiveTarget() {}
 
 type taskStatusExpectedTarget struct {
-	nodeID workflow.NodeID
-	live   taskStatusLiveTarget
+	nodeID       workflow.NodeID
+	live         taskStatusLiveTarget
+	runtimeOwned bool
 }
 
 type controllerBackedTaskStatusRunner struct {
@@ -86,9 +90,9 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ workflowexecution.CurrentNodeAssignmentSteer,
+	_ workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
+	controller workflowruntime.Controller,
 ) error {
 	r.mu.Lock()
 	config, ok := r.configs[reference.TaskID]
@@ -120,10 +124,12 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 			lease.Release()
 		}
 		handle, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-			Descriptor: descriptor,
-			Runtime:    &config.plan,
-			Workflow:   &lease,
-			Resource:   sessionruntime.OpenAgentResource{},
+			Descriptor:         descriptor,
+			Runtime:            &config.plan,
+			Workflow:           &lease,
+			Resource:           sessionruntime.OpenAgentResource{},
+			PromptFeed:         currentNodeExecutionPromptFeedForTest(controller),
+			RunningPublication: currentNodeRunningPublicationForTest(controller),
 			Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 				if config.request != nil {
 					_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
@@ -150,13 +156,38 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	}
 }
 
-func (taskStatusProjectionTestAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (workflowexecution.CurrentNodeAssignmentSteer, error) {
-	return taskStatusProjectionTestAssignmentSteer{}, nil
+func currentNodeExecutionPromptFeedForTest(
+	controller workflowruntime.Controller,
+) sessionruntime.ExecutionPromptFeed {
+	feed, _ := controller.(sessionruntime.ExecutionPromptFeed)
+	return feed
 }
 
-type taskStatusProjectionTestAssignmentSteer struct{}
+func currentNodeRunningPublicationForTest(
+	controller workflowruntime.Controller,
+) func(sessionruntime.TaskExecution) error {
+	publisher, _ := controller.(interface {
+		PublishCurrentNodeRunningExecution(context.Context, sessionruntime.TaskExecution) error
+	})
+	if publisher == nil {
+		return nil
+	}
+	return func(running sessionruntime.TaskExecution) error {
+		return publisher.PublishCurrentNodeRunningExecution(context.Background(), running)
+	}
+}
 
-func (taskStatusProjectionTestAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
+func (taskStatusProjectionTestAssignmentEnsurer) EnsureCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+	return taskStatusProjectionTestAssignmentEnsure{}, nil
+}
+
+type taskStatusProjectionTestAssignmentEnsure struct{}
+
+func (taskStatusProjectionTestAssignmentEnsure) Wait(context.Context) (session.CommitReceipt, error) {
 	return session.CommitReceipt{Committed: true}, nil
 }
 
@@ -168,6 +199,7 @@ type realTaskStatusSurfaces struct {
 	list       *TaskList
 	search     *TaskSearch
 	board      *Board
+	projection *TaskStatusProjection
 }
 
 func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStatusSurfaces {
@@ -181,7 +213,7 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
+			AssignmentEnsurer: taskStatusProjectionTestAssignmentEnsurer{},
 		},
 	)
 	if err != nil {
@@ -197,7 +229,7 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
 	definitions := mustDefinitionProjection(t, fixture.store)
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -225,6 +257,7 @@ func newRealTaskStatusSurfaces(t *testing.T, requiresApproval bool) realTaskStat
 		list:       list,
 		search:     search,
 		board:      board,
+		projection: projection,
 	}
 }
 
@@ -332,10 +365,18 @@ func startControllerBackedTaskStatusExecution(
 			return false
 		}
 		executions := observation.Executions[task.task.ID].Executions
+		if options.queued {
+			lifecycle, exists := observation.Lifecycle[task.task.ID]
+			return exists &&
+				len(executions) == 0 &&
+				len(lifecycle.QueuedCurrentNodes) == 1 &&
+				lifecycle.QueuedCurrentNodes[0].Equal(task.currentNode) &&
+				len(lifecycle.ExactExecutions) == 0
+		}
 		if len(executions) != 1 {
 			return false
 		}
-		if executions[0].Queued != options.queued {
+		if executions[0].Queued {
 			return false
 		}
 		if scriptTarget, ok := options.target.(taskStatusScriptTarget); ok {
@@ -371,76 +412,236 @@ func realTaskStatusApprovalRequest() tools.AskQuestionRequest {
 }
 
 type staticTaskStatusLiveObservationSource struct {
+	store       *workflowstore.Store
 	observation workflowexecution.WorkflowTaskExecutionObservation
 	calls       *int
 }
 
 type countingTaskStatusLiveObservationSource struct {
-	source TaskStatusLiveObservationSource
+	source TaskStatusCaptureSource
 	calls  *int
 }
 
-func (s countingTaskStatusLiveObservationSource) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
+	ctx context.Context,
+	taskIDs []workflow.TaskID,
+	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
+) error {
 	*s.calls++
-	return s.source.ObserveWorkflowTaskExecutions(taskIDs)
+	return s.source.CaptureWorkflowTaskExecutions(ctx, taskIDs, operation)
 }
 
-func (s staticTaskStatusLiveObservationSource) ObserveWorkflowTaskExecutions([]workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
+	ctx context.Context,
+	_ []workflow.TaskID,
+	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
+) error {
 	if s.calls != nil {
 		*s.calls++
 	}
-	return s.observation, nil
+	return captureWorkflowViewTestObservation(ctx, s.store, s.observation, operation)
 }
 
 func (taskStatusProjectionTestRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	workflowexecution.CurrentNodeAssignmentSteer,
+	workflowexecution.CurrentNodeAssignmentEnsure,
 	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
 ) error {
 	return nil
 }
 
+func workflowTaskExecutionObservationForTest(
+	t testing.TB,
+	currentNodes map[workflow.TaskID][]workflow.CurrentNode,
+	executions map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot,
+	quiescence map[workflow.TaskID]bool,
+) workflowexecution.WorkflowTaskExecutionObservation {
+	t.Helper()
+	lifecycle := make(map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot, len(currentNodes))
+	for taskID, nodes := range currentNodes {
+		snapshot := workflowexecution.WorkflowTaskLifecycleSnapshot{
+			CurrentNodes: append([]workflow.CurrentNode(nil), nodes...),
+		}
+		queued := make(map[workflow.CurrentNodeReferenceKey]struct{})
+		for _, execution := range executions[taskID].Executions {
+			key, err := execution.Ref.CurrentNode.Key()
+			if err != nil {
+				t.Fatalf("Current Node key: %v", err)
+			}
+			if _, exists := queued[key]; !exists {
+				queued[key] = struct{}{}
+				snapshot.QueuedCurrentNodes = append(snapshot.QueuedCurrentNodes, execution.Ref.CurrentNode)
+			}
+			if !execution.Queued {
+				snapshot.ExactExecutions = append(snapshot.ExactExecutions, workflowstore.LifecycleExactExecution{
+					CurrentNode: execution.Ref.CurrentNode,
+					ScopeID:     execution.ScopeID,
+				})
+			}
+		}
+		lifecycle[taskID] = snapshot
+	}
+	return workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: executions,
+		Quiescence: quiescence,
+		Lifecycle:  lifecycle,
+	}
+}
+
 func TestTaskStatusProjectionObservationEncodesTypedLiveStateOnce(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
+	reference := func(taskID workflow.TaskID, nodeID workflow.NodeID) workflow.CurrentNodeReference {
+		ref, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
+		if err != nil {
+			t.Fatalf("NewCurrentNodeReference: %v", err)
+		}
+		return ref
+	}
+	bothTaskID := workflow.TaskID("task-both")
+	queuedRef := reference(bothTaskID, "node-queued")
+	approvalRef := reference(bothTaskID, "node-approval")
+	questionRef := reference(bothTaskID, "node-question")
+	questionTaskID := workflow.TaskID("task-question")
+	questionOnlyRef := reference(questionTaskID, "node-question-only")
+	executions := map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+		bothTaskID: {
+			Executions: []sessionruntime.TaskExecution{
+				{
+					Ref: sessionruntime.WorkflowExecutionRef{
+						ProjectID:   fixture.binding.ProjectID,
+						WorkflowID:  fixture.workflowID,
+						CurrentNode: queuedRef,
+					},
+					ScopeID: runtimeids.NewExecutionScopeID(),
+					Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+					Queued:  true,
+				},
+				{
+					Ref: sessionruntime.WorkflowExecutionRef{
+						ProjectID:   fixture.binding.ProjectID,
+						WorkflowID:  fixture.workflowID,
+						CurrentNode: approvalRef,
+					},
+					ScopeID: runtimeids.NewExecutionScopeID(),
+					Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+					PendingPrompts: []sessionruntime.PendingPromptReference{{
+						ID:   "approval",
+						Kind: sessionruntime.PendingPromptKindSessionApproval,
+					}},
+				},
+				{
+					Ref: sessionruntime.WorkflowExecutionRef{
+						ProjectID:   fixture.binding.ProjectID,
+						WorkflowID:  fixture.workflowID,
+						CurrentNode: questionRef,
+					},
+					ScopeID: runtimeids.NewExecutionScopeID(),
+					Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+					PendingPrompts: []sessionruntime.PendingPromptReference{{
+						ID:   "question",
+						Kind: sessionruntime.PendingPromptKindQuestion,
+					}},
+				},
+			},
+		},
+		"task-empty": {},
+		questionTaskID: {
+			Executions: []sessionruntime.TaskExecution{{
+				Ref: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   fixture.binding.ProjectID,
+					WorkflowID:  fixture.workflowID,
+					CurrentNode: questionOnlyRef,
+				},
+				ScopeID: runtimeids.NewExecutionScopeID(),
+				Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+				PendingPrompts: []sessionruntime.PendingPromptReference{{
+					ID:   "question-2",
+					Kind: sessionruntime.PendingPromptKindQuestion,
+				}},
+			}},
+		},
+	}
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
+			observation: workflowTaskExecutionObservationForTest(
+				t,
+				map[workflow.TaskID][]workflow.CurrentNode{
+					bothTaskID: {
+						{Reference: queuedRef},
+						{Reference: approvalRef},
+						{Reference: questionRef},
+					},
+					questionTaskID: {{Reference: questionOnlyRef}},
+				},
+				executions,
+				nil,
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+
+	observation := captureTaskStatusObservation(t, projection, []workflow.TaskID{"task-both", "task-question"})
+	const want = `[{"task_id":"task-both","has_lifecycle_override":true,"current_node_ids":["node-approval","node-question","node-queued"],"has_running":true,"has_queued":true,"waiting_question":true,"has_waiting_approval":true},{"task_id":"task-question","has_lifecycle_override":true,"current_node_ids":["node-question-only"],"has_running":true,"has_queued":false,"waiting_question":true,"has_waiting_approval":false}]`
+	if observation.LiveTaskStatesJSON != want {
+		t.Fatalf("encoded live task states = %s, want %s", observation.LiveTaskStatesJSON, want)
+	}
+}
+
+func TestTaskStatusProjectionObservationEncodesPinnedLifecycleOverridesAndExactFacts(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	queuedReference, err := workflow.NewCurrentNodeReference("task-queued-root", "node-queued", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference queued: %v", err)
+	}
+	runningReference, err := workflow.NewCurrentNodeReference("task-running-root", "node-running", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference running: %v", err)
+	}
+	runningScopeID := runtimeids.NewExecutionScopeID()
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
 			observation: workflowexecution.WorkflowTaskExecutionObservation{
 				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
-					"task-both": {
-						Executions: []sessionruntime.TaskExecution{
-							{
-								Queued: true,
-							},
-							{
-								Queued: false,
-								PendingPrompts: []sessionruntime.PendingPromptReference{{
-									ID:   "approval",
-									Kind: sessionruntime.PendingPromptKindSessionApproval,
-								}},
-							},
-							{
-								Queued: false,
-								PendingPrompts: []sessionruntime.PendingPromptReference{{
-									ID:   "question",
-									Kind: sessionruntime.PendingPromptKindQuestion,
-								}},
-							},
-						},
-					},
-					"task-empty": {},
-					"task-question": {
+					runningReference.TaskID: {
 						Executions: []sessionruntime.TaskExecution{{
-							Queued: false,
+							Ref: sessionruntime.WorkflowExecutionRef{
+								ProjectID:   fixture.binding.ProjectID,
+								WorkflowID:  fixture.workflowID,
+								CurrentNode: runningReference,
+							},
+							ScopeID: runningScopeID,
+							Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
 							PendingPrompts: []sessionruntime.PendingPromptReference{{
-								ID:   "question-2",
+								ID:   "question",
 								Kind: sessionruntime.PendingPromptKindQuestion,
 							}},
+						}},
+					},
+				},
+				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
+					queuedReference.TaskID: {
+						CurrentNodes:       []workflow.CurrentNode{{Reference: queuedReference}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{queuedReference},
+					},
+					runningReference.TaskID: {
+						CurrentNodes:       []workflow.CurrentNode{{Reference: runningReference}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{runningReference},
+						ExactExecutions: []workflowstore.LifecycleExactExecution{{
+							CurrentNode: runningReference,
+							ScopeID:     runningScopeID,
 						}},
 					},
 				},
@@ -451,47 +652,81 @@ func TestTaskStatusProjectionObservationEncodesTypedLiveStateOnce(t *testing.T) 
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
 
-	observation, err := projection.Observe([]workflow.TaskID{"task-both", "task-question"})
-	if err != nil {
-		t.Fatalf("TaskStatusProjection.Observe: %v", err)
-	}
-	const want = `[{"task_id":"task-both","has_running":true,"has_queued":true,"waiting_question":true,"has_waiting_approval":true},{"task_id":"task-question","has_running":true,"has_queued":false,"waiting_question":true,"has_waiting_approval":false}]`
+	observation := captureTaskStatusObservation(t, projection, []workflow.TaskID{queuedReference.TaskID, runningReference.TaskID})
+	const want = `[{"task_id":"task-queued-root","has_lifecycle_override":true,"current_node_ids":["node-queued"],"has_running":false,"has_queued":true,"waiting_question":false,"has_waiting_approval":false},{"task_id":"task-running-root","has_lifecycle_override":true,"current_node_ids":["node-running"],"has_running":true,"has_queued":false,"waiting_question":true,"has_waiting_approval":false}]`
 	if observation.LiveTaskStatesJSON != want {
-		t.Fatalf("encoded live task states = %s, want %s", observation.LiveTaskStatesJSON, want)
+		t.Fatalf("encoded pinned lifecycle states = %s, want %s", observation.LiveTaskStatesJSON, want)
 	}
 }
 
-func TestTaskStatusProjectionProjectsRetainedDurableAndLiveFactsInEitherCaptureOrder(t *testing.T) {
+func TestTaskStatusDurableSnapshotUsesPinnedCurrentNodeOverrideBeforeProjection(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Pinned override")
+	overrideNodeID := "node-pinned-override"
+	liveJSON := fmt.Sprintf(
+		`[{"task_id":%q,"has_lifecycle_override":true,"current_node_ids":[%q],"has_running":false,"has_queued":true,"waiting_question":false,"has_waiting_approval":false}]`,
+		started.task.ID,
+		overrideNodeID,
+	)
+
+	err := fixture.projection.WithSnapshot(t.Context(), nil, func(_ TaskStatusObservation, snapshot *TaskStatusDurableSnapshot) error {
+		statuses, err := snapshot.ProjectedStatuses(t.Context(), []workflow.TaskID{started.task.ID}, liveJSON)
+		if err != nil {
+			return err
+		}
+		status := statuses[started.task.ID]
+		if status.Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
+			t.Fatalf("status kind = %q, want queued", status.Status.Kind)
+		}
+		if !slices.Equal(status.Status.NodeIDs, []string{overrideNodeID}) {
+			t.Fatalf("status Node IDs = %v, want pinned override %q", status.Status.NodeIDs, overrideNodeID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithSnapshot: %v", err)
+	}
+}
+
+func TestTaskStatusProjectionProjectsRetainedDurableAndLiveFactsFromOneCapture(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "mixed projection")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	taskID := started.task.ID
+	scopeID := runtimeids.NewExecutionScopeID()
+	executions := map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+		taskID: {
+			Executions: []sessionruntime.TaskExecution{{
+				Ref: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   fixture.binding.ProjectID,
+					WorkflowID:  fixture.workflowID,
+					CurrentNode: started.currentNode,
+				},
+				ScopeID: scopeID,
+				Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+				PendingPrompts: []sessionruntime.PendingPromptReference{{
+					ID:   "question",
+					Kind: sessionruntime.PendingPromptKindQuestion,
+				}},
+			}},
+		},
+	}
 	calls := 0
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
 			calls: &calls,
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
-					taskID: {
-						Executions: []sessionruntime.TaskExecution{{
-							Ref: sessionruntime.WorkflowExecutionRef{
-								ProjectID:   fixture.binding.ProjectID,
-								WorkflowID:  fixture.workflowID,
-								CurrentNode: started.currentNode,
-							},
-							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
-							PendingPrompts: []sessionruntime.PendingPromptReference{{
-								ID:   "question",
-								Kind: sessionruntime.PendingPromptKindQuestion,
-							}},
-						}},
-					},
+			observation: workflowTaskExecutionObservationForTest(
+				t,
+				map[workflow.TaskID][]workflow.CurrentNode{
+					taskID: {{Reference: started.currentNode}},
 				},
-				Quiescence: map[workflow.TaskID]bool{taskID: false},
-			},
+				executions,
+				map[workflow.TaskID]bool{taskID: false},
+			),
 		},
 	)
 	if err != nil {
@@ -519,34 +754,18 @@ func TestTaskStatusProjectionProjectsRetainedDurableAndLiveFactsInEitherCaptureO
 		}
 	}
 
-	t.Run("durable before live", func(t *testing.T) {
-		err := projection.WithDurableSnapshot(t.Context(), func(durable *TaskStatusDurableSnapshot) error {
-			observation, err := projection.Observe([]workflow.TaskID{taskID})
-			if err != nil {
-				return err
-			}
-			assertProjection(t, observation, durable)
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("durable-before-live projection: %v", err)
-		}
+	err = projection.WithSnapshot(t.Context(), []workflow.TaskID{taskID}, func(
+		observation TaskStatusObservation,
+		durable *TaskStatusDurableSnapshot,
+	) error {
+		assertProjection(t, observation, durable)
+		return nil
 	})
-	t.Run("live before durable", func(t *testing.T) {
-		observation, err := projection.Observe([]workflow.TaskID{taskID})
-		if err != nil {
-			t.Fatalf("capture live observation: %v", err)
-		}
-		err = projection.WithDurableSnapshot(t.Context(), func(durable *TaskStatusDurableSnapshot) error {
-			assertProjection(t, observation, durable)
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("live-before-durable projection: %v", err)
-		}
-	})
-	if calls != 2 {
-		t.Fatalf("live observation calls = %d, want one per request", calls)
+	if err != nil {
+		t.Fatalf("TaskStatusProjection.WithSnapshot: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("lifecycle captures = %d, want one per request", calls)
 	}
 }
 
@@ -560,7 +779,7 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
+			AssignmentEnsurer: taskStatusProjectionTestAssignmentEnsurer{},
 		},
 	)
 	if err != nil {
@@ -576,7 +795,7 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
 
-	err = projection.WithDurableSnapshot(t.Context(), func(snapshot *TaskStatusDurableSnapshot) error {
+	err = projection.WithSnapshot(t.Context(), nil, func(_ TaskStatusObservation, snapshot *TaskStatusDurableSnapshot) error {
 		before, err := snapshot.CurrentNodesByTask(t.Context(), []workflow.TaskID{started.task.ID})
 		if err != nil {
 			return err
@@ -607,11 +826,11 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("WithDurableSnapshot: %v", err)
+		t.Fatalf("WithSnapshot: %v", err)
 	}
 
 	var observedState workflow.CurrentNodeSchedulingState
-	err = projection.WithDurableSnapshot(t.Context(), func(snapshot *TaskStatusDurableSnapshot) error {
+	err = projection.WithSnapshot(t.Context(), nil, func(_ TaskStatusObservation, snapshot *TaskStatusDurableSnapshot) error {
 		nodes, err := snapshot.CurrentNodesByTask(t.Context(), []workflow.TaskID{started.task.ID})
 		if err != nil {
 			return err
@@ -623,7 +842,7 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("WithDurableSnapshot post-mutation: %v", err)
+		t.Fatalf("WithSnapshot post-mutation: %v", err)
 	}
 	if observedState != workflow.CurrentNodeSchedulingInterrupted {
 		t.Fatalf("new snapshot state = %q, want interrupted", observedState)
@@ -639,7 +858,7 @@ func TestTaskStatusDurableSnapshotCannotEscapeProjectionCallback(t *testing.T) {
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
+			AssignmentEnsurer: taskStatusProjectionTestAssignmentEnsurer{},
 		},
 	)
 	if err != nil {
@@ -656,11 +875,11 @@ func TestTaskStatusDurableSnapshotCannotEscapeProjectionCallback(t *testing.T) {
 	}
 
 	var retained *TaskStatusDurableSnapshot
-	if err := projection.WithDurableSnapshot(t.Context(), func(snapshot *TaskStatusDurableSnapshot) error {
+	if err := projection.WithSnapshot(t.Context(), nil, func(_ TaskStatusObservation, snapshot *TaskStatusDurableSnapshot) error {
 		retained = snapshot
 		return nil
 	}); err != nil {
-		t.Fatalf("WithDurableSnapshot: %v", err)
+		t.Fatalf("WithSnapshot: %v", err)
 	}
 	if retained == nil {
 		t.Fatal("projection did not provide a durable snapshot")
@@ -668,4 +887,23 @@ func TestTaskStatusDurableSnapshotCannotEscapeProjectionCallback(t *testing.T) {
 	if _, err := retained.CurrentNodesByTask(t.Context(), []workflow.TaskID{"missing"}); err == nil {
 		t.Fatal("retained durable snapshot remained usable after callback")
 	}
+}
+
+func captureTaskStatusObservation(
+	t *testing.T,
+	projection *TaskStatusProjection,
+	taskIDs []workflow.TaskID,
+) TaskStatusObservation {
+	t.Helper()
+	var observation TaskStatusObservation
+	if err := projection.WithSnapshot(t.Context(), taskIDs, func(
+		captured TaskStatusObservation,
+		_ *TaskStatusDurableSnapshot,
+	) error {
+		observation = captured
+		return nil
+	}); err != nil {
+		t.Fatalf("TaskStatusProjection.WithSnapshot: %v", err)
+	}
+	return observation
 }

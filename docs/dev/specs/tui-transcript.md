@@ -200,10 +200,11 @@
 - Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
-- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
-- Interrupt injects detail-only developer-role control message `User interrupted you`.
-- Post-interrupt state returns idle with input ready.
-- Resume after interrupt requires explicit user text.
+- In an ordinary Session, Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
+- In a retained Workflow Session, Ctrl+C delegates interruption of the live Exact Execution Scope to Workflow Execution, including when mandatory result finalization is active after the Engine step has ended.
+- Ordinary Agent-Turn Interrupt injects detail-only developer-role control message `User interrupted you`.
+- Post-interrupt state returns idle with input ready after the owning Runtime or Workflow Execution reports its stopped result.
+- Starting another ordinary Agent Turn requires explicit user text. Opening or resuming an interrupted retained Workflow Session is an explicit Workflow activation and may Resume or attach to its Current Node without new prompt text.
 - After a crash during an Agent Step, recovery follows interruption behavior. Otherwise Kent restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 

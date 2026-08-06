@@ -255,6 +255,67 @@ func TestAuthorityCloseCancelsLifecycleStartWaitingForSessionAdmission(t *testin
 	}
 }
 
+func TestAttachWorkflowRuntimeAddsRepeatedOwnersToTheExactWorkflowResource(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	lease, err := fixture.authority.NewWorkflowExecutionLease(workflowExecutionRefForTest(
+		t,
+		workflow.TaskID("task-retained-activation"),
+		workflow.NodeID("node-retained-activation"),
+		nil,
+	))
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &lease,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	lease.Release()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("workflow execution did not start")
+	}
+	resource, ok := handle.Scope().Resource()
+	if !ok {
+		t.Fatal("workflow Agent execution has no resource")
+	}
+
+	first, err := fixture.authority.AttachWorkflowRuntime(context.Background(), resource, handle.Scope().ID(), "owner-a")
+	if err != nil {
+		t.Fatalf("AttachWorkflowRuntime owner-a: %v", err)
+	}
+	second, err := fixture.authority.AttachWorkflowRuntime(context.Background(), resource, handle.Scope().ID(), "owner-b")
+	if err != nil {
+		t.Fatalf("AttachWorkflowRuntime owner-b: %v", err)
+	}
+	if first.Resource() != resource || second.Resource() != resource {
+		t.Fatalf("attachments = %v and %v, want exact resource %v", first.Resource(), second.Resource(), resource)
+	}
+	if current, live := fixture.authority.SessionExecution(sessionID); !live || current.Scope().ID() != handle.Scope().ID() {
+		t.Fatalf("Session execution changed after repeated attachment: live=%t scope=%v", live, current)
+	}
+
+	close(release)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait workflow execution: %v", err)
+	}
+}
+
 func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
@@ -1275,7 +1336,7 @@ func TestScopedTaskExecutionSnapshotsExcludeUnrelatedScopesAndRemainImmutable(t 
 	}
 }
 
-func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
+func TestScriptExecutionRemainsRunningAndInterruptibleDuringCompletionFinalizer(t *testing.T) {
 	truePath, err := exec.LookPath("true")
 	if err != nil {
 		t.Skipf("true executable unavailable: %v", err)
@@ -1315,19 +1376,97 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
-	if len(targets.Executions) != 0 {
-		t.Fatalf("finalizing script remains interruptible: %+v", targets)
+	if len(targets.Executions) != 1 ||
+		targets.Executions[0].Queued ||
+		targets.Executions[0].Ref.CurrentNode.TaskID != taskID {
+		t.Fatalf("finalizing script snapshot = %+v, want one running exact execution", targets)
 	}
-	selectionCalled := false
-	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
-		selectionCalled = true
+	var selection WorkflowInterruptSelection
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
+		selection = got
 		return nil
 	})
-	if !errors.Is(selectionErr, ErrExecutionNoLongerLive) {
-		t.Fatalf("finalizing script selection error = %v, want %v", selectionErr, ErrExecutionNoLongerLive)
+	if selectionErr != nil {
+		t.Fatalf("finalizing script selection error = %v", selectionErr)
 	}
-	if selectionCalled {
-		t.Fatal("finalizing script alone authorized task interrupt")
+	if len(selection.Interruptible) != 1 ||
+		selection.Interruptible[0].Scope().ID() != handle.Scope().ID() ||
+		len(selection.Queued) != 0 ||
+		len(selection.Finalizing) != 1 ||
+		selection.Finalizing[0].Scope().ID() != handle.Scope().ID() {
+		t.Fatalf("finalizing script interrupt selection = %+v, want one interruptible exact scope", selection)
+	}
+
+	close(releaseFinalize)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestAgentExecutionRemainsRunningAndInterruptibleAfterRunnerReturnsDuringFinalizer(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	taskID := workflow.TaskID("task-finalizing-agent")
+	workflowRef := workflowExecutionRefForTest(t, taskID, "node-finalizing-agent", nil)
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow: releasedWorkflowLeaseForTest(
+			t,
+			fixture.authority,
+			workflowRef,
+		),
+		Resource: OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			return nil
+		},
+		Finalize: func(context.Context, ExecutionScope, error) error {
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = handle.Close(context.Background())
+	})
+	select {
+	case <-finalizeStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Agent execution did not enter result finalization")
+	}
+
+	snapshot, err := fixture.authority.CurrentScopedTaskExecutionSnapshot(
+		workflowRef.ProjectID,
+		workflowRef.WorkflowID,
+		taskID,
+	)
+	if err != nil {
+		t.Fatalf("CurrentScopedTaskExecutionSnapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 1 || snapshot.Executions[0].Queued {
+		t.Fatalf("finalizing Agent snapshot = %+v, want one running exact execution", snapshot)
+	}
+	var selection WorkflowInterruptSelection
+	if err := fixture.authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
+		selection = got
+		return nil
+	}); err != nil {
+		t.Fatalf("WithWorkflowInterruptSelection: %v", err)
+	}
+	if len(selection.Interruptible) != 1 ||
+		selection.Interruptible[0].Scope().ID() != handle.Scope().ID() {
+		t.Fatalf("finalizing Agent interrupt selection = %+v, want its exact scope", selection)
 	}
 
 	close(releaseFinalize)
@@ -1400,12 +1539,17 @@ func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope
 			return nil
 		})
 		if selectionErr == nil &&
-			len(selection.Interruptible) == 1 &&
-			selection.Interruptible[0].Scope().ID() == running.Scope().ID() &&
+			len(selection.Interruptible) == 2 &&
 			len(selection.Queued) == 0 &&
 			len(selection.Finalizing) == 1 &&
 			selection.Finalizing[0].Scope().ID() == finalizing.Scope().ID() {
-			break
+			selected := map[runtimeids.ExecutionScopeID]bool{}
+			for _, handle := range selection.Interruptible {
+				selected[handle.Scope().ID()] = true
+			}
+			if selected[running.Scope().ID()] && selected[finalizing.Scope().ID()] {
+				break
+			}
 		}
 		select {
 		case <-deadline:
@@ -1531,7 +1675,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 		if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
 			return err
 		}
-		_, err = engine.SteerWorkflowAssignment(runtime.WorkflowAssignment{})
+		_, err = engine.EnsureWorkflowAssignment(runtime.WorkflowAssignment{})
 		return err
 	})
 	if staleErr == nil {
@@ -2941,18 +3085,20 @@ func TestTaskExecutionRejectsPendingPromptsForQueuedAndScript(t *testing.T) {
 	for name, execution := range map[string]TaskExecution{
 		"queued": {
 			Ref:            ref,
+			ScopeID:        runtimeids.NewExecutionScopeID(),
 			Agent:          &TaskAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
 			Queued:         true,
 			PendingPrompts: pending,
 		},
 		"script": {
 			Ref:            ref,
+			ScopeID:        runtimeids.NewExecutionScopeID(),
 			Script:         &TaskScriptExecutionTarget{Path: "/bin/true"},
 			PendingPrompts: pending,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := execution.validate(); err == nil {
+			if err := execution.Validate(); err == nil {
 				t.Fatalf("%s execution accepted pending prompts", name)
 			}
 		})

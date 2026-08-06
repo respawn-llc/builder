@@ -13,7 +13,7 @@ func TestPreflightTaskResumeRejectsEditedTransitionParameterWithoutMutatingCurre
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	reviewResult, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "approved plan"},
@@ -82,7 +82,7 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	reviewResult, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "approved plan"},

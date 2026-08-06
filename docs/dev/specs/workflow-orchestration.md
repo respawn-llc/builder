@@ -20,7 +20,7 @@
 - Automation starts only through explicit Task Start, which applies the Start Node's outgoing Transition and adds the first executable current Node.
 - Automation continues through automatic Nodes until terminal or blocked by a Question, Approval/manual gate, error, capacity, interruption, or validation.
 - Task status combines Current Nodes with current live activity. Kent does not store a second lifecycle status that can disagree with them.
-- Running, queued, and waiting require matching Exact Execution Scope evidence. A current Terminal Node makes the Task done.
+- Running and live Question status require matching Exact Execution Scope evidence. Queued status requires one genuine Run owned by the current server. Persisted Workflow Approval uses its durable Approval state. A current Terminal Node makes the Task done.
 - A Project owns one shared Label catalog for every linked Workflow board. Tasks can use only Labels from their Project.
 - Labels are many-to-many organizational metadata on tasks. They never affect workflow state, scheduling, prompts, task status, or execution.
 
@@ -288,8 +288,11 @@
 - When `[workflow].use_required_tool_calls` is `false`, model requests in `shell_command` and `tool` modes use automatic tool selection. The selected completion mode still rejects ordinary assistant final answers.
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
 - Manual interruption releases the specialized Exact Execution Scope.
-- If the retained Workflow Session still belongs to the interrupted Current Node, a later ordinary interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
-- Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same Current Node. The interactive activation does not create a second Transition authority.
+- If the retained Workflow Session still belongs to the interrupted Current Node, a later interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
+- Kent resolves workflow-started and interactive completion from that retained Session to the same Current Node. The interactive activation does not create a second Transition authority.
+- Opening or resuming that retained Workflow Session interactively routes through Workflow Execution rather than starting an ordinary competing Session execution. Under the Task lifecycle writer, interactive activation and Task Resume either create the same Current-Node Run or attach to the Run that already won.
+- The exact retained binding is determined from the durable Current-Node/Session association. A missing active assignment or an assignment for the previous Current Node remains a Workflow activation and is repaired exactly once before admission; it does not fall back to ordinary Session execution.
+- Repeated interactive clients attach to the same Session resource and Exact Execution Scope. Interrupt from any Task or Session surface targets that scope, and agent-originated completion resolves the same Run and Current Node.
 - Resume starts a fresh Exact Execution Scope while retaining the Session Contract generation's effective completion mode.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, the command resolves the assigned Task and Current Node from the current Session. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
@@ -330,7 +333,10 @@
 - Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
-- Resume must not steer or append a Current Node assignment.
+- Before a resumed Agent Current Node starts, Kent must ensure that the target Session's durable active Workflow assignment identifies that Current Node.
+- Resume must reuse an existing matching Current Node assignment.
+- If the matching assignment is absent, Resume must append it exactly once before the Exact Execution Scope begins.
+- An assignment-delivery failure must leave the affected Current Node interrupted with a reason.
 - When a Session's model context has no prior executable Node assignment, Kent uses the initial-assignment instructions.
 - When a Session's model context already contains another executable Node assignment, Kent uses the reassignment instructions.
 - Full-history fan-out clones use the reassignment instructions because they inherit the source Session's prior assignment context.
@@ -441,23 +447,38 @@
 ## Workflow Execution And Restart
 
 - Workflow Execution is the single authority for Workflow lifecycle changes. It sequences conflicting operations and reports authoritative live state.
-- Requests to start eligible work automatically are temporary. Kent loses them on restart and does not reconstruct them from saved Task state.
+- Every executable Current Node has exactly one stable conceptual execution state: stopped, queued, or running.
+- `queued` means the current server owns one accepted Run for the Current Node and no matching Exact Execution Scope is live.
+- `running` means a matching Exact Execution Scope is actively executing the Agent loop, Script process, or mandatory result finalizer.
+- `stopped` means the Current Node has neither queued admission nor a live Exact Execution Scope. Typed durable or live Workflow state supplies its interruption, blocking attention, terminal failure, backlog, or completion semantics.
+- Preparation, assignment delivery, admission, and interruption persistence are internal lifecycle transitions, not observable Run states. Mandatory result finalization remains part of the live Exact Execution Scope.
+- Lifecycle Publication is the single owner of observable Workflow lifecycle publication. It pairs one immutable process-local runtime root with a compatible SQLite snapshot or commit.
+- A lifecycle-status request may wait only while Lifecycle Publication commits an already-prepared SQLite lifecycle transaction and swaps the matching runtime root. It does not wait for slow lifecycle preparation or for the rest of another read.
+- While a writer prepares the next state, a request may return the previous stable snapshot. It never derives an intermediate state from in-progress Current Node changes.
+- Kent does not persist Task lifecycle snapshots or reconstruct them from saved state.
+- The current server owns each automatically materialized executable Current Node as a pending automatic start until its Exact Execution Scope begins or Kent interrupts it.
+- A pending automatic start is temporary. Kent loses it on restart and does not reconstruct it from saved Task state.
 - Workflow automation starts Agent Nodes within available agent capacity and prefers to continue related work on the same Task. `[workflow].concurrency` limits these agent runs only.
 - Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
 - Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
-- Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
-- Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
+- Interactive activation of a retained Workflow Session is another entrypoint to the same Resume/attach operation. It never creates an ordinary Runtime when that Session is still exactly bound to an interrupted or Run-owned Agent Current Node.
+- Only an actively executing Exact Execution Scope proves that an Agent, Script, or its mandatory result finalizer is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
+- Start, Resume, and automatic Transitions admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
-- Restart does not restore live Questions, live Approvals, Automatic Intents, Runtime Gates, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
+- Restart does not restore live Questions, live Approvals, pending automatic starts, Runtime Gates, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
 - Before Resume continues, it closes unfinished tool operations in the bounded active transcript segment with a restart outcome. Resume does not replay answers, run interrupted tools again, or scan full transcript history.
 - Kent never retries an interrupted Current Node automatically.
-- Task Interrupt can target one Session or every actively executing agent and Script on the Task. A waiting Question and any state without active execution are not interruptible.
+- Task Interrupt can target one Session or every actively executing Agent, Script, or result finalizer on the Task. A waiting Question and any state without active execution are not interruptible.
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
-- Saved state without matching live execution never becomes interruptible as a fallback. Kent must prevent the mismatch, surface the lifecycle failure, or convert the affected Current Node to interrupted during restart recovery.
+- Runtime Interrupt from a workflow-scoped Session delegates execution cancellation and durable interruption publication to Workflow Execution. Runtime control still reconciles targeted and queued client input. Ordinary Sessions continue to use ordinary Engine interruption.
+- Interrupt cancels mandatory result finalization until its success Lifecycle Publication commit begins. Cancellation before that boundary rolls back the prepared success and publishes typed interruption. Once the commit begins it finishes atomically; Interrupt revalidation observes its completed successor or stopped result.
+- If an interrupted result finalizer does not stop within 300 seconds, Kent records verbose Task, Current Node, Run, Exact Execution Scope, finalizer-phase, elapsed-time, and stack diagnostics when possible, then deliberately crashes the server. Startup recovery converts affected executable Current Nodes to resumable interruption.
+- An executable Current Node with no Exact Execution Scope, pending automatic start owned by the current server, typed interruption, blocking attention, or terminal failure is an ownership loss. Kent immediately interrupts it with an ownership-loss reason and never starts it automatically.
+- Saved state without matching live execution never becomes interruptible as a fallback.
 - Completion can change a Task only from the matching Exact Execution Scope or from one unambiguous idle executable Current Node. A stopped scope and a non-current Node cannot change Task state.
 - Completion replaces source Current Nodes, materializes target inputs, and adds target Current Nodes as one atomic change.
 - Runtime failures, crashes, interruptions, and fixable start-validation blockers leave the affected Current Node interrupted with a reason.
@@ -467,10 +488,10 @@
 
 ## Task Status And Listing
 
-- Task Search, Task detail, Workflow boards, and Task lists use one server-owned authoritative Task-status projection derived from Current Nodes, pending Workflow Transition Approvals, and current live activity.
+- Task Search, Task detail, Workflow boards, Task lists, dependency projection, status filtering, actions, and pagination use one server-owned Lifecycle Publication capture derived from process-local stable lifecycle facts, durable stopped state, and current live activity.
 - The projection supplies primary status, every applicable attention kind and reference, available Task actions, and the exact Current Node, Session, or Script targets for those actions. A surface may omit fields it does not expose, but does not independently recompute lifecycle-sensitive facts.
-- Each request combines one durable Task-state view with one Immutable Live Snapshot, then derives the complete projection from those views. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
-- Each request is independent. Kent does not synchronize separate Search, List, Board, and Detail requests, so they may observe different lifecycle moments.
+- Each request briefly enters Lifecycle Publication, establishes its SQLite read snapshot, pins the matching immutable runtime root, and then releases publication coordination before executing the remainder of the read. The pinned pair remains valid for the request even after newer lifecycle publications occur.
+- Each request is independent. Separate Search, List, Board, and Detail requests may observe different published lifecycle snapshots and live moments.
 - Agreement among List/Search status filtering, status sorting, and returned status is not a product invariant. Each evaluation still follows the authoritative Task-status semantics.
 - Projected actions and targets are hints that may become stale after the response. Each Task-changing operation checks its authoritative state again before changing the Task.
 - If required durable or live facts cannot be read, the request fails instead of returning a partial projection or using a surface-specific fallback.
@@ -484,7 +505,10 @@
 - Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
-- Running, queued, and live-Question status require matching Exact Execution Scope evidence. `running` means an agent loop or Script process is actively executing; `waiting_question` is not running and is not interruptible. Interruption metadata on a current Node never proves liveness.
+- Running and live-Question status require matching Exact Execution Scope evidence. `running` means an Agent loop, Script process, or mandatory result finalizer is actively executing; `waiting_question` is not running and is not interruptible. Interruption metadata on a current Node never proves liveness.
+- Kent publishes `queued` only from a genuinely queued Run owned by the current server. Queued work is not interruptible.
+- A previously published `queued` snapshot may remain visible while its Task writer prepares the next stable state. The snapshot does not authorize execution or Interrupt.
+- An executable Current Node never projects as `active` while a lifecycle transition is internal or when no Run authority exists.
 - Task information exposes `can_delete` from the same live state. Delete treats this as a hint and checks Quiescence again before making changes.
 - Task status preserves every applicable attention kind and its Session and Current Node references when parallel branches differ.
 - Workflow validity is workflow-level state and is not a task status.
@@ -507,7 +531,8 @@
 - Task search reuses the authoritative Task status defined above.
 - [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
 - Search returns Task status from the server-owned Task-status projection.
-- Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with one separately captured Immutable Live Snapshot. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
+- Each response uses one Lifecycle Publication capture. The capture pins a compatible SQLite snapshot and immutable runtime root before Search applies lifecycle-sensitive filtering, status projection, sorting, or pagination.
+- A Workflow lifecycle publication that overlaps capture places the whole response on either the prior lifecycle view or the next lifecycle view. Search never combines durable lifecycle facts from one publication with runtime lifecycle facts from another.
 
 ## Execution Targets And Worktrees
 

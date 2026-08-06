@@ -157,6 +157,10 @@ type CompletionObservationResult struct {
 	Completed bool
 }
 
+type ResultFinalizer interface {
+	FinalizeCurrentNodeResult(context.Context, runtimeids.ExecutionScopeID, error) error
+}
+
 type ViolationKind string
 
 const (

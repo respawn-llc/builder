@@ -269,7 +269,7 @@ WHERE id = 'group-fanout'`)
 		}
 	}
 
-	applied, err := store.ApplyPendingApproval(t.Context(), approval.ID)
+	applied, err := applyPendingApprovalForStoreTest(store, t.Context(), approval.ID)
 	if err != nil {
 		t.Fatalf("ApplyPendingApproval migrated fanout: %v", err)
 	}

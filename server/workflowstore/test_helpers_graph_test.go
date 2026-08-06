@@ -195,7 +195,7 @@ func createDefaultTask(t *testing.T, ctx context.Context, store *Store, projectI
 
 func startTask(t *testing.T, ctx context.Context, store *Store, taskID workflow.TaskID) StartTaskResult {
 	t.Helper()
-	started, err := store.StartTask(ctx, taskID)
+	started, err := publishTaskStartForTest(ctx, store, taskID)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}

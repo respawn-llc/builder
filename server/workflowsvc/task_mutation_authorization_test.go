@@ -2,6 +2,7 @@ package workflowsvc
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -85,7 +86,7 @@ func TestWorkflowSessionCannotApproveItsOwnTask(t *testing.T) {
 		started.CurrentNodes[0],
 	)
 	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(task.Task.ID), started.CurrentNodes[0])
-	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(service.store, ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "done",
 	})
@@ -234,7 +235,7 @@ func TestWorkflowSessionCanApproveAnotherTask(t *testing.T) {
 	targetTask := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	targetStarted := startWorkflowServiceTask(t, ctx, service, targetTask.Task.ID)
 	source := workflowServiceCurrentNodeReference(t, workflow.TaskID(targetTask.Task.ID), targetStarted.CurrentNodes[0])
-	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(service.store, ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "done",
 	})
@@ -395,7 +396,7 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 		workflow.TaskID(approvalTask.Task.ID),
 		approvalStarted.CurrentNodes[0],
 	)
-	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(service.store, ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalSource,
 		TransitionID: "done",
 	})

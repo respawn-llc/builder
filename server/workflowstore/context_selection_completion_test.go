@@ -59,7 +59,7 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	targetSessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, targetReference, time.UnixMilli(2))
 	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
 
-	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -67,7 +67,7 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 	})
@@ -174,7 +174,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 
 	selectedTask := createDefaultTask(t, ctx, store, binding.ProjectID)
 	selectedPlan := startTask(t, ctx, store, selectedTask.ID).Mutation.Created[0]
-	selectedReview, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	selectedReview, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       selectedPlan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "selected path"},
@@ -182,7 +182,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete selected plan: %v", err)
 	}
-	selectedAudit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	selectedAudit, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       selectedReview.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "reviewer"},
@@ -193,14 +193,14 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 
 	fallbackTask := createDefaultTask(t, ctx, store, binding.ProjectID)
 	fallbackPlan := startTask(t, ctx, store, fallbackTask.ID).Mutation.Created[0]
-	fallbackAlternate, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	fallbackAlternate, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       fallbackPlan.Reference,
 		TransitionID: "alternate",
 	})
 	if err != nil {
 		t.Fatalf("complete fallback plan: %v", err)
 	}
-	fallbackAudit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	fallbackAudit, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       fallbackAlternate.Mutation.Created[0].Reference,
 		TransitionID: "alternate_audit",
 	})
@@ -271,7 +271,7 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 	}
 	targetSessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, targetReference, time.UnixMilli(2))
 	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
-	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -295,7 +295,7 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 	if !thinkingParameterPresent {
 		t.Fatalf("retained target thinking contract omitted effort parameter: %+v", startContext.TransitionOptions)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"effort": "high"},
@@ -336,7 +336,7 @@ func TestAutomaticCompletionHonorsSelectedRoleAtFreshAndCompactedBoundaries(t *t
 			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 			task := createDefaultTask(t, ctx, store, binding.ProjectID)
 			plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-			review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+			review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 				Source:       plan.Reference,
 				TransitionID: "review",
 				OutputValues: map[string]string{"summary": "plan complete"},
@@ -349,7 +349,7 @@ func TestAutomaticCompletionHonorsSelectedRoleAtFreshAndCompactedBoundaries(t *t
 				sessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, review.Mutation.Created[0].Reference)
 				sourceSessionID = &sessionID
 			}
-			completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+			completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 				Source:       review.Mutation.Created[0].Reference,
 				TransitionID: "audit",
 				OutputValues: map[string]string{"role": "reviewer"},

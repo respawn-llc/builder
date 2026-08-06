@@ -1,6 +1,7 @@
 package workflowview
 
 import (
+	"core/internal/testharness/workflowtest"
 	"testing"
 
 	"core/server/workflowstore"
@@ -42,9 +43,7 @@ func newCurrentNodeLabelFilterFixture(t *testing.T) currentNodeLabelFilterFixtur
 		if createErr != nil {
 			t.Fatalf("CreateTask %s: %v", title, createErr)
 		}
-		if _, startErr := current.store.StartTask(current.ctx, task.ID); startErr != nil {
-			t.Fatalf("StartTask %s: %v", title, startErr)
-		}
+		current.startExistingTask(t, task)
 		return string(task.ID)
 	}
 	return currentNodeLabelFilterFixture{
@@ -166,9 +165,7 @@ func TestCurrentNodeBoardDependencyFilterCountsAndCombinesWithLabels(t *testing.
 		if createErr != nil {
 			t.Fatalf("CreateTask %q: %v", title, createErr)
 		}
-		if _, startErr := fixture.store.StartTask(fixture.ctx, task.ID); startErr != nil {
-			t.Fatalf("StartTask %q: %v", title, startErr)
-		}
+		fixture.startExistingTask(t, task)
 		return task
 	}
 	noDependencies := started("No dependencies", alpha.ID.String())
@@ -189,7 +186,7 @@ func TestCurrentNodeBoardDependencyFilterCountsAndCombinesWithLabels(t *testing.
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
+	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
 		TaskID:       satisfiedBlocker.ID,
 		TargetNodeID: terminalNodeID(t, definition),
 	}); err != nil {

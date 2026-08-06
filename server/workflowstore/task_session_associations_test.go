@@ -404,7 +404,7 @@ func TestAssociateTaskSessionRetainsVisitsAcrossNodes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AssociateTaskSession plan: %v", err)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan"},

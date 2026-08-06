@@ -28,71 +28,64 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 		{
 			name: "predecessor held",
 			apply: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}}
+				run := newCurrentNodeRun(script, workflow.NodeKindScript, currentNodeAdmissionAutomaticScript)
+				key := installCurrentNodeRunLockedForTest(controller, run)
+				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []workflow.CurrentNodeReferenceKey{key}
 			},
 			clean: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
-				controller.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
+				controller.heldStarts = make(map[runtimeids.ExecutionScopeID][]workflow.CurrentNodeReferenceKey)
+				controller.runs.clear()
 			},
 		},
 		{
 			name: "reserved",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				controller.automaticReservations[key] = currentNodeQueuedStart{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
+				run := newCurrentNodeRun(script, workflow.NodeKindScript, currentNodeAdmissionAutomaticScript)
+				run.phase = currentNodeRunReserved
+				installCurrentNodeRunLockedForTest(controller, run)
+				controller.automaticReservations[key] = struct{}{}
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				delete(controller.automaticReservations, key)
+				controller.runs.delete(key)
 			},
 		},
 		{
 			name: "gated",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				controller.gates[key] = currentNodeAdmissionGate{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
+				run := newCurrentNodeRun(script, workflow.NodeKindScript, currentNodeAdmissionAutomaticScript)
+				run.phase = currentNodeRunGated
+				installCurrentNodeRunLockedForTest(controller, run)
+				controller.gates[key] = struct{}{}
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				delete(controller.gates, key)
+				controller.runs.delete(key)
 			},
 		},
 		{
 			name: "live",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := runtimeids.NewExecutionScopeID()
-				controller.live[scopeID] = currentNodeLiveScope{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
-				controller.liveByNode[key] = scopeID
+				run := newCurrentNodeRun(script, workflow.NodeKindScript, currentNodeAdmissionAutomaticScript)
+				run.phase = currentNodeRunRunning
+				installCurrentNodeRunLockedForTest(controller, run)
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := controller.liveByNode[key]
-				delete(controller.liveByNode, key)
-				delete(controller.live, scopeID)
+				controller.runs.delete(key)
 			},
 		},
 		{
 			name: "finalizing",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				scopeID := runtimeids.NewExecutionScopeID()
-				controller.live[scopeID] = currentNodeLiveScope{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
-				controller.liveByNode[key] = scopeID
+				run := newCurrentNodeRun(script, workflow.NodeKindScript, currentNodeAdmissionAutomaticScript)
+				run.phase = currentNodeRunRunning
+				installCurrentNodeRunLockedForTest(controller, run)
 				controller.stopping[scopeID] = struct{}{}
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := controller.liveByNode[key]
-				delete(controller.liveByNode, key)
-				delete(controller.live, scopeID)
-				delete(controller.stopping, scopeID)
+				controller.runs.delete(key)
+				controller.stopping = make(map[runtimeids.ExecutionScopeID]struct{})
 			},
 		},
 	}
@@ -117,15 +110,13 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 				t.Fatalf("Script key: %v", err)
 			}
 			controller.mu.Lock()
-			controller.live[runtimeids.NewExecutionScopeID()] = currentNodeLiveScope{
-				reference: occupyingAgent,
-				policy:    currentNodeAdmissionAutomaticAgent,
-			}
+			occupyingRun := newCurrentNodeRun(occupyingAgent, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+			occupyingRun.phase = currentNodeRunRunning
+			installCurrentNodeRunLockedForTest(controller, occupyingRun)
 			controller.agentCapacityActive = 1
-			controller.automaticQueue.append(currentNodeQueuedStart{
-				reference: queuedAgent,
-				policy:    currentNodeAdmissionAutomaticAgent,
-			})
+			queuedRun := newCurrentNodeRun(queuedAgent, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+			installCurrentNodeRunLockedForTest(controller, queuedRun)
+			controller.automaticQueue.append(queuedKey, queuedRun)
 			controller.queued[queuedKey] = struct{}{}
 			test.apply(controller, scriptKey)
 			if got := controller.agentCapacityActive; got != 1 {
@@ -253,13 +244,11 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 		}
 	})
 
-	controller.enqueueStarts([]currentNodeQueuedStart{{
-		reference: failed,
-		policy:    currentNodeAdmissionAutomaticAgent,
-		assignmentSteer: completedCurrentNodeAssignmentSteer{
-			err: errors.New("assignment preparation failed"),
-		},
-	}})
+	failedRun := newCurrentNodeRun(failed, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	failedRun.assignmentEnsure = completedCurrentNodeAssignmentEnsure{
+		err: errors.New("assignment preparation failed"),
+	}
+	controller.enqueueStarts([]currentNodeQueuedStart{*failedRun})
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, interrupted := store.interruption(failed)
 		return interrupted
@@ -286,7 +275,7 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	if reference.Equal(r.failed) {
 		return errors.New("script start failed")
 	}
@@ -312,7 +301,7 @@ func (r *finalizingBeforeLiveRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -417,7 +406,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
 		},
 	}
-	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	ensurer := &recordingCurrentNodeAssignmentEnsurer{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
@@ -434,7 +423,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: steerer,
+		AssignmentEnsurer: ensurer,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -460,7 +449,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 	}, "unrelated Agent did not remain queued while source occupied capacity")
 	sourceScope := singleLiveScope(t, controller, source)
 	cause := errors.New("assignment persistence failed")
-	steerer.setWaitError(cause)
+	ensurer.setWaitErrorFor(successor, cause)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "next",

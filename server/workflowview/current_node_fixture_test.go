@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,12 +10,14 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -45,6 +48,8 @@ type currentNodeViewFixture struct {
 type currentNodeViewStatusObservationSource struct {
 	authority  *sessionruntime.Authority
 	quiescence currentNodeViewQuiescenceSource
+	store      *workflowstore.Store
+	prompts    currentNodeViewPrompts
 }
 
 type currentNodeViewQuiescenceSource interface {
@@ -56,14 +61,166 @@ func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(ta
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
+	if len(taskIDs) == 0 {
+		selected := make(map[workflow.TaskID]struct{}, len(executions))
+		for taskID := range executions {
+			selected[taskID] = struct{}{}
+		}
+		if quiescence, ok := s.quiescence.(*currentNodeViewQuiescence); ok {
+			for taskID := range quiescence.blocked {
+				selected[taskID] = struct{}{}
+			}
+		}
+		taskIDs = make([]workflow.TaskID, 0, len(selected))
+		for taskID := range selected {
+			taskIDs = append(taskIDs, taskID)
+		}
+	}
 	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
+	lifecycle := make(map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot, len(executions))
+	for taskID, snapshot := range executions {
+		currentNodes, err := s.store.ListCurrentNodes(context.Background(), taskID)
+		if err != nil {
+			return workflowexecution.WorkflowTaskExecutionObservation{}, err
+		}
+		if len(currentNodes) == 0 {
+			continue
+		}
+		lifecycleSnapshot := workflowexecution.WorkflowTaskLifecycleSnapshot{
+			CurrentNodes: currentNodes,
+		}
+		currentKeys := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(currentNodes))
+		for _, currentNode := range currentNodes {
+			key, err := currentNode.Reference.Key()
+			if err != nil {
+				return workflowexecution.WorkflowTaskExecutionObservation{}, err
+			}
+			currentKeys[key] = struct{}{}
+		}
+		queued := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(snapshot.Executions))
+		for _, execution := range snapshot.Executions {
+			key, err := execution.Ref.CurrentNode.Key()
+			if err != nil {
+				return workflowexecution.WorkflowTaskExecutionObservation{}, err
+			}
+			if _, current := currentKeys[key]; !current {
+				continue
+			}
+			if _, exists := queued[key]; !exists {
+				queued[key] = struct{}{}
+				lifecycleSnapshot.QueuedCurrentNodes = append(
+					lifecycleSnapshot.QueuedCurrentNodes,
+					execution.Ref.CurrentNode,
+				)
+			}
+			if !execution.Queued {
+				exact := workflowstore.LifecycleExactExecution{
+					ProjectID:   execution.Ref.ProjectID,
+					WorkflowID:  execution.Ref.WorkflowID,
+					CurrentNode: execution.Ref.CurrentNode,
+					ScopeID:     execution.ScopeID,
+					Phase:       workflowstore.LifecycleExactExecutionRunning,
+				}
+				if execution.Agent != nil {
+					exact.Agent = &workflowstore.LifecycleAgentExecutionTarget{
+						SessionID: execution.Agent.SessionID,
+					}
+					for _, promptReference := range execution.PendingPrompts {
+						for _, prompt := range s.prompts.bySession[execution.Agent.SessionID.String()] {
+							if prompt.ID != promptReference.ID {
+								continue
+							}
+							kind := workflowstore.LifecyclePendingPromptQuestion
+							if promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval {
+								kind = workflowstore.LifecyclePendingPromptSessionApproval
+							}
+							exact.PendingPrompts = append(exact.PendingPrompts, workflowstore.LifecyclePendingPrompt{
+								ID:                     prompt.ID,
+								Kind:                   kind,
+								CreatedAt:              prompt.CreatedAt,
+								Question:               prompt.Question,
+								Suggestions:            append([]string(nil), prompt.Suggestions...),
+								RecommendedOptionIndex: prompt.RecommendedOptionIndex,
+								ApprovalDecisions: lifecycleApprovalDecisionsForTest(
+									prompt.ApprovalDecisions,
+								),
+							})
+						}
+					}
+				}
+				if execution.Script != nil {
+					exact.Script = &workflowstore.LifecycleScriptExecutionTarget{Path: execution.Script.Path}
+				}
+				lifecycleSnapshot.ExactExecutions = append(
+					lifecycleSnapshot.ExactExecutions,
+					exact,
+				)
+			}
+		}
+		lifecycle[taskID] = lifecycleSnapshot
+	}
 	return workflowexecution.WorkflowTaskExecutionObservation{
 		Executions: executions,
 		Quiescence: quiescence,
+		Lifecycle:  lifecycle,
 	}, nil
+}
+
+func lifecycleApprovalDecisionsForTest(
+	decisions []clientui.ApprovalDecision,
+) []workflowstore.LifecycleApprovalDecision {
+	out := make([]workflowstore.LifecycleApprovalDecision, len(decisions))
+	for index, decision := range decisions {
+		out[index] = workflowstore.LifecycleApprovalDecision(decision)
+	}
+	return out
+}
+
+func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskExecutions(
+	ctx context.Context,
+	taskIDs []workflow.TaskID,
+	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
+) error {
+	observation, err := s.ObserveWorkflowTaskExecutions(taskIDs)
+	if err != nil {
+		return err
+	}
+	return captureWorkflowViewTestObservation(ctx, s.store, observation, operation)
+}
+
+func captureWorkflowViewTestObservation(
+	ctx context.Context,
+	store *workflowstore.Store,
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
+) (err error) {
+	if store == nil {
+		return errors.New("workflow test Store is required")
+	}
+	publication, err := workflowstore.NewLifecyclePublication(store)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := publication.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	capture, err := publication.Capture(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := capture.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return capture.WithQueries(func(queries *sqlitegen.Queries) error {
+		return operation(observation, queries)
+	})
 }
 
 type startedCurrentNodeViewTask struct {
@@ -130,6 +287,7 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		currentNodeViewStatusObservationSource{
 			authority:  authority,
 			quiescence: quiescence,
+			store:      store,
 		},
 	)
 	if err != nil {
@@ -139,7 +297,7 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 	if err != nil {
 		t.Fatalf("NewTaskDependencyCounter: %v", err)
 	}
-	dependencies, err := NewTaskDependencies(metadataStore, projection, dependencyCounter)
+	dependencies, err := NewTaskDependencies(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -212,7 +370,15 @@ func (f currentNodeViewFixture) startTask(t *testing.T, title string) startedCur
 
 func (f currentNodeViewFixture) startExistingTask(t *testing.T, task workflowstore.TaskRecord) startedCurrentNodeViewTask {
 	t.Helper()
-	started, err := f.store.StartTask(f.ctx, task.ID)
+	publication, err := workflowstore.NewLifecyclePublication(f.store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	started, err := publication.PublishTaskStart(
+		f.ctx,
+		task.ID,
+		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
+	)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -421,6 +587,11 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
 	}
+	if err := handle.PublishRunning(f.ctx, func(sessionruntime.TaskExecution) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("PublishRunning: %v", err)
+	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		snapshots, snapshotErr := authority.CurrentWorkflowTaskExecutionSnapshots()
 		if snapshotErr != nil {
@@ -469,7 +640,7 @@ func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime
 
 func (f currentNodeViewFixture) attention(t *testing.T) *Attention {
 	t.Helper()
-	attention, err := NewAttention(f.metadata, mustDefinitionProjection(t, f.store), f.authority, emptyCurrentNodeViewPrompts{})
+	attention, err := NewAttention(f.metadata, mustDefinitionProjection(t, f.store), f.projection)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}

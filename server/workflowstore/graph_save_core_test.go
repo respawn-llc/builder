@@ -337,7 +337,7 @@ func TestWorkflowGraphSaveIncompatibleActiveTransitionFailsCompletionWithoutTask
 		t.Fatalf("save = %+v, want committed transition edit", saved)
 	}
 
-	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "done",
 	}); err == nil {
@@ -351,7 +351,7 @@ func TestWorkflowGraphSaveIncompatibleActiveTransitionFailsCompletionWithoutTask
 		t.Fatalf("current nodes after rejected completion = %+v, want unchanged source", currentNodes)
 	}
 
-	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "renamed",
 	}); err != nil {
@@ -564,7 +564,7 @@ func TestWorkflowGraphSaveCommitRejectsChangedConfirmationImpactDuringPreparatio
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("StartTask mutation = %+v, want one current node", started.Mutation)
 	}
-	if _, err := activeStore.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	if _, err := completeCurrentNodeForStoreTest(activeStore, ctx, CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "spare_done",
 	}); err != nil {
@@ -667,7 +667,7 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AssociateTaskSession: %v", err)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       agentReference,
 		TransitionID: "done",
 	})
@@ -681,7 +681,7 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	if reviewReference.NodeID != reviewID {
 		t.Fatalf("agent completion target = %v, want review Node %q", reviewReference, reviewID)
 	}
-	completed, err = store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err = completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       reviewReference,
 		TransitionID: "finish",
 	})

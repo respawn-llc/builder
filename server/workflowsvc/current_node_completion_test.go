@@ -2,6 +2,7 @@ package workflowsvc
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"errors"
 	"reflect"
 	"testing"
@@ -343,6 +344,8 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 type currentNodeCompletionExecutionStub struct {
 	store               *workflowstore.Store
 	startPreparations   chan<- workflowexecution.TaskStartPreparation
+	startPublication    *workflowstore.LifecyclePublication
+	resumePublication   *workflowstore.LifecyclePublication
 	sessionID           runtimeids.SessionID
 	sessionResult       workflowstore.CurrentNodeCompletionResult
 	sessionErr          error
@@ -372,7 +375,26 @@ func (s *currentNodeCompletionExecutionStub) StartTask(
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
-	started, err := s.store.StartTask(ctx, taskID)
+	var (
+		started workflowstore.StartTaskResult
+		err     error
+	)
+	if s.startPublication == nil {
+		started, err = publishWorkflowStoreTaskStart(ctx, s.store, taskID)
+	} else {
+		started, err = s.startPublication.PublishTaskStart(
+			ctx,
+			taskID,
+			func(result workflowstore.StartTaskResult) (
+				workflowstore.TaskLifecycleDelta,
+				func(error),
+				error,
+			) {
+				delta, err := workflowstore.NewTaskStartLifecycleDelta(result)
+				return delta, nil, err
+			},
+		)
+	}
 	if err != nil || preparation == nil {
 		return started, err
 	}
@@ -402,13 +424,28 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 	if err != nil {
 		return nil, err
 	}
+	if len(selected) == 0 {
+		return nil, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
+	}
 	if err := preparation(ctx); err != nil {
 		return nil, err
 	}
+	references := make([]workflow.CurrentNodeReference, 0, len(selected))
 	for _, currentNode := range selected {
-		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
+		references = append(references, currentNode.Reference)
+	}
+	delta, err := workflowstore.NewQueuedTaskLifecycleDelta(taskID, references)
+	if err != nil {
+		return nil, err
+	}
+	if s.resumePublication == nil {
+		s.resumePublication, err = workflowstore.NewLifecyclePublication(s.store)
+		if err != nil {
 			return nil, err
 		}
+	}
+	if _, err := s.resumePublication.PublishResume(ctx, delta); err != nil {
+		return nil, err
 	}
 	return selected, nil
 }
@@ -417,7 +454,7 @@ func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Co
 	if s.store == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyPendingApproval(ctx, approvalID)
+	return workflowtest.ApplyPendingApproval(s.store, ctx, approvalID)
 }
 
 func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
@@ -428,7 +465,7 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
+	return workflowtest.ApplyManualMove(s.store, ctx, prepared, candidate)
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {
@@ -445,6 +482,42 @@ func (*currentNodeCompletionExecutionStub) InterruptForManualMove(context.Contex
 
 func (*currentNodeCompletionExecutionStub) EnsureTaskQuiescent(workflow.TaskID) error {
 	return nil
+}
+
+func (*currentNodeCompletionExecutionStub) RunTaskDeletion(
+	ctx context.Context,
+	_ []workflow.TaskID,
+	operation func(context.Context) error,
+) error {
+	return operation(ctx)
+}
+
+func (s *currentNodeCompletionExecutionStub) DeleteTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (workflowstore.DeleteTaskResult, error) {
+	if s.store == nil {
+		return workflowstore.DeleteTaskResult{}, errors.New("workflow store is required")
+	}
+	publication, err := workflowstore.NewLifecyclePublication(s.store)
+	if err != nil {
+		return workflowstore.DeleteTaskResult{}, err
+	}
+	return publication.PublishTaskDeletion(ctx, taskID)
+}
+
+func (s *currentNodeCompletionExecutionStub) DeleteWorkflow(
+	ctx context.Context,
+	req workflowstore.WorkflowDeleteRequest,
+) (workflowstore.WorkflowDeleteResult, error) {
+	if s.store == nil {
+		return workflowstore.WorkflowDeleteResult{}, errors.New("workflow store is required")
+	}
+	publication, err := workflowstore.NewLifecyclePublication(s.store)
+	if err != nil {
+		return workflowstore.WorkflowDeleteResult{}, err
+	}
+	return publication.PublishWorkflowDeletion(ctx, req)
 }
 
 func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(

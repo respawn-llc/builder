@@ -32,6 +32,7 @@ type PendingPromptReference struct {
 
 type TaskExecution struct {
 	Ref            WorkflowExecutionRef
+	ScopeID        runtimeids.ExecutionScopeID
 	Agent          *TaskAgentExecutionTarget
 	Script         *TaskScriptExecutionTarget
 	Queued         bool
@@ -40,6 +41,20 @@ type TaskExecution struct {
 
 type TaskExecutionSnapshot struct {
 	Executions []TaskExecution
+}
+
+func cloneTaskExecution(execution TaskExecution) TaskExecution {
+	cloned := execution
+	if execution.Agent != nil {
+		agent := *execution.Agent
+		cloned.Agent = &agent
+	}
+	if execution.Script != nil {
+		script := *execution.Script
+		cloned.Script = &script
+	}
+	cloned.PendingPrompts = append([]PendingPromptReference(nil), execution.PendingPrompts...)
+	return cloned
 }
 
 // WithWorkflowTaskExecutionSnapshots runs operation while the Authority live
@@ -247,12 +262,15 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	if !ok {
 		return errors.New("workflow execution index contains a non-workflow scope")
 	}
-	if execution.phase != executionPhaseQueued && execution.phase != executionPhaseRunning {
+	if execution.phase != executionPhaseQueued &&
+		execution.phase != executionPhaseRunning &&
+		execution.phase != executionPhaseFinalizing {
 		return errors.New("live workflow execution has an invalid phase")
 	}
 	target := TaskExecution{
-		Ref:    ref,
-		Queued: execution.phase == executionPhaseQueued,
+		Ref:     ref,
+		ScopeID: execution.scope.ID(),
+		Queued:  execution.phase == executionPhaseQueued,
 	}
 	pendingPrompts, err := execution.prompts.pendingReferences()
 	if err != nil {
@@ -267,7 +285,7 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 		}
 		target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
 	}
-	if err := target.validate(); err != nil {
+	if err := target.Validate(); err != nil {
 		return err
 	}
 	snapshot := snapshots[ref.CurrentNode.TaskID]
@@ -299,9 +317,12 @@ func workflowExecutionLess(leftExecution TaskExecution, rightExecution TaskExecu
 	return leftBranch < rightBranch
 }
 
-func (e TaskExecution) validate() error {
+func (e TaskExecution) Validate() error {
 	if err := e.Ref.Validate(); err != nil {
 		return err
+	}
+	if e.ScopeID.IsZero() {
+		return errors.New("live workflow execution has no Exact Scope id")
 	}
 	for index, prompt := range e.PendingPrompts {
 		if err := prompt.validate(); err != nil {

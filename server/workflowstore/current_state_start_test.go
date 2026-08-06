@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 		task       TaskRecord
 		workflowID runtimeids.WorkflowID
 		targetID   workflow.NodeID
+		targetKind workflow.NodeKind
 	}
 
 	tests := []struct {
@@ -36,6 +39,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 					task:       createDefaultTask(t, ctx, store, binding.ProjectID),
 					workflowID: workflowID,
 					targetID:   workflow.NodeID("node-agent-" + workflowID.String()),
+					targetKind: workflow.NodeKindAgent,
 				}
 			},
 		},
@@ -50,6 +54,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 					task:       scripts.task,
 					workflowID: scripts.workflowID,
 					targetID:   scripts.scriptID,
+					targetKind: workflow.NodeKindScript,
 				}
 			},
 		},
@@ -75,7 +80,7 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 				t.Fatalf("current nodes before start = %+v, want one unbound backlog node", before)
 			}
 
-			started, err := fixture.store.StartTask(fixture.ctx, fixture.task.ID)
+			started, err := publishTaskStartForTest(fixture.ctx, fixture.store, fixture.task.ID)
 			if err != nil {
 				t.Fatalf("StartTask: %v", err)
 			}
@@ -92,6 +97,13 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 				started.Mutation.Created[0].Scheduling == nil ||
 				started.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
 				t.Fatalf("StartTask created = %+v, want one ready unbound target current node", started.Mutation.Created)
+			}
+			kind, err := fixture.store.CurrentNodeKind(fixture.ctx, target)
+			if err != nil {
+				t.Fatalf("CurrentNodeKind: %v", err)
+			}
+			if kind != fixture.targetKind {
+				t.Fatalf("CurrentNodeKind = %q, want %q", kind, fixture.targetKind)
 			}
 
 			after, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.task.ID)
@@ -117,7 +129,7 @@ func TestTaskStartPlacementFreezesSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
 	}
-	if _, err := store.StartTask(ctx, task.ID); err != nil {
+	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 
@@ -134,11 +146,11 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started, err := store.StartTask(ctx, task.ID)
+	started, err := publishTaskStartForTest(ctx, store, task.ID)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); err != nil {
+	if err := publishCurrentNodeAdmissionForTest(ctx, store, started.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 	nodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -148,7 +160,7 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	if len(nodes) != 1 || nodes[0].Scheduling == nil || nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingAdmitted {
 		t.Fatalf("current nodes = %+v, want one admitted node in workflow %q", nodes, workflowID)
 	}
-	if err := store.AdmitCurrentNode(ctx, started.Mutation.Created[0].Reference); !errors.Is(err, sql.ErrNoRows) {
+	if err := publishCurrentNodeAdmissionForTest(ctx, store, started.Mutation.Created[0].Reference); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("second AdmitCurrentNode error = %v, want stale-ready absence", err)
 	}
 }
@@ -160,8 +172,36 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 	ready := startTask(t, ctx, store, readyTask.ID).Mutation.Created[0]
 	admittedTask := createDefaultTask(t, ctx, store, binding.ProjectID)
 	admitted := startTask(t, ctx, store, admittedTask.ID).Mutation.Created[0]
-	if err := store.AdmitCurrentNode(ctx, admitted.Reference); err != nil {
+	if err := publishCurrentNodeAdmissionForTest(ctx, store, admitted.Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+	scriptWorkflowID := createScriptStartWorkflow(t, ctx, store, "scripts/recover")
+	linkWorkflow(t, ctx, store, binding.ProjectID, scriptWorkflowID, false)
+	scriptReadyTask := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &scriptWorkflowID,
+		Title:      "Ready Script recovery",
+	})
+	scriptAdmittedTask := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &scriptWorkflowID,
+		Title:      "Admitted Script recovery",
+	})
+	for _, task := range []TaskRecord{scriptReadyTask, scriptAdmittedTask} {
+		worktreeRoot := t.TempDir()
+		scriptFile := filepath.Join(worktreeRoot, "scripts", "recover")
+		if err := os.MkdirAll(filepath.Dir(scriptFile), 0o755); err != nil {
+			t.Fatalf("create recovery Script directory: %v", err)
+		}
+		if err := os.WriteFile(scriptFile, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write recovery Script: %v", err)
+		}
+		attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	}
+	scriptReady := startTask(t, ctx, store, scriptReadyTask.ID).Mutation.Created[0]
+	scriptAdmitted := startTask(t, ctx, store, scriptAdmittedTask.ID).Mutation.Created[0]
+	if err := publishCurrentNodeAdmissionForTest(ctx, store, scriptAdmitted.Reference); err != nil {
+		t.Fatalf("Admit Script Current Node: %v", err)
 	}
 
 	approvalWorkflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
@@ -181,7 +221,7 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 		Body:       "Preserve pending Approval",
 	})
 	approvalSource := startTask(t, ctx, store, approvalTask.ID).Mutation.Created[0]
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       approvalSource.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "preserve approval"},
@@ -198,10 +238,15 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 	if err != nil {
 		t.Fatalf("RecoverExecutableCurrentNodes: %v", err)
 	}
-	if len(recovered) != 2 {
-		t.Fatalf("recovered current nodes = %d, want ready and admitted nodes only", len(recovered))
+	if len(recovered) != 4 {
+		t.Fatalf("recovered current nodes = %d, want ready/admitted Agent and Script nodes only", len(recovered))
 	}
-	for _, expected := range []workflow.CurrentNodeReference{ready.Reference, admitted.Reference} {
+	for _, expected := range []workflow.CurrentNodeReference{
+		ready.Reference,
+		admitted.Reference,
+		scriptReady.Reference,
+		scriptAdmitted.Reference,
+	} {
 		nodes, err := store.ListCurrentNodes(ctx, expected.TaskID)
 		if err != nil {
 			t.Fatalf("ListCurrentNodes(%q): %v", expected.TaskID, err)
@@ -310,7 +355,7 @@ func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t
 
 func completeReworkCurrentNodeForStartContextTest(t *testing.T, fixture reworkContextCompletionFixture) workflow.CurrentNode {
 	t.Helper()
-	result, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+	result, err := completeCurrentNodeForStoreTest(fixture.store, fixture.ctx, CurrentNodeCompletionRequest{
 		Source:       fixture.audit.Reference,
 		TransitionID: "rework",
 		OutputValues: map[string]string{"summary": "review again"},

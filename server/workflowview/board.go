@@ -82,7 +82,18 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 	selectedWorkflowID := selected.WorkflowID
 	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
-	if err := b.applyColumnTaskCounts(ctx, columns, projectID, selectedWorkflowID, labelFilter, req.DependencyFilter); err != nil {
+	if err := b.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+		return b.applyColumnTaskCounts(
+			ctx,
+			durable.queries,
+			columns,
+			projectID,
+			selectedWorkflowID,
+			labelFilter,
+			req.DependencyFilter,
+			observation.LiveTaskStatesJSON,
+		)
+	}); err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
 	return serverapi.WorkflowBoard{
@@ -138,9 +149,9 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	var tasks []sqlitegen.TaskRecord
 	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
 	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
+	var labelIDsByTask map[string][]string
 	var hasExtra bool
-	err = b.projection.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
-		var err error
+	err = b.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
 		definition, err = durable.Definition(ctx, workflowID)
 		if err != nil {
 			return err
@@ -161,6 +172,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 			SortDirection:        string(sortSelection.Direction),
 			OffsetRows:           int64(offset),
 			LimitRows:            int64(pageSize),
+			LiveTaskStatesJson:   observation.LiveTaskStatesJSON,
 		})
 		if err != nil {
 			return err
@@ -174,19 +186,14 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		if hasExtra {
 			tasks = tasks[:pageSize]
 		}
-		taskIDs := workflowTaskIDs(taskIDs(tasks))
-		observation, err := b.projection.Observe(taskIDs)
+		selectedTaskIDs := workflowTaskIDs(taskIDs(tasks))
+		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, selectedTaskIDs)
 		if err != nil {
 			return err
 		}
-		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, taskIDs)
+		labelIDsByTask, err = loadTaskLabelIDsByTask(ctx, durable.queries, taskIDs(tasks))
 		return err
 	})
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	taskIDStrings := taskIDs(tasks)
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, b.queries, taskIDStrings)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -361,12 +368,21 @@ func (b *Board) selectionInputs(ctx context.Context, projectID string) (map[runt
 	return definitions, picker, nil
 }
 
-func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID runtimeids.WorkflowID, labelFilter workflowTaskLabelFilterFacts, dependencyFilter *bool) error {
+func (b *Board) applyColumnTaskCounts(
+	ctx context.Context,
+	queries *sqlitegen.Queries,
+	columns []serverapi.WorkflowBoardColumn,
+	projectID string,
+	workflowID runtimeids.WorkflowID,
+	labelFilter workflowTaskLabelFilterFacts,
+	dependencyFilter *bool,
+	liveTaskStatesJSON string,
+) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
 		return err
 	}
-	rows, err := b.queries.ListBoardColumnTaskCounts(ctx, sqlitegen.ListBoardColumnTaskCountsParams{
+	rows, err := queries.ListBoardColumnTaskCounts(ctx, sqlitegen.ListBoardColumnTaskCountsParams{
 		ProjectID:            projectID,
 		WorkflowID:           workflowID,
 		LabelFilterKind:      labelFilterArgs.kind,
@@ -374,6 +390,7 @@ func (b *Board) applyColumnTaskCounts(ctx context.Context, columns []serverapi.W
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
 		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
 		DependencyFilter:     workflowTaskDependencyFilterQueryArg(dependencyFilter),
+		LiveTaskStatesJson:   liveTaskStatesJSON,
 	})
 	if err != nil {
 		return err

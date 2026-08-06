@@ -207,14 +207,32 @@ func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key wor
 
 func (a *Authority) beginWorkflowExecution(item *execution) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.byScope[item.scope.ID()] != item {
+		a.mu.Unlock()
 		return
 	}
 	if item.phase != executionPhaseQueued {
+		a.mu.Unlock()
 		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
 	}
 	item.phase = executionPhaseRunning
+	ref, workflowScoped := item.scope.Workflow()
+	if !workflowScoped {
+		a.mu.Unlock()
+		panic(fmt.Sprintf("publish workflow execution start %s: scope is not workflow scoped", item.scope.ID()))
+	}
+	start := TaskExecution{Ref: ref, ScopeID: item.scope.ID()}
+	if resource, agent := item.scope.Resource(); agent {
+		start.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
+	} else if item.script != nil {
+		start.Script = &TaskScriptExecutionTarget{Path: item.script.Path}
+	}
+	if err := start.Validate(); err != nil {
+		a.mu.Unlock()
+		panic(fmt.Sprintf("publish workflow execution start %s: %v", item.scope.ID(), err))
+	}
+	a.mu.Unlock()
+	item.publishStart(start, nil)
 }
 
 func (a *Authority) removeWorkflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey, item *execution) {
@@ -466,17 +484,41 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
 	reserved := &execution{
-		authority: a,
-		scope:     scope,
-		ctx:       runCtx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		prompts:   newExecutionPromptStore(a, scope, a.promptFeed),
-		phase:     executionPhaseRunning,
+		authority:      a,
+		scope:          scope,
+		ctx:            runCtx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
+		started:        make(chan struct{}),
+		runningPublish: req.RunningPublication,
+		publishDone:    make(chan struct{}),
+		disposition:    make(chan struct{}),
+		prompts:        newExecutionPromptStore(a, scope, a.promptFeed),
+		phase:          executionPhaseRunning,
 	}
 	if workflowRef != nil {
 		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}
 		reserved.phase = executionPhaseQueued
 	}
 	return reserved, nil
+}
+
+func (a *Authority) ConfirmWorkflowDisposition(scopeID runtimeids.ExecutionScopeID) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if scopeID.IsZero() {
+		return errors.New("workflow Exact Scope id is required")
+	}
+	a.mu.Lock()
+	execution := a.byScope[scopeID]
+	a.mu.Unlock()
+	if execution == nil {
+		return ErrExecutionNoLongerLive
+	}
+	if _, workflowScoped := execution.scope.Workflow(); !workflowScoped {
+		return errors.New("execution scope is not workflow scoped")
+	}
+	execution.confirmDisposition()
+	return nil
 }

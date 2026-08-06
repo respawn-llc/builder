@@ -18,6 +18,7 @@ import (
 
 type ExecutionHandle interface {
 	Scope() ExecutionScope
+	PublishRunning(context.Context, func(TaskExecution) error) error
 	RequestStop() bool
 	Stop(context.Context) error
 	Wait(context.Context) (ExecutionResult, error)
@@ -61,19 +62,69 @@ type ExecutionPromptFeed interface {
 	PromptResolvedScope(ExecutionScope, string) error
 }
 
+type joinedExecutionPromptFeed struct {
+	first  ExecutionPromptFeed
+	second ExecutionPromptFeed
+}
+
+func joinExecutionPromptFeeds(first, second ExecutionPromptFeed) ExecutionPromptFeed {
+	switch {
+	case first == nil:
+		return second
+	case second == nil:
+		return first
+	default:
+		return joinedExecutionPromptFeed{first: first, second: second}
+	}
+}
+
+func (f joinedExecutionPromptFeed) PromptPendingScope(
+	scope ExecutionScope,
+	request tools.AskQuestionRequest,
+	createdAt time.Time,
+) error {
+	if err := f.first.PromptPendingScope(scope, request, createdAt); err != nil {
+		return err
+	}
+	if err := f.second.PromptPendingScope(scope, request, createdAt); err != nil {
+		return errors.Join(err, f.first.PromptResolvedScope(scope, request.ID))
+	}
+	return nil
+}
+
+func (f joinedExecutionPromptFeed) PromptResolvedScope(
+	scope ExecutionScope,
+	requestID string,
+) error {
+	return errors.Join(
+		f.first.PromptResolvedScope(scope, requestID),
+		f.second.PromptResolvedScope(scope, requestID),
+	)
+}
+
 type execution struct {
-	authority *Authority
-	exactMu   sync.Mutex
-	resource  *agentResource
-	scope     ExecutionScope
-	script    *TaskScriptExecutionTarget
-	workflow  *runtime.CurrentNodeExecutionBinding
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
+	authority       *Authority
+	exactMu         sync.Mutex
+	resource        *agentResource
+	scope           ExecutionScope
+	script          *TaskScriptExecutionTarget
+	workflow        *runtime.CurrentNodeExecutionBinding
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	started         chan struct{}
+	runningPublish  func(TaskExecution) error
+	publishOnce     sync.Once
+	publishDone     chan struct{}
+	publishErr      error
+	startOnce       sync.Once
+	disposition     chan struct{}
+	dispositionOnce sync.Once
 
 	resultMu sync.RWMutex
 	result   ExecutionResult
+	start    TaskExecution
+	startErr error
 	runErr   error
 	stopErr  error
 	prompts  executionPromptStore
@@ -92,6 +143,43 @@ func (h executionHandle) Scope() ExecutionScope {
 		panic("execution handle is uninitialized")
 	}
 	return h.execution.scope
+}
+
+func (h executionHandle) PublishRunning(
+	ctx context.Context,
+	publish func(TaskExecution) error,
+) error {
+	if h.execution == nil {
+		panic("execution handle is uninitialized")
+	}
+	if publish == nil {
+		return errors.New("running execution publication is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-h.execution.started:
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+	h.execution.resultMu.RLock()
+	start := cloneTaskExecution(h.execution.start)
+	startErr := h.execution.startErr
+	h.execution.resultMu.RUnlock()
+	if startErr != nil {
+		return startErr
+	}
+	h.execution.publishOnce.Do(func() {
+		h.execution.publishErr = publish(start)
+		close(h.execution.publishDone)
+	})
+	select {
+	case <-h.execution.publishDone:
+		return h.execution.publishErr
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 func (h executionHandle) Stop(ctx context.Context) error {
@@ -165,6 +253,7 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
+	e.publishStart(TaskExecution{}, runErr)
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
 	e.retire()
@@ -202,6 +291,33 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	close(e.done)
 }
 
+func (e *execution) publishStart(start TaskExecution, err error) {
+	e.startOnce.Do(func() {
+		e.resultMu.Lock()
+		e.start = cloneTaskExecution(start)
+		e.startErr = err
+		e.resultMu.Unlock()
+		close(e.started)
+	})
+}
+
+func (e *execution) publishConfiguredRunning() error {
+	if e.runningPublish == nil {
+		return nil
+	}
+	return executionHandle{execution: e}.PublishRunning(e.ctx, e.runningPublish)
+}
+
+func (e *execution) confirmDisposition() {
+	e.dispositionOnce.Do(func() {
+		close(e.disposition)
+	})
+}
+
+func (e *execution) awaitDisposition() {
+	<-e.disposition
+}
+
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
 	if e.resource == nil ||
 		!e.closeResource ||
@@ -227,11 +343,8 @@ func (e *execution) retire() {
 	authority.mu.Unlock()
 }
 
-// beginWorkflowFinalization removes a terminal Script from workflow liveness
-// indexes while retaining its Exact Execution Scope for its completion
-// finalizer. A Script becomes terminal when its process exits or Start fails.
-// Its finalizer can still prove Current Node ownership, but no longer
-// authorizes Interrupt or appears in queued/running read models.
+// beginWorkflowFinalization keeps the same Exact Execution Scope live while
+// the mandatory result finalizer runs.
 func (e *execution) beginWorkflowFinalization() {
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
@@ -242,6 +355,24 @@ func (e *execution) beginWorkflowFinalization() {
 		e.authority.mu.Unlock()
 		panic(fmt.Sprintf(
 			"workflow execution scope %s began finalization from phase %d",
+			e.scope.ID(),
+			e.phase,
+		))
+	}
+	e.phase = executionPhaseFinalizing
+	e.authority.mu.Unlock()
+}
+
+func (e *execution) beginWorkflowStartupFailureFinalization() {
+	e.authority.mu.Lock()
+	if e.authority.byScope[e.scope.ID()] != e {
+		e.authority.mu.Unlock()
+		return
+	}
+	if e.phase != executionPhaseQueued {
+		e.authority.mu.Unlock()
+		panic(fmt.Sprintf(
+			"workflow execution scope %s began startup-failure finalization from phase %d",
 			e.scope.ID(),
 			e.phase,
 		))

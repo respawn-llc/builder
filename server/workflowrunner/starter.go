@@ -101,7 +101,7 @@ func (s *Starter) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -126,16 +126,17 @@ func (s *Starter) StartCurrentNode(
 		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentEnsure, lease, controller)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
 }
 
-func (s *Starter) SteerCurrentNodeAssignment(
+func (s *Starter) EnsureCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	delivery workflowruntime.TaskPromptDelivery,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
 	if s.closed.Load() {
 		return nil, errors.New("workflow runtime starter closed")
 	}
@@ -144,7 +145,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		return nil, err
 	}
 	if input.Node.Kind == workflow.NodeKindScript {
-		return runtime.CompletedWorkflowAssignmentSteer(session.CommitReceipt{Committed: true}, nil), nil
+		return runtime.CompletedWorkflowAssignmentEnsure(session.CommitReceipt{Committed: true}, nil), nil
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
@@ -156,7 +157,13 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false)
+	prepared, err := s.prepareCurrentNodeAgentSession(
+		ctx,
+		input,
+		false,
+		delivery == workflowruntime.TaskPromptDeliveryResume &&
+			input.CurrentNode.SessionID != nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -180,10 +187,10 @@ func (s *Starter) SteerCurrentNodeAssignment(
 			TaskAwareness:          awareness,
 		},
 	}
-	var steer runtime.WorkflowAssignmentSteer
-	admission, steerErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
+	var ensure runtime.WorkflowAssignmentEnsure
+	admission, ensureErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var err error
-		steer, err = runtime.SteerPersistedWorkflowAssignment(
+		ensure, err = runtime.EnsurePersistedWorkflowAssignment(
 			store,
 			assignment,
 			runtime.PersistedWorkflowAssignmentContext{
@@ -198,8 +205,8 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		)
 		return err
 	})
-	if steerErr == nil && admission.RuntimeAvailable {
-		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+	if ensureErr == nil && admission.RuntimeAvailable {
+		ensureErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
 			thinkingMutation := workflowThinkingMutationFor(input, selection)
 			switch thinkingMutation.Kind() {
 			case launch.WorkflowThinkingMutationSet:
@@ -212,30 +219,36 @@ func (s *Starter) SteerCurrentNodeAssignment(
 				}
 			}
 			var err error
-			steer, err = engine.SteerWorkflowAssignment(assignment)
+			ensure, err = engine.EnsureWorkflowAssignment(assignment)
 			return err
 		})
 	}
-	if steerErr != nil {
-		return nil, prepared.cleanup(steerErr)
+	if ensureErr != nil {
+		return nil, prepared.cleanup(ensureErr)
+	}
+	resource := sessionruntime.AgentResourceSelection(sessionruntime.ReplaceAgentResource{})
+	if delivery == workflowruntime.TaskPromptDeliveryResume && admission.RuntimeAvailable {
+		resource = sessionruntime.CurrentAgentResource{}
 	}
 	prepared.cleanup = func(err error) error { return err }
-	return &currentNodeAgentAssignmentSteer{
+	return &currentNodeAgentAssignmentEnsure{
 		reference:  reference,
-		completion: steer,
+		completion: ensure,
 		prepared:   prepared,
+		resource:   resource,
 	}, nil
 }
 
-type currentNodeAgentAssignmentSteer struct {
+type currentNodeAgentAssignmentEnsure struct {
 	reference  workflow.CurrentNodeReference
-	completion runtime.WorkflowAssignmentSteer
+	completion runtime.WorkflowAssignmentEnsure
 	prepared   preparedCurrentNodeAgentSession
+	resource   sessionruntime.AgentResourceSelection
 }
 
-func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+func (s *currentNodeAgentAssignmentEnsure) Wait(ctx context.Context) (session.CommitReceipt, error) {
 	if s == nil {
-		return session.CommitReceipt{}, errors.New("current node agent assignment steer is required")
+		return session.CommitReceipt{}, errors.New("current node agent assignment ensure is required")
 	}
 	return s.completion.Wait(ctx)
 }
@@ -336,11 +349,11 @@ func (s *Starter) startCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
-	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
+	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentEnsure)
 	if err != nil {
 		return err
 	}
@@ -389,6 +402,8 @@ func (s *Starter) startCurrentNodeAgent(
 	}
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
+		PromptFeed:         currentNodeExecutionPromptFeed(controller),
+		RunningPublication: currentNodeRunningPublication(controller),
 		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
@@ -405,11 +420,31 @@ func (s *Starter) startCurrentNodeAgent(
 			if turnErr == nil {
 				return nil
 			}
-			reason := ReasonRuntimeFailed
-			if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
-				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+			return turnErr
+		},
+		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, runErr error) error {
+			durableCtx := context.WithoutCancel(finalizeCtx)
+			if err := publishCurrentNodeFinalizing(durableCtx, controller, scope.ID()); err != nil {
+				return err
 			}
-			return errors.Join(turnErr, s.failCurrentNodeScope(context.WithoutCancel(runCtx), controller, scope, reason, turnErr))
+			if runErr != nil {
+				reason := ReasonRuntimeFailed
+				if errors.Is(runErr, context.Canceled) || context.Cause(finalizeCtx) != nil {
+					reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+				}
+				return s.failCurrentNodeScope(
+					durableCtx,
+					controller,
+					scope,
+					reason,
+					runErr,
+				)
+			}
+			finalizer, ok := controller.(workflowruntime.ResultFinalizer)
+			if !ok {
+				return errors.New("workflow controller does not finalize Current Node results")
+			}
+			return finalizer.FinalizeCurrentNodeResult(durableCtx, scope.ID(), runErr)
 		},
 	})
 	if err != nil {
@@ -418,26 +453,61 @@ func (s *Starter) startCurrentNodeAgent(
 	return nil
 }
 
+func currentNodeExecutionPromptFeed(
+	controller workflowruntime.Controller,
+) sessionruntime.ExecutionPromptFeed {
+	feed, _ := controller.(sessionruntime.ExecutionPromptFeed)
+	return feed
+}
+
+func currentNodeRunningPublication(
+	controller workflowruntime.Controller,
+) func(sessionruntime.TaskExecution) error {
+	publisher, _ := controller.(interface {
+		PublishCurrentNodeRunningExecution(context.Context, sessionruntime.TaskExecution) error
+	})
+	if publisher == nil {
+		return nil
+	}
+	return func(running sessionruntime.TaskExecution) error {
+		return publisher.PublishCurrentNodeRunningExecution(context.Background(), running)
+	}
+}
+
+func publishCurrentNodeFinalizing(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+) error {
+	publisher, ok := controller.(interface {
+		PublishCurrentNodeExactFinalizing(context.Context, runtimeids.ExecutionScopeID) error
+	})
+	if !ok {
+		return errors.New("workflow controller does not publish Exact Execution finalization")
+	}
+	return publisher.PublishCurrentNodeExactFinalizing(ctx, scopeID)
+}
+
 func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
-	if assignmentSteer == nil {
+	if assignmentEnsure == nil {
 		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
-	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
+	assignment, ok := assignmentEnsure.(*currentNodeAgentAssignmentEnsure)
 	if !ok {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
-			"current node %v received incompatible assignment steer %T",
+			"current node %v received incompatible assignment ensure %T",
 			input.CurrentNode.Reference,
-			assignmentSteer,
+			assignmentEnsure,
 		)
 	}
 	if !assignment.reference.Equal(input.CurrentNode.Reference) {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
-			"current node assignment steer %v does not match start %v",
+			"current node assignment ensure %v does not match start %v",
 			assignment.reference,
 			input.CurrentNode.Reference,
 		)
@@ -449,7 +519,10 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	if !receipt.Committed {
 		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
-	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
+	if assignment.resource == nil {
+		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment ensure has no Agent resource selection")
+	}
+	return assignment.prepared, assignment.resource, nil
 }
 
 func (s *Starter) planCurrentNodeSession(

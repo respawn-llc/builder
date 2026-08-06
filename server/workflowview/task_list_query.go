@@ -64,9 +64,16 @@ type workflowTaskListPageResult struct {
 	matchingWorkflowCount int
 }
 
-func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) (workflowTaskListPageResult, error) {
+func (l *TaskList) queryRows(
+	ctx context.Context,
+	queries *sqlitegen.Queries,
+	req workflowTaskListQueryRequest,
+) (workflowTaskListPageResult, error) {
 	if l == nil {
 		return workflowTaskListPageResult{}, errors.New("task list is required")
+	}
+	if queries == nil {
+		return workflowTaskListPageResult{}, errors.New("task list queries are required")
 	}
 	var workflowFilter *runtimeids.WorkflowID
 	visibleColumnsJSON := sql.NullString{}
@@ -106,7 +113,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
+	rows, err := queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:            req.projectID,
 		WorkflowID:           workflowFilter,
 		VisibleColumnsJson:   visibleColumnsJSON,

@@ -60,7 +60,11 @@ CREATE INDEX task_dependencies_reverse_idx
 	ON task_dependencies(blocked_task_id, blocker_task_id);
 CREATE TABLE workflow_task_status_records (
 	task_id TEXT PRIMARY KEY,
-	is_done INTEGER NOT NULL
+	is_done INTEGER NOT NULL,
+	kind TEXT NOT NULL,
+	primary_status_rank INTEGER NOT NULL,
+	node_ids_json TEXT NOT NULL,
+	attention_types_json TEXT NOT NULL
 );
 CREATE VIEW task_records AS SELECT * FROM tasks;
 `); err != nil {
@@ -127,9 +131,12 @@ VALUES (?, ?), (?, ?)`,
 		t.Fatalf("insert dependency: %v", err)
 	}
 	if _, err := db.Exec(`
-INSERT INTO workflow_task_status_records (task_id, is_done)
-VALUES (?, ?), (?, ?)`,
-		"blocker-1", 0, "blocker-2", 1,
+INSERT INTO workflow_task_status_records (
+	task_id, is_done, kind, primary_status_rank, node_ids_json, attention_types_json
+)
+VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+		"blocker-1", 0, "active", 8, "[]", "[]",
+		"blocker-2", 1, "done", 1, "[]", "[]",
 	); err != nil {
 		t.Fatalf("insert blocker statuses: %v", err)
 	}
@@ -265,5 +272,6 @@ func boardNodeTasksQueryParams(
 		SortDirection:        sortDirection,
 		OffsetRows:           int64(offset),
 		LimitRows:            int64(limit),
+		LiveTaskStatesJson:   "[]",
 	}
 }

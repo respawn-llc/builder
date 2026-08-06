@@ -175,25 +175,15 @@ func (a *Authority) WithWorkflowInterruptSelection(
 			if !execution.prompts.hasPending() {
 				selection.Interruptible = append(selection.Interruptible, handle)
 			}
+		case executionPhaseFinalizing:
+			if !execution.prompts.hasPending() {
+				selection.Interruptible = append(selection.Interruptible, handle)
+				selection.Finalizing = append(selection.Finalizing, handle)
+			}
 		default:
 			panic("workflow execution has an invalid interrupt phase")
 		}
 	})
-	if sessionID == nil {
-		for _, execution := range a.byScope {
-			if execution.phase != executionPhaseFinalizing {
-				continue
-			}
-			ref, workflowScoped := execution.scope.Workflow()
-			if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-				continue
-			}
-			if execution.scope.Kind() != ExecutionScopeScript {
-				panic("workflow execution finalizing phase is not a script")
-			}
-			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
-		}
-	}
 	if len(selection.Interruptible) == 0 {
 		return ErrExecutionNoLongerLive
 	}

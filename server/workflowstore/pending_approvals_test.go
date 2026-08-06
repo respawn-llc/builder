@@ -23,7 +23,7 @@ func TestPendingApprovalReloadDefaultsMissingCommentaryToEmpty(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "ready"},
@@ -114,7 +114,7 @@ func TestPendingApprovalFreezesSelectedAgentExecutionWithoutCatalogResolution(t 
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -122,7 +122,7 @@ func TestPendingApprovalFreezesSelectedAgentExecutionWithoutCatalogResolution(t 
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "reviewer"},
@@ -139,7 +139,7 @@ func TestPendingApprovalFreezesSelectedAgentExecutionWithoutCatalogResolution(t 
 	}
 
 	store.roleResolver = emptyTargetAgentCatalog{}
-	applied, err := store.ApplyPendingApproval(ctx, completed.PendingApproval.ID)
+	applied, err := applyPendingApprovalForStoreTest(store, ctx, completed.PendingApproval.ID)
 	if err != nil {
 		t.Fatalf("ApplyPendingApproval without catalog: %v", err)
 	}

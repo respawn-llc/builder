@@ -28,9 +28,10 @@ type ScriptCommand struct {
 }
 
 type ScriptExecutionRequest struct {
-	Workflow *WorkflowExecutionLease
-	Command  ScriptCommand
-	Finalize func(context.Context, ExecutionScope, ScriptResult, error) error
+	Workflow           *WorkflowExecutionLease
+	Command            ScriptCommand
+	RunningPublication func(TaskExecution) error
+	Finalize           func(context.Context, ExecutionScope, ScriptResult, error) error
 }
 
 type ScriptResult struct {
@@ -97,24 +98,61 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			}
 		}
 		if startErr := process.cmd.Start(); startErr != nil {
-			// A failed start never becomes running. Its completion finalizer
-			// retains exact ownership without publishing queued/running state.
-			execution.beginWorkflowFinalization()
+			// A failed start never becomes running. Its failure finalizer keeps
+			// exact ownership without publishing queued/running liveness.
+			execution.beginWorkflowStartupFailureFinalization()
 			var finalizeErr error
 			if req.Finalize != nil {
-				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
+				finalizeErr = req.Finalize(execution.ctx, execution.scope, ScriptResult{}, startErr)
+			}
+			if finalizeErr == nil {
+				execution.confirmDisposition()
+			} else {
+				execution.awaitDisposition()
 			}
 			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
 			return
 		}
 		if req.Workflow != nil {
 			a.beginWorkflowExecution(execution)
+			if publicationErr := execution.publishConfiguredRunning(); publicationErr != nil {
+				execution.cancel()
+				result, runErr, stopErr := process.wait(execution.ctx)
+				execution.beginWorkflowFinalization()
+				var finalizeErr error
+				if req.Finalize != nil {
+					finalizeErr = req.Finalize(
+						context.WithoutCancel(execution.ctx),
+						execution.scope,
+						result.clone(),
+						publicationErr,
+					)
+				}
+				if finalizeErr == nil {
+					execution.confirmDisposition()
+				} else {
+					execution.awaitDisposition()
+				}
+				execution.finish(
+					ExecutionResult{Script: &result},
+					errors.Join(publicationErr, runErr, finalizeErr),
+					stopErr,
+				)
+				return
+			}
 		}
 		result, runErr, stopErr := process.wait(execution.ctx)
 		execution.beginWorkflowFinalization()
 		var finalizeErr error
 		if req.Finalize != nil {
-			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
+			finalizeErr = req.Finalize(execution.ctx, execution.scope, result.clone(), runErr)
+		}
+		if req.Workflow != nil {
+			if finalizeErr == nil {
+				execution.confirmDisposition()
+			} else {
+				execution.awaitDisposition()
+			}
 		}
 		execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, finalizeErr), stopErr)
 	}()

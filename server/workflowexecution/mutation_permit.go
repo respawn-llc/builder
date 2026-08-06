@@ -7,9 +7,10 @@ import (
 
 type mutationPermitContextKey struct{}
 
-// MutationPermit serializes workflow lifecycle mutations. The permit is
-// context-aware so a lifecycle operation can call another Workflow Execution
-// operation without reacquiring the same global permit.
+// MutationPermit serializes process-wide Workflow mutations such as startup
+// recovery and destructive cross-Task operations. Ordinary Task execution is
+// owned by TaskLifecycleCoordinator. The permit remains context-aware for
+// nested process-wide operations.
 type MutationPermit struct {
 	token chan struct{}
 }

@@ -29,8 +29,9 @@ type Service struct {
 	mutationPermit    *workflowexecution.MutationPermit
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
+		RunTaskDeletion(context.Context, []workflow.TaskID, func(context.Context) error) error
+		DeleteProject(context.Context, workflowstore.ProjectDeleteRequest) ([]serverapi.ProjectDeleteBlocker, error)
 	}
-	workflowStore *workflowstore.Store
 }
 
 // runtimeSessionGuard is an internal composition collaborator. Production
@@ -124,13 +125,14 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 
 func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
-}, store *workflowstore.Store) *Service {
+	RunTaskDeletion(context.Context, []workflow.TaskID, func(context.Context) error) error
+	DeleteProject(context.Context, workflowstore.ProjectDeleteRequest) ([]serverapi.ProjectDeleteBlocker, error)
+}) *Service {
 	if s == nil {
 		return nil
 	}
 	s.mutationPermit = permit
 	s.workflowExecution = execution
-	s.workflowStore = store
 	return s
 }
 
@@ -383,33 +385,34 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
 		return withRuntimeBlockers(ctx, sessionIDs, s.projectActiveSessionBlockers, s.blockSessionStarts)
 	}
-	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
-		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
-		for _, taskID := range taskIDs {
-			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
-				return nil, err
-			}
-		}
-		if s.workflowStore == nil {
-			return nil, errors.New("workflow store is required for project deletion")
-		}
-		return s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
-			ProjectID:      projectID,
-			RuntimeBlocker: runtimeBlocker,
-			Artifacts: projectSessionDeleteArtifacts{
-				persistenceRoot: s.metadata.PersistenceRoot(),
-				projectID:       projectID,
-			},
-		})
-	}
 	var blockers []serverapi.ProjectDeleteBlocker
 	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		var runErr error
-		blockers, runErr = deleteProject(ctx)
-		return runErr
+		rawTaskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		taskIDs := make([]workflow.TaskID, 0, len(rawTaskIDs))
+		for _, taskID := range rawTaskIDs {
+			taskIDs = append(taskIDs, workflow.TaskID(taskID))
+		}
+		return s.workflowExecution.RunTaskDeletion(ctx, taskIDs, func(ctx context.Context) error {
+			currentTaskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+			if err != nil {
+				return err
+			}
+			if !sameProjectTaskIDs(rawTaskIDs, currentTaskIDs) {
+				return errors.New("Project Task set changed during deletion")
+			}
+			blockers, err = s.workflowExecution.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
+				ProjectID:      projectID,
+				RuntimeBlocker: runtimeBlocker,
+				Artifacts: projectSessionDeleteArtifacts{
+					persistenceRoot: s.metadata.PersistenceRoot(),
+					projectID:       projectID,
+				},
+			})
+			return err
+		})
 	})
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
@@ -418,6 +421,22 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: false, Blockers: blockers}, nil
 	}
 	return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
+}
+
+func sameProjectTaskIDs(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, taskID := range left {
+		seen[taskID] = struct{}{}
+	}
+	for _, taskID := range right {
+		if _, exists := seen[taskID]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {

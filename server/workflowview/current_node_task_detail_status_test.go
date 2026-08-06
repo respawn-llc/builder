@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"os/exec"
 	"reflect"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -131,8 +133,12 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			wantStatus:    serverapi.WorkflowTaskStatusKindQueued,
 			wantCanDelete: false,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				_, execution := startRealTaskStatusExecution(t, surfaces, task, true, nil)
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
+				_, _ = startRealTaskStatusExecution(t, surfaces, task, true, nil)
+				return taskStatusExpectedTarget{
+					nodeID:       surfaces.fixture.agentNodeID,
+					live:         taskStatusNoLiveTarget{},
+					runtimeOwned: true,
+				}
 			},
 		},
 		{
@@ -208,7 +214,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			wantAttention:    1,
 			wantCanDelete:    true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				completed, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+				completed, err := workflowtest.CompleteCurrentNode(surfaces.fixture.store, surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       task.currentNode,
 					TransitionID: "done",
 				})
@@ -242,7 +248,7 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 			wantStatus:     serverapi.WorkflowTaskStatusKindDone,
 			wantCanDelete:  true,
 			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				if _, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+				if _, err := workflowtest.CompleteCurrentNode(surfaces.fixture.store, surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       task.currentNode,
 					TransitionID: "done",
 				}); err != nil {
@@ -283,7 +289,7 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 		workflowexecution.NewMutationPermit(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
+			AssignmentEnsurer: taskStatusProjectionTestAssignmentEnsurer{},
 		},
 	)
 	if err != nil {
@@ -304,7 +310,7 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -334,6 +340,140 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	}
 }
 
+func TestLifecycleSensitiveReadSurfacesUseOneCapturePerRequest(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	controller, err := workflowexecution.NewCurrentNodeController(
+		fixture.store,
+		taskStatusProjectionTestRunner{},
+		fixture.authority,
+		workflowexecution.NewMutationPermit(),
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentEnsurer: taskStatusProjectionTestAssignmentEnsurer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+	})
+	captures := 0
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		countingTaskStatusLiveObservationSource{source: controller, calls: &captures},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	detail, err := NewTaskDetail(fixture.metadata, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	definitions := mustDefinitionProjection(t, fixture.store)
+	list, err := NewTaskList(fixture.metadata, definitions, projection)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	search, err := NewTaskSearch(fixture.metadata, projection)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+	board, err := NewBoard(
+		fixture.metadata,
+		definitions,
+		testsetup.QuestionsEnabled("coder"),
+		projection,
+	)
+	if err != nil {
+		t.Fatalf("NewBoard: %v", err)
+	}
+	started := fixture.startTask(t, "Captured surface")
+	projectID := fixture.binding.ProjectID
+	workflowID := fixture.workflowID
+	requireOneCapture := func(t *testing.T, operation func() error) {
+		t.Helper()
+		captures = 0
+		if err := operation(); err != nil {
+			t.Fatalf("read surface: %v", err)
+		}
+		if captures != 1 {
+			t.Fatalf("lifecycle captures = %d, want one", captures)
+		}
+	}
+	t.Run("detail", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := detail.GetTask(t.Context(), string(started.task.ID))
+			return err
+		})
+	})
+	t.Run("current nodes", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := detail.ListCurrentNodes(t.Context(), string(started.task.ID))
+			return err
+		})
+	})
+	t.Run("list", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := list.List(t.Context(), serverapi.WorkflowTaskListRequest{
+				ProjectID:  &projectID,
+				WorkflowID: &workflowID,
+				Limit:      intPointer(20),
+				LabelFilter: serverapi.WorkflowTaskLabelFilter{
+					Kind: serverapi.WorkflowTaskLabelFilterKindNone,
+				},
+			})
+			return err
+		})
+	})
+	t.Run("search", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := search.Search(t.Context(), taskSearchRequest("Captured surface"))
+			return err
+		})
+	})
+	t.Run("board counts", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := board.Get(t.Context(), serverapi.WorkflowBoardRequest{
+				ProjectID:  projectID,
+				WorkflowID: &workflowID,
+				LabelFilter: serverapi.WorkflowTaskLabelFilter{
+					Kind: serverapi.WorkflowTaskLabelFilterKindNone,
+				},
+			})
+			return err
+		})
+	})
+	t.Run("board cards", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := board.ListNodeCards(t.Context(), serverapi.WorkflowBoardNodeCardsListRequest{
+				ProjectID:  projectID,
+				WorkflowID: workflowID,
+				NodeID:     string(fixture.agentNodeID),
+				PageSize:   20,
+				LabelFilter: serverapi.WorkflowTaskLabelFilter{
+					Kind: serverapi.WorkflowTaskLabelFilterKindNone,
+				},
+			})
+			return err
+		})
+	})
+	t.Run("dependencies", func(t *testing.T) {
+		requireOneCapture(t, func() error {
+			_, err := dependencies.GetTaskDependencies(t.Context(), string(started.task.ID))
+			return err
+		})
+	})
+}
+
 func assertRealTaskStatusAcrossSurfaces(
 	t *testing.T,
 	surfaces realTaskStatusSurfaces,
@@ -352,7 +492,7 @@ func assertRealTaskStatusAcrossSurfaces(
 	wantQuiescent := false
 	switch expected.live.(type) {
 	case taskStatusNoLiveTarget:
-		wantQuiescent = true
+		wantQuiescent = !expected.runtimeOwned
 	case taskStatusAgentTarget, taskStatusScriptTarget:
 	default:
 		t.Fatalf("unsupported expected live target %T", expected.live)
@@ -567,6 +707,171 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 		len(*item.ColumnKeys) != 1 ||
 		(*item.ColumnKeys)[0] != "agent" {
 		t.Fatalf("task list item = %+v, want Current Node status and column", item)
+	}
+}
+
+func TestTaskListAppliesPinnedLifecycleOverrideBeforeColumnAndStatusFilters(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Pinned List task")
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	overrideNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
+	overrideNodeKey := ""
+	for _, node := range definition.Nodes {
+		if workflow.NodeIDOf(node) == overrideNodeID {
+			overrideNodeKey = string(workflow.NodeKey(node))
+			break
+		}
+	}
+	if overrideNodeKey == "" {
+		t.Fatalf("override node %q has no key", overrideNodeID)
+	}
+	overrideReference, err := workflow.NewCurrentNodeReference(started.task.ID, overrideNodeID, nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference override: %v", err)
+	}
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
+					started.task.ID: {
+						CurrentNodes:       []workflow.CurrentNode{{Reference: overrideReference}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{overrideReference},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	taskList, err := NewTaskList(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		projection,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	projectID := fixture.binding.ProjectID
+	workflowID := fixture.workflowID
+	limit := 1
+	page, err := taskList.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		ColumnKeys:  []string{overrideNodeKey},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued},
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		Limit:       &limit,
+	})
+	if err != nil {
+		t.Fatalf("TaskList.List: %v", err)
+	}
+	if len(page.Tasks) != 1 ||
+		page.Tasks[0].TaskID != string(started.task.ID) ||
+		page.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+		page.Tasks[0].ColumnKeys == nil ||
+		!slices.Equal(*page.Tasks[0].ColumnKeys, []string{overrideNodeKey}) {
+		t.Fatalf("Task List pinned lifecycle page = %+v", page.Tasks)
+	}
+	if page.NextOffset != nil {
+		t.Fatalf("Task List pinned lifecycle next offset = %v, want none", page.NextOffset)
+	}
+}
+
+func TestTaskListDependencyFilterUsesPinnedBlockerLifecycleBeforePagination(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	blocker := fixture.startTask(t, "Pinned blocker")
+	blocked := fixture.startTask(t, "Pinned blocked")
+	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+		BlockerTaskID: blocker.task.ID,
+		BlockedTaskID: blocked.task.ID,
+	}); err != nil {
+		t.Fatalf("AddTaskDependency: %v", err)
+	}
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+		TaskID:       blocker.task.ID,
+		TargetNodeID: currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal),
+	}); err != nil {
+		t.Fatalf("move blocker to done: %v", err)
+	}
+	overrideReference, err := workflow.NewCurrentNodeReference(
+		blocker.task.ID,
+		fixture.agentNodeID,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference override: %v", err)
+	}
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
+					blocker.task.ID: {
+						CurrentNodes:       []workflow.CurrentNode{{Reference: overrideReference}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{overrideReference},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	taskList, err := NewTaskList(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		projection,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	projectID := fixture.binding.ProjectID
+	workflowID := fixture.workflowID
+	limit := 1
+	unblocked := true
+	request := serverapi.WorkflowTaskListRequest{
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		ColumnKeys:       []string{"agent"},
+		StatusKinds:      []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
+		DependencyFilter: &unblocked,
+		LabelFilter:      serverapi.WorkflowTaskLabelFilterNone(),
+		Limit:            &limit,
+	}
+	page, err := taskList.List(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("TaskList.List unblocked: %v", err)
+	}
+	if len(page.Tasks) != 0 {
+		t.Fatalf("unblocked page = %+v, want pinned queued blocker to exclude blocked Task", page.Tasks)
+	}
+
+	blockedFilter := false
+	request.DependencyFilter = &blockedFilter
+	page, err = taskList.List(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("TaskList.List blocked: %v", err)
+	}
+	if len(page.Tasks) != 1 || page.Tasks[0].TaskID != string(blocked.task.ID) {
+		t.Fatalf("blocked page = %+v, want Task %q", page.Tasks, blocked.task.ID)
+	}
+	if page.NextOffset != nil {
+		t.Fatalf("blocked page next offset = %v, want none", page.NextOffset)
 	}
 }
 
@@ -811,25 +1116,38 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Live approval")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
+	scopeID := runtimeids.NewExecutionScopeID()
+	executions := map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+		started.task.ID: {
+			Executions: []sessionruntime.TaskExecution{{
+				Ref: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   fixture.binding.ProjectID,
+					WorkflowID:  fixture.workflowID,
+					CurrentNode: started.currentNode,
+				},
+				ScopeID: scopeID,
+				Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+				PendingPrompts: []sessionruntime.PendingPromptReference{{
+					ID:   "approval",
+					Kind: sessionruntime.PendingPromptKindSessionApproval,
+				}},
+			}},
+		},
+	}
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
-					started.task.ID: {
-						Executions: []sessionruntime.TaskExecution{{
-							Queued: false,
-							Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
-							PendingPrompts: []sessionruntime.PendingPromptReference{{
-								ID:   "approval",
-								Kind: sessionruntime.PendingPromptKindSessionApproval,
-							}},
-						}},
-					},
+			store: fixture.store,
+			observation: workflowTaskExecutionObservationForTest(
+				t,
+				map[workflow.TaskID][]workflow.CurrentNode{
+					started.task.ID: {{Reference: started.currentNode}},
 				},
-			},
+				executions,
+				nil,
+			),
 		},
 	)
 	if err != nil {
@@ -906,7 +1224,7 @@ func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
 		return len(executions) == 1 && !executions[0].Queued
 	}, "timed out waiting for source Exact Execution Scope")
 
-	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	if _, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       done.currentNode,
 		TransitionID: "done",
 	}); err != nil {
@@ -1191,7 +1509,7 @@ func TestTaskDetailProjectsDurableCurrentStateMatrix(t *testing.T) {
 	t.Run("waiting approval", func(t *testing.T) {
 		fixture := newCurrentNodeViewFixture(t, true)
 		started := fixture.startTask(t, "Approval")
-		completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+		completed, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       started.currentNode,
 			TransitionID: "done",
 		})
@@ -1216,7 +1534,7 @@ func TestTaskDetailProjectsDurableCurrentStateMatrix(t *testing.T) {
 	t.Run("done", func(t *testing.T) {
 		fixture := newCurrentNodeViewFixture(t, false)
 		started := fixture.startTask(t, "Done")
-		if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+		if _, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       started.currentNode,
 			TransitionID: "done",
 		}); err != nil {

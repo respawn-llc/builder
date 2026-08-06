@@ -164,7 +164,11 @@ Per-Transition-Branch policy deciding which retained Session supplies context fo
 
 ### Exact Execution Scope
 
-The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
+The immutable identity of one live Agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. The scope includes mandatory result finalization after the Agent loop or Script process returns. It remains live and interruptible until that finalizer publishes successors or interruption. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
+
+### Run
+
+The process-local Workflow Execution owner for one executable Current Node. A Run is queued before a matching Exact Execution Scope actively executes and running while that scope executes, including mandatory result finalization. Interactive clients may attach to the same Agent Run and Exact Execution Scope; an attachment is not another execution owner. A Run may remain stopped by live blocking attention. Durable interrupted or terminal Current Nodes have no Run. Runs are never persisted or reconstructed after restart. A Run without active exact execution does not authorize Interrupt.
 
 ### Resource Generation
 
@@ -224,11 +228,15 @@ The product authority that sequences Workflow lifecycle changes, starts eligible
 
 ### Automatic Intent
 
-A temporary request for Workflow Execution to start eligible work automatically. Automatic Intents are lost on restart and are not reconstructed from saved Task state.
+A temporary description of eligible work that Workflow Execution may accept into a Run. Automatic Intents are lost on restart, are not reconstructed from saved Task state, and never prove Run ownership or liveness.
 
 ### Immutable Live Snapshot
 
 A read-only view of live Workflow activity at one point in time. The view can become stale. Each operation checks the authoritative live state again before it changes a Task.
+
+### Lifecycle Publication
+
+The process-local owner that publishes one observable Workflow lifecycle view from compatible durable stopped facts and runtime facts. It briefly couples a prepared SQLite lifecycle commit with an immutable runtime-root swap and gives reads a matching SQLite snapshot and runtime root. It never persists runtime state or derives queued or running authority from secondary signals.
 
 ### Task Comment
 

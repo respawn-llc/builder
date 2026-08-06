@@ -50,10 +50,12 @@
 
 ## Interrupts And Exit
 
-- `Ctrl+C` interrupts only an active Agent Turn. It stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
+- In an ordinary Session, `Ctrl+C` interrupts only an active Agent Turn. It stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to start another turn.
+- In a retained Workflow Session, `Ctrl+C` interrupts a live workflow-scoped Exact Execution Scope, including its Agent loop, active tool, or mandatory result finalizer. The TUI delegates that interruption to Workflow Execution and does not require an active Engine step.
+- An accepted Workflow Interrupt keeps the Session available and returns input when the Current Node reaches durable interruption or when a completion publication already won. Opening or resuming the retained Workflow Session later is an explicit Workflow activation and may Resume or attach to that Current Node without new prompt text.
 - `Ctrl+C` does not cancel a submission before its Agent Turn starts.
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
-- `Ctrl+C` without an active `Agent Turn` exits the TUI. A submission already sent to the server may start or continue after the client detaches.
+- `Ctrl+C` without an active ordinary Agent Turn or live workflow-scoped Exact Execution Scope exits the TUI. A submission or queued Workflow Run already accepted by the server may start or continue after the client detaches.
 - Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
 - Structured draft-recovery entries preserve only their recovery category and text. They carry no runtime operation, request, or queue identity.
 - Recovered entries return as editable composer text and are never reconstructed into operational queues, resumed, or replayed automatically; sending them again requires an explicit user action.

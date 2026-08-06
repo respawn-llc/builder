@@ -25,9 +25,7 @@ func TestDeleteTaskRemovesDependenciesAndTouchesDistinctSurvivorsOnce(t *testing
 	updatedAt := time.Now().UTC().Add(time.Hour).Truncate(time.Millisecond)
 	store.now = func() time.Time { return updatedAt }
 
-	if _, err := store.DeleteTask(ctx, victim.ID); err != nil {
-		t.Fatalf("DeleteTask: %v", err)
-	}
+	deleteTaskThroughLifecyclePublication(t, store, ctx, victim.ID)
 	var dependencyCount int
 	if err := store.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)

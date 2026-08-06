@@ -2,6 +2,7 @@ package workflowrunner
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"testing"
 
 	"core/server/workflow"
@@ -168,12 +169,9 @@ func newMaterializedRoleSelectionStart(t *testing.T) (*currentNodeRunnerFixture,
 	}); err != nil {
 		t.Fatalf("LockTaskExecutionTarget: %v", err)
 	}
-	started, err := f.store.StartTask(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
+	started := f.publishTaskStart(t, task.ID)
 	first := started.Mutation.Created[0]
-	completed, err := f.store.CompleteCurrentNode(context.Background(), workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(f.store, context.Background(), workflowstore.CurrentNodeCompletionRequest{
 		Source:       first.Reference,
 		TransitionID: "next",
 		OutputValues: map[string]string{"role": "reviewer"},

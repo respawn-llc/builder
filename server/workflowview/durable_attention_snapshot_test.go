@@ -1,6 +1,7 @@
 package workflowview
 
 import (
+	"core/internal/testharness/workflowtest"
 	"testing"
 
 	"core/server/workflow"
@@ -10,7 +11,7 @@ import (
 func TestAttentionPagesTypedDurableNotificationReferences(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, true)
 	approvalTask := fixture.startTask(t, "Approval")
-	completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalTask.currentNode,
 		TransitionID: "done",
 	})

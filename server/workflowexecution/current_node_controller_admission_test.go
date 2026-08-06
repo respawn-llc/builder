@@ -58,6 +58,10 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 		started <- startCurrentNodeForControllerTest(context.Background(), controller, store, reference)
 	}()
 	<-runner.entered
+	activation, err := controller.joinAgentRunActivation(reference, runtimeids.NewSessionID())
+	if err != nil {
+		t.Fatalf("join Agent Run activation: %v", err)
+	}
 
 	snapshot := controller.Snapshot()
 	if len(snapshot.Gates) != 1 || !snapshot.Gates[0].CurrentNode.Equal(reference) {
@@ -78,6 +82,11 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	close(runner.returnStart)
 	if err := <-started; err != nil {
 		t.Fatalf("start current node: %v", err)
+	}
+	activationCtx, cancelActivation := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelActivation()
+	if _, err := activation.await(activationCtx); err == nil {
+		t.Fatal("Agent activation without a Session resource remained pending or succeeded")
 	}
 	handle := <-runner.handles
 	if _, err := handle.Wait(context.Background()); err != nil {
@@ -125,6 +134,340 @@ func TestCurrentNodeControllerRunnerFailureInterruptsAdmittedCurrentNode(t *test
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return attention.pendingCount() == 1
 	}, "runner failure did not publish interrupted Current Node attention")
+}
+
+func TestCurrentNodeControllerRunnerFailureWaitsForTaskLifecycleWriterBeforeStoppingRun(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-runner-failure-writer", "node-agent")
+	store := &currentNodeControllerStore{}
+	runner := &blockingCurrentNodeRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("queue current node start: %v", err)
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not begin")
+	}
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("reference key: %v", err)
+	}
+	controller.mu.Lock()
+	run, owned := controller.runs.get(key)
+	_, gated := controller.gates[key]
+	controller.mu.Unlock()
+	if !owned || !gated {
+		t.Fatal("runner did not retain its accepted gated Run")
+	}
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), reference.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+	close(runner.release)
+
+	time.Sleep(50 * time.Millisecond)
+	controller.mu.Lock()
+	current, stillOwned := controller.runs.get(key)
+	_, stillGated := controller.gates[key]
+	disposition := run.disposition
+	controller.mu.Unlock()
+	if !stillOwned || current != run || !stillGated || disposition != currentNodeRunDispositionQueued {
+		t.Fatalf(
+			"runner failure mutated accepted Run before Task writer: owned=%t same=%t gated=%t disposition=%v",
+			stillOwned,
+			current == run,
+			stillGated,
+			disposition,
+		)
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("Task lifecycle writer: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		controller.mu.Lock()
+		defer controller.mu.Unlock()
+		return run.disposition == currentNodeRunDispositionStopped &&
+			run.stop != nil &&
+			run.stop.reason == currentNodeRunStopAdmissionFailed
+	}, "runner failure did not stop the accepted Run with an admission-failed disposition")
+}
+
+func TestCurrentNodeControllerReservationCancellationWaitsForTaskLifecycleWriter(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-reservation-cancellation-writer", "node-agent")
+	preparationEntered := make(chan struct{})
+	releasePreparation := make(chan struct{})
+	cause := errors.New("automatic preparation failed")
+	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	run.preparation = func(context.Context) error {
+		close(preparationEntered)
+		<-releasePreparation
+		return cause
+	}
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("reference key: %v", err)
+	}
+	var accepted *currentNodeRun
+	if err := controller.lifecycle.Run(context.Background(), reference.TaskID, func(context.Context) error {
+		controller.mu.Lock()
+		defer controller.mu.Unlock()
+		if err := controller.queueAutomaticStartLocked(*run); err != nil {
+			return err
+		}
+		accepted, _ = controller.runs.get(key)
+		return nil
+	}); err != nil {
+		t.Fatalf("queue automatic Run: %v", err)
+	}
+	if accepted == nil {
+		t.Fatal("automatic queue did not accept Run")
+	}
+	select {
+	case <-preparationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("automatic admission did not begin preparation")
+	}
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), reference.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+	close(releasePreparation)
+
+	time.Sleep(50 * time.Millisecond)
+	controller.mu.Lock()
+	current, owned := controller.runs.get(key)
+	_, reserved := controller.automaticReservations[key]
+	capacity := controller.agentCapacityActive
+	disposition := accepted.disposition
+	controller.mu.Unlock()
+	if !owned || current != accepted || !reserved || capacity != 1 || disposition != currentNodeRunDispositionQueued {
+		t.Fatalf(
+			"reservation cancellation crossed Task writer: owned=%t same=%t reserved=%t capacity=%d disposition=%v",
+			owned,
+			current == accepted,
+			reserved,
+			capacity,
+			disposition,
+		)
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("Task lifecycle writer: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		controller.mu.Lock()
+		defer controller.mu.Unlock()
+		_, reserved := controller.automaticReservations[key]
+		return !reserved &&
+			controller.agentCapacityActive == 0 &&
+			accepted.disposition == currentNodeRunDispositionStopped &&
+			accepted.stop != nil &&
+			accepted.stop.reason == currentNodeRunStopAdmissionFailed &&
+			errors.Is(accepted.stop.cause, cause)
+	}, "reservation cancellation did not end in one typed admission-failed disposition")
+}
+
+func TestCurrentNodeControllerWorkerFailureEndsAcceptedRunInOneTypedDisposition(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-worker-failure-disposition", "node-agent")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	controller.mu.Lock()
+	installCurrentNodeRunLockedForTest(controller, run)
+	controller.mu.Unlock()
+	cause := errors.New("assignment worker failed")
+
+	controller.handleCurrentNodeStartFailures([]currentNodeQueuedStart{*run}, false, cause)
+
+	if run.disposition != currentNodeRunDispositionStopped ||
+		run.stop == nil ||
+		run.stop.reason != currentNodeRunStopWorkerFailed ||
+		!errors.Is(run.stop.cause, cause) {
+		t.Fatalf("worker failure Run disposition = %+v, want one typed worker-failed stop", run)
+	}
+	if calls := store.interruptionCount(reference); calls != 1 {
+		t.Fatalf("worker failure interruption writes = %d, want 1", calls)
+	}
+}
+
+func TestCurrentNodeControllerWorkerFailureWaitsForTaskLifecycleWriterBeforeCleanup(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-worker-failure-writer", "node-agent")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	controller.mu.Lock()
+	key := installCurrentNodeRunLockedForTest(controller, run)
+	controller.mu.Unlock()
+	cause := errors.New("assignment worker failed")
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), reference.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+	cleanupDone := make(chan struct{})
+	go func() {
+		controller.handleCurrentNodeStartFailures([]currentNodeQueuedStart{*run}, false, cause)
+		close(cleanupDone)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	controller.mu.Lock()
+	current, owned := controller.runs.get(key)
+	disposition := run.disposition
+	controller.mu.Unlock()
+	if !owned || current != run || disposition != currentNodeRunDispositionQueued {
+		t.Fatalf(
+			"worker cleanup crossed Task writer: owned=%t same=%t disposition=%v",
+			owned,
+			current == run,
+			disposition,
+		)
+	}
+	if calls := store.interruptionCount(reference); calls != 0 {
+		t.Fatalf("worker cleanup wrote interruption before Task writer release: calls=%d", calls)
+	}
+	select {
+	case <-cleanupDone:
+		t.Fatal("worker cleanup returned while Task writer was held")
+	default:
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("Task lifecycle writer: %v", err)
+	}
+	select {
+	case <-cleanupDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker cleanup did not continue after Task writer released")
+	}
+	if run.disposition != currentNodeRunDispositionStopped ||
+		run.stop == nil ||
+		run.stop.reason != currentNodeRunStopWorkerFailed ||
+		!errors.Is(run.stop.cause, cause) {
+		t.Fatalf("worker cleanup Run disposition = %+v, want one typed worker-failed stop", run)
+	}
+	if calls := store.interruptionCount(reference); calls != 1 {
+		t.Fatalf("worker cleanup interruption writes = %d, want 1", calls)
+	}
+}
+
+func TestCurrentNodeControllerRunnerNoLongerLiveErrorStillStopsAcceptedRun(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-runner-no-longer-live", "node-agent")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, failingCurrentNodeRunner{
+		cause: sessionruntime.ErrExecutionNoLongerLive,
+	}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: reference,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, interrupted := store.interruption(reference)
+		return interrupted
+	}, "accepted Run was not stopped after runner returned no-longer-live")
+	if err := controller.EnsureTaskQuiescent(reference.TaskID); err != nil {
+		t.Fatalf("accepted Run remained owned after runner failure: %v", err)
+	}
+}
+
+func TestCurrentNodeControllerAdmissionWorkerKeepsStoppedRunUntilExactScopeRetires(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-stopped-exact-scope", "node-agent")
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: reference,
+	})
+	if err != nil {
+		t.Fatalf("new workflow execution lease: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = authority.Close(context.Background())
+	})
+	controller := &CurrentNodeController{
+		closed:           true,
+		lifecycle:        NewTaskLifecycleCoordinator(),
+		runs:             newCurrentNodeRunRegistry(),
+		exactScopes:      make(map[runtimeids.ExecutionScopeID]workflow.CurrentNodeReferenceKey),
+		gates:            make(map[workflow.CurrentNodeReferenceKey]struct{}),
+		admissionWorkers: make(map[workflow.CurrentNodeReferenceKey]struct{}),
+	}
+	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
+		t.Fatalf("transition Run to running: %v", err)
+	}
+	run.stopOnce(currentNodeRunStopInterrupted, context.Canceled)
+	run.executionLease = &lease
+	key := installCurrentNodeRunLockedForTest(controller, run)
+	controller.exactScopes[lease.ScopeID()] = key
+	controller.admissionWorkers[key] = struct{}{}
+
+	controller.finishAdmissionWorker(key, reference.TaskID)
+
+	if current, exists := controller.runs.get(key); !exists || current != run {
+		t.Fatal("admission worker removed a stopped Run before its Exact Execution Scope retired")
+	}
 }
 
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {
@@ -211,10 +554,8 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
-			err: errors.New("Resume must not steer an assignment"),
-		},
+		AgentConcurrency:  1,
+		AssignmentEnsurer: &recordingCurrentNodeAssignmentEnsurer{},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -250,6 +591,45 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
 		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
 		t.Fatalf("runner prompt deliveries = %+v, want Resume", deliveries)
+	}
+}
+
+func TestCurrentNodeControllerResumeInterruptsWhenAssignmentEnsureFails(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-assignment-failure", "node-review")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{{
+		Reference: reference,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	cause := errors.New("assignment append failed")
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentEnsurer: &recordingCurrentNodeAssignmentEnsurer{
+			waitErr: cause,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if _, err := controller.ResumeTask(context.Background(), reference.TaskID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		interruption, interrupted := store.interruption(reference)
+		return interrupted &&
+			interruption.reason == reasonCurrentNodeRuntimeStartFailed &&
+			interruption.detail.Code == string(reasonCurrentNodeRuntimeStartFailed)
+	}, "assignment ensure failure did not publish interruption")
+	if starts := runner.starts(); starts != 0 {
+		t.Fatalf("runner starts = %d, want none after assignment ensure failure", starts)
 	}
 }
 
@@ -489,6 +869,176 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	}
 }
 
+func TestCurrentNodeControllerAutomaticSelectionWaitsForTaskLifecycleWriter(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-selection-writer", "node-agent")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	var releaseRunnerOnce sync.Once
+	t.Cleanup(func() {
+		releaseRunnerOnce.Do(func() { close(runner.release) })
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), reference.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: reference,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	time.Sleep(50 * time.Millisecond)
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("reference key: %v", err)
+	}
+	controller.mu.Lock()
+	run, exists := controller.runs.get(key)
+	reserved := false
+	if exists {
+		_, reserved = controller.automaticReservations[key]
+	}
+	controller.mu.Unlock()
+	if !exists || run.phase != currentNodeRunQueued || reserved {
+		t.Fatalf("Run crossed Task writer during selection: exists=%t phase=%d reserved=%t", exists, run.phase, reserved)
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("Task lifecycle writer: %v", err)
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("automatic admission did not continue after Task writer released")
+	}
+	releaseRunnerOnce.Do(func() { close(runner.release) })
+}
+
+func TestCurrentNodeControllerAutomaticSelectionSkipsBusyTaskForUnrelatedScript(t *testing.T) {
+	busy := currentNodeReferenceForControllerTest(t, "task-busy-selection", "node-agent")
+	script := currentNodeReferenceForControllerTest(t, "task-unrelated-selection", "node-script")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &boundedExplicitAdmissionRunner{
+		entered: make(chan workflow.CurrentNodeReference, 2),
+		release: make(chan struct{}),
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	var releaseRunnerOnce sync.Once
+	t.Cleanup(func() {
+		releaseRunnerOnce.Do(func() { close(runner.release) })
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), busy.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+		{CurrentNode: busy, NodeKind: workflow.NodeKindAgent},
+		{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+	})
+	select {
+	case started := <-runner.entered:
+		if !started.Equal(script) {
+			t.Fatalf("start while first Task writer was busy = %v, want unrelated Script %v", started, script)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("busy Task writer prevented unrelated Script progress")
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("busy Task lifecycle writer: %v", err)
+	}
+	releaseRunnerOnce.Do(func() { close(runner.release) })
+}
+
+func TestCurrentNodeControllerExplicitSelectionSkipsBusyTask(t *testing.T) {
+	busy := currentNodeReferenceForControllerTest(t, "task-busy-explicit-selection", "node-agent")
+	unrelated := currentNodeReferenceForControllerTest(t, "task-unrelated-explicit-selection", "node-agent")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &boundedExplicitAdmissionRunner{
+		entered: make(chan workflow.CurrentNodeReference, 2),
+		release: make(chan struct{}),
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 2)
+	var releaseRunnerOnce sync.Once
+	t.Cleanup(func() {
+		releaseRunnerOnce.Do(func() { close(runner.release) })
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- controller.lifecycle.Run(context.Background(), busy.TaskID, func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+
+	controller.mu.Lock()
+	if err := controller.queueExplicitStartLocked(*newCurrentNodeRun(
+		busy,
+		workflow.NodeKindAgent,
+		currentNodeAdmissionExplicitOverride,
+	)); err != nil {
+		controller.mu.Unlock()
+		t.Fatalf("queue busy explicit Run: %v", err)
+	}
+	if err := controller.queueExplicitStartLocked(*newCurrentNodeRun(
+		unrelated,
+		workflow.NodeKindAgent,
+		currentNodeAdmissionExplicitOverride,
+	)); err != nil {
+		controller.mu.Unlock()
+		t.Fatalf("queue unrelated explicit Run: %v", err)
+	}
+	controller.mu.Unlock()
+
+	select {
+	case started := <-runner.entered:
+		if !started.Equal(unrelated) {
+			t.Fatalf("explicit start while first Task writer was busy = %v, want %v", started, unrelated)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("busy Task writer prevented unrelated explicit admission")
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("busy Task lifecycle writer: %v", err)
+	}
+	releaseRunnerOnce.Do(func() { close(runner.release) })
+}
+
 func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -567,8 +1117,8 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 	}
 }
 
-func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCanObserveQuiescence(t *testing.T) {
-	taskID := workflow.TaskID("task-start-delete-linearization")
+func TestCurrentNodeControllerStartTaskSerializesSameTaskLifecycleWrites(t *testing.T) {
+	taskID := workflow.TaskID("task-start-serialization")
 	target := currentNodeReferenceForControllerTest(t, string(taskID), "node-target")
 	store := &currentNodeControllerStore{
 		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
@@ -588,7 +1138,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	permit := NewMutationPermit()
 	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
@@ -619,15 +1169,14 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	case <-time.After(3 * time.Second):
 		t.Fatal("task start did not enter durable mutation")
 	}
-	deleteCheck := make(chan error, 1)
+	secondStart := make(chan error, 1)
 	go func() {
-		deleteCheck <- permit.Run(context.Background(), func(context.Context) error {
-			return controller.EnsureTaskQuiescent(taskID)
-		})
+		_, err := controller.StartTask(context.Background(), taskID, func(context.Context) error { return nil })
+		secondStart <- err
 	}()
 	select {
-	case err := <-deleteCheck:
-		t.Fatalf("delete quiescence check crossed unfinished task start: %v", err)
+	case err := <-secondStart:
+		t.Fatalf("same-Task start crossed unfinished lifecycle write: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(store.startTaskRelease)
@@ -640,12 +1189,12 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		t.Fatal("task start did not finish")
 	}
 	select {
-	case err := <-deleteCheck:
+	case err := <-secondStart:
 		if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-			t.Fatalf("delete quiescence after task start = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+			t.Fatalf("second same-Task start = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("delete quiescence check did not resume")
+		t.Fatal("second same-Task start did not resume")
 	}
 	select {
 	case <-runner.entered:
@@ -653,6 +1202,82 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		t.Fatal("explicit admission did not begin")
 	}
 	releaseRunner()
+}
+
+func TestCurrentNodeControllerStartTaskDoesNotSerializeUnrelatedTasks(t *testing.T) {
+	slowTaskID := workflow.TaskID("task-slow-start")
+	fastTaskID := workflow.TaskID("task-fast-start")
+	slowReference := currentNodeReferenceForControllerTest(t, string(slowTaskID), "node-target")
+	fastReference := currentNodeReferenceForControllerTest(t, string(fastTaskID), "node-target")
+	releaseSlow := make(chan struct{})
+	var releaseSlowOnce sync.Once
+	store := &currentNodeControllerStore{
+		startedByTask: map[workflow.TaskID]workflowstore.StartTaskResult{
+			slowTaskID: {Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
+				Reference:  slowReference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}}}},
+			fastTaskID: {Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
+				Reference:  fastReference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}}}},
+		},
+		startTaskCalls: make(chan workflow.TaskID, 2),
+		startTaskHook: func(ctx context.Context, taskID workflow.TaskID) error {
+			if taskID != slowTaskID {
+				return nil
+			}
+			select {
+			case <-releaseSlow:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &blockingCurrentNodeRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	var releaseRunnerOnce sync.Once
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		releaseSlowOnce.Do(func() { close(releaseSlow) })
+		releaseRunnerOnce.Do(func() { close(runner.release) })
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(context.Background(), slowTaskID, func(context.Context) error { return nil })
+		slowDone <- err
+	}()
+	if taskID := <-store.startTaskCalls; taskID != slowTaskID {
+		t.Fatalf("first durable Task start = %s, want %s", taskID, slowTaskID)
+	}
+
+	fastDone := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(context.Background(), fastTaskID, func(context.Context) error { return nil })
+		fastDone <- err
+	}()
+	select {
+	case taskID := <-store.startTaskCalls:
+		if taskID != fastTaskID {
+			t.Fatalf("concurrent durable Task start = %s, want %s", taskID, fastTaskID)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("unrelated Task start waited for the slow Task lifecycle write")
+	}
+	releaseSlowOnce.Do(func() { close(releaseSlow) })
+	if err := <-slowDone; err != nil {
+		t.Fatalf("slow StartTask: %v", err)
+	}
+	if err := <-fastDone; err != nil {
+		t.Fatalf("fast StartTask: %v", err)
+	}
 }
 
 func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
@@ -668,7 +1293,7 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	permit := NewMutationPermit()
 	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
@@ -779,7 +1404,10 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 		t.Fatalf("reference key: %v", err)
 	}
 	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	run.phase = currentNodeRunReserved
+	installCurrentNodeRunLockedForTest(controller, run)
+	controller.automaticReservations[key] = struct{}{}
 	controller.mu.Unlock()
 
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
@@ -807,10 +1435,9 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 		{
 			name: "automatic queue",
 			apply: func(controller *CurrentNodeController) {
-				controller.automaticQueue.append(currentNodeQueuedStart{
-					reference: reference,
-					policy:    currentNodeAdmissionAutomaticAgent,
-				})
+				run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+				key := installCurrentNodeRunLockedForTest(controller, run)
+				controller.automaticQueue.append(key, run)
 			},
 		},
 		{
@@ -820,13 +1447,18 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+				run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+				run.phase = currentNodeRunReserved
+				installCurrentNodeRunLockedForTest(controller, run)
+				controller.automaticReservations[key] = struct{}{}
 			},
 		},
 		{
 			name: "retirement held intent",
 			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
+				run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+				key := installCurrentNodeRunLockedForTest(controller, run)
+				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []workflow.CurrentNodeReferenceKey{key}
 			},
 		},
 		{
@@ -836,19 +1468,18 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.gates[key] = currentNodeAdmissionGate{reference: reference}
+				run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+				run.phase = currentNodeRunGated
+				installCurrentNodeRunLockedForTest(controller, run)
+				controller.gates[key] = struct{}{}
 			},
 		},
 		{
 			name: "live scope",
 			apply: func(controller *CurrentNodeController) {
-				scopeID := runtimeids.NewExecutionScopeID()
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.live[scopeID] = currentNodeLiveScope{reference: reference}
-				controller.liveByNode[key] = scopeID
+				run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+				run.phase = currentNodeRunRunning
+				installCurrentNodeRunLockedForTest(controller, run)
 			},
 		},
 	}

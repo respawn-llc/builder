@@ -2,11 +2,13 @@ package metadata_test
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	metadatamigrations "core/server/metadata/migrations"
 	"core/server/workflow"
@@ -193,7 +195,15 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	started, err := store.StartTask(ctx, task.ID)
+	publication, err := workflowstore.NewLifecyclePublication(store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	started, err := publication.PublishTaskStart(
+		ctx,
+		task.ID,
+		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
+	)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -209,7 +219,7 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	if startContext.TransitionPrompt != version71CutoverPrompt {
 		t.Fatalf("start Transition Prompt = %q, want migrated prompt", startContext.TransitionPrompt)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := workflowtest.CompleteCurrentNode(store, ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "fanout",
 		OutputValues: map[string]string{"summary": "migrated summary"},

@@ -19,7 +19,7 @@ func TestDeleteWorkflowCleansCrossWorkflowDependenciesAndTouchesSurvivors(t *tes
 	if err != nil {
 		t.Fatalf("GetDefinition deleted workflow: %v", err)
 	}
-	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{
+	if _, err := manualMoveTaskForStoreTest(store, ctx, ManualMoveRequest{
 		TaskID:       deletedTask.ID,
 		TargetNodeID: workflow.NodeIDOf(nodeByKind(t, deletedDefinition, workflow.NodeKindTerminal)),
 	}); err != nil {
@@ -37,7 +37,7 @@ func TestDeleteWorkflowCleansCrossWorkflowDependenciesAndTouchesSurvivors(t *tes
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
 	}
 	deleted := confirmedWorkflowDeleteRequest(impact, false)
-	if result, err := store.DeleteWorkflow(ctx, deleted); err != nil {
+	if result, err := deleteWorkflowThroughLifecyclePublication(store, ctx, deleted); err != nil {
 		t.Fatalf("DeleteWorkflow: %v", err)
 	} else if !result.Deleted {
 		t.Fatalf("DeleteWorkflow result = %+v, want deleted", result)
@@ -65,7 +65,7 @@ func TestDeleteProjectCascadesTaskDependenciesWithoutSurvivorTouch(t *testing.T)
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	for _, task := range []TaskRecord{blocker, blocked} {
-		if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{
+		if _, err := manualMoveTaskForStoreTest(store, ctx, ManualMoveRequest{
 			TaskID:       task.ID,
 			TargetNodeID: workflow.NodeIDOf(nodeByKind(t, definition, workflow.NodeKindTerminal)),
 		}); err != nil {
@@ -76,7 +76,7 @@ func TestDeleteProjectCascadesTaskDependenciesWithoutSurvivorTouch(t *testing.T)
 		t.Fatalf("add project dependency: %v", err)
 	}
 	artifacts := projectDeleteArtifactsNoop{}
-	if blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{ProjectID: binding.ProjectID, Artifacts: artifacts}); err != nil {
+	if blockers, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{ProjectID: binding.ProjectID, Artifacts: artifacts}); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	} else if len(blockers) != 0 {
 		t.Fatalf("DeleteProject blockers = %+v, want none", blockers)

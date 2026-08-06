@@ -19,7 +19,7 @@ func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 		"coder":                   {toolspec.ToolAskQuestion: false},
 	}
 
-	_, err := store.StartTask(ctx, task.ID)
+	_, err := publishTaskStartForTest(ctx, store, task.ID)
 	var validationErr WorkflowValidationError
 	if !errors.As(err, &validationErr) || !validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
 		t.Fatalf("StartTask error = %v, want workflow validation error", err)
@@ -60,7 +60,7 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 	resolver := store.roleResolver.(testsetup.RoleResolver)
 	resolver["coder"][toolspec.ToolAskQuestion] = false
 
-	_, err := store.StartTask(ctx, task.ID)
+	_, err := publishTaskStartForTest(ctx, store, task.ID)
 	var validationErr WorkflowValidationError
 	if errors.As(err, &validationErr) && validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
 		t.Fatalf("repeated StartTask returned post-start role-tool validation: %+v", validationErr.Diagnostics)

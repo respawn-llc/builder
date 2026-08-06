@@ -2,6 +2,7 @@ package workflowrunner
 
 import (
 	"context"
+	"core/internal/testharness/workflowtest"
 	"encoding/json"
 	"errors"
 	"os"
@@ -47,9 +48,12 @@ type currentNodeRunnerFixture struct {
 	workspace    string
 	client       *ScriptedClient
 
-	mu             sync.Mutex
-	clientRequests []runtimewire.RuntimeClientRequest
-	clientErr      error
+	mu              sync.Mutex
+	clientRequests  []runtimewire.RuntimeClientRequest
+	clientErr       error
+	providerEntered chan struct{}
+	providerRelease chan struct{}
+	providerOnce    sync.Once
 }
 
 type currentNodeRunnerStepLifecycle struct {
@@ -184,11 +188,21 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		RuntimeAuthority: fixture.authority,
 		MutationPermit:   permit,
 		TaskDependencies: dependencyCounter,
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(factoryCtx context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
 			err := fixture.clientErr
+			entered := fixture.providerEntered
+			release := fixture.providerRelease
 			fixture.mu.Unlock()
+			if entered != nil {
+				fixture.providerOnce.Do(func() { close(entered) })
+				select {
+				case <-release:
+				case <-factoryCtx.Done():
+					return nil, context.Cause(factoryCtx)
+				}
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -201,7 +215,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	fixture.starter = starter
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: starter,
+		AssignmentEnsurer: starter,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -216,7 +230,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 	if err != nil {
 		t.Fatalf("new Task status projection: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("new Task dependency projection: %v", err)
 	}
@@ -237,6 +251,26 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 		t.Fatalf("create task: %v", err)
 	}
 	return task
+}
+
+func (f *currentNodeRunnerFixture) publishTaskStart(
+	t *testing.T,
+	taskID workflow.TaskID,
+) workflowstore.StartTaskResult {
+	t.Helper()
+	publication, err := workflowstore.NewLifecyclePublication(f.store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	started, err := publication.PublishTaskStart(
+		context.Background(),
+		taskID,
+		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
+	)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	return started
 }
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
@@ -609,7 +643,7 @@ func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testin
 	requireToolOutputBeforeAssignment(t, requests[1], "complete-first", targetAssignments[1])
 }
 
-func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceRetires(t *testing.T) {
+func TestApprovalTransitionReusesPreviousTargetAssignmentAfterSourceRetires(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
 		ScriptedFinalAnswer(`{"transition":"review","commentary":"implementation complete"}`),
@@ -647,9 +681,9 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	if len(initialAssignments) != 1 {
 		t.Fatalf("initial implementation assignments = %+v, want exactly one", initialAssignments)
 	}
-	if len(reassignedImplementation) != 2 {
+	if len(reassignedImplementation) != 1 {
 		t.Fatalf(
-			"approved implementation assignments = %+v, want initial plus exactly one reassignment",
+			"approved implementation assignments = %+v, want one reused assignment",
 			reassignedImplementation,
 		)
 	}
@@ -807,7 +841,25 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	event, err := subscription.Next(eventCtx)
 	cancelEvent()
 	if err != nil {
-		t.Fatalf("attached transcript subscription did not receive resumed runtime event: %v", err)
+		nodes, nodesErr := f.store.ListCurrentNodes(context.Background(), task.ID)
+		var scheduling *workflow.CurrentNodeScheduling
+		var interruption *workflow.CurrentNodeInterruption
+		if len(nodes) != 0 {
+			scheduling = nodes[0].Scheduling
+			if scheduling != nil {
+				interruption = scheduling.Interruption
+			}
+		}
+		t.Fatalf(
+			"attached transcript subscription did not receive resumed runtime event: %v; current_nodes=%+v scheduling=%+v interruption=%+v current_nodes_error=%v controller=%+v model_requests=%d",
+			err,
+			nodes,
+			scheduling,
+			interruption,
+			nodesErr,
+			f.controller.Snapshot(),
+			len(f.client.Requests()),
+		)
 	}
 	if event.Sequence <= 1 {
 		t.Fatalf("resumed runtime event sequence = %d, want post-hydration delivery", event.Sequence)
@@ -905,27 +957,24 @@ func TestCurrentNodeTaskAwarenessMatchesCanonicalDependencyProjectionAcrossTermi
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
+	if _, err := workflowtest.ManualMoveTask(f.store, context.Background(), workflowstore.ManualMoveRequest{
 		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindTerminal),
 	}); err != nil {
 		t.Fatalf("manual terminal move: %v", err)
 	}
 	assertAwareness(0)
-	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
+	if _, err := workflowtest.ManualMoveTask(f.store, context.Background(), workflowstore.ManualMoveRequest{
 		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindStart),
 	}); err != nil {
 		t.Fatalf("reopen blocker: %v", err)
 	}
 	assertAwareness(1)
 
-	started, err := f.store.StartTask(context.Background(), blocker.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
+	started := f.publishTaskStart(t, blocker.ID)
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("started Current Nodes = %+v, want one", started.Mutation.Created)
 	}
-	if _, err := f.store.CompleteCurrentNode(context.Background(), workflowstore.CurrentNodeCompletionRequest{
+	if _, err := workflowtest.CompleteCurrentNode(f.store, context.Background(), workflowstore.CurrentNodeCompletionRequest{
 		Source: started.Mutation.Created[0].Reference, TransitionID: "done",
 	}); err != nil {
 		t.Fatalf("complete blocker to ordinary terminal: %v", err)

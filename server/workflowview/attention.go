@@ -13,9 +13,10 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/shared/runtimeids"
+	"core/server/workflowexecution"
+	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -23,28 +24,27 @@ import (
 type Attention struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
-	authority   *sessionruntime.Authority
-	prompts     PendingPromptSource
+	status      *TaskStatusProjection
 }
 
-func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, authority *sessionruntime.Authority, prompts PendingPromptSource) (*Attention, error) {
+func NewAttention(
+	metadataStore *metadata.Store,
+	definitions *DefinitionProjection,
+	status *TaskStatusProjection,
+) (*Attention, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if definitions == nil {
 		return nil, errors.New("definition projection is required")
 	}
-	if authority == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
-	if prompts == nil {
-		return nil, errors.New("pending prompt source is required")
+	if status == nil {
+		return nil, errors.New("task status projection is required")
 	}
 	return &Attention{
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
-		authority:   authority,
-		prompts:     prompts,
+		status:      status,
 	}, nil
 }
 
@@ -63,15 +63,27 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	live, err := a.liveQuestionCandidates(ctx, nil, nil)
+	var items []serverapi.WorkflowAttentionItem
+	err = a.status.WithSnapshot(ctx, nil, func(
+		observation TaskStatusObservation,
+		durableSnapshot *TaskStatusDurableSnapshot,
+	) error {
+		snapshot := *a
+		snapshot.queries = durableSnapshot.queries
+		live, err := snapshot.liveQuestionCandidates(ctx, observation.Live, nil, nil)
+		if err != nil {
+			return err
+		}
+		durable, err := snapshot.durableCandidates(ctx, cursor, nil, pageSize+len(live)+1)
+		if err != nil {
+			return err
+		}
+		items = mergeAttentionCandidates(cursor, durable, live)
+		return nil
+	})
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	durable, err := a.durableCandidates(ctx, cursor, nil, pageSize+len(live)+1)
-	if err != nil {
-		return serverapi.WorkflowAttentionListResponse{}, err
-	}
-	items := mergeAttentionCandidates(cursor, durable, live)
 	hasNext := len(items) > pageSize
 	if hasNext {
 		items = items[:pageSize]
@@ -96,19 +108,31 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
 	taskID := strings.TrimSpace(req.TaskID)
-	task, err := a.queries.GetTask(ctx, taskID)
+	var items []serverapi.WorkflowAttentionItem
+	err := a.status.WithSnapshot(ctx, []workflow.TaskID{workflow.TaskID(taskID)}, func(
+		observation TaskStatusObservation,
+		durableSnapshot *TaskStatusDurableSnapshot,
+	) error {
+		snapshot := *a
+		snapshot.queries = durableSnapshot.queries
+		task, err := snapshot.queries.GetTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		durable, err := snapshot.durableCandidates(ctx, attentionPageCursor{}, &taskID, 0)
+		if err != nil {
+			return err
+		}
+		live, err := snapshot.liveQuestionCandidates(ctx, observation.Live, &taskID, &task)
+		if err != nil {
+			return err
+		}
+		items = mergeAttentionCandidates(attentionPageCursor{}, durable, live)
+		return nil
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	durable, err := a.durableCandidates(ctx, attentionPageCursor{}, &taskID, 0)
-	if err != nil {
-		return serverapi.WorkflowTaskAttentionListResponse{}, err
-	}
-	live, err := a.liveQuestionCandidates(ctx, &taskID, &task)
-	if err != nil {
-		return serverapi.WorkflowTaskAttentionListResponse{}, err
-	}
-	items := mergeAttentionCandidates(attentionPageCursor{}, durable, live)
 	return serverapi.WorkflowTaskAttentionListResponse{
 		Items:             items,
 		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
@@ -277,28 +301,20 @@ func currentNodeReferenceFromAttentionCandidate(row sqlitegen.ListWorkflowDurabl
 	return reference, nil
 }
 
-func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *string, selectedTask *sqlitegen.TaskRecord) ([]attentionCandidate, error) {
-	var snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	var err error
-	if selectedTask == nil {
-		snapshots, err = a.authority.CurrentWorkflowTaskExecutionSnapshots()
-	} else {
-		snapshots, err = a.authority.CurrentScopedTaskExecutionSnapshots(
-			selectedTask.ProjectID, runtimeids.WorkflowID(selectedTask.WorkflowID), []workflow.TaskID{workflow.TaskID(selectedTask.ID)},
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
+func (a *Attention) liveQuestionCandidates(
+	ctx context.Context,
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+	taskFilter *string,
+	selectedTask *sqlitegen.TaskRecord,
+) ([]attentionCandidate, error) {
 	out := []attentionCandidate{}
-	for taskID, snapshot := range snapshots {
+	for taskID, lifecycle := range observation.Lifecycle {
 		if taskFilter != nil && string(taskID) != *taskFilter {
 			continue
 		}
-		var task *sqlitegen.TaskRecord
-		for _, execution := range snapshot.Executions {
-			if !execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion) &&
-				!execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval) {
+		task := selectedTask
+		for _, execution := range lifecycle.ExactExecutions {
+			if len(execution.PendingPrompts) == 0 {
 				continue
 			}
 			if execution.Agent == nil {
@@ -311,47 +327,29 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				}
 				task = &record
 			}
-			prompts, err := a.prompts.ListPendingPrompts(execution.Agent.SessionID.String())
-			if err != nil {
-				return nil, err
-			}
-			promptsByID := make(map[string]PendingPromptSnapshot, len(prompts))
-			for _, prompt := range prompts {
-				promptID := strings.TrimSpace(prompt.ID)
-				if promptID == "" {
-					return nil, fmt.Errorf("task %q session %q has a pending prompt without question identity", taskID, execution.Agent.SessionID)
-				}
-				if _, duplicate := promptsByID[promptID]; duplicate {
-					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, promptID)
-				}
-				promptsByID[promptID] = prompt
-			}
-			for _, promptReference := range execution.PendingPrompts {
-				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion &&
-					promptReference.Kind != sessionruntime.PendingPromptKindSessionApproval {
-					continue
-				}
-				prompt, present := promptsByID[promptReference.ID]
-				if !present {
-					continue
-				}
-				question, present, err := pendingQuestionFromPrompt(prompt)
+			for _, prompt := range execution.PendingPrompts {
+				question, present, err := pendingQuestionFromPrompt(PendingPromptSnapshot{
+					ID:                     prompt.ID,
+					CreatedAt:              prompt.CreatedAt,
+					Question:               prompt.Question,
+					Suggestions:            prompt.Suggestions,
+					RecommendedOptionIndex: prompt.RecommendedOptionIndex,
+					Approval:               prompt.Kind == workflowstore.LifecyclePendingPromptSessionApproval,
+					ApprovalDecisions:      lifecycleApprovalDecisions(prompt.ApprovalDecisions),
+				})
 				if err != nil {
 					return nil, err
 				}
 				if !present {
 					continue
 				}
-				if prompt.Approval != (promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval) {
-					return nil, fmt.Errorf("task %q session %q prompt %q changed prompt kind", taskID, execution.Agent.SessionID, promptReference.ID)
-				}
 				occurredAt := prompt.CreatedAt.UnixMilli()
 				if occurredAt <= 0 {
-					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ID)
+					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, prompt.ID)
 				}
-				questionID := promptReference.ID
+				questionID := prompt.ID
 				sessionID := execution.Agent.SessionID.String()
-				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
+				currentNode := workflowCurrentNodeReference(execution.CurrentNode)
 				currentNode.SessionID = &sessionID
 				out = append(out, attentionCandidate{item: serverapi.WorkflowAttentionItem{
 					ID:                     "question:" + sessionID + ":" + questionID,
@@ -377,6 +375,16 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 		return nil, err
 	}
 	return out, nil
+}
+
+func lifecycleApprovalDecisions(
+	decisions []workflowstore.LifecycleApprovalDecision,
+) []clientui.ApprovalDecision {
+	out := make([]clientui.ApprovalDecision, len(decisions))
+	for index, decision := range decisions {
+		out[index] = clientui.ApprovalDecision(decision)
+	}
+	return out
 }
 
 func (a *Attention) attachLiveQuestionSessionNames(ctx context.Context, candidates []attentionCandidate) error {

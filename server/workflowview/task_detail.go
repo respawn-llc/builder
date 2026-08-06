@@ -11,7 +11,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
-	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -60,11 +59,24 @@ func (d *TaskDetail) ListCurrentNodes(ctx context.Context, taskID string) ([]wor
 	if strings.TrimSpace(taskID) == "" {
 		return nil, ErrTaskIDRequired
 	}
-	nodesByTask, err := workflowstore.ListCurrentNodesByTaskWithQueries(ctx, d.queries, []workflow.TaskID{workflow.TaskID(taskID)})
-	if err != nil {
-		return nil, err
-	}
-	return nodesByTask[workflow.TaskID(taskID)], nil
+	selectedTaskID := workflow.TaskID(taskID)
+	var currentNodes []workflow.CurrentNode
+	err := d.projection.WithSnapshot(ctx, []workflow.TaskID{selectedTaskID}, func(
+		observation TaskStatusObservation,
+		durable *TaskStatusDurableSnapshot,
+	) error {
+		if lifecycle, exists := observation.Live.Lifecycle[selectedTaskID]; exists {
+			currentNodes = append([]workflow.CurrentNode(nil), lifecycle.CurrentNodes...)
+			return nil
+		}
+		nodesByTask, err := durable.CurrentNodesByTask(ctx, []workflow.TaskID{selectedTaskID})
+		if err != nil {
+			return err
+		}
+		currentNodes = nodesByTask[selectedTaskID]
+		return nil
+	})
+	return currentNodes, err
 }
 
 func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
