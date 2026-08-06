@@ -138,6 +138,18 @@ func testResultGroupUnit(callID string) resultGroupUnit {
 	}
 }
 
+func countHydratedToolRows(snapshot TranscriptHydrationSnapshot, callID string) int {
+	count := 0
+	for _, row := range snapshot.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactTool &&
+			row.Tool != nil &&
+			row.Tool.ToolCallID == callID {
+			count++
+		}
+	}
+	return count
+}
+
 func TestResultGroupCollectorEarlierEmptySlotBlocksReadyLaterResult(t *testing.T) {
 	collector := testResultGroupCollector(t, "first", "second")
 	if _, err := collector.report("second", testResultGroupUnit("second")); err != nil {
@@ -620,6 +632,12 @@ func TestResultGroupCommittedObserverFailureProjectsOnceAndStoresFatal(t *testin
 			events,
 		)
 	}
+	if toolRows := countHydratedToolRows(
+		mustTranscriptHydrationSnapshot(t, engine),
+		"observer",
+	); toolRows != 1 {
+		t.Fatalf("committed observer projected tool rows = %d, want 1", toolRows)
+	}
 	appendsAfterFailure, _ := durability.snapshot()
 	if len(appendsAfterFailure) != len(appendsBefore)+1 {
 		t.Fatalf(
@@ -694,17 +712,69 @@ func TestResultGroupCommittedProjectionFailureEmitsNothingAndHydratesOnce(t *tes
 		Config{Model: "gpt-5"},
 	)
 	snapshot := mustTranscriptHydrationSnapshot(t, restored)
-	toolRows := 0
-	for _, row := range snapshot.CommittedRows {
-		if row.Kind == TranscriptCommittedRowFactTool &&
-			row.Tool != nil &&
-			row.Tool.ToolCallID == "projection" {
-			toolRows++
-		}
-	}
+	toolRows := countHydratedToolRows(snapshot, "projection")
 	if toolRows != 1 {
 		t.Fatalf(
 			"rehydrated projection-failure tool rows = %d, want 1: %+v",
+			toolRows,
+			snapshot.CommittedRows,
+		)
+	}
+}
+
+func TestResultGroupCrashAfterCommitBeforeProjectionHydratesOnce(t *testing.T) {
+	callbackObserver := newCallbackPersistenceObserver(
+		runtimeTestSessionPersistence,
+	)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(callbackObserver),
+	)
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	prepareSimpleResultGroupCall(t, engine, "step", "crash")
+	events = nil
+	collector := testResultGroupCollector(t, "crash")
+	crash := errors.New("simulated process crash after commit")
+	callbackObserver.Arm(func() {
+		panic(crash)
+	})
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != crash {
+				t.Fatalf("recovered crash = %v, want %v", recovered, crash)
+			}
+		}()
+		_ = reportAndFlushSimpleResultGroup(engine, "step", collector, "crash")
+	}()
+	if len(events) != 0 {
+		t.Fatalf("crash-before-projection events = %+v, want none", events)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(
+		t,
+		reopened,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	snapshot := mustTranscriptHydrationSnapshot(t, restored)
+	toolRows := countHydratedToolRows(snapshot, "crash")
+	if toolRows != 1 {
+		t.Fatalf(
+			"rehydrated crash-before-projection tool rows = %d, want 1: %+v",
 			toolRows,
 			snapshot.CommittedRows,
 		)
