@@ -337,7 +337,12 @@ func TestCompleteNodeBarrierCommittedObserverFailureRetainsPrefixAndBlocksMutati
 			len(appendsBefore),
 		)
 	}
-	assertFreshResourceRepairExactlyOnce(t, store, "complete-node")
+	assertFreshResourceRepairExactlyOnceWithHydratedPrefix(
+		t,
+		store,
+		"complete-node",
+		"hosted",
+	)
 }
 
 func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMutation(t *testing.T) {
@@ -412,5 +417,10 @@ func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMut
 		t.Fatalf("rehydrated complete_node sibling rows = %d, want one", rows)
 	}
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "complete-node")
-	assertFreshResourceRepairExactlyOnce(t, reopened, "complete-node")
+	assertFreshResourceRepairExactlyOnceWithHydratedPrefix(
+		t,
+		reopened,
+		"complete-node",
+		"hosted",
+	)
 }

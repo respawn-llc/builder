@@ -43,7 +43,10 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 		{name: "committed projection barrier abort", tool: toolspec.ToolCompleteNode, withMarker: true, withPrefix: true},
 	}
 
-	var equivalentOutput json.RawMessage
+	var (
+		equivalentOutput  json.RawMessage
+		equivalentWarning *string
+	)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			const stepID = "recovery-step"
@@ -124,6 +127,16 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 					test.name,
 					completion.Output,
 					equivalentOutput,
+				)
+			}
+			warning := freshResourceRepairWarning(t, reopened)
+			if equivalentWarning == nil {
+				equivalentWarning = textutil.Value(warning)
+			}
+			if warning != *equivalentWarning {
+				t.Fatalf(
+					"fresh repair warning for %s differs by recovery cause",
+					test.name,
 				)
 			}
 		})
@@ -209,10 +222,53 @@ func assertFreshResourceRepairOnEngine(
 }
 
 func assertFreshResourceRepairExactlyOnce(t *testing.T, store *session.Store, callID string) {
+	assertFreshResourceRepairExactlyOnceWith(t, store, callID, nil)
+}
+
+func assertFreshResourceRepairExactlyOnceWithHydratedPrefix(
+	t *testing.T,
+	store *session.Store,
+	callID string,
+	prefixCallID string,
+) {
+	t.Helper()
+	assertFreshResourceRepairExactlyOnceWith(
+		t,
+		store,
+		callID,
+		func(restored *Engine, _ *session.Store) {
+			assertHydratedToolRowsExactlyOnce(t, restored, prefixCallID)
+		},
+	)
+}
+
+func assertHydratedToolRowsExactlyOnce(
+	t *testing.T,
+	engine *Engine,
+	callID string,
+) {
+	t.Helper()
+	if rows := countHydratedToolRows(
+		mustTranscriptHydrationSnapshot(t, engine),
+		callID,
+	); rows != 1 {
+		t.Fatalf("hydrated tool rows for %q = %d, want one", callID, rows)
+	}
+}
+
+func assertFreshResourceRepairExactlyOnceWith(
+	t *testing.T,
+	store *session.Store,
+	callID string,
+	verify func(*Engine, *session.Store),
+) {
 	t.Helper()
 	firstStore := mustOpenTestSession(t, store.Dir())
 	first := mustNewTestEngine(t, firstStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertFreshResourceRepairOnEngine(t, first, firstStore, callID)
+	if verify != nil {
+		verify(first, firstStore)
+	}
 	completions, warnings, found := completionRecordCount(t, firstStore, callID)
 	if !found || completions != 1 || warnings != 1 {
 		t.Fatalf(
@@ -227,6 +283,9 @@ func assertFreshResourceRepairExactlyOnce(t *testing.T, store *session.Store, ca
 	secondStore := mustOpenTestSession(t, store.Dir())
 	second := mustNewTestEngine(t, secondStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	assertFreshResourceRepairOnEngine(t, second, secondStore, callID)
+	if verify != nil {
+		verify(second, secondStore)
+	}
 	completions, warnings, found = completionRecordCount(t, secondStore, callID)
 	if !found || completions != 1 || warnings != 1 {
 		t.Fatalf(
@@ -262,4 +321,28 @@ func completionRecordCount(t *testing.T, store *session.Store, callID string) (i
 		}
 	}
 	return completions, warnings, found
+}
+
+func freshResourceRepairWarning(t *testing.T, store *session.Store) string {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if err != nil {
+		t.Fatalf("read bounded fresh-resource warning records: %v", err)
+	}
+	var warning *string
+	for _, record := range window.Records {
+		payload, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
+		if !ok ||
+			payload.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
+			continue
+		}
+		if warning != nil {
+			t.Fatal("fresh-resource recovery persisted more than one typed warning")
+		}
+		warning = textutil.Value(payload.Text)
+	}
+	if warning == nil {
+		t.Fatal("fresh-resource recovery persisted no typed warning")
+	}
+	return *warning
 }

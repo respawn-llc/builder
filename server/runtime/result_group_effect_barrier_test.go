@@ -397,7 +397,12 @@ func TestQuestionBarrierCommittedObserverFailureRetainsPrefixAndBlocksInteractio
 			len(appendsBefore),
 		)
 	}
-	assertFreshResourceRepairExactlyOnce(t, store, "question")
+	assertFreshResourceRepairExactlyOnceWithHydratedPrefix(
+		t,
+		store,
+		"question",
+		"hosted",
+	)
 }
 
 func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPrefix(t *testing.T) {
@@ -482,7 +487,12 @@ func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPr
 		t.Fatalf("rehydrated committed sibling rows = %d, want one", rows)
 	}
 	assertFreshResourceRepairOnEngine(t, restored, reopened, "question")
-	assertFreshResourceRepairExactlyOnce(t, reopened, "question")
+	assertFreshResourceRepairExactlyOnceWithHydratedPrefix(
+		t,
+		reopened,
+		"question",
+		"hosted",
+	)
 }
 
 func TestQuestionBarrierOrdinaryBrokerErrorRemainsSemantic(t *testing.T) {
