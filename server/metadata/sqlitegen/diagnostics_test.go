@@ -1,4 +1,4 @@
-package sqlitegen
+package sqlitegen_test
 
 import (
 	"context"
@@ -6,7 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"core/server/internal/testsupport"
+	"core/internal/testharness/testsetup"
+	"core/server/metadata/sqlitegen"
 )
 
 type noRowsQueryDB struct {
@@ -26,11 +27,17 @@ func (db queryErrorDB) QueryRowContext(ctx context.Context, _ string, _ ...inter
 }
 
 func TestGeneratedSingleRowNoRowsDiagnosticsArePolicyScoped(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	if err := sqlitegen.RegisterSQLiteExtensions(); err != nil {
+		t.Fatalf("register metadata SQLite extensions: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
 	t.Cleanup(func() { _ = db.Close() })
-	diagnostics := testsupport.CaptureSlog(t)
-	ctx := WithQueryFailureDiagnostics(context.Background())
-	queries := New(noRowsQueryDB{DB: db})
+	diagnostics := testsetup.CaptureSlog(t)
+	ctx := sqlitegen.WithQueryFailureDiagnostics(context.Background())
+	queries := sqlitegen.New(noRowsQueryDB{DB: db})
 
 	if _, err := queries.GetTask(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("unexpected generated no-row error = %v, want sql.ErrNoRows", err)
@@ -40,7 +47,7 @@ func TestGeneratedSingleRowNoRowsDiagnosticsArePolicyScoped(t *testing.T) {
 	}
 
 	diagnostics.Reset()
-	if _, err := queries.GetTask(WithExpectedNoRows(ctx), "missing"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := queries.GetTask(sqlitegen.WithExpectedNoRows(ctx), "missing"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected generated no-row error = %v, want sql.ErrNoRows", err)
 	}
 	if diagnostics.Len() != 0 {
@@ -48,8 +55,8 @@ func TestGeneratedSingleRowNoRowsDiagnosticsArePolicyScoped(t *testing.T) {
 	}
 
 	diagnostics.Reset()
-	queries = New(queryErrorDB{DB: db})
-	if _, err := queries.GetTask(WithExpectedNoRows(ctx), "unexpected"); err == nil {
+	queries = sqlitegen.New(queryErrorDB{DB: db})
+	if _, err := queries.GetTask(sqlitegen.WithExpectedNoRows(ctx), "unexpected"); err == nil {
 		t.Fatal("unexpected generated query failure returned nil error")
 	}
 	if diagnostics.Len() == 0 {

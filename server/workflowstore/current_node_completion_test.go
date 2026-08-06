@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"core/server/internal/testsupport"
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
@@ -21,7 +21,7 @@ func TestCompleteCurrentNodeWithoutApprovalDoesNotEmitQueryFailureDiagnostics(t 
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
 
-	diagnostics := testsupport.CaptureSlog(t)
+	diagnostics := testsetup.CaptureSlog(t)
 
 	if _, err := store.CompleteCurrentNode(metadata.WithQueryFailureDiagnostics(ctx), CurrentNodeCompletionRequest{
 		Source:       source.Reference,

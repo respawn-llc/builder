@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"core/server/internal/testsupport"
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -461,7 +461,7 @@ func TestLoadSessionReuseAssociationsTreatsMissingReferencesAsNormalWithoutDiagn
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
 
-	diagnostics := testsupport.CaptureSlog(t)
+	diagnostics := testsetup.CaptureSlog(t)
 
 	associations, err := store.LoadSessionReuseAssociations(
 		metadata.WithQueryFailureDiagnostics(ctx),
