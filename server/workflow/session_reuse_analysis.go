@@ -216,7 +216,12 @@ type reusePathState struct {
 	currentLineage   reuseLineage
 	completedDormant bool
 	dormancyBlocked  bool
-	overwritten      map[NodeID]struct{}
+	overwritten      map[reuseOverwriteKey]struct{}
+}
+
+type reuseOverwriteKey struct {
+	nodeID NodeID
+	branch reuseBranch
 }
 
 type reuseTransition struct {
@@ -275,9 +280,12 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		targetLineage != reuseLineageAbsent &&
 		targetLineage != reuseLineageCompleted {
 		if targetState.overwritten == nil {
-			targetState.overwritten = make(map[NodeID]struct{})
+			targetState.overwritten = make(map[reuseOverwriteKey]struct{})
 		}
-		targetState.overwritten[edge.TargetNodeID] = struct{}{}
+		targetState.overwritten[reuseOverwriteKey{
+			nodeID: edge.TargetNodeID,
+			branch: targetBranch,
+		}] = struct{}{}
 	}
 	selectedCompleted := targetLineage == reuseLineageCompleted || targetLineage == reuseLineageUnknown
 	possibleReuse := selectedCompleted && completedDormant && !dormancyBlocked
@@ -330,8 +338,8 @@ func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source 
 	}
 }
 
-func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[NodeID]struct{}, nodeID NodeID, optional bool) (reuseLineage, bool) {
-	if _, exists := overwritten[nodeID]; exists {
+func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[reuseOverwriteKey]struct{}, nodeID NodeID, optional bool) (reuseLineage, bool) {
+	if _, exists := overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]; exists {
 		return reuseLineageOther, true
 	}
 	for index := len(a.input.RetainedAssociations) - 1; index >= 0; index-- {
@@ -411,29 +419,51 @@ type reuseGraph struct {
 
 func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 	graph := reuseGraph{}
-	addState := func(state reusePathState) int {
+	processed := make(map[int]bool)
+	// Overwritten provenance is merged by union when structural path states
+	// converge. This deliberately trades some possible-reuse precision for a
+	// bounded worklist instead of enumerating every overwrite subset.
+	addState := func(state reusePathState) (int, bool) {
 		if id, exists := graphStateID(state, graph.states); exists {
-			return id
+			merged, changed := mergeOverwritten(graph.states[id].overwritten, state.overwritten)
+			if changed {
+				graph.states[id].overwritten = merged
+				graph.groups[id] = nil
+				processed[id] = false
+				return id, true
+			}
+			return id, false
 		}
 		id := len(graph.states)
 		graph.states = append(graph.states, state)
 		graph.groups = append(graph.groups, nil)
-		return id
+		processed[id] = false
+		return id, true
 	}
 	queue := make([]int, 0, len(initial))
+	queued := make(map[int]struct{}, len(initial))
+	enqueue := func(stateID int) {
+		if _, exists := queued[stateID]; exists {
+			return
+		}
+		queued[stateID] = struct{}{}
+		queue = append(queue, stateID)
+	}
 	for _, transition := range initial {
 		if transition.possibleReuse {
 			graph.possibleReuse = true
 		}
-		queue = append(queue, addState(transition.target))
-	}
-	queued := make(map[int]struct{}, len(queue))
-	for _, stateID := range queue {
-		queued[stateID] = struct{}{}
+		stateID, _ := addState(transition.target)
+		enqueue(stateID)
 	}
 	for len(queue) > 0 {
 		stateID := queue[0]
 		queue = queue[1:]
+		delete(queued, stateID)
+		if processed[stateID] {
+			continue
+		}
+		processed[stateID] = true
 		groups := a.stateGroups(graph.states[stateID])
 		if groups == nil {
 			groups = []reuseGroup{}
@@ -444,10 +474,9 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 				if transition.possibleReuse {
 					graph.possibleReuse = true
 				}
-				targetID := addState(transition.target)
-				if _, exists := queued[targetID]; !exists {
-					queued[targetID] = struct{}{}
-					queue = append(queue, targetID)
+				targetID, changed := addState(transition.target)
+				if changed {
+					enqueue(targetID)
 				}
 			}
 		}
@@ -572,15 +601,34 @@ func graphStateID(state reusePathState, states []reusePathState) (int, bool) {
 	return 0, false
 }
 
-func cloneOverwritten(value map[NodeID]struct{}) map[NodeID]struct{} {
+func cloneOverwritten(value map[reuseOverwriteKey]struct{}) map[reuseOverwriteKey]struct{} {
 	if len(value) == 0 {
 		return nil
 	}
-	cloned := make(map[NodeID]struct{}, len(value))
-	for nodeID := range value {
-		cloned[nodeID] = struct{}{}
+	cloned := make(map[reuseOverwriteKey]struct{}, len(value))
+	for key := range value {
+		cloned[key] = struct{}{}
 	}
 	return cloned
+}
+
+func mergeOverwritten(left, right map[reuseOverwriteKey]struct{}) (map[reuseOverwriteKey]struct{}, bool) {
+	if len(right) == 0 {
+		return left, false
+	}
+	for key := range right {
+		if _, exists := left[key]; !exists {
+			merged := cloneOverwritten(left)
+			if merged == nil {
+				merged = make(map[reuseOverwriteKey]struct{}, len(right))
+			}
+			for key := range right {
+				merged[key] = struct{}{}
+			}
+			return merged, true
+		}
+	}
+	return left, false
 }
 
 func sameReusePathState(left, right reusePathState) bool {
@@ -588,14 +636,8 @@ func sameReusePathState(left, right reusePathState) bool {
 		left.branch != right.branch ||
 		left.currentLineage != right.currentLineage ||
 		left.completedDormant != right.completedDormant ||
-		left.dormancyBlocked != right.dormancyBlocked ||
-		len(left.overwritten) != len(right.overwritten) {
+		left.dormancyBlocked != right.dormancyBlocked {
 		return false
-	}
-	for nodeID := range left.overwritten {
-		if _, exists := right.overwritten[nodeID]; !exists {
-			return false
-		}
 	}
 	return true
 }
