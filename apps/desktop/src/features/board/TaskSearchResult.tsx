@@ -27,13 +27,16 @@ export function TaskSearchResultRow({
   result: TaskSearchResultItem;
 }>) {
   const { t } = useTranslation();
-  const visibleHits = result.group.hits.slice(0, visibleHitLimit);
-  const lastVisibleHit = visibleHits.at(-1);
-  if (lastVisibleHit === undefined) {
+  const shortIDHits = result.group.hits.filter((hit) => hit.source.kind === "short_id");
+  const visibleHits = result.group.hits
+    .filter((hit) => hit.source.kind !== "short_id")
+    .slice(0, visibleHitLimit);
+  const representedHits = [...shortIDHits, ...visibleHits];
+  if (representedHits.length === 0) {
     throw new Error(`Task Search result group ${result.group.taskID} has no hits.`);
   }
-  const lastVisibleOrdinal = lastVisibleHit.ordinal;
-  const remainingHitCount = Math.max(0, result.group.totalHitCount - lastVisibleOrdinal);
+  const highestRepresentedOrdinal = Math.max(...representedHits.map((hit) => hit.ordinal));
+  const remainingHitCount = Math.max(0, result.group.totalHitCount - highestRepresentedOrdinal);
   return (
     <div
       aria-selected={active}

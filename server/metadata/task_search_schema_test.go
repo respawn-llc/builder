@@ -26,14 +26,16 @@ var taskSearchTriggerNames = []string{
 	"task_search_comment_body_before_update",
 	"task_search_comment_delete",
 	"task_search_comment_insert",
-	"task_search_document_delete",
-	"task_search_document_insert",
+	"task_search_short_id_document_delete",
+	"task_search_short_id_document_insert",
 	"task_search_task_body_after_update",
 	"task_search_task_body_before_update",
 	"task_search_task_delete",
 	"task_search_task_insert",
 	"task_search_task_title_after_update",
 	"task_search_task_title_before_update",
+	"task_search_text_document_delete",
+	"task_search_text_document_insert",
 }
 
 func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
@@ -47,6 +49,7 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 	assertTaskSearchIndexCatalog(t, store.db, []string{
 		"task_search_documents_comment_unique",
 		"task_search_documents_task_body_unique",
+		"task_search_documents_task_short_id_unique",
 		"task_search_documents_task_title_unique",
 	})
 	assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
@@ -57,6 +60,46 @@ func TestTaskSearchSchemaExposesTheRequiredOperationalContract(t *testing.T) {
 	}
 	if len(failures) != 0 {
 		t.Fatalf("task-search schema contract failures = %v", failures)
+	}
+}
+
+func TestTaskSearchSchemaContractRejectsMissingShortIDSearchObjects(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		statement string
+	}{
+		{name: "mapping", statement: `DROP TABLE task_search_documents`},
+		{name: "virtual table", statement: `DROP TABLE task_search_short_id_fts`},
+		{name: "unique index", statement: `DROP INDEX task_search_documents_task_short_id_unique`},
+		{name: "trigger", statement: `DROP TRIGGER task_search_short_id_document_insert`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			tx, err := store.db.BeginTx(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("begin schema mutation: %v", err)
+			}
+			if _, err := tx.Exec(testCase.statement); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("remove required %s: %v", testCase.name, err)
+			}
+			failures, err := store.Queries().WithTx(tx).ListTaskSearchSchemaContractFailures(t.Context())
+			if err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("validate schema without %s: %v", testCase.name, err)
+			}
+			if len(failures) == 0 {
+				_ = tx.Rollback()
+				t.Fatalf("schema without %s passed Task Search contract", testCase.name)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatalf("restore schema after removing %s: %v", testCase.name, err)
+			}
+		})
 	}
 }
 
@@ -87,6 +130,7 @@ func TestTaskSearchMigrationCompletesFromEveryPublishedCheckpoint(t *testing.T) 
 			assertTaskSearchIndexCatalog(t, store.db, []string{
 				"task_search_documents_comment_unique",
 				"task_search_documents_task_body_unique",
+				"task_search_documents_task_short_id_unique",
 				"task_search_documents_task_title_unique",
 			})
 			assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
@@ -141,6 +185,7 @@ func TestTaskSearchMigrationInstallsPinnedFTSBehavior(t *testing.T) {
 	insertTaskSearchTestTask(t, store.db, "task-fts-config", 1, "KNT-1", "ZÀBcQ", "other", now)
 
 	assertTaskSearchSourceSearchable(t, store.db, "abc", "title", "task-fts-config")
+	assertTaskSearchShortIDSearchable(t, store.db, "knt", "task-fts-config")
 	var indexedTitle sql.NullString
 	if err := store.db.QueryRow(`
 SELECT task_search_fts.title
@@ -154,6 +199,56 @@ WHERE document.source_kind = 'title'
 	if !indexedTitle.Valid || indexedTitle.String != "ZÀBcQ" {
 		t.Fatalf("external-content Task Search title = %+v, want ZÀBcQ", indexedTitle)
 	}
+}
+
+func TestTaskSearchMigrationHardCutoverRebuildsEveryCanonicalSource(t *testing.T) {
+	legacy, _ := openVersion59TaskSearchFixture(t)
+	t.Cleanup(func() { _ = legacy.Close() })
+	provider, err := newMetadataMigrationProvider(legacy)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 75); err != nil {
+		t.Fatalf("advance to immediately preceding schema: %v", err)
+	}
+	var priorDocumentID int64
+	if err := legacy.QueryRow(`
+SELECT document_id
+FROM task_search_documents
+WHERE source_kind = 'title'
+  AND task_id = 'task-legacy-search-one'`).Scan(&priorDocumentID); err != nil {
+		t.Fatalf("read prior derived document id: %v", err)
+	}
+	if _, err := legacy.Exec(`UPDATE task_search_documents SET document_id = document_id + 1000`); err != nil {
+		t.Fatalf("make prior derived document ids noncanonical: %v", err)
+	}
+
+	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatalf("apply Short ID search cutover: %v", err)
+	}
+
+	var sourceCount, shortIDCount int
+	if err := legacy.QueryRow(`SELECT COUNT(*) FROM task_search_documents`).Scan(&sourceCount); err != nil {
+		t.Fatalf("count rebuilt search documents: %v", err)
+	}
+	if err := legacy.QueryRow(`SELECT COUNT(*) FROM task_search_documents WHERE source_kind = 'short_id'`).Scan(&shortIDCount); err != nil {
+		t.Fatalf("count rebuilt Short ID documents: %v", err)
+	}
+	if sourceCount != 8 || shortIDCount != 2 {
+		t.Fatalf("rebuilt source counts = all:%d Short ID:%d, want 8 and 2", sourceCount, shortIDCount)
+	}
+	var rebuiltDocumentID int64
+	if err := legacy.QueryRow(`
+SELECT document_id
+FROM task_search_documents
+WHERE source_kind = 'title'
+  AND task_id = 'task-legacy-search-one'`).Scan(&rebuiltDocumentID); err != nil {
+		t.Fatalf("read rebuilt derived document id: %v", err)
+	}
+	if rebuiltDocumentID == priorDocumentID+1000 {
+		t.Fatalf("cutover preserved prior internal document id %d", rebuiltDocumentID)
+	}
+	assertTaskSearchInvariants(t, legacy)
 }
 
 func assertTaskSearchLegacySourcesSearchable(t *testing.T, db *sql.DB) {
@@ -281,6 +376,7 @@ func assertTaskSearchSchemaObjects(t *testing.T, db *sql.DB) {
 	}{
 		{kind: "table", name: "task_search_documents"},
 		{kind: "table", name: "task_search_fts"},
+		{kind: "table", name: "task_search_short_id_fts"},
 		{kind: "view", name: "task_search_content"},
 	} {
 		var count int
@@ -449,6 +545,9 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 	if _, err := db.Exec(`INSERT INTO task_search_fts(task_search_fts) VALUES ('integrity-check')`); err != nil {
 		t.Fatalf("run task-search FTS integrity check: %v", err)
 	}
+	if _, err := db.Exec(`INSERT INTO task_search_short_id_fts(task_search_short_id_fts) VALUES ('integrity-check')`); err != nil {
+		t.Fatalf("run task-search Short ID FTS integrity check: %v", err)
+	}
 	rows, err := db.Query(`PRAGMA foreign_key_check`)
 	if err != nil {
 		t.Fatalf("run foreign-key check: %v", err)
@@ -491,7 +590,9 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 
 func queryTaskSearchCanonicalSources(t *testing.T, db *sql.DB) map[string]taskSearchCanonicalSource {
 	t.Helper()
-	rows, err := db.Query(`SELECT 'title:' || id, title FROM tasks
+	rows, err := db.Query(`SELECT 'short_id:' || id, short_id FROM tasks
+UNION ALL
+SELECT 'title:' || id, title FROM tasks
 UNION ALL
 SELECT 'body:' || id, body FROM tasks
 UNION ALL
@@ -547,7 +648,7 @@ FROM task_search_documents`)
 
 func queryTaskSearchContent(t *testing.T, db *sql.DB) map[int64]string {
 	t.Helper()
-	rows, err := db.Query(`SELECT document_id, title, body, comment FROM task_search_content`)
+	rows, err := db.Query(`SELECT document_id, short_id, title, body, comment FROM task_search_content`)
 	if err != nil {
 		t.Fatalf("list task-search content: %v", err)
 	}
@@ -555,11 +656,11 @@ func queryTaskSearchContent(t *testing.T, db *sql.DB) map[int64]string {
 	out := map[int64]string{}
 	for rows.Next() {
 		var documentID int64
-		var title, body, comment sql.NullString
-		if err := rows.Scan(&documentID, &title, &body, &comment); err != nil {
+		var shortID, title, body, comment sql.NullString
+		if err := rows.Scan(&documentID, &shortID, &title, &body, &comment); err != nil {
 			t.Fatalf("scan task-search content: %v", err)
 		}
-		text := taskSearchSparseText(t, documentID, title, body, comment)
+		text := taskSearchSparseText(t, documentID, shortID, title, body, comment)
 		if _, exists := out[documentID]; exists {
 			t.Fatalf("duplicate task-search content document id %d", documentID)
 		}
@@ -598,7 +699,7 @@ func queryTaskSearchFTSRowIDs(t *testing.T, db *sql.DB) map[int64]bool {
 func taskSearchSourceIdentity(t *testing.T, sourceKind string, taskID sql.NullString, commentID sql.NullString) string {
 	t.Helper()
 	switch sourceKind {
-	case "title", "body":
+	case "short_id", "title", "body":
 		if !taskID.Valid || commentID.Valid {
 			t.Fatalf("task-search %s mapping has task_id=%+v comment_id=%+v, want only task id", sourceKind, taskID, commentID)
 		}
@@ -614,9 +715,9 @@ func taskSearchSourceIdentity(t *testing.T, sourceKind string, taskID sql.NullSt
 	}
 }
 
-func taskSearchSparseText(t *testing.T, documentID int64, title sql.NullString, body sql.NullString, comment sql.NullString) string {
+func taskSearchSparseText(t *testing.T, documentID int64, shortID sql.NullString, title sql.NullString, body sql.NullString, comment sql.NullString) string {
 	t.Helper()
-	values := []sql.NullString{title, body, comment}
+	values := []sql.NullString{shortID, title, body, comment}
 	count := 0
 	var text string
 	for _, value := range values {
@@ -686,6 +787,36 @@ WHERE task_search_fts MATCH ?`, taskSearchCandidateExpression(t, query)).Scan(&c
 	}
 	if count != 0 {
 		t.Fatalf("task-search FTS result count for absent source %q = %d, want 0", query, count)
+	}
+}
+
+func assertTaskSearchShortIDSearchable(t *testing.T, db *sql.DB, query string, wantTaskID string) {
+	t.Helper()
+	var taskID string
+	if err := db.QueryRow(`
+SELECT document.task_id
+FROM task_search_short_id_fts
+JOIN task_search_documents document
+  ON document.document_id = task_search_short_id_fts.rowid
+WHERE task_search_short_id_fts MATCH ?`, taskSearchCandidateExpression(t, query)).Scan(&taskID); err != nil {
+		t.Fatalf("search task-search Short ID FTS for %q: %v", query, err)
+	}
+	if taskID != wantTaskID {
+		t.Fatalf("task-search Short ID FTS Task for %q = %q, want %q", query, taskID, wantTaskID)
+	}
+}
+
+func assertTaskSearchShortIDNotSearchable(t *testing.T, db *sql.DB, query string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`
+SELECT COUNT(*)
+FROM task_search_short_id_fts
+WHERE task_search_short_id_fts MATCH ?`, taskSearchCandidateExpression(t, query)).Scan(&count); err != nil {
+		t.Fatalf("search task-search Short ID FTS for absent source %q: %v", query, err)
+	}
+	if count != 0 {
+		t.Fatalf("task-search Short ID FTS result count for absent source %q = %d, want 0", query, count)
 	}
 }
 

@@ -388,7 +388,9 @@ kent task move <task> <target-node-id> --ignore-dependencies
 
 ### Search Tasks
 
-Search Task titles and bodies from the CLI. Add `--include-comments` to search Task Comments, or `--project` and `--status` to narrow the result.
+Literal Search matches case-insensitive Task Short ID substrings plus Task titles and bodies. Complete Short IDs and canonical numeric suffixes rank before partial Short ID matches, while `--include-comments` adds Task Comments.
+
+Raw `--fts5` Search remains limited to the public `title`, `body`, and `comment` columns.
 
 ```bash
 kent task search "retry policy"

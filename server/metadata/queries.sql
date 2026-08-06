@@ -4028,6 +4028,7 @@ SELECT
     document.source_kind,
     document.task_id,
     document.comment_id,
+    content.short_id,
     content.title,
     content.body,
     content.comment

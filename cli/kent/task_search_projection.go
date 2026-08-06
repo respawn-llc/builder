@@ -49,6 +49,9 @@ func taskSearchPlainProjectionFromResponse(response serverapi.TaskSearchResponse
 		lines := make([]taskSearchPlainLine, 0, len(group.Hits)+1)
 		commentHeadingWritten := false
 		for _, hit := range group.Hits {
+			if hit.Source.Kind == serverapi.TaskSearchSourceKindShortID {
+				continue
+			}
 			if hit.Source.Kind == serverapi.TaskSearchSourceKindComment && !commentHeadingWritten {
 				lines = append(lines, taskSearchPlainLine{Kind: taskSearchPlainLineKindCommentHeading})
 				commentHeadingWritten = true

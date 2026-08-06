@@ -308,6 +308,58 @@ func TestTaskSearchResponseRoundTripsRawGroupedJSON(t *testing.T) {
 	}
 }
 
+func TestTaskSearchLiteralShortIDHitRoundTrips(t *testing.T) {
+	response := validTaskSearchResponse()
+	response.Groups[0].Hits[0] = TaskSearchHit{
+		Ordinal: 1,
+		Source:  TaskSearchSource{Kind: TaskSearchSourceKindShortID},
+		Literal: &TaskSearchLiteralHit{Match: "KNT-1"},
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal Short ID task search response: %v", err)
+	}
+	var decoded TaskSearchResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal Short ID task search response: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded Short ID task search response: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, response) {
+		t.Fatalf("Short ID response round-trip = %+v, want %+v", decoded, response)
+	}
+}
+
+func TestTaskSearchShortIDHitRejectsCommentMetadata(t *testing.T) {
+	commentID := "comment-1"
+	hit := TaskSearchHit{
+		Ordinal: 1,
+		Source: TaskSearchSource{
+			Kind:      TaskSearchSourceKindShortID,
+			CommentID: &commentID,
+		},
+		Literal: &TaskSearchLiteralHit{Match: "KNT-1"},
+	}
+
+	if err := hit.Validate(TaskSearchModeLiteral); err == nil {
+		t.Fatal("Short ID hit with Comment metadata validated")
+	}
+}
+
+func TestTaskSearchRawResponseRejectsShortIDHit(t *testing.T) {
+	hit := TaskSearchHit{
+		Ordinal: 1,
+		Source:  TaskSearchSource{Kind: TaskSearchSourceKindShortID},
+		FTS5:    &TaskSearchFTS5Hit{Snippet: "KNT-1"},
+	}
+
+	if err := hit.Validate(TaskSearchModeFTS5); err == nil {
+		t.Fatal("raw FTS5 Short ID hit validated")
+	}
+}
+
 func TestTaskSearchErrorJSONRoundTripsEveryTypedReason(t *testing.T) {
 	for _, reason := range []TaskSearchErrorReason{
 		TaskSearchErrorReasonNormalizedTooShort,

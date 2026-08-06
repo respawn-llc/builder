@@ -1,11 +1,15 @@
 Usage of kent task search:
   kent task search <query> [--project <project>]... [--status <status>[,<status>...]] [flags]
 
-Search Task titles and bodies across Projects. Task Comments are searched only
-with `--include-comments`.
+Search Task Short IDs, titles, and bodies across Projects. Task Comments are
+searched only with `--include-comments`.
 
-The default mode treats the query as a literal substring. Matching ignores case and removable diacritics according to the FTS5 trigram search contract;
-`--case-sensitive` requires exact original code points.
+The default mode treats the query as a literal substring. Short ID matching is
+always case-insensitive. Complete Short IDs and canonical numeric suffixes rank
+before partial Short ID matches, which rank before title, body, and Comment
+matches. Text matching ignores case and removable diacritics according to the
+FTS5 trigram search contract; `--case-sensitive` requires exact original code
+points only for title, body, and Comment text.
 
 `--fts5` treats the query as a raw SQLite FTS5 expression over the public
 `title`, `body`, and `comment` columns. Boolean terms must match within one title, Task body, or Comment body rather than across sources.
