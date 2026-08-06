@@ -131,12 +131,9 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 			if rootErr != nil {
 				return rootErr
 			}
-			previous := activeRuntime.PreviousFilesystemContext
-			if previous.ManagedWorktree != nil {
-				targetFilesystemContext.ManagedWorktree, rootErr = previous.ManagedWorktree.WithCurrentWorktreeRoot(nil)
-				if rootErr != nil {
-					return rootErr
-				}
+			targetFilesystemContext.ManagedWorktree, rootErr = runtimewire.NewManagedWorktreePathContext(targetBoundary, nil)
+			if rootErr != nil {
+				return rootErr
 			}
 		}
 		if currentPlan.CrossProject() {

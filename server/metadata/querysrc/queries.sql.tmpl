@@ -2337,6 +2337,23 @@ WHERE w.project_id = sqlc.arg(project_id)
 ORDER BY w.created_at_unix_ms DESC, w.rowid DESC
 LIMIT 500;
 
+-- name: ListProjectManagedWorktreeRoots :many
+SELECT
+    wt.workspace_id,
+    wt.canonical_root_path AS root_path
+FROM worktrees wt
+JOIN workspaces w ON w.id = wt.workspace_id
+JOIN (
+    SELECT recent.id
+    FROM workspaces recent
+    WHERE recent.project_id = sqlc.arg(project_id)
+    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
+    LIMIT 500
+) recent_workspaces ON recent_workspaces.id = w.id
+WHERE w.project_id = sqlc.arg(project_id)
+  AND wt.managed <> 0
+ORDER BY wt.created_at_unix_ms DESC, wt.rowid DESC;
+
 -- name: ListProjectWorkspacesPage :many
 SELECT
     w.id,

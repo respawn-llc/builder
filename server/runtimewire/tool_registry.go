@@ -350,6 +350,21 @@ func NewFilesystemContext(workdir string, targetRoot string, boundary metadata.P
 	}}, nil
 }
 
+func NewManagedWorktreePathContext(boundary metadata.ProjectWorkspaceBoundary, currentWorktreeRoot *string) (*tools.ManagedWorktreePathContext, error) {
+	normalizedBoundary, err := boundary.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	if len(normalizedBoundary.ManagedWorktrees) == 0 {
+		return nil, nil
+	}
+	roots := make([]string, 0, len(normalizedBoundary.ManagedWorktrees))
+	for _, worktree := range normalizedBoundary.ManagedWorktrees {
+		roots = append(roots, worktree.CanonicalRoot)
+	}
+	return tools.NewManagedWorktreePathContextForRoots(roots, currentWorktreeRoot)
+}
+
 func WithExecutionTarget(current tools.FilesystemContext, workdir string, targetRoot string, managed *tools.ManagedWorktreePathContext) (tools.FilesystemContext, error) {
 	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
 	if err != nil {

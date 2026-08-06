@@ -659,10 +659,10 @@ func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, in
 }
 
 func currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
-	if root.Managed == nil || strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) == "" {
+	if root.Managed == nil {
 		return nil, nil
 	}
-	return askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, &root.Managed.Root)
+	return runtimewire.NewManagedWorktreePathContext(plan.ProjectWorkspaceBoundary, &root.Managed.Root)
 }
 
 func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {

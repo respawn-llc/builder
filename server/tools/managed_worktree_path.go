@@ -33,7 +33,7 @@ func NewManagedWorktreePathContextForRoots(roots []string, currentWorktreeRoot *
 	context := &ManagedWorktreePathContext{}
 	seen := make(map[string]struct{}, len(roots))
 	for _, root := range roots {
-		real, err := config.ResolveExistingPathRealPath(strings.TrimSpace(root))
+		real, err := config.ResolveExistingAncestorRealPath(strings.TrimSpace(root))
 		if err != nil {
 			return nil, fmt.Errorf("resolve managed worktree root: %w", err)
 		}

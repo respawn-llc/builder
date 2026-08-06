@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
@@ -30,15 +32,37 @@ import (
 
 type sessionRuntimeTestLLMClient struct {
 	responses []llm.Response
+	mu        sync.Mutex
+	requests  []llm.Request
+	final     chan struct{}
+	finalOnce sync.Once
 }
 
-func (c *sessionRuntimeTestLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+func (c *sessionRuntimeTestLLMClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, llm.Request{Items: llm.CloneResponseItems(request.Items)})
 	if len(c.responses) == 0 {
+		c.mu.Unlock()
 		return llm.Response{}, nil
 	}
 	resp := c.responses[0]
 	c.responses = c.responses[1:]
+	c.mu.Unlock()
+	if resp.Assistant.Phase != nil && *resp.Assistant.Phase == llm.MessagePhaseFinal && c.final != nil {
+		c.finalOnce.Do(func() { close(c.final) })
+	}
 	return resp, nil
+}
+
+func (c *sessionRuntimeTestLLMClient) requestSnapshot() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]llm.Request, len(c.requests))
+	for index := range c.requests {
+		out[index] = c.requests[index]
+		out[index].Items = llm.CloneResponseItems(c.requests[index].Items)
+	}
+	return out
 }
 
 type blockingLLMClient struct {
@@ -316,6 +340,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	managedBase := t.TempDir()
 	currentRoot := filepath.Join(managedBase, "current")
 	foreignRoot := filepath.Join(managedBase, "foreign")
+	missingRoot := filepath.Join(managedBase, "missing")
 	for _, root := range []string{currentRoot, foreignRoot} {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", root, err)
@@ -336,10 +361,10 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		t.Fatalf("UpsertWorktreeRecord current: %v", err)
 	}
 	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
-		ID: "interactive-foreign", WorkspaceID: binding.WorkspaceID, CanonicalRoot: foreignRoot,
-		DisplayName: "foreign", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+		ID: "interactive-missing", WorkspaceID: binding.WorkspaceID, CanonicalRoot: missingRoot,
+		DisplayName: "missing", Availability: "missing", Managed: true, GitMetadataJSON: `{}`,
 	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord foreign: %v", err)
+		t.Fatalf("UpsertWorktreeRecord missing: %v", err)
 	}
 	if err := fixture.metadata.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{
 		SessionID:  fixture.store.Meta().SessionID,
@@ -349,14 +374,21 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
-	if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, foreignRoot); err != nil {
+	foreignBinding, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, foreignRoot)
+	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject foreign: %v", err)
+	}
+	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID: "interactive-foreign-workspace", WorkspaceID: foreignBinding.WorkspaceID, CanonicalRoot: foreignRoot,
+		DisplayName: "foreign-workspace", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord foreign workspace: %v", err)
 	}
 	target := filepath.Join(foreignRoot, "foreign.txt")
 	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write foreign fixture: %v", err)
 	}
-	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+	client := &sessionRuntimeTestLLMClient{final: make(chan struct{}), responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("editing"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call-foreign-edit", Name: string(toolspec.ToolEdit), Input: json.RawMessage(`{"path":"` + target + `","old_string":"before","new_string":"forbidden-direct"}`)}},
@@ -394,6 +426,35 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		return err
 	}); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	select {
+	case <-client.final:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for final model response")
+	}
+	denied := false
+	for _, request := range client.requestSnapshot() {
+		for _, item := range request.Items {
+			if item.Type != llm.ResponseItemTypeFunctionCallOutput {
+				continue
+			}
+			var output struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(item.Output, &output); err == nil && output.Error == tools.ForeignManagedWorktreeEditDeniedMessage {
+				denied = true
+			}
+		}
+	}
+	if !denied {
+		requests := client.requestSnapshot()
+		var items []string
+		for _, request := range requests {
+			for _, item := range request.Items {
+				items = append(items, fmt.Sprintf("type=%s call_id=%v name=%v output=%s", item.Type, item.CallID, item.Name, item.Output))
+			}
+		}
+		t.Fatalf("foreign edit tool result was not the typed denial: items=%v", items)
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != "before\n" {
 		t.Fatalf("foreign managed edit data = %q, error = %v", data, err)
