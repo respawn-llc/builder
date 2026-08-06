@@ -25,6 +25,79 @@ func testApprovalRequest(id string) AskQuestionRequest {
 	}
 }
 
+func TestAskRunsTypedEffectBarrierAfterValidationBeforeHandlerSelection(t *testing.T) {
+	b := NewAskQuestionBroker()
+	order := make([]string, 0, 2)
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+		order = append(order, "handler")
+		return AskQuestionResponse{RequestID: req.ID, Answer: "handled"}, nil
+	})
+	ctx := WithEffectBarrier(context.Background(), func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierQuestion {
+			t.Fatalf("barrier reason = %d, want Question", reason)
+		}
+		order = append(order, "barrier")
+		// This would deadlock if Ask held the broker mutex while invoking the barrier.
+		b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+			order = append(order, "replacement")
+			return AskQuestionResponse{RequestID: req.ID, Answer: "replaced"}, nil
+		})
+		return nil
+	})
+
+	resp, err := b.Ask(ctx, AskQuestionRequest{ID: "question", Question: "one?"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if resp.Answer != "replaced" {
+		t.Fatalf("response = %+v, want replacement handler response", resp)
+	}
+	if !slices.Equal(order, []string{"barrier", "replacement"}) {
+		t.Fatalf("execution order = %v, want barrier then selected handler", order)
+	}
+}
+
+func TestAskUsesApprovalBarrierAndBlocksInteractionWhenItFails(t *testing.T) {
+	b := NewAskQuestionBroker()
+	handlerCalled := false
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+		handlerCalled = true
+		return AskQuestionResponse{RequestID: req.ID}, nil
+	})
+	barrierErr := errors.New("flush failed")
+	ctx := WithEffectBarrier(context.Background(), func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierApproval {
+			t.Fatalf("barrier reason = %d, want Approval", reason)
+		}
+		return barrierErr
+	})
+
+	if _, err := b.Ask(ctx, testApprovalRequest("approval")); !errors.Is(err, barrierErr) {
+		t.Fatalf("Ask error = %v, want barrier error", err)
+	}
+	if handlerCalled {
+		t.Fatal("approval handler ran after barrier failure")
+	}
+	if pending := b.Pending(); len(pending) != 0 {
+		t.Fatalf("approval was queued after barrier failure: %+v", pending)
+	}
+}
+
+func TestAskRejectsInvalidRequestBeforeEffectBarrier(t *testing.T) {
+	calls := 0
+	ctx := WithEffectBarrier(context.Background(), func(EffectBarrierReason) error {
+		calls++
+		return nil
+	})
+
+	if _, err := NewAskQuestionBroker().Ask(ctx, AskQuestionRequest{}); err == nil {
+		t.Fatal("invalid ask succeeded")
+	}
+	if calls != 0 {
+		t.Fatalf("barrier calls = %d, want zero for invalid request", calls)
+	}
+}
+
 func TestBrokerFIFOQueue(t *testing.T) {
 	b := NewAskQuestionBroker()
 

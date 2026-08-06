@@ -131,6 +131,15 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	if err := validateRequest(req); err != nil {
 		return AskQuestionResponse{}, err
 	}
+	if barrier, ok := EffectBarrierFromContext(ctx); ok {
+		reason, err := effectBarrierReasonForAsk(req)
+		if err != nil {
+			return AskQuestionResponse{}, err
+		}
+		if err := barrier(reason); err != nil {
+			return AskQuestionResponse{}, err
+		}
+	}
 
 	h := b.askHandler()
 	if h != nil {

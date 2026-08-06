@@ -44,6 +44,12 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	if collector == nil {
 		return results, errors.New("tool execution requires a result group collector")
 	}
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+	executionCtx = tools.WithEffectBarrier(
+		executionCtx,
+		t.resultGroupEffectBarrier(stepID, collector, cancelExecution),
+	)
 
 	for i := range preparedCalls {
 		prepared := preparedCalls[i]
@@ -76,7 +82,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			res, callErr := t.executePreparedToolCall(ctx, stepID, runID, tc, toolID, knownTool, askBatch)
+			res, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, askBatch)
 			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
@@ -123,6 +129,47 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		return results, joined
 	}
 	return results, nil
+}
+
+func (t *defaultToolExecutor) resultGroupEffectBarrier(
+	stepID string,
+	collector *resultGroupCollector,
+	cancel context.CancelFunc,
+) tools.EffectBarrier {
+	return func(reason tools.EffectBarrierReason) error {
+		flushReason, err := resultGroupFlushReasonForEffect(reason)
+		if err != nil {
+			return err
+		}
+		if err := t.engine.steer(
+			stepID,
+			steerResultGroupFlushIntent(collector, flushReason),
+		); err != nil {
+			fatal := collector.fatalSnapshot()
+			if fatal == nil {
+				return fmt.Errorf(
+					"result group effect barrier failed without collector fatal: %w",
+					err,
+				)
+			}
+			cancel()
+			return fatal
+		}
+		return nil
+	}
+}
+
+func resultGroupFlushReasonForEffect(
+	reason tools.EffectBarrierReason,
+) (ResultGroupFlushReason, error) {
+	switch reason {
+	case tools.EffectBarrierQuestion:
+		return ResultGroupFlushQuestion, nil
+	case tools.EffectBarrierApproval:
+		return ResultGroupFlushApproval, nil
+	default:
+		return 0, fmt.Errorf("unknown tool effect barrier reason %d", reason)
+	}
 }
 
 func (t *defaultToolExecutor) executePreparedToolCall(

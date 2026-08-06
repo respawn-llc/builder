@@ -213,6 +213,125 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 	}
 }
 
+func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *testing.T) {
+	workspace := t.TempDir()
+	outside := outsideNonTempDir(t)
+	patchPath := filepath.Join(outside, "patch.txt")
+	editPath := filepath.Join(outside, "edit.txt")
+	imagePath := filepath.Join(outside, "image.png")
+	for path, contents := range map[string][]byte{
+		patchPath: []byte("before\n"),
+		editPath:  []byte("before\n"),
+		imagePath: []byte("not-read-after-barrier"),
+	} {
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			t.Fatalf("write outside fixture %s: %v", path, err)
+		}
+	}
+	registry, broker := newRuntimeWireToolRegistry(
+		t,
+		workspace,
+		toolspec.ToolPatch,
+		toolspec.ToolEdit,
+		toolspec.ToolViewImage,
+	)
+	handlerCalled := false
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		handlerCalled = true
+		return askquestion.AskQuestionResponse{RequestID: req.ID}, nil
+	})
+	barrierErr := errors.New("Approval durability barrier failed")
+	encode := func(value any) json.RawMessage {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal outside-workspace tool input: %v", err)
+		}
+		return encoded
+	}
+
+	tests := []struct {
+		name          string
+		toolID        toolspec.ID
+		input         json.RawMessage
+		unchangedPath string
+		wantContents  []byte
+	}{
+		{
+			name:   "patch",
+			toolID: toolspec.ToolPatch,
+			input: encode(map[string]any{
+				"patch": "*** Begin Patch\n*** Update File: " + patchPath + "\n-before\n+after\n*** End Patch\n",
+			}),
+			unchangedPath: patchPath,
+			wantContents:  []byte("before\n"),
+		},
+		{
+			name:   "edit",
+			toolID: toolspec.ToolEdit,
+			input: encode(map[string]any{
+				"path":       editPath,
+				"old_string": "before",
+				"new_string": "after",
+			}),
+			unchangedPath: editPath,
+			wantContents:  []byte("before\n"),
+		},
+		{
+			name:   "view_image",
+			toolID: toolspec.ToolViewImage,
+			input: encode(map[string]any{
+				"path": imagePath,
+			}),
+			unchangedPath: imagePath,
+			wantContents:  []byte("not-read-after-barrier"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			barrierCalls := 0
+			ctx := tools.WithEffectBarrier(
+				context.Background(),
+				func(reason tools.EffectBarrierReason) error {
+					barrierCalls++
+					if reason != tools.EffectBarrierApproval {
+						t.Fatalf("barrier reason = %d, want Approval", reason)
+					}
+					return barrierErr
+				},
+			)
+			handler, ok := registry.Get(test.toolID)
+			if !ok {
+				t.Fatalf("missing %s handler", test.toolID)
+			}
+
+			result, err := handler.Call(ctx, tools.Call{
+				ID:    "call-" + test.name,
+				Name:  test.toolID,
+				Input: test.input,
+			})
+			if err != nil {
+				t.Fatalf("%s call returned operational error: %v", test.name, err)
+			}
+			if !result.IsError {
+				t.Fatalf("%s result = %+v, want provisional approval error", test.name, result)
+			}
+			if barrierCalls != 1 {
+				t.Fatalf("%s barrier calls = %d, want one", test.name, barrierCalls)
+			}
+			got, err := os.ReadFile(test.unchangedPath)
+			if err != nil {
+				t.Fatalf("read %s fixture: %v", test.name, err)
+			}
+			if string(got) != string(test.wantContents) {
+				t.Fatalf("%s changed guarded file to %q", test.name, got)
+			}
+		})
+	}
+	if handlerCalled {
+		t.Fatal("outside-workspace Approval entered broker handler after barrier failure")
+	}
+}
+
 func TestRuntimewireGeneratedWritePolicyUsesActivePersistenceRoot(t *testing.T) {
 	workspace := t.TempDir()
 	configRoot := t.TempDir()
