@@ -48,7 +48,12 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	defer cancelExecution()
 	executionCtx = tools.WithEffectBarrier(
 		executionCtx,
-		t.resultGroupEffectBarrier(stepID, collector, cancelExecution),
+		t.resultGroupEffectBarrier(
+			executionCtx,
+			stepID,
+			collector,
+			cancelExecution,
+		),
 	)
 
 	for i := range preparedCalls {
@@ -132,6 +137,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 }
 
 func (t *defaultToolExecutor) resultGroupEffectBarrier(
+	ctx context.Context,
 	stepID string,
 	collector *resultGroupCollector,
 	cancel context.CancelFunc,
@@ -141,22 +147,41 @@ func (t *defaultToolExecutor) resultGroupEffectBarrier(
 		if err != nil {
 			return err
 		}
-		if err := t.engine.steer(
-			stepID,
-			steerResultGroupFlushIntent(collector, flushReason),
-		); err != nil {
-			fatal := collector.fatalSnapshot()
-			if fatal == nil {
-				return fmt.Errorf(
-					"result group effect barrier failed without collector fatal: %w",
-					err,
+		return runResultGroupEffectBarrier(
+			ctx,
+			collector,
+			cancel,
+			func() error {
+				return t.engine.steer(
+					stepID,
+					steerResultGroupFlushIntent(collector, flushReason),
 				)
-			}
-			cancel()
-			return fatal
-		}
-		return nil
+			},
+		)
 	}
+}
+
+func runResultGroupEffectBarrier(
+	ctx context.Context,
+	collector *resultGroupCollector,
+	cancel context.CancelFunc,
+	flush func() error,
+) error {
+	flushErr := flush()
+	if fatal := collector.fatalSnapshot(); fatal != nil {
+		cancel()
+		return fatal
+	}
+	if flushErr != nil {
+		return fmt.Errorf(
+			"result group effect barrier failed without collector fatal: %w",
+			flushErr,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func resultGroupFlushReasonForEffect(

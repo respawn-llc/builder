@@ -140,6 +140,9 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 			return AskQuestionResponse{}, err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return AskQuestionResponse{}, err
+	}
 
 	h := b.askHandler()
 	if h != nil {
@@ -179,7 +182,9 @@ func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest,
 }
 
 func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
-
+	if err := ctx.Err(); err != nil {
+		return AskQuestionResponse{}, err
+	}
 	p := &pending{req: req, ch: make(chan responseResult, 1)}
 	b.mu.Lock()
 	b.queue = append(b.queue, p)

@@ -203,6 +203,40 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 	}
 }
 
+func TestResultGroupEffectBarrierRejectsConcurrentFatalAfterSuccessfulFlush(t *testing.T) {
+	collector := testResultGroupCollector(t, "first")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cause := errors.New("concurrent sibling durability failure")
+	siblingDone := make(chan struct{})
+
+	err := runResultGroupEffectBarrier(
+		ctx,
+		collector,
+		cancel,
+		func() error {
+			go func() {
+				collector.abort(resultGroupFatal{
+					Committed: false,
+					Cause:     cause,
+				})
+				close(siblingDone)
+			}()
+			<-siblingDone
+			return nil
+		},
+	)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, cause) {
+		t.Fatalf("effect barrier error = %v, want concurrent sibling fatal", err)
+	}
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("effect barrier context error = %v, want canceled", ctx.Err())
+	}
+}
+
 func TestQuestionBarrierPreCommitFailureBlocksInteractionAndSemanticResult(t *testing.T) {
 	store := mustCreateTestSession(t)
 	broker := tools.NewAskQuestionBroker()

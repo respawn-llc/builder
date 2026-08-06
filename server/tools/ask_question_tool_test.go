@@ -98,6 +98,48 @@ func TestAskRejectsInvalidRequestBeforeEffectBarrier(t *testing.T) {
 	}
 }
 
+func TestQueuedToolCallBarrierFailureDoesNotMaterializeRequestAndRunsBatchCleanup(t *testing.T) {
+	b := NewAskQuestionBroker()
+	barrierErr := errors.New("flush failed")
+	ctx := WithEffectBarrier(context.Background(), func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierQuestion {
+			t.Fatalf("barrier reason = %d, want Question", reason)
+		}
+		return barrierErr
+	})
+	skipped := 0
+	result, err := NewAskQuestionTool(b, func() bool { return true }).Call(ctx, Call{
+		ID:    "queued-question",
+		Name:  toolspec.ToolAskQuestion,
+		Input: json.RawMessage(`{"question":"Continue?"}`),
+		AskQuestionBatch: &AskQuestionBatchMetadata{
+			Origin:              AskQuestionOriginModelTool,
+			RunID:               "run-1",
+			StepID:              "step-1",
+			BatchID:             "batch-1",
+			PromptID:            "queued-question",
+			BatchPromptIDs:      []string{"queued-question"},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 1,
+		},
+		OnAskQuestionBatchSkipped: func(AskQuestionBatchMetadata) {
+			skipped++
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want provisional barrier error", result)
+	}
+	if skipped != 1 {
+		t.Fatalf("batch cleanup calls = %d, want one", skipped)
+	}
+	if pending := b.Pending(); len(pending) != 0 {
+		t.Fatalf("barrier-failed queued request materialized: %+v", pending)
+	}
+}
+
 func TestBrokerFIFOQueue(t *testing.T) {
 	b := NewAskQuestionBroker()
 
