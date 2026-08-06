@@ -20,7 +20,6 @@ type defaultStepExecutor struct {
 	phase    phaseProtocolEnforcer
 	reviewer reviewerPipeline
 	messages messageLifecycle
-	tools    toolExecutor
 }
 
 type completedResponseNext uint8
@@ -851,24 +850,15 @@ func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.
 		return false, false, nil
 	}
 	e := s.engine
-	results, err := s.tools.ExecuteToolCalls(ctx, stepID, localToolCalls)
+	results, err := e.executeToolCalls(ctx, stepID, localToolCalls)
 	if err != nil {
 		return false, false, err
 	}
 	patchEditsApplied := false
 	terminal := hasWorkflowTerminalResult(results)
-	customToolCalls := customToolCallIDs(localToolCalls)
 	for _, result := range results {
 		if !result.IsError && (result.Name == toolspec.ToolPatch || result.Name == toolspec.ToolEdit) {
 			patchEditsApplied = true
-		}
-		msg := llm.Message{
-			Role: llm.RoleTool, Content: textutil.Value(string(result.Output)),
-			ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name)),
-		}
-		msg.MessageType = llm.ToolOutputMessageType(customToolCalls[result.CallID])
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
-			return false, false, err
 		}
 	}
 	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)
@@ -1013,19 +1003,6 @@ func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (str
 		return "", err
 	}
 	return workflowCompletionInstructionsFragment(mode, execution.Instructions.WorkflowID, execution.Contract)
-}
-
-func customToolCallIDs(calls []llm.ToolCall) map[string]bool {
-	if len(calls) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(calls))
-	for _, call := range calls {
-		if call.Custom && strings.TrimSpace(call.ID) != "" {
-			out[call.ID] = true
-		}
-	}
-	return out
 }
 
 func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID string) error {

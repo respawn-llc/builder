@@ -758,8 +758,9 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
-			if !errors.Is(err, errPersistToolCompletion) {
-				t.Fatalf("expected errPersistToolCompletion, got %v", err)
+			var fatal *resultGroupFatal
+			if !errors.As(err, &fatal) || fatal.Committed {
+				t.Fatalf("expected uncommitted result group fatal, got %v", err)
 			}
 			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 0 {
 				t.Fatalf("uncommitted tool completions = %d, want 0", got)
@@ -776,8 +777,11 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
-			if !errors.Is(err, errPersistToolCompletion) || !errors.Is(err, observerErr) {
-				t.Fatalf("tool completion error = %v, want persistence wrapper and observer error", err)
+			var fatal *resultGroupFatal
+			if !errors.As(err, &fatal) ||
+				!fatal.Committed ||
+				!errors.Is(fatal.Cause, observerErr) {
+				t.Fatalf("tool completion error = %v, want committed observer fatal", err)
 			}
 			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 1 {
 				t.Fatalf("committed tool completions = %d, want 1", got)

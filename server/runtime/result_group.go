@@ -317,17 +317,29 @@ func resultGroupRosterFromAcceptedCalls(calls acceptedResponseCalls) []resultGro
 	ordered := calls.toolCalls()
 	roster := make([]resultGroupCallIdentity, len(ordered))
 	for index, call := range ordered {
-		outputKind := session.ToolOutputKindFunction
-		if call.Custom {
-			outputKind = session.ToolOutputKindCustom
-		}
-		roster[index] = resultGroupCallIdentity{
-			CallID:     call.ID,
-			Name:       toolspec.ID(call.Name),
-			OutputKind: outputKind,
-		}
+		roster[index] = resultGroupIdentityFromToolCall(call)
 	}
 	return roster
+}
+
+func resultGroupRosterFromPreparedCalls(calls []executorToolCall) []resultGroupCallIdentity {
+	roster := make([]resultGroupCallIdentity, len(calls))
+	for index, call := range calls {
+		roster[index] = resultGroupIdentityFromToolCall(call.call)
+	}
+	return roster
+}
+
+func resultGroupIdentityFromToolCall(call llm.ToolCall) resultGroupCallIdentity {
+	outputKind := session.ToolOutputKindFunction
+	if call.Custom {
+		outputKind = session.ToolOutputKindCustom
+	}
+	return resultGroupCallIdentity{
+		CallID:     call.ID,
+		Name:       toolspec.ID(call.Name),
+		OutputKind: outputKind,
+	}
 }
 
 func (e *Engine) flushResultGroup(

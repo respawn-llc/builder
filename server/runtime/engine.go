@@ -45,8 +45,6 @@ var (
 	ErrModelRequired = errors.New("model is required")
 	// errUnknownTool is returned when a tool call targets a tool that is not registered.
 	errUnknownTool = errors.New("unknown tool")
-	// errPersistToolCompletion wraps failures to persist a tool completion result.
-	errPersistToolCompletion = errors.New("persist tool completion")
 )
 
 func NormalizeThinkingLevel(level string) (string, bool) {
@@ -788,30 +786,14 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 			return err
 		}
-		if _, ok := e.registry.Get(toolspec.ToolExecCommand); !ok {
-			transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
-			_ = e.steer(stepID, steerEventIntent(Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}))
-			result = tools.Result{
-				CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true,
-				Output:  mustJSON(map[string]any{"error": "unknown tool"}),
-				Summary: textutil.Value("unknown tool"),
-			}
-			if err := e.steer(stepID, steerToolCompletionIntent(result)); err != nil {
-				return fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, call.ID, result.Name, err)
-			}
-			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
-				return appendErr
-			}
-			return errUnknownTool
-		}
-
+		_, registered := e.registry.Get(toolspec.ToolExecCommand)
 		results, execErr := e.executeToolCalls(stepCtx, stepID, []llm.ToolCall{call})
 		if len(results) == 0 {
 			return errors.New("shell tool execution returned no result")
 		}
 		result = results[0]
-		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
-			return errors.Join(execErr, appendErr)
+		if !registered {
+			return errors.Join(execErr, errUnknownTool)
 		}
 		return execErr
 	})
@@ -1076,5 +1058,40 @@ func providerFailureRetriesAllowed(req llm.Request) bool {
 
 func (e *Engine) executeToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.toolFlow.ExecuteToolCalls(ctx, stepID, calls)
+	prepared, err := prepareExecutorToolCalls(
+		e,
+		stepID,
+		activeRunIDForStep(e, stepID),
+		e.currentNodeExecutionActive(),
+		calls,
+	)
+	if err != nil {
+		return nil, err
+	}
+	collector, err := newResultGroupCollector(resultGroupRosterFromPreparedCalls(prepared))
+	if err != nil {
+		return nil, err
+	}
+	completed, executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
+	closeErr := e.steer(stepID, steerResultGroupCloseIntent(collector))
+	if fatal := collector.fatalSnapshot(); fatal != nil {
+		results := make([]tools.Result, len(completed))
+		for index, result := range completed {
+			if result != nil {
+				results[index] = result.result
+			}
+		}
+		return results, fatal
+	}
+	var goalErr error
+	if closeErr == nil {
+		goalErr = e.drainActiveStepGoalMutations(stepID)
+	}
+	results := make([]tools.Result, len(completed))
+	for index, result := range completed {
+		if result != nil {
+			results[index] = result.result
+		}
+	}
+	return results, errors.Join(executeErr, closeErr, goalErr)
 }

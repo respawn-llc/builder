@@ -21,21 +21,28 @@ type defaultToolExecutor struct {
 	engine *Engine
 }
 
+type completedToolResult struct {
+	result tools.Result
+}
+
 var ErrMissingProviderToolCallID = errors.New("provider tool call id is required")
 
-func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
+func (t *defaultToolExecutor) ExecuteToolCalls(
+	ctx context.Context,
+	stepID string,
+	preparedCalls []executorToolCall,
+	collector *resultGroupCollector,
+) ([]*completedToolResult, error) {
 	e := t.engine
-	results := make([]tools.Result, len(calls))
-	callErrs := make([]error, len(calls))
+	results := make([]*completedToolResult, len(preparedCalls))
+	callErrs := make([]error, len(preparedCalls))
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
-	workingDir := e.transcriptWorkingDir()
 	workflowActive := e.currentNodeExecutionActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
-	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
-	if err != nil {
-		return results, err
+	if collector == nil {
+		return results, errors.New("tool execution requires a result group collector")
 	}
 
 	for i := range preparedCalls {
@@ -44,7 +51,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
 		executableCall := prepared.call
-		transcriptCall := normalizeToolCallForTranscript(executableCall, workingDir)
+		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
@@ -64,60 +71,45 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
-			var callErr error
 
 			if serialOrdinal >= 0 {
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			if !knownTool {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
+			res, callErr := t.executePreparedToolCall(ctx, stepID, runID, tc, toolID, knownTool, askBatch)
+			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
-			if toolID == toolspec.ToolCompleteNode {
-				results[idx] = t.executeCompleteNodeTool(ctx, stepID, tc)
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
-				return
-			}
-			h, ok := e.registry.Get(toolID)
-			if toolID == toolspec.ToolWebSearch {
-				if err := tools.ValidateWebSearchInput(tc.Input); err != nil {
-					results[idx] = tools.ErrorResult(tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage)
-					if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-						callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-					}
+			outcome := resultGroupReportOutcome(0)
+			if err := e.steer(stepID, steerResultGroupReportIntent(
+				collector,
+				tc.ID,
+				resultGroupUnit{result: res},
+				&outcome,
+			)); err != nil {
+				if fatal := collector.fatalSnapshot(); fatal != nil {
 					return
 				}
-			}
-			if !ok {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
+				callErrs[idx] = errors.Join(callErr, fmt.Errorf(
+					"report tool result (call_id=%s tool=%s): %w",
+					tc.ID,
+					res.Name,
+					err,
+				))
 				return
 			}
-			res, err := h.Call(
-				tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
-				tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped},
-			)
-			if err != nil {
-				callErr = err
-				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
-			}
-			res.CallID = tc.ID
-			res.Name = toolID
-			res = tools.MaterializeModelWarnings(res)
-			results[idx] = res
-			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
-				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)
-				callErrs[idx] = errors.Join(callErr, persistErr)
+			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
+			if outcome != resultGroupReportAccepted {
+				callErrs[idx] = fmt.Errorf(
+					"result group ignored tool result without fatal (call_id=%s tool=%s)",
+					tc.ID,
+					res.Name,
+				)
+				return
+			}
+			results[idx] = &completedToolResult{result: res}
 			callErrs[idx] = callErr
 		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
 	}
@@ -127,11 +119,46 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)
 	}
-	joined = errors.Join(joined, e.drainActiveStepGoalMutations(stepID))
 	if joined != nil {
 		return results, joined
 	}
 	return results, nil
+}
+
+func (t *defaultToolExecutor) executePreparedToolCall(
+	ctx context.Context,
+	stepID string,
+	runID string,
+	call llm.ToolCall,
+	toolID toolspec.ID,
+	knownTool bool,
+	askBatch *tools.AskQuestionBatchMetadata,
+) (tools.Result, error) {
+	if !knownTool {
+		return tools.Result{CallID: call.ID, Name: toolspec.ID(call.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, nil
+	}
+	if toolID == toolspec.ToolCompleteNode {
+		return t.executeCompleteNodeTool(ctx, stepID, call), nil
+	}
+	if toolID == toolspec.ToolWebSearch {
+		if err := tools.ValidateWebSearchInput(call.Input); err != nil {
+			return tools.ErrorResult(tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage), nil
+		}
+	}
+	handler, ok := t.engine.registry.Get(toolID)
+	if !ok {
+		return tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, nil
+	}
+	result, err := handler.Call(
+		tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
+		tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: t.engine.cfg.AskQuestionBatchSkipped},
+	)
+	if err != nil {
+		result = tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
+	}
+	result.CallID = call.ID
+	result.Name = toolID
+	return tools.MaterializeModelWarnings(result), err
 }
 
 type executorToolCall struct {
