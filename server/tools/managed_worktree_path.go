@@ -3,16 +3,14 @@ package tools
 import (
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"core/shared/config"
 )
 
 type ManagedWorktreePathContext struct {
-	baseRoot     string
-	managedRoots []string
-	currentRoot  *string
+	baseRoot    string
+	currentRoot *string
 }
 
 const ForeignManagedWorktreeEditDeniedMessage = "Directly reaching into another agent's worktree is not permitted. Enter the worktree first instead with `kent worktree enter`"
@@ -23,72 +21,22 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) 
 		return nil, fmt.Errorf("resolve managed worktree base: %w", err)
 	}
 	context := &ManagedWorktreePathContext{baseRoot: base}
-	return context.withCurrentWorktreeRoot(currentWorktreeRoot)
-}
-
-// NewManagedWorktreePathContextForRoots creates a managed-worktree policy from
-// metadata-owned managed roots. This keeps denial effective even when the
-// active client settings omit the configured base directory.
-func NewManagedWorktreePathContextForRoots(roots []string, currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
-	context := &ManagedWorktreePathContext{}
-	seen := make(map[string]struct{}, len(roots))
-	for _, root := range roots {
-		real, err := config.ResolveExistingAncestorRealPath(strings.TrimSpace(root))
-		if err != nil {
-			return nil, fmt.Errorf("resolve managed worktree root: %w", err)
-		}
-		if _, exists := seen[real]; exists {
-			continue
-		}
-		seen[real] = struct{}{}
-		context.managedRoots = append(context.managedRoots, real)
-	}
-	if len(context.managedRoots) == 0 {
-		return nil, fmt.Errorf("managed worktree roots are required")
-	}
-	return context.withCurrentWorktreeRoot(currentWorktreeRoot)
-}
-
-func (c *ManagedWorktreePathContext) withCurrentWorktreeRoot(currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
 	if currentWorktreeRoot == nil {
-		return c, nil
+		return context, nil
 	}
 	current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 	}
-	if c.baseRoot != "" && !pathWithin(c.baseRoot, current) {
-		return c, nil
+	if !pathWithin(base, current) {
+		return context, nil
 	}
-	if len(c.managedRoots) > 0 {
-		for _, root := range c.managedRoots {
-			if pathWithin(root, current) {
-				c.currentRoot = &current
-				return c, nil
-			}
-		}
-		return c, nil
-	}
-	c.currentRoot = &current
-	return c, nil
+	context.currentRoot = &current
+	return context, nil
 }
 
 func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(requestedPath string, resolvedPath string) bool {
-	if !filepath.IsAbs(requestedPath) {
-		return false
-	}
-	managed := false
-	if len(c.managedRoots) > 0 {
-		for _, root := range c.managedRoots {
-			if pathWithin(root, resolvedPath) {
-				managed = true
-				break
-			}
-		}
-	} else {
-		managed = c.baseRoot != "" && pathWithin(c.baseRoot, resolvedPath)
-	}
-	if !managed {
+	if !filepath.IsAbs(requestedPath) || !pathWithin(c.baseRoot, resolvedPath) {
 		return false
 	}
 	return c.currentRoot == nil || !pathWithin(*c.currentRoot, resolvedPath)
@@ -98,15 +46,26 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 	if c == nil {
 		return nil, nil
 	}
-	next := &ManagedWorktreePathContext{baseRoot: c.baseRoot, managedRoots: append([]string(nil), c.managedRoots...)}
-	return next.withCurrentWorktreeRoot(currentWorktreeRoot)
+	next := &ManagedWorktreePathContext{baseRoot: c.baseRoot}
+	if currentWorktreeRoot == nil {
+		return next, nil
+	}
+	current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
+	}
+	if !pathWithin(c.baseRoot, current) {
+		return next, nil
+	}
+	next.currentRoot = &current
+	return next, nil
 }
 
 func (c *ManagedWorktreePathContext) Equal(other *ManagedWorktreePathContext) bool {
 	if c == nil || other == nil {
 		return c == other
 	}
-	if c.baseRoot != other.baseRoot || !slices.Equal(c.managedRoots, other.managedRoots) {
+	if c.baseRoot != other.baseRoot {
 		return false
 	}
 	if c.currentRoot == nil || other.currentRoot == nil {

@@ -13,20 +13,13 @@ type ProjectWorkspace struct {
 	AttachmentOrdinal int
 }
 
-type ProjectManagedWorktree struct {
-	WorkspaceID   string
-	CanonicalRoot string
-}
-
 type ProjectWorkspaceBoundary struct {
-	ProjectID        string
-	Workspaces       []ProjectWorkspace
-	ManagedWorktrees []ProjectManagedWorktree
+	ProjectID  string
+	Workspaces []ProjectWorkspace
 }
 
 func (b ProjectWorkspaceBoundary) Clone() ProjectWorkspaceBoundary {
 	b.Workspaces = append([]ProjectWorkspace(nil), b.Workspaces...)
-	b.ManagedWorktrees = append([]ProjectManagedWorktree(nil), b.ManagedWorktrees...)
 	return b
 }
 
@@ -35,11 +28,7 @@ func (b ProjectWorkspaceBoundary) Normalize() (ProjectWorkspaceBoundary, error) 
 	if projectID == "" {
 		return ProjectWorkspaceBoundary{}, errors.New("project id is required")
 	}
-	normalized := ProjectWorkspaceBoundary{
-		ProjectID:        projectID,
-		Workspaces:       make([]ProjectWorkspace, 0, len(b.Workspaces)),
-		ManagedWorktrees: make([]ProjectManagedWorktree, 0, len(b.ManagedWorktrees)),
-	}
+	normalized := ProjectWorkspaceBoundary{ProjectID: projectID, Workspaces: make([]ProjectWorkspace, 0, len(b.Workspaces))}
 	seen := make(map[string]struct{}, len(b.Workspaces))
 	for _, workspace := range b.Workspaces {
 		root := strings.TrimSpace(workspace.CanonicalRoot)
@@ -56,25 +45,6 @@ func (b ProjectWorkspaceBoundary) Normalize() (ProjectWorkspaceBoundary, error) 
 	}
 	if len(normalized.Workspaces) > ProjectWorkspaceCollectionLimit {
 		return ProjectWorkspaceBoundary{}, errors.New("project workspace boundary exceeds collection limit")
-	}
-	managedSeen := make(map[string]struct{}, len(b.ManagedWorktrees))
-	for _, worktree := range b.ManagedWorktrees {
-		workspaceID := strings.TrimSpace(worktree.WorkspaceID)
-		root := strings.TrimSpace(worktree.CanonicalRoot)
-		if workspaceID == "" {
-			return ProjectWorkspaceBoundary{}, errors.New("project managed worktree workspace id is required")
-		}
-		if root == "" {
-			return ProjectWorkspaceBoundary{}, errors.New("project managed worktree root is required")
-		}
-		key := workspaceID + "\x00" + root
-		if _, exists := managedSeen[key]; exists {
-			continue
-		}
-		managedSeen[key] = struct{}{}
-		normalized.ManagedWorktrees = append(normalized.ManagedWorktrees, ProjectManagedWorktree{
-			WorkspaceID: workspaceID, CanonicalRoot: root,
-		})
 	}
 	return normalized, nil
 }

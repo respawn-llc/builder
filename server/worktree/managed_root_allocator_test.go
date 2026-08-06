@@ -246,8 +246,9 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "tilde", request: "~/requested", want: filepath.Join(home, "requested")},
-		{name: "absolute outside base", request: absolute, want: absolute},
+		{name: "tilde outside base", request: "~/requested", wantErr: true},
+		{name: "absolute outside base", request: absolute, wantErr: true},
+		{name: "absolute under base", request: filepath.Join(base, "explicit"), want: filepath.Join(base, "explicit")},
 		{name: "relative under base", request: "nested/requested", want: filepath.Join(allocator.base.path, "nested/requested")},
 		{name: "dot", request: ".", wantErr: true},
 		{name: "dot dot", request: "..", wantErr: true},

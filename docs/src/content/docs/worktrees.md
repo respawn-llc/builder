@@ -55,7 +55,7 @@ base_dir = "~/.kent/worktrees"
 # setup_timeout_seconds = 60
 ```
 
-- `base_dir` sets the root directory for Kent-managed worktrees. Automatic worktree paths must remain outside the source workspace.
+- `base_dir` sets the namespace for Kent-managed worktrees. Automatic and explicit worktree paths must remain inside this directory and outside the source workspace.
 - `setup_script` runs after Kent creates a worktree and before the create command or a workflow run uses it. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 

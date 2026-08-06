@@ -457,6 +457,7 @@
 - A Task with a legacy managed worktree and usable recorded `HEAD` continues to use that worktree. Kent identifies its observed commit as legacy provenance and does not present it as a known original branch point.
 - A legacy Task without a managed worktree remains unlocked and uses its Workflow's source-`HEAD` policy.
 - Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
+- Every Kent-managed Worktree root must remain inside the server-configured Worktree base namespace. An explicit managed Worktree root outside that namespace is rejected before Worktree creation.
 - Managed worktree setup failure during Task Start leaves placement applied and interrupts the placed Current Node. For other initiating actions it leaves the action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when an operation creates or recreates a worktree root. A later retry does not rerun setup for an existing compatible root.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.

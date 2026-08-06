@@ -24,11 +24,13 @@ type API struct {
 	recoveredWarningProvider func() (string, bool, error)
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
+	managedWorktreeBaseDir   string
 }
 
 type APIOptions struct {
 	RuntimeClientFactory     runtimewire.RuntimeClientFactory
 	RecoveredWarningProvider func() (string, bool, error)
+	ManagedWorktreeBaseDir   string
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
@@ -38,6 +40,7 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 		recoveredWarningProvider: options.RecoveredWarningProvider,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
+		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
 	}
 }
 
@@ -150,9 +153,12 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
-	managedWorktreePathContext, err := runtimewire.NewManagedWorktreePathContext(projectWorkspaceBoundary, currentWorktreeRoot)
-	if err != nil {
-		return AgentRuntimePlan{}, err
+	var managedWorktreePathContext *tools.ManagedWorktreePathContext
+	if strings.TrimSpace(s.managedWorktreeBaseDir) != "" {
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot)
+		if err != nil {
+			return AgentRuntimePlan{}, err
+		}
 	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
 		Settings:                 req.ActiveSettings,

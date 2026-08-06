@@ -119,7 +119,22 @@ func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string
 		return "", err
 	}
 	if filepath.IsAbs(expanded) {
-		return config.CanonicalWorkspaceRoot(expanded)
+		base, err := a.automaticBase()
+		if err != nil {
+			return "", err
+		}
+		resolved, err := config.ResolveExistingAncestorRealPath(expanded)
+		if err != nil {
+			return "", err
+		}
+		if !sameOrDescendantPath(base, resolved) {
+			return "", fmt.Errorf("absolute managed worktree root %q is outside base %q", expanded, base)
+		}
+		canonical, err := config.CanonicalWorkspaceRoot(expanded)
+		if err != nil {
+			return "", err
+		}
+		return canonical, nil
 	}
 	base, err := a.automaticBase()
 	if err != nil {

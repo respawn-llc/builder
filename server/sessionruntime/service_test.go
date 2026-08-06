@@ -384,6 +384,23 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord foreign workspace: %v", err)
 	}
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject filler %d: %v", index, err)
+		}
+	}
+	boundary, err := fixture.metadata.ResolveProjectWorkspaceBoundary(context.Background(), binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceBoundary: %v", err)
+	}
+	if len(boundary.Workspaces) != metadata.ProjectWorkspaceCollectionLimit {
+		t.Fatalf("project workspace boundary count = %d, want %d", len(boundary.Workspaces), metadata.ProjectWorkspaceCollectionLimit)
+	}
+	for _, workspace := range boundary.Workspaces {
+		if workspace.CanonicalRoot == foreignRoot {
+			t.Fatal("foreign managed Worktree Workspace was not omitted from bounded Project collection")
+		}
+	}
 	target := filepath.Join(foreignRoot, "foreign.txt")
 	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write foreign fixture: %v", err)
@@ -397,7 +414,8 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
+		ManagedWorktreeBaseDir: managedBase,
+		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",

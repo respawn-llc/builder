@@ -2123,14 +2123,9 @@ func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID s
 	if err != nil {
 		return ProjectWorkspaceBoundary{}, err
 	}
-	managedWorktrees, err := s.queries.ListProjectManagedWorktreeRoots(ctx, projectID)
-	if err != nil {
-		return ProjectWorkspaceBoundary{}, err
-	}
 	boundary := ProjectWorkspaceBoundary{
-		ProjectID:        projectID,
-		Workspaces:       make([]ProjectWorkspace, 0, len(workspaces)),
-		ManagedWorktrees: make([]ProjectManagedWorktree, 0, len(managedWorktrees)),
+		ProjectID:  projectID,
+		Workspaces: make([]ProjectWorkspace, 0, len(workspaces)),
 	}
 	for _, workspace := range workspaces {
 		root := strings.TrimSpace(workspace.RootPath)
@@ -2142,19 +2137,6 @@ func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID s
 			WorkspaceID:       &workspaceID,
 			CanonicalRoot:     root,
 			AttachmentOrdinal: len(boundary.Workspaces),
-		})
-	}
-	for _, worktree := range managedWorktrees {
-		workspaceID := strings.TrimSpace(worktree.WorkspaceID)
-		root := strings.TrimSpace(worktree.RootPath)
-		if workspaceID == "" {
-			return ProjectWorkspaceBoundary{}, errors.New("project managed worktree workspace id is required")
-		}
-		if root == "" {
-			return ProjectWorkspaceBoundary{}, fmt.Errorf("project managed worktree %q has empty root path", workspaceID)
-		}
-		boundary.ManagedWorktrees = append(boundary.ManagedWorktrees, ProjectManagedWorktree{
-			WorkspaceID: workspaceID, CanonicalRoot: root,
 		})
 	}
 	if err := boundary.Validate(); err != nil {

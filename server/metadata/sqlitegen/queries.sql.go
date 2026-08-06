@@ -5799,53 +5799,6 @@ func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, projectID st
 	return items, nil
 }
 
-const listProjectManagedWorktreeRoots = `-- name: ListProjectManagedWorktreeRoots :many
-SELECT
-    wt.workspace_id,
-    wt.canonical_root_path AS root_path
-FROM worktrees wt
-JOIN workspaces w ON w.id = wt.workspace_id
-JOIN (
-    SELECT recent.id
-    FROM workspaces recent
-    WHERE recent.project_id = ?1
-    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
-    LIMIT 500
-) recent_workspaces ON recent_workspaces.id = w.id
-WHERE w.project_id = ?1
-  AND wt.managed <> 0
-ORDER BY wt.created_at_unix_ms DESC, wt.rowid DESC
-`
-
-type ListProjectManagedWorktreeRootsRow struct {
-	WorkspaceID string
-	RootPath    string
-}
-
-func (q *Queries) ListProjectManagedWorktreeRoots(ctx context.Context, projectID string) ([]ListProjectManagedWorktreeRootsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectManagedWorktreeRoots, projectID)
-	err = recordQueryError(ctx, err, listProjectManagedWorktreeRoots, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProjectManagedWorktreeRootsRow
-	for rows.Next() {
-		var i ListProjectManagedWorktreeRootsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.WorkspaceID, &i.RootPath), listProjectManagedWorktreeRoots, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectManagedWorktreeRoots, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectManagedWorktreeRoots, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProjectWorkspaces = `-- name: ListProjectWorkspaces :many
 SELECT
     w.id,

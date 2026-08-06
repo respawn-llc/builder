@@ -662,7 +662,10 @@ func currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflo
 	if root.Managed == nil {
 		return nil, nil
 	}
-	return runtimewire.NewManagedWorktreePathContext(plan.ProjectWorkspaceBoundary, &root.Managed.Root)
+	if strings.TrimSpace(s.cfg.Settings.Worktrees.BaseDir) == "" {
+		return nil, nil
+	}
+	return askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, &root.Managed.Root)
 }
 
 func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {
