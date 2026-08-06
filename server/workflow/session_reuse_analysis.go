@@ -283,8 +283,8 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	possibleReuse := selectedCompleted && completedDormant && !dormancyBlocked
 	guaranteedCAC := edge.ContextMode == ContextModeCompactAndContinueSession &&
 		targetLineage == reuseLineageCompleted &&
-		state.completedDormant &&
-		!state.dormancyBlocked
+		completedDormant &&
+		!dormancyBlocked
 	return reuseTransition{
 		target:        targetState,
 		possibleReuse: possibleReuse,

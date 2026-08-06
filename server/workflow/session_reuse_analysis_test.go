@@ -707,6 +707,70 @@ func TestClassifyWorkflowSessionReuseDistinguishesGuaranteedAndOptionalCAC(t *te
 	}
 }
 
+func TestClassifyWorkflowSessionReuseTreatsApprovalGatedAcceptedCACAsGuaranteed(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_approval_gated_cac")
+	completedSessionID := runtimeids.NewSessionID()
+	completedReference, err := workflow.NewCurrentNodeReference("task-approval-gated-cac", "node_worker", nil)
+	if err != nil {
+		t.Fatalf("completed current node reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed current node: %v", err)
+	}
+
+	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "coder"})
+	review := testAgentNode(workflowID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "reviewer"})
+	acceptedCAC := workflow.Edge{
+		WorkflowID:        workflowID,
+		ID:                "edge_worker_review",
+		Key:               "review",
+		TransitionGroupID: "group_worker",
+		TargetNodeID:      "node_review",
+		ContextMode:       workflow.ContextModeCompactAndContinueSession,
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		RequiresApproval:  true,
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          workflowID,
+			DisplayName: "Approval-Gated Accepted CAC",
+			Nodes:       []workflow.Node{worker, review},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_worker", SourceNodeID: "node_worker"},
+			},
+			Edges: []workflow.Edge{acceptedCAC},
+		},
+		AcceptedBranches:     []workflow.Edge{acceptedCAC},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+
+	if classification != workflow.SessionReuseGuaranteedCACReuse {
+		t.Fatalf("classification = %q, want guaranteed_cac_reuse", classification)
+	}
+
+	acceptedCAC.RequiresApproval = false
+	directClassification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          workflowID,
+			DisplayName: "Direct Accepted CAC",
+			Nodes:       []workflow.Node{worker, review},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_worker", SourceNodeID: "node_worker"},
+			},
+			Edges: []workflow.Edge{acceptedCAC},
+		},
+		AcceptedBranches:     []workflow.Edge{acceptedCAC},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+	if directClassification != workflow.SessionReuseNone {
+		t.Fatalf("direct classification = %q, want none without approval", directClassification)
+	}
+}
+
 func TestClassifyWorkflowSessionReuseProvesCACThroughDecisionCycleExit(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_cycle_cac")
 	completedSessionID := runtimeids.NewSessionID()
