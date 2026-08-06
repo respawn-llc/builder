@@ -509,6 +509,40 @@ func TestMetadataServicePaginatesProjectWorkspacesForGUI(t *testing.T) {
 	}
 }
 
+func TestMetadataServiceStopsWorkspacePaginationAtCollectionLimit(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	for index := 1; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		attachProjectViewWorkspace(t, store, binding.ProjectID)
+	}
+	svc := newProjectViewMetadataService(t, store, "")
+
+	pageToken := ""
+	for page := 0; page < metadata.ProjectWorkspaceCollectionLimit/100; page++ {
+		response, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
+			ProjectID: binding.ProjectID,
+			PageSize:  100,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			t.Fatalf("ListProjectWorkspaces page %d: %v", page, err)
+		}
+		if len(response.Workspaces) != 100 {
+			t.Fatalf("page %d workspace count = %d, want 100", page, len(response.Workspaces))
+		}
+		if page == metadata.ProjectWorkspaceCollectionLimit/100-1 {
+			if response.NextPageToken != "" {
+				t.Fatalf("terminal page next token = %q, want empty", response.NextPageToken)
+			}
+			return
+		}
+		if response.NextPageToken == "" {
+			t.Fatalf("page %d next token empty before collection limit", page)
+		}
+		pageToken = response.NextPageToken
+	}
+	t.Fatal("workspace pagination did not reach a terminal page")
+}
+
 func TestMetadataServiceUpdatesProjectNameForEditPage(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store, "")

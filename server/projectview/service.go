@@ -758,8 +758,6 @@ func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.Proje
 	if len(workspaces) > pageSize {
 		workspaces = workspaces[:pageSize]
 		nextPageToken = strconv.Itoa(offset + pageSize)
-	} else if len(workspaces) == pageSize && offset+len(workspaces) == metadata.ProjectWorkspaceCollectionLimit {
-		nextPageToken = strconv.Itoa(offset + pageSize)
 	}
 	response := serverapi.ProjectWorkspaceListResponse{
 		ProjectID:          strings.TrimSpace(req.ProjectID),

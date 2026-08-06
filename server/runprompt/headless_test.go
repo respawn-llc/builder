@@ -298,6 +298,77 @@ func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, bac
 	})
 }
 
+func TestHeadlessRuntimeUsesServerManagedWorktreeNamespace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	serverManagedBase := filepath.Join(root, "server-worktrees")
+	projectManagedBase := filepath.Join(root, "project-worktrees")
+	currentWorktree := filepath.Join(serverManagedBase, "current")
+	workdir := filepath.Join(currentWorktree, "pkg")
+	for _, dir := range []string{workspace, workdir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	persistence := sessiontest.NewPersistence()
+	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, containerDir)
+	if err != nil {
+		t.Fatalf("NewScopedOpenSessionDescriptor: %v", err)
+	}
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{
+			Type:   auth.MethodAPIKey,
+			APIKey: &auth.APIKeyMethod{Key: "test-key"},
+		},
+	}), nil, time.Now)
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
+	launcher := &headlessPromptLauncher{boot: HeadlessBootstrap{
+		RuntimeAuthority:       authority,
+		ManagedWorktreeBaseDir: serverManagedBase,
+	}}
+	runtimePlan, err := launcher.prepareRuntime(context.Background(), launch.SessionPlan{
+		Descriptor: descriptor,
+		ActiveSettings: config.Settings{
+			Model:         "gpt-5",
+			OpenAIBaseURL: "http://127.0.0.1:1",
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		BaseSettings: config.Settings{
+			Worktrees: config.WorktreeSettings{BaseDir: projectManagedBase},
+		},
+		ExecutionTarget: clientui.SessionExecutionTarget{
+			WorkspaceRoot:    workspace,
+			EffectiveWorkdir: workdir,
+			Worktree: &clientui.SessionExecutionWorktreeTarget{
+				Root: currentWorktree,
+			},
+		},
+		ProjectWorkspaceBoundary: metadata.ProjectWorkspaceBoundary{
+			ProjectID:  "project-a",
+			Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: workspace}},
+		},
+		ManagedWorktreeRoots: []string{currentWorktree},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("prepareRuntime: %v", err)
+	}
+	if err := runtimePlan.CloseWithFailure(true); err != nil {
+		t.Fatalf("CloseWithFailure: %v", err)
+	}
+}
+
 type selectedRunPromptFixture struct {
 	store     *session.Store
 	authority *sessionruntime.Authority
@@ -585,8 +656,9 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
-		RuntimeAuthority: authority,
-		PromptHistory:    meta,
+		RuntimeAuthority:       authority,
+		PromptHistory:          meta,
+		ManagedWorktreeBaseDir: managedBase,
 	})
 	parentID := parent.Meta().SessionID
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{

@@ -100,6 +100,9 @@ func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput)
 		return ctx.Err()
 	default:
 	}
+	if err := t.validateManagedWorktreeMutation(path); err != nil {
+		return err
+	}
 	info, statErr := os.Stat(path.real)
 	if statErr == nil && info.IsDir() {
 		return failf("path is a directory: %s.", path.real)
@@ -145,7 +148,9 @@ func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput)
 	if len(next) > maxEditableBytes {
 		return failf("maximum editable text file size is 100 MiB.")
 	}
-	if err := writeAtomicallyIfUnchanged(path.real, next, info); err != nil {
+	if err := writeAtomicallyIfUnchanged(path.real, next, info, func() error {
+		return t.validateManagedWorktreeMutation(path)
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -198,8 +203,24 @@ func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statE
 	if statErr == nil {
 		before = info
 	}
-	if err := writeAtomicallyIfUnchanged(path.real, next, before); err != nil {
+	if err := writeAtomicallyIfUnchanged(path.real, next, before, func() error {
+		return t.validateManagedWorktreeMutation(path)
+	}); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (t *Tool) validateManagedWorktreeMutation(path resolvedPath) error {
+	if t.managedWorktreePathContext == nil {
+		return nil
+	}
+	real, err := resolveRealTarget(path.cleaned)
+	if err != nil {
+		return err
+	}
+	if t.managedWorktreePathContext.IsForeignManagedWorktreePath(real) {
+		return errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	return nil
 }
@@ -264,7 +285,12 @@ func hasMixedLineEndings(text string) bool {
 	return styles > 1
 }
 
-func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) error {
+func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo, beforeMutation func() error) error {
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
+	}
 	if before != nil {
 		current, err := os.Stat(path)
 		if err != nil {
@@ -280,6 +306,11 @@ func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) er
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return failf("create parent dir for %s: %v", path, err)
+	}
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
 	}
 	mode := os.FileMode(0o644)
 	if before != nil {
@@ -305,6 +336,11 @@ func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) er
 	}
 	if err := tmp.Close(); err != nil {
 		return failf("stage write failed: %v", err)
+	}
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return failf("commit write %s: %v", path, err)
