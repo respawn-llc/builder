@@ -40,6 +40,14 @@ context_compaction_threshold_tokens = 90001
 	}
 }
 
+func TestResolveWorkflowPreCompactionTokensDefaultRemainsPositive(t *testing.T) {
+	settings := Settings{ContextCompactionThresholdTokens: 1}
+
+	if got := ResolveWorkflowPreCompactionTokens(settings); got != 1 {
+		t.Fatalf("resolved pre-compaction tokens = %d, want 1", got)
+	}
+}
+
 func TestLoadWorkflowPreCompactionTokensAcceptsPositiveValueIncludingThreshold(t *testing.T) {
 	_, _, cfg := loadConfigTestFileApp(t, `model_context_window = 100000
 context_compaction_threshold_tokens = 90000

@@ -37,13 +37,18 @@ func TestSessionReuseAssociationReferencesIncludesLaterFanoutBranches(t *testing
 	laterB := workflow.Edge{
 		WorkflowID: workflowID, ID: "edge_next_b", Key: "branch_b",
 		TransitionGroupID: "group_next", TargetNodeID: "node_branch_b",
-		ContextMode: workflow.ContextModeNewSession,
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
 	}
 
 	references := workflow.SessionReuseAssociationReferences(workflow.SessionReuseAnalysisInput{
 		Workflow: workflow.Definition{
 			ID: workflowID, DisplayName: "Later Fanout",
 			Nodes: []workflow.Node{source, next, branchA, branchB},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_source", SourceNodeID: "node_source"},
+				{WorkflowID: workflowID, ID: "group_next", SourceNodeID: "node_next"},
+			},
 			Edges: []workflow.Edge{accepted, laterA, laterB},
 		},
 		AcceptedBranches:     []workflow.Edge{accepted},
@@ -51,10 +56,16 @@ func TestSessionReuseAssociationReferencesIncludesLaterFanoutBranches(t *testing
 	})
 
 	wants := []workflow.CurrentNodeReference{}
-	for _, branch := range []workflow.TransitionBranchKey{"branch_a", "branch_b"} {
-		reference, err := workflow.NewCurrentNodeReference("task-later-fanout", "node_branch_a", &branch)
+	for _, want := range []struct {
+		nodeID workflow.NodeID
+		branch workflow.TransitionBranchKey
+	}{
+		{nodeID: "node_branch_a", branch: "branch_a"},
+		{nodeID: "node_branch_b", branch: "branch_b"},
+	} {
+		reference, err := workflow.NewCurrentNodeReference("task-later-fanout", want.nodeID, &want.branch)
 		if err != nil {
-			t.Fatalf("branch %q reference: %v", branch, err)
+			t.Fatalf("branch %q reference: %v", want.branch, err)
 		}
 		wants = append(wants, reference)
 	}
@@ -68,6 +79,29 @@ func TestSessionReuseAssociationReferencesIncludesLaterFanoutBranches(t *testing
 		}
 		if !found {
 			t.Fatalf("references omitted later fanout scope %v: %+v", want, references)
+		}
+	}
+	serialBranch := workflow.TransitionBranchKey("next")
+	for _, reference := range references {
+		if branch, scoped := reference.TransitionBranchKey(); scoped && branch == serialBranch {
+			t.Fatalf("references included serial edge key as a branch scope: %+v", reference)
+		}
+	}
+	for _, unwanted := range []struct {
+		nodeID workflow.NodeID
+		branch workflow.TransitionBranchKey
+	}{
+		{nodeID: "node_branch_a", branch: "branch_b"},
+		{nodeID: "node_branch_b", branch: "branch_a"},
+	} {
+		reference, err := workflow.NewCurrentNodeReference("task-later-fanout", unwanted.nodeID, &unwanted.branch)
+		if err != nil {
+			t.Fatalf("unwanted branch %q reference: %v", unwanted.branch, err)
+		}
+		for _, candidate := range references {
+			if candidate.Equal(reference) {
+				t.Fatalf("references included unrelated branch scope %v: %+v", reference, references)
+			}
 		}
 	}
 }

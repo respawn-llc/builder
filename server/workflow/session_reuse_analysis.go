@@ -37,41 +37,13 @@ type SessionReuseAnalysisInput struct {
 // only Context Source forms that consult retained provenance.
 func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []CurrentNodeReference {
 	taskID := input.CompletedCurrentNode.Reference.TaskID
+	topology := newFanoutTopology(input.Workflow)
 	nodeIDsByKey := make(map[ModelKey]NodeID, len(input.Workflow.Nodes))
 	for _, node := range input.Workflow.Nodes {
 		nodeIDsByKey[NodeKey(node)] = NodeIDOf(node)
 	}
-	nodeIDs := make(map[NodeID]struct{})
-	for _, edge := range input.Workflow.Edges {
-		source := CanonicalContextSource(edge.ContextSource)
-		switch source.Kind {
-		case ContextSourceSelectedNode:
-			if nodeID, ok := nodeIDsByKey[source.NodeKey]; ok {
-				nodeIDs[nodeID] = struct{}{}
-			}
-		case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
-			nodeIDs[edge.TargetNodeID] = struct{}{}
-		}
-	}
-	if input.CompletedCurrentNode.SessionID != nil {
-		nodeIDs[input.CompletedCurrentNode.Reference.NodeID] = struct{}{}
-	}
-	branches := make(map[TransitionBranchKey]struct{})
-	if branch, scoped := input.CompletedCurrentNode.Reference.TransitionBranchKey(); scoped {
-		branches[branch] = struct{}{}
-	}
-	for _, edge := range input.AcceptedBranches {
-		if branch := TransitionBranchKey(strings.TrimSpace(string(edge.Key))); branch != "" {
-			branches[branch] = struct{}{}
-		}
-	}
-	for _, edge := range input.Workflow.Edges {
-		if branch := TransitionBranchKey(strings.TrimSpace(string(edge.Key))); branch != "" {
-			branches[branch] = struct{}{}
-		}
-	}
 
-	references := make([]CurrentNodeReference, 0, len(nodeIDs)*(len(branches)+1))
+	references := make([]CurrentNodeReference, 0, len(input.Workflow.Edges)+1)
 	seen := make(map[CurrentNodeReferenceKey]struct{}, cap(references))
 	appendReference := func(nodeID NodeID, branch *TransitionBranchKey) {
 		reference, err := NewCurrentNodeReference(taskID, nodeID, branch)
@@ -88,11 +60,80 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		seen[key] = struct{}{}
 		references = append(references, reference)
 	}
-	for nodeID := range nodeIDs {
-		appendReference(nodeID, nil)
-		for branch := range branches {
-			value := branch
-			appendReference(nodeID, &value)
+
+	if input.CompletedCurrentNode.SessionID != nil {
+		appendReference(
+			input.CompletedCurrentNode.Reference.NodeID,
+			transitionBranchPointer(input.CompletedCurrentNode.Reference),
+		)
+	}
+
+	type referenceState struct {
+		nodeID NodeID
+		branch reuseBranch
+	}
+	initial := referenceState{
+		nodeID: input.CompletedCurrentNode.Reference.NodeID,
+		branch: reuseBranchForReference(input.CompletedCurrentNode.Reference),
+	}
+	visited := map[referenceState]struct{}{initial: {}}
+	queue := make([]referenceState, 0, len(input.AcceptedBranches))
+
+	appendContextReference := func(state referenceState, edge Edge, target Node) {
+		if target == nil {
+			return
+		}
+		switch edge.ContextMode {
+		case ContextModeContinueSession, ContextModeCompactAndContinueSession:
+		default:
+			return
+		}
+		var branch *TransitionBranchKey
+		if state.branch.scoped {
+			value := state.branch.key
+			branch = &value
+		}
+		source := CanonicalContextSource(edge.ContextSource)
+		switch source.Kind {
+		case ContextSourceSelectedNode:
+			if nodeID, ok := nodeIDsByKey[source.NodeKey]; ok {
+				appendReference(nodeID, branch)
+			}
+		case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+			appendReference(NodeIDOf(target), branch)
+		}
+	}
+
+	enqueue := func(state referenceState, edge Edge) {
+		target, exists := topology.nodesByID[edge.TargetNodeID]
+		if !exists {
+			return
+		}
+		targetBranch := nextReuseBranch(
+			state.branch,
+			edge,
+			target,
+			len(topology.edgesByGroup[edge.TransitionGroupID]),
+		)
+		appendContextReference(referenceState{nodeID: state.nodeID, branch: targetBranch}, edge, target)
+		next := referenceState{nodeID: edge.TargetNodeID, branch: targetBranch}
+		if _, exists := visited[next]; exists {
+			return
+		}
+		visited[next] = struct{}{}
+		queue = append(queue, next)
+	}
+
+	for _, edge := range input.AcceptedBranches {
+		enqueue(initial, edge)
+	}
+	for len(queue) > 0 {
+		state := queue[0]
+		queue = queue[1:]
+		for _, group := range topology.groupsBySource[state.nodeID] {
+			for _, edge := range topology.edgesByGroup[group.ID] {
+				enqueue(state, edge)
+			}
 		}
 	}
 	return references
@@ -338,13 +379,28 @@ func acceptedBranchesFanout(edges []Edge) bool {
 }
 
 func (a sessionReuseAnalyzer) nextBranch(current reuseBranch, edge Edge, target Node, groupEdgeCount int) reuseBranch {
+	return nextReuseBranch(current, edge, target, groupEdgeCount)
+}
+
+func nextReuseBranch(current reuseBranch, edge Edge, target Node, groupEdgeCount int) reuseBranch {
 	if target.Kind() == NodeKindJoin {
 		return reuseBranch{}
 	}
 	if groupEdgeCount > 1 {
-		return reuseBranch{key: TransitionBranchKey(edge.Key), scoped: true}
+		key := TransitionBranchKey(strings.TrimSpace(string(edge.Key)))
+		if key != "" {
+			return reuseBranch{key: key, scoped: true}
+		}
 	}
 	return current
+}
+
+func transitionBranchPointer(reference CurrentNodeReference) *TransitionBranchKey {
+	branch, scoped := reference.TransitionBranchKey()
+	if !scoped {
+		return nil
+	}
+	return &branch
 }
 
 type reuseGraph struct {
