@@ -348,7 +348,7 @@ A temporary guard that blocks conflicting changes while Workflow Execution chang
 
 ### Append Certainty
 
-The result that tells Kent whether a Session change became durable. If a change did not commit, Kent can retry it and must not show it as applied. If a change committed, Kent applies it exactly once and must not retry it, even when later notification fails.
+The result that tells Kent whether a Session change became durable. Kent never shows an uncommitted change as applied; the owning operation determines whether retry is permitted. Kent applies a committed change exactly once and never retries it, even when later notification fails.
 
 ### ReadModelVersion
 
@@ -373,6 +373,10 @@ The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and d
 ### Agent Step
 
 One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
+
+### Result Group
+
+An atomic ordered durable unit containing one or more compatible complete tool results from one Agent Step. Each result keeps its completion, model-visible output, and associated operator diagnostic together. One Agent Step may commit several Result Groups when an intermediate Question, Approval, or another durability-dependent operation requires already-complete results to become durable before the Step ends. The remaining results become durable before the next provider request or Step completion. A Result Group never spans Agent Steps or Agent Turns and becomes visible only after the whole group is durable.
 
 ### Agent Turn
 

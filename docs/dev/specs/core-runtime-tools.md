@@ -50,6 +50,16 @@ To respond, run: kent run steer <source-session-id> "message"
 - A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
 - Prompt history stores the complete wrapped message.
 - Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
+- A Kent-executed tool call is durable before Kent begins its execution.
+  Provider-hosted work may already be complete when Kent receives its outcome; that
+  outcome follows the same compatible Result Group durability as Kent-executed
+  results. Kent commits compatible complete tool results from one Agent Step in one
+  or more ordered Result Groups; an Agent Turn is never a Result Group. Each result
+  keeps its completion, model-visible output, and attached operator diagnostic
+  together, whether it reports success or error.
+- Result Groups preserve provider-required order and otherwise the Agent Step's
+  stable result order. Clients and later model requests see no part of a Result
+  Group before the complete Result Group is durable.
 - A dormant Goal command is the sole persisted-transcript exception outside an Active Session Runtime: the server atomically confirms that no current agent resource owns the Session, then persists the durable Goal transition and one Goal notice without creating a runtime, live event, transaction, rollback, repair, retry, or extra admission lock. A concurrent live release surfaces its error rather than re-admitting.
 - Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client refreshes authoritative Session state. A later explicit user submission creates a new Runtime Command.
 - Input accepted before workflow completion becomes final supersedes that pending completion and continues the same Exact Execution Scope. Input submitted after that point, or while the scope is closing, receives a retryable rejection so the client restores its draft; it never reaches a successor Node or Session.
@@ -87,7 +97,36 @@ To respond, run: kent run steer <source-session-id> "message"
 - Concise background output may hide an inline preview, but completion must expose the exit code and output-file location when output exists and must not claim there was no output. Recoverable warnings remain visible and count as output, but do not imply command-log content.
 - An invalid background-completion state fails fast with diagnostics in debug mode. Production preserves the terminal process facts, records the diagnostic, and reports an explicit Kent error instead of inventing successful or empty output.
 - Transient model-step failures retry after `1s`, `2s`, `4s`, `8s`, and `16s`. Ongoing mode shows concise model/API errors; detail and logs retain full details.
-- After a provider HTTP 400, Kent may append error results for tool calls that were interrupted without output, rebuild the request, and retry. Each synthetic error uses the original call's output kind and states that the call was interrupted with no output. Kent never rewrites or removes history, never fabricates success, and leaves matching live operations alone. A 400 without missing outputs surfaces unchanged. Resume after restart closes stale active-segment tool operations with restart outcomes; it neither reconstructs a waiter nor re-executes an interrupted call. Each repair records a user-only warning with the number of closed calls.
+- After a provider HTTP 400, Kent may append error results for tool calls that were interrupted without output only when no matching live operation remains, rebuild the request, and retry. Each synthetic error uses the original call's output kind and states that the call was interrupted with no output. Kent never rewrites or removes history, never fabricates success, and leaves matching live operations alone. A 400 without missing outputs surfaces unchanged. Each live repair records a user-only warning with the number of closed calls.
+- Before the next provider request, a Question or Approval wait, Agent Step
+  completion or cancellation, history replacement or compaction, rollback, or any
+  operation that consumes durable transcript state, every compatible complete result
+  available in stable order is durable. A delayed background result becomes durable
+  at its own ordered delivery boundary rather than as part of an unrelated Agent
+  Step.
+- Interruption, user cancellation, provider failure, validation failure, and other
+  recoverable errors still finish the Agent Step. Kent makes their honest
+  interruption or error results, notices, and warnings durable before it exposes
+  committed transcript entries or terminal presentation for that outcome.
+- A persistence failure before a Result Group becomes durable leaves that Result
+  Group absent from the committed transcript and from committed client presentation.
+  Kent surfaces the persistence error, ends the Exact Execution Scope, and neither
+  retries that persistence operation nor retains a new pending-persistence state. It
+  does not invent a semantic terminal transcript outcome for the absent group.
+- Once a Result Group is durable, later persistence observation or live-delivery
+  failure never rolls it back or causes Kent to append it again. Reconnect and reopen
+  hydration restore the authoritative committed Result Group.
+- A failure while making an effect barrier durable blocks its pending Question,
+  Approval, or Workflow effect and ends the Exact Execution Scope. Any already-durable
+  Result Group remains authoritative and is never appended again.
+- Before a fresh Session resource becomes ready, Kent closes every durable tool call
+  without a committed result using the same execution-status-neutral recovery error,
+  whether the call remained after process death, a pre-commit Result Group failure,
+  or a commit-certain effect-barrier failure. The model-visible recovery output remains
+  the ordinary missing-durable-output message: it reports only that no committed
+  output is available, does not expose or infer the failure cause or whether execution
+  finished, and never re-executes the tool. A committed Result Group is restored once
+  before this recovery completes.
 - A failure that prevents a model turn from starting is persisted as a user-visible developer diagnostic. Local command and validation failures that do not block a turn remain ordinary errors.
 
 ## Questions And Approvals
@@ -96,6 +135,10 @@ To respond, run: kent run steer <source-session-id> "message"
 - The model can ask ordinary freeform or suggested questions only. Internal approvals are not model-callable.
 - Suggested questions support freeform commentary and use one-based `recommended_option_index`. In the TUI, `Tab` switches between suggestions and freeform editing. A recommendation uses a Success-colored marker and a faint recommended note; selecting that row also applies the ordinary selected-row style. Choosing empty freeform opens editing, and a freeform answer cannot be empty. Returning to suggestions preserves an unsent freeform draft.
 - Internal approvals carry ordered typed options whose labels are authoritative. Outside-workspace access ordinarily offers `Allow once`, `Allow for this session`, and `Deny`, but clients render the labels in the live request and never reconstruct them from decisions. TUI Approval-commentary delivery follows `tui-ask-prompts.md` and `tui-chat-core.md`; the Question CLI passes optional commentary directly through the existing Approval answer.
+- A Question or Approval is not presented when its preceding durability barrier
+  fails. A later fresh-resource recovery closes its durable tool call through the
+  ordinary execution-status-neutral missing-durable-output outcome without replaying
+  the blocked interaction.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - Answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
 - When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. Accepting an answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
@@ -130,7 +173,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - A session selected for an interactive workspace prompts to rebind only when its attached workspace differs from the open workspace. Detached historical locations neither trigger nor supply a rebind. Attached location has one authority; a detached historical location is not an execution fallback.
 - Interactive Sessions are created lazily, at the first trigger that needs model work.
 - Immediately before a Session's first model request, and after every compaction at the same moment the cache key rotates, Kent locks the model/provider setup, generation parameters, effective tool declarations and enabled tool set, system and developer context, skills, workspace information, current model-facing date/time, and conversation context for that generation.
-- Transcript order is immutable for prompt-cache stability. An operation that does not take effect makes no visible state change and remains retryable. An operation that takes effect does so exactly once and is never retried because a later notification fails. Crash-loss tolerance is at most one model step.
+- Transcript order is immutable for prompt-cache stability. Except for a Result Group persistence failure before commit, an operation that does not take effect makes no visible state change and remains retryable. A pre-commit Result Group persistence failure ends the Exact Execution Scope, makes no visible transcript change, and is not retried. An operation that takes effect does so exactly once and is never retried because a later notification fails. Crash-loss tolerance is at most one model step.
 
 ## Authentication And Configuration
 
