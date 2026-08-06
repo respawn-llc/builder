@@ -423,7 +423,7 @@ export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
   .object({
     node_id: nonBlankString,
     transition_branch_key: nullableNonBlankString,
-    session_id: z.null(),
+    session_id: z.null().optional().transform(() => null),
   })
   .strict()
   .transform((value) => ({

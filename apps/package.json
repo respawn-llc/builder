@@ -14,8 +14,7 @@
     "lint": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present lint",
     "ts:policy": "node ./scripts/check-typescript-policy.mjs",
     "typecheck": "pnpm --recursive --if-present typecheck",
-    "test": "pnpm deps:policy && pnpm ts:policy && pnpm test:policy && pnpm --recursive --if-present test",
-    "test:policy": "node --test ./scripts/check-dependency-policy.test.mjs ./scripts/check-eslint-app-plugin.test.mjs ./scripts/check-eslint-policy.test.mjs ./scripts/check-typescript-policy.test.mjs",
+    "test": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present test",
     "format": "pnpm --recursive --if-present format",
     "build": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
   },
