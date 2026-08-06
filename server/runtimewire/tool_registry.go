@@ -355,12 +355,12 @@ func WithExecutionTarget(current tools.FilesystemContext, workdir string, target
 	if err != nil {
 		return tools.FilesystemContext{}, err
 	}
-	next := current.Clone()
-	next.Access.WorkingDirectory = working
-	next.Access.ExecutionTargetRoot = target
 	if !filesystemRootContains(target, working.RealPath) {
 		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
+	next := current.Clone()
+	next.Access.WorkingDirectory = working
+	next.Access.ExecutionTargetRoot = target
 	next.ManagedWorktree = managed
 	return next, nil
 }

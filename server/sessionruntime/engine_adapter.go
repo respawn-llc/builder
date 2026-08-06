@@ -49,7 +49,9 @@ type AgentRuntimePlan struct {
 
 func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, error) {
 	if strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
-		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" {
+		strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.RealPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.RealPath) == "" {
 		return AgentRuntimePlan{}, errors.New("agent runtime filesystem context is required")
 	}
 	options.Settings = cloneAgentRuntimeSettings(options.Settings)

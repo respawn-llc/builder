@@ -54,6 +54,9 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 			opt(t)
 		}
 	}
+	if err := tools.ValidateFileAccessScope(t.fileAccessScope); err != nil {
+		return nil, fmt.Errorf("validate file access scope: %w", err)
+	}
 	return t, nil
 }
 

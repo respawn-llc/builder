@@ -2115,6 +2115,9 @@ func (s *Store) ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sess
 }
 
 func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID string) (ProjectWorkspaceBoundary, error) {
+	if s == nil || s.queries == nil {
+		return ProjectWorkspaceBoundary{}, errors.New("metadata store is required")
+	}
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return ProjectWorkspaceBoundary{}, errors.New("project id is required")
@@ -2133,6 +2136,9 @@ func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID s
 			return ProjectWorkspaceBoundary{}, fmt.Errorf("project workspace %q has empty root path", workspace.ID)
 		}
 		workspaceID := strings.TrimSpace(workspace.ID)
+		if workspaceID == "" {
+			return ProjectWorkspaceBoundary{}, fmt.Errorf("project workspace %q has empty workspace id", root)
+		}
 		boundary.Workspaces = append(boundary.Workspaces, ProjectWorkspace{
 			WorkspaceID:       &workspaceID,
 			CanonicalRoot:     root,
@@ -2146,6 +2152,9 @@ func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID s
 }
 
 func (s *Store) ProjectWorkspaceAttached(ctx context.Context, projectID string, root string) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
 	projectID, root = strings.TrimSpace(projectID), strings.TrimSpace(root)
 	if projectID == "" || root == "" {
 		return false, errors.New("project id and workspace root are required")

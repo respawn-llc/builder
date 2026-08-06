@@ -570,7 +570,7 @@ func waitForPendingRequests(t *testing.T, b *AskQuestionBroker, want int) []AskQ
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return b.Pending()
+	return pending
 }
 
 func callAskQuestionTool(t *testing.T, b *AskQuestionBroker, id string, input string) Result {

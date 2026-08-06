@@ -562,12 +562,20 @@ func TestCurrentNodeAgentWritesToSiblingWorkspaceThroughCreatedRuntime(t *testin
 	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write workflow sibling fixture: %v", err)
 	}
+	input, err := json.Marshal(map[string]string{
+		"path":       target,
+		"old_string": "before",
+		"new_string": "workflow sibling",
+	})
+	if err != nil {
+		t.Fatalf("marshal sibling edit input: %v", err)
+	}
 	f := newCurrentNodeRunnerFixture(
 		t,
 		ScriptedToolBatch("write sibling", llm.ToolCall{
 			ID:    "sibling-patch",
 			Name:  string(toolspec.ToolEdit),
-			Input: json.RawMessage(`{"path":"` + target + `","old_string":"before","new_string":"workflow sibling"}`),
+			Input: input,
 		}),
 		ScriptedToolBatch("complete", llm.ToolCall{
 			ID:    "complete-sibling",

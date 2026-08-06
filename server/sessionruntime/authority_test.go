@@ -154,7 +154,14 @@ func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
 		t.Fatalf("exact execution operation: %v", err)
 	}
 	if observationBlocked {
-		<-observationDone
+		select {
+		case err := <-observationDone:
+			if err != nil {
+				t.Fatalf("observe workflow task executions after release: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("workflow task execution observation remained blocked after exact execution release")
+		}
 		t.Fatal("exact execution operation blocked workflow task execution observation")
 	}
 }

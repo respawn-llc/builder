@@ -71,6 +71,16 @@ type FileAccessScope struct {
 	ProjectWorkspace    ProjectWorkspaceScope
 }
 
+func ValidateFileAccessScope(scope FileAccessScope) error {
+	if strings.TrimSpace(scope.WorkingDirectory.LexicalPath) == "" ||
+		strings.TrimSpace(scope.WorkingDirectory.RealPath) == "" ||
+		strings.TrimSpace(scope.ExecutionTargetRoot.LexicalPath) == "" ||
+		strings.TrimSpace(scope.ExecutionTargetRoot.RealPath) == "" {
+		return errors.New("file access scope requires working and execution target roots")
+	}
+	return nil
+}
+
 func (s FileAccessScope) Clone() FileAccessScope {
 	s.ProjectWorkspace = s.ProjectWorkspace.Clone()
 	return s
