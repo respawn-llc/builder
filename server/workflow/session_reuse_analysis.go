@@ -125,9 +125,9 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 
 	initial := reusePathState{
 		nodeID:           input.CompletedCurrentNode.Reference.NodeID,
-		branch:           reuseBranch{},
+		branch:           reuseBranchForReference(input.CompletedCurrentNode.Reference),
 		currentLineage:   reuseLineageCompleted,
-		completedDormant: false,
+		completedDormant: acceptedBranchesFanout(input.AcceptedBranches),
 	}
 	initialTransitions := make([]reuseTransition, 0, len(input.AcceptedBranches))
 	for _, edge := range input.AcceptedBranches {
@@ -309,6 +309,24 @@ func sameReuseBranch(branch reuseBranch, reference CurrentNodeReference) bool {
 		return false
 	}
 	return !branch.scoped || branch.key == associationBranch
+}
+
+func reuseBranchForReference(reference CurrentNodeReference) reuseBranch {
+	key, scoped := reference.TransitionBranchKey()
+	return reuseBranch{key: key, scoped: scoped}
+}
+
+func acceptedBranchesFanout(edges []Edge) bool {
+	if len(edges) < 2 {
+		return false
+	}
+	groupID := edges[0].TransitionGroupID
+	for _, edge := range edges[1:] {
+		if edge.TransitionGroupID != groupID {
+			return false
+		}
+	}
+	return true
 }
 
 func (a sessionReuseAnalyzer) nextBranch(current reuseBranch, edge Edge, target Node, groupEdgeCount int) reuseBranch {

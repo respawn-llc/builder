@@ -708,7 +708,8 @@ func TestClassifyWorkflowSessionReuseAcceptsOneGuaranteedFanoutBranch(t *testing
 		Key:               "review",
 		TransitionGroupID: "group_source",
 		TargetNodeID:      "node_review",
-		ContextMode:       workflow.ContextModeNewSession,
+		ContextMode:       workflow.ContextModeContinueSession,
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
 	}
 	acceptedDone := acceptedReview
 	acceptedDone.ID = "edge_source_done"
@@ -742,6 +743,60 @@ func TestClassifyWorkflowSessionReuseAcceptsOneGuaranteedFanoutBranch(t *testing
 
 	if classification != workflow.SessionReuseGuaranteedCACReuse {
 		t.Fatalf("classification = %q, want guaranteed_cac_reuse", classification)
+	}
+}
+
+func TestClassifyWorkflowSessionReusePreservesCompletedBranchScope(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_completed_branch")
+	completedSessionID := runtimeids.NewSessionID()
+	branchKey := workflow.TransitionBranchKey("branch_a")
+	completedReference, err := workflow.NewCurrentNodeReference("task-completed-branch", "node_source", &branchKey)
+	if err != nil {
+		t.Fatalf("completed branch reference: %v", err)
+	}
+	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
+	if err != nil {
+		t.Fatalf("completed branch node: %v", err)
+	}
+
+	source := testAgentNode(workflowID, "node_source", "source", "Source", workflow.NodeFields{SubagentRole: "coder"})
+	review := testAgentNode(workflowID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "reviewer"})
+	done := testTerminalNode(workflowID, "node_done", "done", "Done")
+	accepted := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_source_review", Key: "review",
+		TransitionGroupID: "group_source", TargetNodeID: "node_review",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+	reuse := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_review_source", Key: "source",
+		TransitionGroupID: "group_review", TargetNodeID: "node_source",
+		ContextMode:   workflow.ContextModeCompactAndContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
+	}
+	terminal := workflow.Edge{
+		WorkflowID: workflowID, ID: "edge_review_done", Key: "done",
+		TransitionGroupID: "group_review_done", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	}
+
+	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID: workflowID, DisplayName: "Completed Branch Scope",
+			Nodes: []workflow.Node{source, review, done},
+			TransitionGroups: []workflow.TransitionGroup{
+				{WorkflowID: workflowID, ID: "group_source", SourceNodeID: "node_source"},
+				{WorkflowID: workflowID, ID: "group_review", SourceNodeID: "node_review"},
+				{WorkflowID: workflowID, ID: "group_review_done", SourceNodeID: "node_review"},
+			},
+			Edges: []workflow.Edge{accepted, reuse, terminal},
+		},
+		AcceptedBranches:     []workflow.Edge{accepted},
+		CompletedCurrentNode: completedNode,
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+	})
+
+	if classification != workflow.SessionReuseThresholdPossibleReuse {
+		t.Fatalf("classification = %q, want threshold_possible_reuse for completed branch scope", classification)
 	}
 }
 
