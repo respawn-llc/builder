@@ -479,6 +479,47 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	}
 }
 
+func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	binding, err := fixture.metadata.ResolveSessionNavigationBinding(context.Background(), fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
+	}
+	legacyRoot := t.TempDir()
+	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID: "interactive-legacy-outside-namespace", WorkspaceID: binding.WorkspaceID, CanonicalRoot: legacyRoot,
+		DisplayName: "legacy", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord legacy: %v", err)
+	}
+	if err := fixture.metadata.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{
+		SessionID:  fixture.store.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "interactive-legacy-outside-namespace"},
+		CwdRelpath: ".",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	_, err = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+		ManagedWorktreeBaseDir: t.TempDir(),
+	}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activate-legacy-outside-namespace",
+		SessionID:       fixture.store.Meta().SessionID,
+		OwnerID:         "interactive-owner",
+		ActiveSettings: config.Settings{
+			Model: "gpt-5", ModelContextWindow: 200000,
+			Reviewer: config.ReviewerSettings{Frequency: "off"},
+			Timeouts: config.Timeouts{ModelRequestSeconds: 1},
+			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		EnabledToolIDs: []string{string(toolspec.ToolEdit)},
+		Source:         config.SourceReport{Sources: map[string]string{}},
+	})
+	if err == nil {
+		t.Fatal("ActivateSessionRuntime accepted a managed Worktree outside the server namespace")
+	}
+}
+
 func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	bootstrapRunner, err := postprocess.NewRunner(postprocess.Settings{

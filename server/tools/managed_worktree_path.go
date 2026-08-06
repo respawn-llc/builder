@@ -29,7 +29,7 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) 
 		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 	}
 	if !pathWithin(base, current) {
-		return context, nil
+		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, base)
 	}
 	context.currentRoot = &current
 	return context, nil
@@ -55,7 +55,7 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 	}
 	if !pathWithin(c.baseRoot, current) {
-		return next, nil
+		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, c.baseRoot)
 	}
 	next.currentRoot = &current
 	return next, nil

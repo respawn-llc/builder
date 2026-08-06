@@ -99,6 +99,56 @@ func TestRestoreLockedTaskWorktreeRejectsExplicitRootOverlappingSourceWorkspace(
 	}
 }
 
+func TestRestoreLockedTaskWorktreeRejectsLegacyRootOutsideNamespace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	legacyRoot := filepath.Join(t.TempDir(), "legacy")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(legacyRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot legacy root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot legacy root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted a legacy root outside the server namespace")
+	}
+	if _, err := os.Stat(legacyRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range registered {
+		if worktree.Root == legacyRoot {
+			t.Fatalf("legacy root %q was registered after rejected restore", legacyRoot)
+		}
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
+	}
+}
+
 func TestRestoreLockedTaskWorktreeAcceptsHealthyChangedNamedBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
