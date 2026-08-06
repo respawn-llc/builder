@@ -43,12 +43,7 @@ const taskSearchDialogMaximumHeight = 560;
 const taskSearchLoadingDialogHeight = 176;
 const taskSearchErrorDialogHeight = 240;
 
-type SearchPage = Readonly<{
-  offset: number | null;
-  projectID: string;
-  query: string;
-  response: TaskSearchResponse;
-}>;
+type SearchPage = Readonly<{ offset: number | null; projectID: string | null; query: string; response: TaskSearchResponse }>;
 
 export function BoardTaskSearchChrome({
   projectID,
@@ -57,13 +52,31 @@ export function BoardTaskSearchChrome({
   projectID: string;
   onOpenTask(taskID: string): void;
 }>) {
+  return <TaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />;
+}
+
+export function GlobalTaskSearchChrome({
+  onOpenTask,
+}: Readonly<{
+  onOpenTask(taskID: string): void;
+}>) {
+  return <TaskSearchChrome onOpenTask={onOpenTask} projectID={null} />;
+}
+
+function TaskSearchChrome({
+  onOpenTask,
+  projectID,
+}: Readonly<{
+  onOpenTask(taskID: string): void;
+  projectID: string | null;
+}>) {
   const { t } = useTranslation();
   const memory = useTaskSearchMemory();
   const [open, setOpen] = useState(false);
   const pendingTaskIDRef = useRef<string | null>(null);
   const query = memory.query;
   const debouncedQuery = useDebouncedText(query, searchDebounceMs);
-  const search = useBoardTaskSearch(projectID, open, debouncedQuery);
+  const search = useTaskSearch(projectID, open, debouncedQuery);
   const selection = useTaskSearchSelection(projectID, search.displayedQuery, search.results);
   const revealActiveSelection = selection.revealActive;
 
@@ -89,7 +102,7 @@ export function BoardTaskSearchChrome({
     revealActiveSelection();
     setOpen(true);
   }, [revealActiveSelection]);
-  useTaskSearchShortcuts(openSearch);
+  useTaskSearchShortcuts(projectID === null ? openSearch : null);
   const moveSelection = useCallback(
     (direction: -1 | 1): void => {
       const next = adjacentSearchResult(search.results, selection.activeKey, direction);
@@ -99,18 +112,19 @@ export function BoardTaskSearchChrome({
     },
     [search.results, selection],
   );
-
   return (
     <>
       <InteractiveChip
         aria-label={t("taskSearch.open")}
+        className={projectID === null ? "h-6 w-6 justify-center p-0" : undefined}
         onClick={openSearch}
         selected={open}
-        style={{ paddingInline: "var(--space-3)" }}
+        size={projectID === null ? "compact" : "default"}
+        style={projectID === null ? undefined : { paddingInline: "var(--space-3)" }}
         tone={open ? "primary" : "neutral"}
       >
         <SearchIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-        {t("taskSearch.open")}
+        {projectID === null ? null : t("taskSearch.open")}
       </InteractiveChip>
       <TaskSearchDialog
         onActivate={activate}
@@ -127,8 +141,11 @@ export function BoardTaskSearchChrome({
   );
 }
 
-function useTaskSearchShortcuts(onOpen: () => void): void {
+function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
   useEffect(() => {
+    if (onOpen === null) {
+      return undefined;
+    }
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (!isTaskSearchShortcut(event)) {
         return;
@@ -166,7 +183,7 @@ function useDebouncedText(value: string, delayMs: number): string {
   return debounced;
 }
 
-function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: string) {
+function useTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
   const { api } = useAppServices();
   const trimmedQuery = debouncedQuery.trim();
   const searchable = Array.from(trimmedQuery).length >= 3;
@@ -174,7 +191,7 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
     SearchPage,
     Error,
     InfiniteData<SearchPage, number | null>,
-    readonly string[],
+    readonly (string | null)[],
     number | null
   >({
     queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
@@ -189,7 +206,7 @@ function useBoardTaskSearch(projectID: string, open: boolean, debouncedQuery: st
           context: taskSearchContext,
           caseSensitive: false,
           includeComments: true,
-          projectIDs: [projectID],
+          projectIDs: projectID === null ? undefined : [projectID],
           pageSize: taskSearchPageSize,
           offset: pageParam ?? undefined,
         },
@@ -235,7 +252,7 @@ function TaskSearchDialog({
   onQueryChange(value: string): void;
   open: boolean;
   query: string;
-  search: ReturnType<typeof useBoardTaskSearch>;
+  search: ReturnType<typeof useTaskSearch>;
   selection: ReturnType<typeof useTaskSearchSelection>;
 }>) {
   const { t } = useTranslation();
@@ -390,7 +407,7 @@ function TaskSearchResults({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
-  search: ReturnType<typeof useBoardTaskSearch>;
+  search: ReturnType<typeof useTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
 }>) {
@@ -446,7 +463,7 @@ function TaskSearchResultList({
   listID: string;
   onActivate(result: SearchResult): void;
   onSelect(key: string): void;
-  search: ReturnType<typeof useBoardTaskSearch>;
+  search: ReturnType<typeof useTaskSearch>;
   scrollRequest: TaskSearchScrollRequest | null;
   selectedKey: string | null;
 }>) {
@@ -585,14 +602,7 @@ function taskSearchResultKey(page: SearchPage, group: TaskSearchGroup, groupInde
   if (firstOrdinal === undefined) {
     throw new Error(`Task Search group ${group.taskID} at offset ${String(page.offset)} has no hits.`);
   }
-  return [
-    page.projectID,
-    page.query,
-    String(page.offset),
-    groupIndex.toString(),
-    group.taskID,
-    firstOrdinal.toString(),
-  ].join(":");
+  return JSON.stringify([page.projectID, page.query, page.offset, groupIndex, group.taskID, firstOrdinal]);
 }
 
 function taskSearchOptionID(listID: string, resultKey: string): string {
@@ -609,15 +619,10 @@ function searchSelectionDirection(key: string): -1 | 1 | null {
   return null;
 }
 
-function sameTaskSearchProject(
-  left: Readonly<{ projectID: string }>,
-  right: Readonly<{ projectID: string }>,
-): boolean {
-  return left.projectID === right.projectID;
-}
+function sameTaskSearchProject(left: Readonly<{ projectID: string | null }>, right: Readonly<{ projectID: string | null }>): boolean { return left.projectID === right.projectID; }
 
 function searchBoundaryState(
-  search: ReturnType<typeof useBoardTaskSearch>,
+  search: ReturnType<typeof useTaskSearch>,
   copy: Readonly<{
     errorMessage: string;
     loadingLabel: string;

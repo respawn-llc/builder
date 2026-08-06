@@ -108,30 +108,23 @@
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
 
-## Board Task Search
+## Desktop Task Search
 
-- A board has a `Search` chip immediately after the Unblocked chip. It uses the
-  same visual treatment and height as the Labels chip.
-- Selecting Search opens one centered command-palette dialog over a blurred
-  backdrop. The dialog uses a frosted-glass surface.
-- Opening Search animates the backdrop from unblurred to blurred. Its island
-  fades in while moving upward by 30 pixels into place.
-- Closing Search reverses that motion: the backdrop unblurs while the island
-  fades and moves 30 pixels downward. Search remains mounted until the complete
-  exit finishes. Search uses the fast motion duration. These motions are subject
-  to reduced-motion preference.
-- Search and its blurred backdrop appear above an open Task sidebar. Opening
-  Search does not close or otherwise change the sidebar.
-- The search input is an inline top row separated from the results by one thin
-  divider. The input is not a nested island.
+- The main window's application chrome always has a Search icon at the outer edge of its navigation controls. Search is the rightmost navigation control on macOS and the leftmost navigation control on other platforms. It is adjacent to the back and forward controls when they are visible.
+- Selecting the application-chrome Search icon opens global Search from every ordinary page in the main window.
+- `Command-S`, `Control-S`, and `Alt-Space` open global Search from every ordinary page in the main window. These shortcuts suppress their platform or browser default action.
+- Global Search covers every Project.
+- Separate native windows do not provide global Search.
+- A board has a `Search` chip immediately after the Unblocked chip. It uses the same visual treatment and height as the Labels chip.
+- The board Search chip opens Project-scoped Search that spans every Workflow linked to that Project.
+- Selecting either Search entry point opens one centered command-palette dialog over a blurred backdrop. The dialog uses a frosted-glass surface.
+- Opening Search animates the backdrop from unblurred to blurred. Its island fades in while moving upward by 30 pixels into place.
+- Closing Search reverses that motion: the backdrop unblurs while the island fades and moves 30 pixels downward. Search remains mounted until the complete exit finishes. Search uses the fast motion duration. These motions are subject to reduced-motion preference.
+- Search and its blurred backdrop appear above the main content and an open Task sidebar. Opening Search does not close or otherwise change the sidebar.
+- The search input is an inline top row separated from the results by one thin divider. The input is not a nested island.
 - The dialog focuses the input when it opens.
-- `Command-S`, `Control-S`, and `Alt-Space` open Search from a board. These
-  shortcuts suppress their platform or browser default action while the board
-  is open.
 - Search uses the existing case-insensitive literal Task Search contract.
 - Search includes Task titles, complete bodies, and Comments.
-- Search is scoped to the board's Project and spans every Workflow linked to
-  that Project.
 - Desktop submits a nonblank searchable query 300 milliseconds after the last
   edit.
 - A blank query, a literal query without a searchable trigram, or a searchable
@@ -145,11 +138,8 @@
   subject to reduced-motion preference.
 - While a replacement query is debouncing or loading, the prior results remain
   visible and usable.
-- Desktop retains one search query in process memory across Projects. Opening a
-  different Project reruns that query with the new Project scope. Restarting
-  Desktop clears the query.
-- Closing and reopening Search retains the selected Task group while its result
-  set remains current.
+- Desktop retains one search query in process memory across global and Project-scoped Search. Changing scope reruns that query within the selected scope. Restarting Desktop clears the query.
+- Closing and reopening Search retains the selected Task group for that scope while its result set remains current.
 - Results use infinite scroll and preserve the server's Task grouping, hit
   pagination, and ordering. Desktop does not deduplicate repeated Task groups
   across pages.
@@ -188,8 +178,7 @@
 - At the last loaded result, Down Arrow is a no-op until another result arrives.
   At either loaded boundary, repeated navigation never wraps or resets
   selection to the first result.
-- Selecting a row with the pointer or pressing Enter for the selected row
-  closes Search and opens that Task in the board's Task Detail sidebar.
+- Selecting a row with the pointer or pressing Enter for the selected row closes Search and opens that Task in the Task Detail sidebar.
 - Escape and backdrop selection close Search without opening a Task.
 
 ## Labels And Board Sorting

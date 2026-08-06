@@ -68,7 +68,7 @@ export async function invalidateProjectDeleteQueries(
 ): Promise<void> {
   queryClient.removeQueries({ queryKey: queryKeys.projectEdit(projectID) });
   queryClient.removeQueries({ queryKey: queryKeys.workspaces(projectID) });
-  removeProjectTaskSearches(queryClient, projectID);
+  await removeProjectTaskSearches(queryClient, projectID);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),

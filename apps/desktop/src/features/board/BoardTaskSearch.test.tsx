@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { appI18n } from "@/i18n";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
-import { BoardTaskSearchChrome } from "./BoardTaskSearch";
+import { BoardTaskSearchChrome, GlobalTaskSearchChrome } from "./BoardTaskSearch";
 
 const searchResponse = {
   mode: "literal",
@@ -138,6 +138,36 @@ describe("Board Task Search", () => {
       },
     ]);
     expect(services.transport.dedicatedCalls[0]?.options?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("opens global Search from the shortcut without a Project filter", async () => {
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+
+    renderSearch(services, null);
+    fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
+
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "search" } });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(services.transport.dedicatedCalls).toMatchObject([
+      {
+        method: "workflow.task.search",
+        params: {
+          mode: "literal",
+          query: "search",
+          context: 20,
+          case_sensitive: false,
+          include_comments: true,
+          page_size: 40,
+        },
+      },
+    ]);
+    expect(services.transport.dedicatedCalls[0]?.params).not.toHaveProperty("project_ids");
   });
 
   it("keeps input focus while arrows choose a Task and Enter opens it", async () => {
@@ -284,8 +314,8 @@ describe("Board Task Search", () => {
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
     const onOpenTask = vi.fn();
 
-    renderSearch(services, "project-reopen", onOpenTask);
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    renderSearch(services, null, onOpenTask);
+    fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
     const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
     fireEvent.change(input, { target: { value: "search" } });
     expect(await screen.findAllByRole("option")).toHaveLength(2);
@@ -332,12 +362,18 @@ describe("Board Task Search", () => {
 
 function renderSearch(
   services: ReturnType<typeof createTestServices>,
-  projectID: string,
+  projectID: string | null,
   onOpenTask = vi.fn(),
 ): ReturnType<typeof render> {
+  const search =
+    projectID === null ? (
+      <GlobalTaskSearchChrome onOpenTask={onOpenTask} />
+    ) : (
+      <BoardTaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />
+    );
   return render(
     <TestAppProviders services={services}>
-      <BoardTaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />
+      {search}
     </TestAppProviders>,
   );
 }
