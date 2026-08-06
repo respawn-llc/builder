@@ -78,8 +78,8 @@ describe("Sidebar destination completion ownership", () => {
   it("deduplicates only Task Detail destinations", () => {
     const task = { kind: "taskDetail", taskID: "task-1" } as const;
     const custom = { kind: "custom", title: "same", content: null } as const;
-    expect(sidebarDestinationPolicy.equals(task, task)).toBe(true);
-    expect(sidebarDestinationPolicy.equals(custom, custom)).toBe(false);
+    expect(sidebarDestinationPolicy.equals(task, { ...task })).toBe(true);
+    expect(sidebarDestinationPolicy.equals(custom, { ...custom })).toBe(false);
   });
   it("locks header exit only for a pending related New Task and replaces it on success", () => {
     const pageNavigator = mountDestination({

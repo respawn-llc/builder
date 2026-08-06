@@ -176,3 +176,8 @@
 - [x] Restore malformed retained-state, destination equality, Workflow Inspector close, and pop-out payload coverage.
 - [x] Reconcile restored coverage and canonical code authority with the user-approved 37-file guideline and existing LoC caps.
 - [x] Run final automated verification and commit the third remediation round.
+
+## Fourth review remediation
+
+- [x] Prove destination equality with distinct Task Detail and custom destination values.
+- [x] Run final automated verification and commit the fourth remediation round.
