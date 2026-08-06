@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -109,6 +110,68 @@ type lifecycleRequestCaptureClient chan llm.Request
 type lifecycleRuntimeAbort struct {
 	committed bool
 	cause     error
+}
+
+type lifecycleBarrierFailureObserver struct {
+	armed   atomic.Bool
+	failure error
+}
+
+func (o *lifecycleBarrierFailureObserver) ObservePersistedStore(
+	context.Context,
+	session.PersistedStoreSnapshot,
+) error {
+	if o.armed.CompareAndSwap(true, false) {
+		return o.failure
+	}
+	return nil
+}
+
+type lifecycleQuestionBarrierClient struct {
+	calls atomic.Int32
+}
+
+func (c *lifecycleQuestionBarrierClient) Generate(
+	context.Context,
+	llm.Request,
+) (llm.Response, error) {
+	call := c.calls.Add(1)
+	if call != 1 {
+		return llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("unexpected continuation"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}, nil
+	}
+	question := llm.ToolCall{
+		ID:    "lifecycle-question",
+		Name:  string(toolspec.ToolAskQuestion),
+		Input: json.RawMessage(`{"question":"Continue?"}`),
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("working"),
+			Phase:   textutil.Value(llm.MessagePhaseCommentary),
+		},
+		ToolCalls: []llm.ToolCall{question},
+		OutputItems: []llm.ResponseItem{
+			{
+				Type: llm.ResponseItemTypeOther,
+				ID:   textutil.Value("lifecycle-hosted"),
+				Raw:  json.RawMessage(`{"type":"web_search_call","id":"lifecycle-hosted","status":"completed","action":{"type":"search","query":"kent"}}`),
+			},
+			{
+				Type:   llm.ResponseItemTypeFunctionCall,
+				ID:     textutil.Value(question.ID),
+				CallID: textutil.Value(question.ID),
+			},
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
 }
 
 func (e *lifecycleRuntimeAbort) Error() string {
@@ -224,6 +287,123 @@ func TestRuntimeAbortRetiresCurrentOpenAndReplaceResourceGenerations(t *testing.
 				&plan,
 			)
 		})
+	}
+}
+
+func TestQuestionBarrierDurabilityAbortClosesLifecycleAndRetiresCurrentGeneration(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	failure := errors.New("Question barrier observer failure")
+	observer := &lifecycleBarrierFailureObserver{failure: failure}
+	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
+	storeOptions := append(
+		[]session.StoreOption(nil),
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	storeOptions = append(storeOptions, session.WithPersistenceObserver(observer))
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      storeOptions,
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	client := &lifecycleQuestionBarrierClient{}
+	var askCalls atomic.Int32
+	capabilities := llm.ProviderCapabilities{
+		ProviderID:                    "openai",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		IsOpenAIFirstParty:            true,
+	}
+	plan := authorityTestRuntimePlan(t, fixture, client, func(event runtime.Event) {
+		if event.Kind == runtime.EventToolCallStarted &&
+			event.ToolCall != nil &&
+			event.ToolCall.ID == "lifecycle-question" {
+			observer.armed.Store(true)
+		}
+	})
+	plan.options.EnabledTools = []toolspec.ID{
+		toolspec.ToolAskQuestion,
+		toolspec.ToolWebSearch,
+	}
+	plan.options.Settings.WebSearch = "native"
+	plan.options.ProviderCapabilitiesOverride = &capabilities
+	openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+	authority.mu.Lock()
+	failedResource := authority.resources[sessionID]
+	authority.mu.Unlock()
+
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Ask: func(
+			context.Context,
+			ExecutionScope,
+			tools.AskQuestionRequest,
+		) (tools.AskQuestionResponse, error) {
+			askCalls.Add(1)
+			return tools.AskQuestionResponse{}, errors.New("Question handler must remain blocked")
+		},
+		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
+				_, err := engine.SubmitUserMessage(ctx, "ask after the hosted result")
+				return err
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start Question barrier execution: %v", err)
+	}
+	_, runErr := handle.Wait(context.Background())
+	type runtimeAbort interface {
+		RuntimeAbortDisposition() (committed bool, cause error)
+	}
+	var abort runtimeAbort
+	if !errors.As(runErr, &abort) {
+		t.Fatalf("Question barrier execution error = %v, want typed runtime abort", runErr)
+	}
+	committed, cause := abort.RuntimeAbortDisposition()
+	if !committed || !errors.Is(cause, failure) {
+		t.Fatalf(
+			"Question barrier abort = committed:%t cause:%v, want true/%v",
+			committed,
+			cause,
+			failure,
+		)
+	}
+	if askCalls.Load() != 0 {
+		t.Fatalf("Question handler calls = %d, want none", askCalls.Load())
+	}
+	if client.calls.Load() != 1 {
+		t.Fatalf("model calls = %d, want one with no idle continuation", client.calls.Load())
+	}
+	if failedResource.store.Meta().PendingModelRecovery == nil {
+		t.Fatal("Question barrier runtime abort cleared PendingModelRecovery")
+	}
+	if _, err := failedResource.engine.SubmitUserMessage(context.Background(), "later"); !errors.Is(err, runtime.ErrEngineClosed) {
+		t.Fatalf("later failed-Engine submission error = %v, want ErrEngineClosed", err)
+	}
+	if state := failedResource.descriptor().State; state != AgentResourceClosed {
+		t.Fatalf("Question barrier resource state = %v, want closed", state)
+	}
+	select {
+	case <-lifecycle.draining:
+	default:
+		t.Fatal("Question barrier resource did not publish draining retirement")
+	}
+	authority.mu.Lock()
+	admitted := authority.resources[sessionID]
+	authority.mu.Unlock()
+	if admitted == failedResource {
+		t.Fatal("Question barrier failed resource generation remained admitted")
 	}
 }
 
