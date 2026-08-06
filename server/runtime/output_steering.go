@@ -511,35 +511,35 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 			if err := e.applySteeringItem(stepID, item); err != nil {
 				return err
 			}
-			if item.historyReplace == nil && steeringItemConsumesWorkflowPostCompletionBoundary(item) {
-				e.compactionRuntimeState().ConsumeWorkflowPostCompletionBoundary()
+			if item.historyReplace == nil {
+				e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+					workflowPostCompletionActivityForSteeringItem(item),
+				)
 			}
 		}
 	}
 	return nil
 }
 
-func steeringItemConsumesWorkflowPostCompletionBoundary(item steeringItem) bool {
+func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPostCompletionActivity {
 	if item.message != nil {
+		messageType := ""
 		if item.message.message.MessageType != nil {
-			switch *item.message.message.MessageType {
-			case llm.MessageTypeAgentsMD, llm.MessageTypeSkills, llm.MessageTypeSubagents,
-				llm.MessageTypeEnvironment, llm.MessageTypeWorkflowMode,
-				llm.MessageTypeCompactionSoonReminder:
-				return false
-			}
+			messageType = string(*item.message.message.MessageType)
 		}
-		return true
+		return workflowPostCompletionMessageActivity(messageType)
 	}
-	return item.message != nil ||
-		item.assistantCommit != nil ||
+	if item.assistantCommit != nil ||
 		item.committedAssistant != nil ||
 		item.completedResponseResolution != nil ||
 		item.reviewerFeedback != nil ||
 		item.reviewerError != nil ||
 		item.toolCompletion != nil ||
 		item.queuedFlush != nil ||
-		item.queuedRestore != nil
+		item.queuedRestore != nil {
+		return workflowPostCompletionDurableActivity
+	}
+	return workflowPostCompletionNoActivity
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -929,7 +929,8 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		&projectedStart,
 		replacement.projectedEntries,
 	)
-	e.compactionRuntimeState().SetHistoryReplacementMode(replacement.payload.Mode)
+	replacementMode := session.CompactionMode(replacement.payload.Mode)
+	modeErr := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,
@@ -937,6 +938,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		replacement.projectedEntries,
 	)
 	emitErr = errors.Join(
+		modeErr,
 		emitErr,
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	)

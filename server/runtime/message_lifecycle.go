@@ -188,7 +188,10 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				replacement.CommittedEntryStart,
 				projectedEntries,
 			)
-			e.compactionRuntimeState().SetHistoryReplacementMode(string(replacement.Mode))
+			replacementMode := session.CompactionMode(replacement.Mode)
+			if err := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode); err != nil {
+				return fmt.Errorf("restore history replacement mode: %w", err)
+			}
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,
@@ -206,9 +209,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			reminderIssued = false
 		}
-		if sessionRecordConsumesWorkflowPostCompletionBoundary(payload) {
-			e.compactionRuntimeState().ConsumeWorkflowPostCompletionBoundary()
-		}
+		e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+			workflowPostCompletionActivityForSessionRecord(payload),
+		)
 	}
 	for _, generations := range generationsByStep {
 		for _, generation := range generations {
@@ -245,22 +248,18 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	return nil
 }
 
-func sessionRecordConsumesWorkflowPostCompletionBoundary(payload any) bool {
+func workflowPostCompletionActivityForSessionRecord(payload any) workflowPostCompletionActivity {
 	switch record := payload.(type) {
 	case session.MessageRecord:
+		messageType := ""
 		if record.MessageType != nil {
-			switch *record.MessageType {
-			case session.MessageTypeAgentsMD, session.MessageTypeSkills, session.MessageTypeSubagents,
-				session.MessageTypeEnvironment, session.MessageTypeWorkflowMode,
-				session.MessageTypeCompactionSoonReminder:
-				return false
-			}
+			messageType = string(*record.MessageType)
 		}
-		return true
+		return workflowPostCompletionMessageActivity(messageType)
 	case session.ToolCompletionRecord, session.CacheRequestObservationRecord:
-		return true
+		return workflowPostCompletionDurableActivity
 	default:
-		return false
+		return workflowPostCompletionNoActivity
 	}
 }
 

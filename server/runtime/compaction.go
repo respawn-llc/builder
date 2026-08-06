@@ -106,13 +106,25 @@ func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) wo
 	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
 }
 
-// ConsumeWorkflowPostCompletionBoundary consumes the committed boundary once
-// the workflow's existing lazy continuation path has used it.
-func (e *Engine) ConsumeWorkflowPostCompletionBoundary() bool {
+// SubmitWorkflowContinuationTurn runs the existing lazy CAC operation and
+// consumes a committed Workflow Pre-Compaction boundary only after the target
+// turn succeeds. A failed target attempt therefore preserves the boundary for
+// the existing Resume path.
+func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Message, error) {
 	if e == nil {
-		return false
+		return llm.Message{}, errors.New("runtime engine is required")
 	}
-	return e.compactionRuntimeState().ConsumeWorkflowPostCompletionBoundary()
+	if !e.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		if err := e.CompactContextForWorkflowContinuation(ctx); err != nil {
+			return llm.Message{}, err
+		}
+	}
+	assistant, err := e.SubmitWorkflowTurn(ctx)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity)
+	return assistant, nil
 }
 
 func (e *Engine) WorkflowPreCompactionTokenLimit() (int, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -45,11 +47,16 @@ type currentNodeRunnerFixture struct {
 	projectID    string
 	workspaceID  string
 	workspace    string
-	client       *ScriptedClient
+	client       currentNodeRunnerClient
 
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
 	clientErr      error
+}
+
+type currentNodeRunnerClient interface {
+	llm.Client
+	Requests() []llm.Request
 }
 
 type currentNodeRunnerStepLifecycle struct {
@@ -95,6 +102,16 @@ func (s currentNodeStartContextStore) ResolveCurrentNodeStartContext(
 }
 
 func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *currentNodeRunnerFixture {
+	return newCurrentNodeRunnerFixtureWithClient(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			steps...,
+		),
+	)
+}
+
+func newCurrentNodeRunnerFixtureWithClient(t *testing.T, client currentNodeRunnerClient) *currentNodeRunnerFixture {
 	t.Helper()
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -140,10 +157,7 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 		projectID:   binding.ProjectID,
 		workspaceID: binding.WorkspaceID,
 		workspace:   binding.CanonicalRoot,
-		client: NewScriptedClient(
-			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
-			steps...,
-		),
+		client:      client,
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
 	var controller *workflowexecution.CurrentNodeController
@@ -699,6 +713,174 @@ func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) 
 	}
 	if meta.PromptCacheLineageGeneration != 1 {
 		t.Fatalf("compacted workflow Session cache lineage = %d, want 1", meta.PromptCacheLineageGeneration)
+	}
+}
+
+func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:        llm.ResponseItemTypeMessage,
+					Role:        textutil.Value(llm.RoleUser),
+					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+					Content:     textutil.Value("completed source"),
+				},
+				{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("workflow-post-completion"),
+					EncryptedContent: textutil.Value("encrypted"),
+				},
+			},
+			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+		}},
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_1","commentary":"first done"}`),
+			},
+		),
+		ScriptedToolBatch(
+			"complete second node",
+			llm.ToolCall{
+				ID:    "complete-second",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_2","commentary":"second done"}`),
+			},
+		),
+		ScriptedFinalAnswer(`{"commentary":"target done"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	workflowID := createCurrentNodeThreeStepWorkflow(
+		t,
+		f.store,
+		"Successful post-turn compaction",
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the second node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply CAC target Approval: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 3)
+
+	compactions := client.CompactionCalls()
+	if len(compactions) != 1 {
+		t.Fatalf("post-completion compactions = %d, want one", len(compactions))
+	}
+	summaries := 0
+	for _, item := range requests[2].Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeCompactionSummary {
+			summaries++
+		}
+	}
+	if summaries != 1 {
+		t.Fatalf("target request compaction summaries = %d, want one", summaries)
+	}
+	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
+		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
+		t.Fatalf("source/target cache keys = %q/%q, want distinct non-empty keys", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+	}
+}
+
+func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:        llm.ResponseItemTypeMessage,
+					Role:        textutil.Value(llm.RoleUser),
+					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+					Content:     textutil.Value("target-time CAC"),
+				},
+				{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("target-time-cac"),
+					EncryptedContent: textutil.Value("encrypted"),
+				},
+			},
+			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+		}},
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_1","commentary":"first done"}`),
+			},
+		),
+		ScriptedToolBatch(
+			"complete second node",
+			llm.ToolCall{
+				ID:    "complete-second",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next_2","commentary":"second done"}`),
+			},
+		),
+		ScriptedFinalAnswer(`{"commentary":"resumed target done"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNone
+	workflowID := createCurrentNodeThreeStepWorkflow(
+		t,
+		f.store,
+		"Resume disabled CAC",
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the second node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply CAC target Approval: %v", err)
+	}
+	interrupted := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})[0]
+	if interrupted.SessionID == nil {
+		t.Fatal("disabled CAC target lost its assigned Session")
+	}
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("resume disabled CAC target: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 3)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("resumed target-time compactions = %d, want one", len(client.CompactionCalls()))
+	}
+	targets := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(interrupted.Reference)
+	})
+	if targets[0].SessionID == nil || *targets[0].SessionID != *interrupted.SessionID {
+		t.Fatalf("resumed target Session = %v, want assigned Session %v", targets[0].SessionID, interrupted.SessionID)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("resumed model requests = %d, want source, source, target", len(requests))
 	}
 }
 
@@ -1580,6 +1762,97 @@ func createCurrentNodeTwoStepWorkflow(
 		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
+		}
+	}
+	return created.ID
+}
+
+func createCurrentNodeThreeStepWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+	name string,
+	first, second, third currentNodeWorkflowStep,
+) runtimeids.WorkflowID {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name})
+	if err != nil {
+		t.Fatalf("create workflow: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get workflow: %v", err)
+	}
+	var startID, doneID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			doneID = workflow.NodeIDOf(node)
+		}
+	}
+	workflowSuffix := created.ID.String()
+	nodeIDs := []workflow.NodeID{
+		workflow.NodeID("node-first-" + workflowSuffix),
+		workflow.NodeID("node-second-" + workflowSuffix),
+		workflow.NodeID("node-third-" + workflowSuffix),
+	}
+	steps := []currentNodeWorkflowStep{first, second, third}
+	for index, step := range steps {
+		if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
+			ID: nodeIDs[index], WorkflowID: created.ID, Key: workflow.ModelKey(fmt.Sprintf("step_%d", index+1)),
+			Kind: step.kind, DisplayName: fmt.Sprintf("Step %d", index+1),
+			SubagentRole: step.role, ScriptPath: step.scriptPath,
+			CompletionMode: step.completionMode,
+		}); err != nil {
+			t.Fatalf("add workflow step %d: %v", index+1, err)
+		}
+	}
+	groupIDs := []workflow.TransitionGroupID{
+		workflow.TransitionGroupID("group-start-" + workflowSuffix),
+		workflow.TransitionGroupID("group-first-" + workflowSuffix),
+		workflow.TransitionGroupID("group-second-" + workflowSuffix),
+		workflow.TransitionGroupID("group-third-" + workflowSuffix),
+	}
+	groupSources := []workflow.NodeID{startID, nodeIDs[0], nodeIDs[1], nodeIDs[2]}
+	groupTransitions := []string{"start", "next_1", "next_2", "done"}
+	for index := range groupIDs {
+		if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
+			ID: groupIDs[index], WorkflowID: created.ID, SourceNodeID: groupSources[index],
+			TransitionID: workflow.TransitionID(groupTransitions[index]), DisplayName: groupTransitions[index],
+		}); err != nil {
+			t.Fatalf("add workflow transition group %d: %v", index+1, err)
+		}
+	}
+	edges := []workflowstore.EdgeRecord{
+		{
+			ID: workflow.EdgeID("edge-start-" + workflowSuffix), WorkflowID: created.ID,
+			TransitionGroupID: groupIDs[0], Key: "start", TargetNodeID: nodeIDs[0],
+			ContextMode: workflow.ContextModeNewSession, PromptTemplate: first.prompt,
+		},
+		{
+			ID: workflow.EdgeID("edge-first-second-" + workflowSuffix), WorkflowID: created.ID,
+			TransitionGroupID: groupIDs[1], Key: "next_1", TargetNodeID: nodeIDs[1],
+			ContextMode: workflow.ContextModeNewSession, PromptTemplate: second.prompt,
+		},
+		{
+			ID: workflow.EdgeID("edge-second-third-" + workflowSuffix), WorkflowID: created.ID,
+			TransitionGroupID: groupIDs[2], Key: "next_2", TargetNodeID: nodeIDs[2],
+			ContextMode: workflow.ContextModeCompactAndContinueSession, RequiresApproval: true,
+			ContextSource:  workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+			PromptTemplate: third.prompt,
+		},
+		{
+			ID: workflow.EdgeID("edge-third-done-" + workflowSuffix), WorkflowID: created.ID,
+			TransitionGroupID: groupIDs[3], Key: "done", TargetNodeID: doneID,
+			ContextMode: workflow.ContextModeNewSession,
+		},
+	}
+	for _, edge := range edges {
+		edge = normalizeWorkflowEdgeRecordForTest(edge)
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("add workflow edge %s: %v", edge.Key, err)
 		}
 	}
 	return created.ID

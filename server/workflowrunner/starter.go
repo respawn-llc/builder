@@ -396,17 +396,12 @@ func (s *Starter) startCurrentNodeAgent(
 			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					if !engine.ConsumeWorkflowPostCompletionBoundary() {
-						if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
-							return err
-						}
+					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+					if err != nil {
+						return err
 					}
-				}
-				if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
 					return err
-				}
-				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					engine.ConsumeWorkflowPostCompletionBoundary()
 				}
 				turnEngine = engine
 				return nil

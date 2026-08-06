@@ -159,7 +159,7 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	reopenedStore := mustOpenTestSession(t, fixture.store.Dir())
 	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	mode, present := reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != string(compactionModeWorkflowPostCompletion) {
+	if !present || mode == nil || *mode != session.CompactionModeWorkflowPostCompletion {
 		t.Fatalf(
 			"restored history replacement mode = %v, want %q",
 			mode,
@@ -169,7 +169,7 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	if !reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("unconsumed post-completion boundary was not restored from active segment")
 	}
-	if !reopened.ConsumeWorkflowPostCompletionBoundary() ||
+	if !reopened.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity) ||
 		reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("restored boundary did not have one successful consumption")
 	}
@@ -191,7 +191,7 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 		t.Fatal("ordinary replacement restored a stale post-completion boundary")
 	}
 	mode, present = reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != string(compactionModeManual) {
+	if !present || mode == nil || *mode != session.CompactionModeManual {
 		t.Fatalf("latest replacement mode = %v, want %q", mode, compactionModeManual)
 	}
 }
@@ -243,7 +243,10 @@ func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t
 func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
 	steer, err := engine.SteerWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
 	if err != nil {
 		t.Fatalf("steer workflow assignment: %v", err)
@@ -274,7 +277,10 @@ func TestWorkflowPostCompletionBoundarySurvivesFailedWorkflowRequest(t *testing.
 		},
 		Config{Model: "gpt-5"},
 	)
-	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
 
 	if _, err := engine.SubmitWorkflowTurn(context.Background()); !errors.Is(err, requestErr) {
 		t.Fatalf("failed workflow request error = %v, want %v", err, requestErr)
@@ -284,10 +290,63 @@ func TestWorkflowPostCompletionBoundarySurvivesFailedWorkflowRequest(t *testing.
 	}
 }
 
+func TestWorkflowContinuationPreservesBoundaryAcrossFailedCACAttempt(t *testing.T) {
+	t.Parallel()
+	requestErr := &llm.ProviderAPIError{
+		Code: llm.UnifiedErrorCodeProviderContract,
+	}
+	client := &fakeClient{
+		errors: []error{requestErr},
+		responses: []llm.Response{
+			finalTextResponse(`{"commentary":"retry succeeded"}`),
+		},
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Contract: workflowruntime.CompletionContract{
+				Transitions: []workflowruntime.CompletionTransition{{ID: "done"}},
+			},
+			CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: mustTestCurrentNodeReference(t, "task", "node", nil),
+			},
+		},
+		Config{Model: "gpt-5"},
+	)
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+
+	if _, err := engine.SubmitWorkflowContinuationTurn(context.Background()); !errors.Is(err, requestErr) {
+		t.Fatalf("first CAC attempt error = %v, want %v", err, requestErr)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed CAC attempt consumed the committed boundary")
+	}
+	if _, err := engine.SubmitWorkflowContinuationTurn(context.Background()); err != nil {
+		t.Fatalf("retry CAC attempt: %v", err)
+	}
+	if engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("successful CAC retry did not consume the committed boundary")
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("CAC model calls = %d, want failed attempt plus retry", len(client.calls))
+	}
+}
+
 func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	engine.compactionRuntimeState().SetHistoryReplacementMode(string(compactionModeWorkflowPostCompletion))
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
 
 	if err := engine.steer("diagnostic", steerLocalEntryIntent(storedLocalEntry{
 		Role: string(transcript.EntryRoleDeveloperErrorFeedback),
@@ -297,6 +356,59 @@ func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testi
 	}
 	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("local diagnostic steering consumed the post-completion boundary")
+	}
+}
+
+func TestHistoryReplacementModeRejectsEmptyPresentValue(t *testing.T) {
+	t.Parallel()
+	state := newCompactionRuntimeState()
+	empty := session.CompactionMode("")
+	if err := state.SetHistoryReplacementMode(&empty); err == nil {
+		t.Fatal("empty present history replacement mode was accepted")
+	}
+	if err := state.SetHistoryReplacementMode(nil); err != nil {
+		t.Fatalf("clear absent history replacement mode: %v", err)
+	}
+}
+
+func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t *testing.T) {
+	t.Parallel()
+	preservedMessageTypes := []string{
+		string(llm.MessageTypeAgentsMD),
+		string(llm.MessageTypeSkills),
+		string(llm.MessageTypeSubagents),
+		string(llm.MessageTypeEnvironment),
+		string(llm.MessageTypeWorkflowMode),
+		string(llm.MessageTypeCompactionSoonReminder),
+	}
+	for _, messageType := range preservedMessageTypes {
+		t.Run(messageType, func(t *testing.T) {
+			state := newCompactionRuntimeState()
+			mode := session.CompactionModeWorkflowPostCompletion
+			if err := state.SetHistoryReplacementMode(&mode); err != nil {
+				t.Fatalf("set replacement mode: %v", err)
+			}
+			if activity := workflowPostCompletionMessageActivity(messageType); activity != workflowPostCompletionNoActivity {
+				t.Fatalf("meta message activity = %d, want no activity", activity)
+			}
+			state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionNoActivity)
+			if !state.WorkflowPostCompletionBoundary() {
+				t.Fatal("meta message consumed the boundary")
+			}
+		})
+	}
+
+	state := newCompactionRuntimeState()
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := state.SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set replacement mode: %v", err)
+	}
+	if activity := workflowPostCompletionMessageActivity(""); activity != workflowPostCompletionDurableActivity {
+		t.Fatalf("ordinary message activity = %d, want durable activity", activity)
+	}
+	if !state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity) ||
+		state.WorkflowPostCompletionBoundary() {
+		t.Fatal("ordinary activity did not consume the boundary exactly once")
 	}
 }
 
