@@ -441,6 +441,24 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 	return row, nil
 }
 
+func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
+	if s == nil || s.queries == nil {
+		return sqlitegen.Workspace{}, errors.New("metadata store is required")
+	}
+	workspaceID, err := ResolveProjectSourceWorkspaceID(ctx, s.queries, projectID)
+	if err != nil {
+		return sqlitegen.Workspace{}, err
+	}
+	workspace, err := s.GetWorkspaceByID(ctx, workspaceID)
+	if err != nil {
+		return sqlitegen.Workspace{}, err
+	}
+	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(projectID) {
+		return sqlitegen.Workspace{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
+	}
+	return workspace, nil
+}
+
 func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceID string) ([]WorktreeRecord, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
@@ -1842,7 +1860,10 @@ func (s *Store) ListProjectWorkspaces(ctx context.Context, projectID string) ([]
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	rows, err := s.queries.ListProjectWorkspaces(ctx, strings.TrimSpace(projectID))
+	rows, err := s.queries.ListProjectWorkspaces(ctx, sqlitegen.ListProjectWorkspacesParams{
+		ProjectID:                strings.TrimSpace(projectID),
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list project workspaces: %w", err)
 	}
@@ -1864,9 +1885,10 @@ func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string,
 		return nil, errors.New("offset must be non-negative")
 	}
 	rows, err := s.queries.ListProjectWorkspacesPage(ctx, sqlitegen.ListProjectWorkspacesPageParams{
-		ProjectID:  strings.TrimSpace(projectID),
-		LimitRows:  int64(pageSize),
-		OffsetRows: int64(offset),
+		ProjectID:                strings.TrimSpace(projectID),
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+		LimitRows:                int64(pageSize),
+		OffsetRows:               int64(offset),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list project workspaces page: %w", err)
@@ -2122,7 +2144,10 @@ func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID s
 	if projectID == "" {
 		return ProjectWorkspaceBoundary{}, errors.New("project id is required")
 	}
-	workspaces, err := s.queries.ListProjectWorkspaceBoundary(ctx, projectID)
+	workspaces, err := s.queries.ListProjectWorkspaceBoundary(ctx, sqlitegen.ListProjectWorkspaceBoundaryParams{
+		ProjectID:                projectID,
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+	})
 	if err != nil {
 		return ProjectWorkspaceBoundary{}, err
 	}

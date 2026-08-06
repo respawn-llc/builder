@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
@@ -621,38 +622,7 @@ func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Que
 		}
 		return workspaceID, nil
 	}
-	return resolveProjectSourceWorkspaceID(ctx, q, projectID)
-}
-
-func resolveProjectSourceWorkspaceID(ctx context.Context, q *sqlitegen.Queries, projectID string) (string, error) {
-	primaryWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, projectID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	if err == nil && strings.TrimSpace(primaryWorkspaceID) != "" {
-		primaryWorkspace, workspaceErr := q.GetWorkspaceByID(ctx, strings.TrimSpace(primaryWorkspaceID))
-		if workspaceErr == nil && strings.TrimSpace(primaryWorkspace.ProjectID) == strings.TrimSpace(projectID) {
-			return strings.TrimSpace(primaryWorkspace.ID), nil
-		}
-		if workspaceErr != nil && !errors.Is(workspaceErr, sql.ErrNoRows) {
-			return "", workspaceErr
-		}
-	}
-	workspaces, err := q.ListProjectWorkspaces(ctx, projectID)
-	if err != nil {
-		return "", err
-	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary != 0 && strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	return "", fmt.Errorf("project %q has no source workspace", projectID)
+	return metadata.ResolveProjectSourceWorkspaceID(ctx, q, projectID)
 }
 
 func taskCurrentPositionIsBacklog(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (bool, error) {

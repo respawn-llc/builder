@@ -398,7 +398,7 @@ func taskSourceWorkspaceForExecution(ctx context.Context, q *sqlitegen.Queries, 
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	if sourceWorkspaceID == "" {
 		var err error
-		sourceWorkspaceID, err = resolveProjectSourceWorkspaceID(ctx, q, task.ProjectID)
+		sourceWorkspaceID, err = metadata.ResolveProjectSourceWorkspaceID(ctx, q, task.ProjectID)
 		if err != nil {
 			return sqlitegen.Workspace{}, err
 		}

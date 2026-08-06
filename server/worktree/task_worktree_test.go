@@ -1075,6 +1075,26 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	}
 }
 
+func TestTaskSourceWorkspaceRetainsProjectPrimaryOutsideCollectionLimit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := env.store.AttachWorkspaceToProject(env.ctx, env.binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+	}
+
+	source, err := env.service.taskSourceWorkspace(env.ctx, env.binding.ProjectID, "")
+	if err != nil {
+		t.Fatalf("taskSourceWorkspace: %v", err)
+	}
+	if source.WorkspaceID != env.binding.WorkspaceID {
+		t.Fatalf("source workspace = %q, want project primary %q", source.WorkspaceID, env.binding.WorkspaceID)
+	}
+	if source.RootPath != env.workspaceRoot {
+		t.Fatalf("source root = %q, want project primary root %q", source.RootPath, env.workspaceRoot)
+	}
+}
+
 func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)

@@ -5021,17 +5021,22 @@ SELECT
 FROM workspaces w
 WHERE w.project_id = ?1
 ORDER BY w.created_at_unix_ms DESC, w.rowid DESC
-LIMIT 500
+LIMIT ?2
 `
+
+type ListProjectWorkspaceBoundaryParams struct {
+	ProjectID                string
+	WorkspaceCollectionLimit int64
+}
 
 type ListProjectWorkspaceBoundaryRow struct {
 	ID       string
 	RootPath string
 }
 
-func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, projectID string) ([]ListProjectWorkspaceBoundaryRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceBoundary, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkspaceBoundary, 1)
+func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProjectWorkspaceBoundaryParams) ([]ListProjectWorkspaceBoundaryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceBoundary, arg.ProjectID, arg.WorkspaceCollectionLimit)
+	err = recordQueryError(ctx, err, listProjectWorkspaceBoundary, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5039,15 +5044,15 @@ func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, projectID st
 	var items []ListProjectWorkspaceBoundaryRow
 	for rows.Next() {
 		var i ListProjectWorkspaceBoundaryRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.RootPath), listProjectWorkspaceBoundary, 1); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.RootPath), listProjectWorkspaceBoundary, 2); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceBoundary, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceBoundary, 2); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceBoundary, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceBoundary, 2); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5070,12 +5075,17 @@ JOIN (
     FROM workspaces recent
     WHERE recent.project_id = ?1
     ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
-    LIMIT 500
+    LIMIT ?2
 ) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = ?1
 GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms, w.created_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, latest_activity_unix_ms DESC, w.created_at_unix_ms ASC, w.rowid ASC
 `
+
+type ListProjectWorkspacesParams struct {
+	ProjectID                string
+	WorkspaceCollectionLimit int64
+}
 
 type ListProjectWorkspacesRow struct {
 	ID                   string
@@ -5087,9 +5097,9 @@ type ListProjectWorkspacesRow struct {
 	WorkspaceOrderID     string
 }
 
-func (q *Queries) ListProjectWorkspaces(ctx context.Context, projectID string) ([]ListProjectWorkspacesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectWorkspaces, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkspaces, 1)
+func (q *Queries) ListProjectWorkspaces(ctx context.Context, arg ListProjectWorkspacesParams) ([]ListProjectWorkspacesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspaces, arg.ProjectID, arg.WorkspaceCollectionLimit)
+	err = recordQueryError(ctx, err, listProjectWorkspaces, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5105,15 +5115,15 @@ func (q *Queries) ListProjectWorkspaces(ctx context.Context, projectID string) (
 			&i.LatestActivityUnixMs,
 			&i.AttachedAtUnixMs,
 			&i.WorkspaceOrderID,
-		), listProjectWorkspaces, 1); err != nil {
+		), listProjectWorkspaces, 2); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaces, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaces, 2); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaces, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaces, 2); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5134,19 +5144,20 @@ JOIN (
     FROM workspaces recent
     WHERE recent.project_id = ?1
     ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
-    LIMIT 500
+    LIMIT ?2
 ) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = ?1
 GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.created_at_unix_ms DESC, w.rowid DESC
-LIMIT ?3
-OFFSET ?2
+LIMIT ?4
+OFFSET ?3
 `
 
 type ListProjectWorkspacesPageParams struct {
-	ProjectID  string
-	OffsetRows int64
-	LimitRows  int64
+	ProjectID                string
+	WorkspaceCollectionLimit int64
+	OffsetRows               int64
+	LimitRows                int64
 }
 
 type ListProjectWorkspacesPageRow struct {
@@ -5158,8 +5169,14 @@ type ListProjectWorkspacesPageRow struct {
 }
 
 func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProjectWorkspacesPageParams) ([]ListProjectWorkspacesPageRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectWorkspacesPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listProjectWorkspacesPage, 3)
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspacesPage,
+		arg.ProjectID,
+		arg.WorkspaceCollectionLimit,
+		arg.OffsetRows,
+		arg.LimitRows,
+	)
+	err = recordQueryError(ctx, err, listProjectWorkspacesPage, 4)
+
 	if err != nil {
 		return nil, err
 	}
@@ -5173,15 +5190,15 @@ func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProject
 			&i.IsPrimary,
 			&i.SessionCount,
 			&i.LatestActivityUnixMs,
-		), listProjectWorkspacesPage, 3); err != nil {
+		), listProjectWorkspacesPage, 4); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspacesPage, 3); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspacesPage, 4); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspacesPage, 3); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspacesPage, 4); err != nil {
 		return nil, err
 	}
 	return items, nil

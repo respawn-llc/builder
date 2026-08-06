@@ -979,21 +979,14 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 		}
 		return taskSourceWorkspace{WorkspaceID: workspace.ID, RootPath: workspace.CanonicalRootPath}, nil
 	}
-	workspaces, err := s.metadata.ListProjectWorkspaces(ctx, projectID)
+	workspace, err := s.metadata.ResolveProjectSourceWorkspace(ctx, projectID)
 	if err != nil {
 		return taskSourceWorkspace{}, err
 	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary && strings.TrimSpace(workspace.RootPath) != "" {
-			return taskSourceWorkspace{WorkspaceID: workspace.WorkspaceID, RootPath: workspace.RootPath}, nil
-		}
+	if strings.TrimSpace(workspace.CanonicalRootPath) == "" {
+		return taskSourceWorkspace{}, fmt.Errorf("task source workspace %q has no root path", workspace.ID)
 	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.RootPath) != "" {
-			return taskSourceWorkspace{WorkspaceID: workspace.WorkspaceID, RootPath: workspace.RootPath}, nil
-		}
-	}
-	return taskSourceWorkspace{}, fmt.Errorf("project %q has no workspace for task worktree", strings.TrimSpace(projectID))
+	return taskSourceWorkspace{WorkspaceID: workspace.ID, RootPath: workspace.CanonicalRootPath}, nil
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
