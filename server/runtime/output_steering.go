@@ -43,6 +43,9 @@ type steeringItem struct {
 	reviewerError               *steeringReviewerError
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
+	resultGroupReport           *steeringResultGroupReport
+	resultGroupFlush            *steeringResultGroupFlush
+	resultGroupClose            *steeringResultGroupClose
 	queuedFlush                 *steeringQueuedUserMessageFlush
 	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
@@ -139,6 +142,22 @@ type steeringCompletedResponseResolution struct {
 type steeringHistoryReplacement struct {
 	payload          historyReplacementPayload
 	projectedEntries []ChatEntry
+}
+
+type steeringResultGroupReport struct {
+	collector *resultGroupCollector
+	callID    string
+	unit      resultGroupUnit
+	outcome   *resultGroupReportOutcome
+}
+
+type steeringResultGroupFlush struct {
+	collector *resultGroupCollector
+	reason    ResultGroupFlushReason
+}
+
+type steeringResultGroupClose struct {
+	collector *resultGroupCollector
 }
 
 type steeringStreamingOutput struct {
@@ -282,6 +301,45 @@ func steerToolCompletionIntent(result tools.Result) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityNormal,
 		items:    []steeringItem{{toolCompletion: &copyResult}},
+	}
+}
+
+func steerResultGroupReportIntent(
+	collector *resultGroupCollector,
+	callID string,
+	unit resultGroupUnit,
+	outcome *resultGroupReportOutcome,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
+			collector: collector,
+			callID:    callID,
+			unit:      cloneResultGroupUnit(unit),
+			outcome:   outcome,
+		}}},
+	}
+}
+
+func steerResultGroupFlushIntent(
+	collector *resultGroupCollector,
+	reason ResultGroupFlushReason,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupFlush: &steeringResultGroupFlush{
+			collector: collector,
+			reason:    reason,
+		}}},
+	}
+}
+
+func steerResultGroupCloseIntent(collector *resultGroupCollector) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupClose: &steeringResultGroupClose{
+			collector: collector,
+		}}},
 	}
 }
 
@@ -528,6 +586,25 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+	if item.resultGroupReport != nil {
+		report := item.resultGroupReport
+		if report.collector == nil || report.outcome == nil {
+			return errors.New("result group report requires collector and outcome")
+		}
+		outcome, err := report.collector.report(report.callID, report.unit)
+		if err != nil {
+			return err
+		}
+		*report.outcome = outcome
+		return nil
+	}
+	if item.resultGroupFlush != nil {
+		flush := item.resultGroupFlush
+		return e.flushResultGroup(stepID, flush.collector, flush.reason)
+	}
+	if item.resultGroupClose != nil {
+		return e.closeResultGroup(stepID, item.resultGroupClose.collector)
+	}
 	if item.assistantCommit != nil {
 		commit := item.assistantCommit
 		if commit.result == nil {
