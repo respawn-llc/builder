@@ -337,32 +337,32 @@ func summarizeOutputItemTypes(items []llm.ResponseItem) []string {
 }
 
 type hostedToolExecution struct {
-	Call   llm.ToolCall
-	Result tools.Result
+	Call           llm.ToolCall
+	Result         tools.Result
+	outputPosition int
 }
 
 func hostedToolExecutionsFromOutputItems(items []llm.ResponseItem, defs []tools.Definition) []hostedToolExecution {
-	hostedOutputs := make([]tools.HostedToolOutput, 0, len(items))
-	for _, item := range items {
+	out := make([]hostedToolExecution, 0, len(items))
+	for position, item := range items {
 		id, _ := textutil.OptionalTrimmed(item.ID)
 		callID, _ := textutil.OptionalTrimmed(item.CallID)
-		hostedOutputs = append(hostedOutputs, tools.HostedToolOutput{
+		decoded := tools.HostedExecutionsFromOutputs([]tools.HostedToolOutput{{
 			ID:     id,
 			CallID: callID,
 			Raw:    append(json.RawMessage(nil), item.Raw...),
-		})
-	}
-	decoded := tools.HostedExecutionsFromOutputs(hostedOutputs, defs)
-	out := make([]hostedToolExecution, 0, len(decoded))
-	for _, execution := range decoded {
-		out = append(out, hostedToolExecution{
-			Call: llm.ToolCall{
-				ID:    execution.Call.ID,
-				Name:  string(execution.Call.Name),
-				Input: execution.Call.Input,
-			},
-			Result: execution.Result,
-		})
+		}}, defs)
+		for _, execution := range decoded {
+			out = append(out, hostedToolExecution{
+				Call: llm.ToolCall{
+					ID:    execution.Call.ID,
+					Name:  string(execution.Call.Name),
+					Input: execution.Call.Input,
+				},
+				Result:         execution.Result,
+				outputPosition: position,
+			})
+		}
 	}
 	return out
 }

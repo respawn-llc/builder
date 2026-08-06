@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/prompts"
@@ -56,12 +57,26 @@ type completedResponsePreflightRejection struct {
 type acceptedResponseCalls struct {
 	local  []llm.ToolCall
 	hosted []hostedToolExecution
+	order  []acceptedResponseCallRef
+}
+
+type acceptedResponseCallSource uint8
+
+const (
+	acceptedResponseCallLocal acceptedResponseCallSource = iota + 1
+	acceptedResponseCallHosted
+)
+
+type acceptedResponseCallRef struct {
+	source acceptedResponseCallSource
+	index  int
 }
 
 func planAcceptedResponseCalls(
 	workflowActive bool,
 	phaseTurn *phaseProtocolTurn,
-) (acceptedResponseCalls, *completedResponsePreflightRejection) {
+	outputItems []llm.ResponseItem,
+) (acceptedResponseCalls, *completedResponsePreflightRejection, error) {
 	calls := acceptedResponseCalls{
 		local:  append([]llm.ToolCall(nil), phaseTurn.LocalToolCalls...),
 		hosted: append([]hostedToolExecution(nil), phaseTurn.HostedToolExecutions...),
@@ -72,9 +87,12 @@ func planAcceptedResponseCalls(
 		workflowActive,
 		calls,
 	); rejection != nil {
-		return acceptedResponseCalls{}, rejection
+		return acceptedResponseCalls{}, rejection, nil
 	}
-	return calls, nil
+	if err := calls.establishCanonicalOrder(outputItems); err != nil {
+		return acceptedResponseCalls{}, nil, err
+	}
+	return calls, nil, nil
 }
 
 func (c acceptedResponseCalls) hasCalls() bool {
@@ -82,11 +100,155 @@ func (c acceptedResponseCalls) hasCalls() bool {
 }
 
 func (c acceptedResponseCalls) toolCalls() []llm.ToolCall {
-	result := append([]llm.ToolCall(nil), c.local...)
-	for _, hosted := range c.hosted {
-		result = append(result, hosted.Call)
+	result := make([]llm.ToolCall, 0, len(c.order))
+	for _, ref := range c.order {
+		switch ref.source {
+		case acceptedResponseCallLocal:
+			result = append(result, c.local[ref.index])
+		case acceptedResponseCallHosted:
+			result = append(result, c.hosted[ref.index].Call)
+		default:
+			panic(fmt.Sprintf(
+				"accepted response call order contains unknown source %d at index %d",
+				ref.source,
+				ref.index,
+			))
+		}
 	}
 	return result
+}
+
+func (c *acceptedResponseCalls) establishCanonicalOrder(outputItems []llm.ResponseItem) error {
+	seenIDs := make(map[string]struct{}, len(c.local)+len(c.hosted))
+	for _, call := range c.local {
+		if err := registerAcceptedCallID(seenIDs, call.ID); err != nil {
+			return err
+		}
+	}
+	for _, hosted := range c.hosted {
+		if err := registerAcceptedCallID(seenIDs, hosted.Call.ID); err != nil {
+			return err
+		}
+	}
+
+	if len(c.hosted) == 0 {
+		c.order = make([]acceptedResponseCallRef, len(c.local))
+		for index := range c.local {
+			c.order[index] = acceptedResponseCallRef{
+				source: acceptedResponseCallLocal,
+				index:  index,
+			}
+		}
+		return nil
+	}
+	if len(c.local) == 0 {
+		c.order = make([]acceptedResponseCallRef, len(c.hosted))
+		for index := range c.hosted {
+			c.order[index] = acceptedResponseCallRef{
+				source: acceptedResponseCallHosted,
+				index:  index,
+			}
+		}
+		return nil
+	}
+
+	type positionedCall struct {
+		position int
+		ref      acceptedResponseCallRef
+	}
+	positioned := make([]positionedCall, 0, len(c.local)+len(c.hosted))
+	seenPositions := make(map[int]string, len(c.local)+len(c.hosted))
+	for index, call := range c.local {
+		positions := outputPositionsForLocalCall(outputItems, call.ID)
+		if len(positions) != 1 {
+			return fmt.Errorf(
+				"mixed accepted local tool call %q has %d canonical output positions, want 1",
+				call.ID,
+				len(positions),
+			)
+		}
+		if err := registerAcceptedOutputPosition(seenPositions, positions[0], call.ID); err != nil {
+			return err
+		}
+		positioned = append(positioned, positionedCall{
+			position: positions[0],
+			ref: acceptedResponseCallRef{
+				source: acceptedResponseCallLocal,
+				index:  index,
+			},
+		})
+	}
+	for index, hosted := range c.hosted {
+		if err := registerAcceptedOutputPosition(
+			seenPositions,
+			hosted.outputPosition,
+			hosted.Call.ID,
+		); err != nil {
+			return err
+		}
+		positioned = append(positioned, positionedCall{
+			position: hosted.outputPosition,
+			ref: acceptedResponseCallRef{
+				source: acceptedResponseCallHosted,
+				index:  index,
+			},
+		})
+	}
+	sort.Slice(positioned, func(left, right int) bool {
+		return positioned[left].position < positioned[right].position
+	})
+	c.order = make([]acceptedResponseCallRef, len(positioned))
+	for index, call := range positioned {
+		c.order[index] = call.ref
+	}
+	return nil
+}
+
+func registerAcceptedCallID(seen map[string]struct{}, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("accepted tool call ID is required")
+	}
+	if _, exists := seen[callID]; exists {
+		return fmt.Errorf("accepted tool call ID %q is duplicated", callID)
+	}
+	seen[callID] = struct{}{}
+	return nil
+}
+
+func outputPositionsForLocalCall(items []llm.ResponseItem, callID string) []int {
+	callID = strings.TrimSpace(callID)
+	var positions []int
+	for position, item := range items {
+		switch item.Type {
+		case llm.ResponseItemTypeFunctionCall, llm.ResponseItemTypeCustomToolCall:
+		default:
+			continue
+		}
+		itemID, hasItemID := textutil.OptionalTrimmed(item.ID)
+		itemCallID, hasItemCallID := textutil.OptionalTrimmed(item.CallID)
+		if hasItemID && itemID == callID || hasItemCallID && itemCallID == callID {
+			positions = append(positions, position)
+		}
+	}
+	return positions
+}
+
+func registerAcceptedOutputPosition(
+	seen map[int]string,
+	position int,
+	callID string,
+) error {
+	if previousCallID, exists := seen[position]; exists {
+		return fmt.Errorf(
+			"accepted tool calls %q and %q share canonical output position %d",
+			previousCallID,
+			callID,
+			position,
+		)
+	}
+	seen[position] = callID
+	return nil
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
@@ -493,10 +655,14 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		return preparedCompletedResponse{}, err
 	}
 	assistantMsg := phaseTurn.Assistant
-	acceptedCalls, rejection := planAcceptedResponseCalls(
+	acceptedCalls, rejection, err := planAcceptedResponseCalls(
 		e.currentNodeExecutionActive(),
 		&phaseTurn,
+		resp.OutputItems,
 	)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
 	executedToolCall := acceptedCalls.hasCalls()
 	noopFinalAnswer := isNoopFinalAnswer(assistantMsg)
 
@@ -622,10 +788,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	toolCallMessage := llm.Message{
 		Role:      llm.RoleAssistant,
 		Phase:     textutil.Value(llm.MessagePhaseCommentary),
-		ToolCalls: append([]llm.ToolCall(nil), calls.local...),
-	}
-	for _, hosted := range calls.hosted {
-		toolCallMessage.ToolCalls = append(toolCallMessage.ToolCalls, hosted.Call)
+		ToolCalls: calls.toolCalls(),
 	}
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{toolCallMessage})); err != nil {
 		return false, false, err
