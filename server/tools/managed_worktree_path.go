@@ -31,9 +31,6 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string, 
 		if err != nil {
 			return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 		}
-		if !pathWithin(base, current) {
-			return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, base)
-		}
 		context.currentRoot = &current
 	}
 	for _, root := range managedWorktreeRoots {
@@ -96,9 +93,6 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 	if err != nil {
 		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 	}
-	if !pathWithin(c.baseRoot, current) {
-		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, c.baseRoot)
-	}
 	if err := validateCurrentManagedWorktreeRoot(current, next.managedRoots); err != nil {
 		return nil, err
 	}
@@ -136,18 +130,13 @@ func pathWithin(root string, path string) bool {
 }
 
 func validateCurrentManagedWorktreeRoot(current string, managedRoots []string) error {
-	registered := false
 	for _, managedRoot := range managedRoots {
 		if samePathIdentity(current, managedRoot) {
-			registered = true
 			continue
 		}
 		if properlyNestedPaths(current, managedRoot) {
 			return fmt.Errorf("managed worktree root %q overlaps current managed worktree root %q", managedRoot, current)
 		}
-	}
-	if !registered {
-		return fmt.Errorf("current managed worktree root %q is not a registered managed worktree root", current)
 	}
 	return nil
 }

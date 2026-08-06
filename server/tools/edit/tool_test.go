@@ -158,6 +158,16 @@ func TestManagedWorktreePathContextRejectsNestedRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("managed worktree path context with registered current root: %v", err)
 	}
+	externalRoot := filepath.Join(t.TempDir(), "external")
+	if err := os.MkdirAll(externalRoot, 0o755); err != nil {
+		t.Fatalf("mkdir external root: %v", err)
+	}
+	if _, err := tools.NewManagedWorktreePathContext(base, &externalRoot, []string{outer}); err != nil {
+		t.Fatalf("managed worktree path context rejected adopted external current root: %v", err)
+	}
+	if _, err := context.WithCurrentWorktreeRoot(&externalRoot); err != nil {
+		t.Fatalf("managed worktree path context rejected adopted external rebinding: %v", err)
+	}
 	if _, err := context.WithCurrentWorktreeRoot(&inner); err == nil {
 		t.Fatal("managed worktree path context rebound to an unregistered nested root")
 	}
