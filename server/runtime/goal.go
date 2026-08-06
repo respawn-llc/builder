@@ -649,12 +649,17 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
-	if err == nil ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, ErrAgentBusy) ||
-		errors.Is(err, errGoalLoopInactive) ||
-		errors.Is(err, ErrEngineClosed) {
+	message := e.persistRunErrorFeedback(err)
+	if message == "" {
 		return
+	}
+	e.SetStreamingError(message)
+}
+
+func (e *Engine) persistRunErrorFeedback(err error) string {
+	message, ok := runErrorFeedbackMessage(err)
+	if !ok {
+		return ""
 	}
 	message, appendErr := e.steerRuntimeErrorFeedback(err)
 	if appendErr != nil {
@@ -667,7 +672,51 @@ func (e *Engine) surfaceRunError(err error) {
 			Text:       "Failed to persist run error: " + appendErr.Error(),
 		}))
 	}
+	return message
+}
+
+func (e *Engine) setStreamingRunError(err error) {
+	message, ok := runErrorFeedbackMessage(err)
+	if !ok {
+		return
+	}
 	e.SetStreamingError(message)
+}
+
+func (e *Engine) finishRunErrorFeedback(err error) {
+	if errors.Is(err, errPendingModelRecoveryClear) {
+		e.surfaceRunError(err)
+		return
+	}
+	e.setStreamingRunError(err)
+}
+
+func runErrorFeedbackMessage(err error) (string, bool) {
+	if err == nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrAgentBusy) ||
+		errors.Is(err, errGoalLoopInactive) ||
+		errors.Is(err, ErrEngineClosed) {
+		return "", false
+	}
+	message := strings.TrimSpace(llm.UserFacingError(err))
+	if message == "" {
+		message = err.Error()
+	}
+	return message, true
+}
+
+func (e *Engine) withRunErrorFeedbackBeforeStepClose(
+	run func(context.Context, string) error,
+) func(context.Context, string) error {
+	if run == nil {
+		panic("step run callback is required")
+	}
+	return func(ctx context.Context, stepID string) error {
+		err := run(ctx, stepID)
+		e.persistRunErrorFeedback(err)
+		return err
+	}
 }
 
 func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {

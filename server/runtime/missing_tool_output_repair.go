@@ -36,6 +36,15 @@ const (
 // fabricating a successful one or silently erasing the call from history.
 var missingToolOutputInterruptedOutput = json.RawMessage(`{"error":"Tool execution was interrupted before a result was produced. No output is available for this call."}`)
 
+func missingToolOutputInterruptedResult(callID string, name toolspec.ID) tools.Result {
+	return tools.Result{
+		CallID:  callID,
+		Name:    name,
+		IsError: true,
+		Output:  append(json.RawMessage(nil), missingToolOutputInterruptedOutput...),
+	}
+}
+
 // missingToolOutputUnavailableOutput is the cause-independent result recorded
 // by fresh-resource recovery. It describes only the durable fact available at
 // startup and does not infer whether execution began or completed.
@@ -135,12 +144,9 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	}
 	repaired := 0
 	for _, call := range dangling {
-		if err := e.steer(*call.stepID, steerToolCompletionIntent(tools.Result{
-			CallID:  call.callID,
-			Name:    toolspec.ID(call.name),
-			IsError: true,
-			Output:  append(json.RawMessage(nil), policy.output...),
-		})); err != nil {
+		result := missingToolOutputInterruptedResult(call.callID, toolspec.ID(call.name))
+		result.Output = append(json.RawMessage(nil), policy.output...)
+		if err := e.steer(*call.stepID, steerToolCompletionIntent(result)); err != nil {
 			return repaired, err
 		}
 		repaired++

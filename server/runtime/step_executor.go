@@ -841,7 +841,11 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 		return false, false, nil
 	}
 	e := s.engine
-	results, err := e.executeAcceptedToolCalls(ctx, stepID, calls)
+	results, durableTerminal, err := e.executeAcceptedToolCallsCoordinated(
+		ctx,
+		stepID,
+		calls,
+	)
 	if err != nil {
 		return false, false, err
 	}
@@ -851,10 +855,6 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 		if !result.IsError && (result.Name == toolspec.ToolPatch || result.Name == toolspec.ToolEdit) {
 			patchEditsApplied = true
 		}
-	}
-	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)
-	if err != nil {
-		return false, false, err
 	}
 	return patchEditsApplied, terminal || durableTerminal, nil
 }

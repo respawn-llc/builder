@@ -758,6 +758,9 @@ func runSecondQuestionBarrierAttentionCase(
 		results[1].CallID != "" {
 		t.Fatalf("two-Question results = %+v, want first complete and blocked second absent", results)
 	}
+	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("question-2"); found {
+		t.Fatal("collector fatal was converted into an interrupted or semantic second-Question result")
+	}
 
 	pending := nextQuestionBarrierAttentionEvent(t, attentionSub)
 	if pending.Type != clientui.AttentionNotificationEventPending ||
