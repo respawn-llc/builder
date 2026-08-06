@@ -76,7 +76,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
-	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(in.Path, resolved.real) {
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved.real) {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
 	}
 	unlock := tools.LockFSGuardPaths([]string{resolved.real})

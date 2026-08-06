@@ -126,8 +126,9 @@ func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
 	current := filepath.Join(currentRoot, "current.txt")
+	foreign := filepath.Join(foreignRoot, "foreign.txt")
 	outside := filepath.Join(outsideRoot, "outside.txt")
-	for _, path := range []string{current, outside} {
+	for _, path := range []string{current, foreign, outside} {
 		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
@@ -146,6 +147,7 @@ func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.
 		isError bool
 	}{
 		{name: "relative current", path: "../current.txt", old: "before", new: "after"},
+		{name: "relative foreign", path: filepath.Join("..", "..", "foreign", "foreign.txt"), old: "before", new: "after", isError: true},
 		{name: "absolute current", path: current, old: "after", new: "again"},
 		{name: "absolute outside managed base", path: outside, old: "before", new: "after"},
 	}

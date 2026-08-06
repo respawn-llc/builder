@@ -397,18 +397,10 @@ func nullableStringPointer(value *string) sql.NullString {
 func taskSourceWorkspaceForExecution(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.Workspace, error) {
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	if sourceWorkspaceID == "" {
-		workspaces, err := q.ListProjectWorkspaces(ctx, task.ProjectID)
+		var err error
+		sourceWorkspaceID, err = resolveProjectSourceWorkspaceID(ctx, q, task.ProjectID)
 		if err != nil {
 			return sqlitegen.Workspace{}, err
-		}
-		for _, workspace := range workspaces {
-			if workspace.IsPrimary != 0 {
-				sourceWorkspaceID = workspace.ID
-				break
-			}
-		}
-		if sourceWorkspaceID == "" && len(workspaces) > 0 {
-			sourceWorkspaceID = workspaces[0].ID
 		}
 	}
 	if sourceWorkspaceID == "" {

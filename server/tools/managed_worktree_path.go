@@ -35,8 +35,8 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) 
 	return context, nil
 }
 
-func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(requestedPath string, resolvedPath string) bool {
-	if !filepath.IsAbs(requestedPath) || !pathWithin(c.baseRoot, resolvedPath) {
+func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(resolvedPath string) bool {
+	if !pathWithin(c.baseRoot, resolvedPath) {
 		return false
 	}
 	return c.currentRoot == nil || !pathWithin(*c.currentRoot, resolvedPath)

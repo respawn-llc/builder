@@ -128,7 +128,7 @@ func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, er
 			if err != nil {
 				return false, err
 			}
-			if t.managedWorktreePathContext.IsForeignManagedWorktreePath(path, resolved) {
+			if t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved) {
 				return true, nil
 			}
 		}

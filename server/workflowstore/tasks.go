@@ -621,6 +621,23 @@ func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Que
 		}
 		return workspaceID, nil
 	}
+	return resolveProjectSourceWorkspaceID(ctx, q, projectID)
+}
+
+func resolveProjectSourceWorkspaceID(ctx context.Context, q *sqlitegen.Queries, projectID string) (string, error) {
+	primaryWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, projectID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	if err == nil && strings.TrimSpace(primaryWorkspaceID) != "" {
+		primaryWorkspace, workspaceErr := q.GetWorkspaceByID(ctx, strings.TrimSpace(primaryWorkspaceID))
+		if workspaceErr == nil && strings.TrimSpace(primaryWorkspace.ProjectID) == strings.TrimSpace(projectID) {
+			return strings.TrimSpace(primaryWorkspace.ID), nil
+		}
+		if workspaceErr != nil && !errors.Is(workspaceErr, sql.ErrNoRows) {
+			return "", workspaceErr
+		}
+	}
 	workspaces, err := q.ListProjectWorkspaces(ctx, projectID)
 	if err != nil {
 		return "", err

@@ -79,8 +79,10 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
 	currentFile := filepath.Join(currentRoot, "current.txt")
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
 	outsideFile := filepath.Join(outsideRoot, "outside.txt")
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
+	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
 	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
 	if err != nil {
@@ -96,6 +98,7 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 		isError bool
 	}{
 		{name: "relative current", path: filepath.Join("..", "current.txt"), old: "before", new: "after"},
+		{name: "relative foreign", path: filepath.Join("..", "..", "foreign", "foreign.txt"), old: "before", new: "after", isError: true},
 		{name: "absolute current", path: currentFile, old: "after", new: "again"},
 		{name: "absolute outside managed base", path: outsideFile, old: "before", new: "after"},
 	}
