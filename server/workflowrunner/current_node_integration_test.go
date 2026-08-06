@@ -787,7 +787,7 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
-	implementation := f.startTask(t, task)
+	f.startTask(t, task)
 
 	approval := f.waitForPendingApproval(t, task.ID)
 	if len(client.CompactionCalls()) != 1 {
@@ -803,7 +803,7 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 	if len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending Approvals after finalization diagnostic = %+v, want original Approval", pending)
 	}
-	f.waitForControllerCurrentNodeFinalized(t, implementation)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for {
 		_, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID)
