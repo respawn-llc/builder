@@ -17,6 +17,7 @@ import (
 	"core/server/auth"
 	"core/server/metadata"
 	"core/shared/apicontract"
+	"core/shared/invariant"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -38,6 +39,7 @@ const canceledByClientMessage = "request canceled by client"
 type Gateway struct {
 	deps     GatewayDependencies
 	identity protocol.ServerIdentity
+	debug    bool
 }
 
 type GatewayDependencies interface {
@@ -232,7 +234,11 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if strings.TrimSpace(identity.ProtocolVersion) == "" {
 		return nil, errors.New("server identity is required")
 	}
-	return &Gateway{deps: deps, identity: identity}, nil
+	debugMode := invariant.NewPolicy().Mode() == invariant.ModePanic
+	if debugDeps, ok := deps.(interface{ DebugEnabled() bool }); ok {
+		debugMode = debugMode || debugDeps.DebugEnabled()
+	}
+	return &Gateway{deps: deps, identity: identity, debug: debugMode}, nil
 }
 
 func isNilGatewayDependencies(deps GatewayDependencies) bool {
@@ -355,14 +361,18 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			stack := string(debug.Stack())
 			slog.Error(
 				"gateway request handler panicked",
 				"method", req.Method,
 				"request_id", req.ID,
 				"panic", recovered,
-				"stack", string(debug.Stack()),
+				"stack", stack,
 			)
 			stop()
+			if g.debug {
+				panic(recovered)
+			}
 		}
 	}()
 	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {

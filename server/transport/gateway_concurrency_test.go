@@ -32,10 +32,15 @@ func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
 type gatewayConcurrencyDependencies struct {
 	GatewayDependencies
 	workflow apicontract.WorkflowService
+	debug    bool
 }
 
 func (d *gatewayConcurrencyDependencies) WorkflowClient() apicontract.WorkflowService {
 	return d.workflow
+}
+
+func (d *gatewayConcurrencyDependencies) DebugEnabled() bool {
+	return d.debug
 }
 
 type gatewayCloseTracker struct {
@@ -228,6 +233,48 @@ func TestGatewayOrdinaryHandlerPanicClosesOnlyItsConnection(t *testing.T) {
 	next := dialGateway(t, server)
 	defer func() { _ = next.Close() }()
 	handshakeGateway(t, next)
+}
+
+func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	defer func() { _ = appCore.Close() }()
+
+	workflow := &gatewayConcurrencyWorkflowService{
+		WorkflowService: appCore.WorkflowClient(),
+		getWorkflowTask: func(_ context.Context, _ serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
+			panic("gateway debug test panic")
+		},
+	}
+	deps := &gatewayConcurrencyDependencies{
+		GatewayDependencies: appCore,
+		workflow:            workflow,
+		debug:               true,
+	}
+	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	req := protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "panic",
+		Method:  protocol.MethodWorkflowTaskGet,
+		Params:  mustJSON(t, serverapi.WorkflowTaskGetRequest{TaskID: "panic"}),
+	}
+	state := &connectionState{handshakeDone: true}
+	stopped := false
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("debug panic was recovered instead of re-panicked")
+		}
+		if !stopped {
+			t.Fatal("debug panic did not close the connection")
+		}
+	}()
+	gateway.serveOrdinaryGatewayRequest(nil, context.Background(), state, req, gatewayRequestSchedule{
+		kind: gatewayRequestScheduleOrdinary,
+	}, func() {
+		stopped = true
+	})
 }
 
 func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) {
