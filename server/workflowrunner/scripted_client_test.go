@@ -43,15 +43,22 @@ func (c *compactingScriptedClient) Requests() []llm.Request {
 	return c.base.Requests()
 }
 
-func (c *compactingScriptedClient) Compact(_ context.Context, request llm.CompactionRequest) (llm.CompactionResponse, error) {
+func (c *compactingScriptedClient) Compact(ctx context.Context, request llm.CompactionRequest) (llm.CompactionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return llm.CompactionResponse{}, err
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.compactions = append(c.compactions, request)
 	if len(c.responses) == 0 {
+		c.mu.Unlock()
 		return llm.CompactionResponse{}, ErrScriptedRuntime
 	}
 	response := c.responses[0]
 	c.responses = c.responses[1:]
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return llm.CompactionResponse{}, err
+	}
 	response.TrimmedItemsCount = new(int)
 	*response.TrimmedItemsCount = len(request.InputItems)
 	return response, nil

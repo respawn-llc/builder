@@ -60,13 +60,6 @@ func (g *PersistenceGate) BlockNext() (<-chan struct{}, func()) {
 }
 
 func (g *PersistenceGate) BlockWhen(match func(session.PersistedStoreSnapshot) bool) (<-chan struct{}, func()) {
-	return g.BlockWhenWithError(match, nil)
-}
-
-func (g *PersistenceGate) BlockWhenWithError(
-	match func(session.PersistedStoreSnapshot) bool,
-	err error,
-) (<-chan struct{}, func()) {
 	if match == nil {
 		panic("test persistence gate match requires a predicate")
 	}
@@ -74,7 +67,6 @@ func (g *PersistenceGate) BlockWhenWithError(
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 		match:   match,
-		err:     err,
 	}
 	g.arm(step)
 	var once sync.Once

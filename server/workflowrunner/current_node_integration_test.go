@@ -1152,12 +1152,12 @@ func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterrupte
 	threshold := 1
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 	var postCompactionObservation atomic.Bool
-	compactionFinalizationStarted, releaseCompactionFinalization := f.persistenceGate.BlockWhenWithError(func(session.PersistedStoreSnapshot) bool {
+	compactionFinalizationStarted, releaseCompactionFinalization := f.persistenceGate.BlockWhen(func(session.PersistedStoreSnapshot) bool {
 		if len(client.CompactionCalls()) == 0 {
 			return false
 		}
 		return postCompactionObservation.Swap(true)
-	}, context.Canceled)
+	})
 	t.Cleanup(releaseCompactionFinalization)
 	workflowID := createCurrentNodeTwoStepWorkflowWithTransition(
 		t,

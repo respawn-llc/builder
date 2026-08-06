@@ -511,6 +511,12 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 				runtimeState.UsedTokens >= runtimeState.PreCompactionTokens))
 	if shouldCompact {
 		result := runtimeState.Compact(ctx)
+		if cause := context.Cause(ctx); cause != nil {
+			if result.Diagnostic != nil {
+				return errors.Join(cause, result.Diagnostic)
+			}
+			return cause
+		}
 		if result.Diagnostic != nil {
 			if errors.Is(result.Diagnostic, context.Canceled) ||
 				context.Cause(ctx) != nil {
