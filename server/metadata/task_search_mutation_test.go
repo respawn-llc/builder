@@ -16,6 +16,7 @@ VALUES ('comment-mutation', 'task-mutation', 'comment create otter', 'user', 'op
 	assertTaskSearchSourceSearchable(t, store.db, "create title koala", "title", "task-mutation")
 	assertTaskSearchSourceSearchable(t, store.db, "create body llama", "body", "task-mutation")
 	assertTaskSearchSourceSearchable(t, store.db, "create otter", "comment", "comment-mutation")
+	assertTaskSearchInvariants(t, store.db)
 
 	if _, err := store.db.Exec(`UPDATE tasks SET title = 'task update title mongoose', body = 'task update body narwhal' WHERE id = 'task-mutation'`); err != nil {
 		t.Fatalf("update task sources: %v", err)
@@ -34,6 +35,7 @@ VALUES ('comment-mutation', 'task-mutation', 'comment create otter', 'user', 'op
 		t.Fatalf("delete Comment: %v", err)
 	}
 	assertTaskSearchSourceNotSearchable(t, store.db, "update puffin")
+	assertTaskSearchInvariants(t, store.db)
 	if _, err := store.db.Exec(`DELETE FROM tasks WHERE id = 'task-mutation'`); err != nil {
 		t.Fatalf("delete Task: %v", err)
 	}

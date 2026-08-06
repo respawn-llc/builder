@@ -90,8 +90,19 @@ INSERT INTO task_search_documents (source_kind, comment_id)
 SELECT 'comment', id
 FROM task_comments;
 
-INSERT INTO task_search_fts(task_search_fts) VALUES ('rebuild');
-INSERT INTO task_search_short_id_fts(task_search_short_id_fts) VALUES ('rebuild');
+INSERT INTO task_search_fts(rowid, title, body, comment)
+SELECT content.document_id, content.title, content.body, content.comment
+FROM task_search_content content
+JOIN task_search_documents document
+  ON document.document_id = content.document_id
+WHERE document.source_kind != 'short_id';
+
+INSERT INTO task_search_short_id_fts(rowid, short_id)
+SELECT content.document_id, content.short_id
+FROM task_search_content content
+JOIN task_search_documents document
+  ON document.document_id = content.document_id
+WHERE document.source_kind = 'short_id';
 
 -- +goose StatementBegin
 CREATE TRIGGER task_search_short_id_document_insert

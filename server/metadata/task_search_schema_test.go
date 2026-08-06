@@ -21,6 +21,12 @@ type taskSearchCanonicalSource struct {
 	text string
 }
 
+type taskSearchIndexOwnership struct {
+	sourceKind string
+	text       bool
+	shortID    bool
+}
+
 var taskSearchTriggerNames = []string{
 	"task_search_comment_body_after_update",
 	"task_search_comment_body_before_update",
@@ -570,9 +576,15 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 	canonical := queryTaskSearchCanonicalSources(t, db)
 	mappings := queryTaskSearchMappings(t, db)
 	content := queryTaskSearchContent(t, db)
-	ftsRowIDs := queryTaskSearchFTSRowIDs(t, db)
-	if len(canonical) != len(mappings) || len(canonical) != len(content) || len(canonical) != len(ftsRowIDs) {
-		t.Fatalf("task-search source counts = canonical:%d mapping:%d content:%d fts:%d, want one-to-one", len(canonical), len(mappings), len(content), len(ftsRowIDs))
+	indexOwnership := queryTaskSearchIndexOwnership(t, db)
+	if len(canonical) != len(mappings) || len(canonical) != len(content) || len(canonical) != len(indexOwnership) {
+		t.Fatalf(
+			"task-search source counts = canonical:%d mapping:%d content:%d indexed:%d, want one-to-one",
+			len(canonical),
+			len(mappings),
+			len(content),
+			len(indexOwnership),
+		)
 	}
 	for identity, source := range canonical {
 		documentID, ok := mappings[identity]
@@ -582,8 +594,21 @@ func assertTaskSearchInvariants(t *testing.T, db *sql.DB) {
 		if got, ok := content[documentID]; !ok || got != source.text {
 			t.Fatalf("canonical source %s content = %q, want %q", identity, got, source.text)
 		}
-		if !ftsRowIDs[documentID] {
-			t.Fatalf("canonical source %s document id %d is absent from FTS", identity, documentID)
+		ownership, ok := indexOwnership[documentID]
+		if !ok {
+			t.Fatalf("canonical source %s document id %d is absent from both FTS indexes", identity, documentID)
+		}
+		switch ownership.sourceKind {
+		case "short_id":
+			if ownership.text || !ownership.shortID {
+				t.Fatalf("Short ID document %d index ownership = %+v, want Short ID only", documentID, ownership)
+			}
+		case "title", "body", "comment":
+			if !ownership.text || ownership.shortID {
+				t.Fatalf("%s document %d index ownership = %+v, want text only", ownership.sourceKind, documentID, ownership)
+			}
+		default:
+			t.Fatalf("document %d has unknown source kind %q", documentID, ownership.sourceKind)
 		}
 	}
 }
@@ -672,26 +697,59 @@ func queryTaskSearchContent(t *testing.T, db *sql.DB) map[int64]string {
 	return out
 }
 
-func queryTaskSearchFTSRowIDs(t *testing.T, db *sql.DB) map[int64]bool {
+func queryTaskSearchIndexOwnership(t *testing.T, db *sql.DB) map[int64]taskSearchIndexOwnership {
 	t.Helper()
-	rows, err := db.Query(`SELECT rowid FROM task_search_fts`)
+	rows, err := db.Query(`
+WITH indexed_documents(document_id, index_owner) AS (
+    SELECT id, 'text'
+    FROM task_search_fts_docsize
+    UNION ALL
+    SELECT id, 'short_id'
+    FROM task_search_short_id_fts_docsize
+)
+SELECT index_row.document_id, index_row.index_owner, document.source_kind
+FROM indexed_documents index_row
+LEFT JOIN task_search_documents document
+  ON document.document_id = index_row.document_id
+ORDER BY index_row.document_id, index_row.index_owner`)
 	if err != nil {
-		t.Fatalf("list task-search FTS row ids: %v", err)
+		t.Fatalf("list task-search index ownership: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
-	out := map[int64]bool{}
+	out := map[int64]taskSearchIndexOwnership{}
 	for rows.Next() {
 		var documentID int64
-		if err := rows.Scan(&documentID); err != nil {
-			t.Fatalf("scan task-search FTS row id: %v", err)
+		var indexOwner string
+		var sourceKind sql.NullString
+		if err := rows.Scan(&documentID, &indexOwner, &sourceKind); err != nil {
+			t.Fatalf("scan task-search index ownership: %v", err)
 		}
-		if out[documentID] {
-			t.Fatalf("duplicate task-search FTS row id %d", documentID)
+		if !sourceKind.Valid {
+			t.Fatalf("task-search %s index contains orphan document id %d", indexOwner, documentID)
 		}
-		out[documentID] = true
+		ownership := out[documentID]
+		if ownership.sourceKind != "" && ownership.sourceKind != sourceKind.String {
+			t.Fatalf("task-search document %d source kinds = %q and %q", documentID, ownership.sourceKind, sourceKind.String)
+		}
+		ownership.sourceKind = sourceKind.String
+		switch indexOwner {
+		case "text":
+			if ownership.text {
+				t.Fatalf("task-search text index duplicates document id %d", documentID)
+			}
+			ownership.text = true
+		case "short_id":
+			if ownership.shortID {
+				t.Fatalf("task-search Short ID index duplicates document id %d", documentID)
+			}
+			ownership.shortID = true
+		default:
+			t.Fatalf("task-search document %d has unknown index owner %q", documentID, indexOwner)
+		}
+		out[documentID] = ownership
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate task-search FTS row ids: %v", err)
+		t.Fatalf("iterate task-search index ownership: %v", err)
 	}
 	return out
 }
