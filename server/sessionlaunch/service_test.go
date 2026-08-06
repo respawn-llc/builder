@@ -63,6 +63,10 @@ func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(co
 	return metadata.ProjectWorkspaceBoundary{ProjectID: "test-project", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
 }
 
+func (r sessionLaunchBoundaryResolver) ResolveProjectManagedWorktreeRoots(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

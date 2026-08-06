@@ -41,6 +41,10 @@ type SessionProjectWorkspaceBoundaryResolver interface {
 	ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sessionID string) (metadata.ProjectWorkspaceBoundary, error)
 }
 
+type SessionProjectManagedWorktreeRootsResolver interface {
+	ResolveProjectManagedWorktreeRoots(ctx context.Context, projectID string) ([]string, error)
+}
+
 // MetadataExecutionTargetStore is the metadata subset needed to copy a parent
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
@@ -89,6 +93,7 @@ type SessionPlan struct {
 	WorkspaceRoot                       string
 	ExecutionTarget                     clientui.SessionExecutionTarget
 	ProjectWorkspaceBoundary            metadata.ProjectWorkspaceBoundary
+	ManagedWorktreeRoots                []string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
 }
@@ -107,6 +112,7 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 		panic(fmt.Sprintf("session plan snapshot cannot scope session %q to %q: %v", meta.SessionID, containerDir, err))
 	}
 	plan.Descriptor = descriptor
+	plan.ManagedWorktreeRoots = append([]string(nil), plan.ManagedWorktreeRoots...)
 	plan.FirstPromptPreview = meta.FirstPromptPreview
 	plan.Goal = meta.Goal
 	plan.WorktreeReminder = meta.WorktreeReminder
@@ -454,6 +460,14 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	managedRootsResolver, ok := p.ProjectWorkspaceBoundary.(SessionProjectManagedWorktreeRootsResolver)
+	if !ok {
+		return SessionPlan{}, errors.New("project managed worktree roots resolver is required")
+	}
+	managedWorktreeRoots, err := managedRootsResolver.ResolveProjectManagedWorktreeRoots(ctx, projectWorkspaceBoundary.ProjectID)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
@@ -465,6 +479,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
 		ExecutionTarget:                     executionTarget,
 		ProjectWorkspaceBoundary:            projectWorkspaceBoundary.Clone(),
+		ManagedWorktreeRoots:                append([]string(nil), managedWorktreeRoots...),
 		Source:                              source,
 		BaseSource:                          baseSource,
 	}, store), nil

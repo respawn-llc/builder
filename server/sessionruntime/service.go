@@ -121,6 +121,10 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	if err != nil {
 		return AgentRuntimePlan{}, err
 	}
+	managedWorktreeRoots, err := s.metadataStore.ResolveProjectManagedWorktreeRoots(ctx, projectWorkspaceBoundary.ProjectID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	executionRoot := target.WorkspaceRoot
 	var currentWorktreeRoot *string
 	if target.Worktree != nil {
@@ -155,7 +159,7 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	}
 	var managedWorktreePathContext *tools.ManagedWorktreePathContext
 	if strings.TrimSpace(s.managedWorktreeBaseDir) != "" {
-		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot)
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot, managedWorktreeRoots)
 		if err != nil {
 			return AgentRuntimePlan{}, err
 		}

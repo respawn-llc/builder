@@ -48,7 +48,7 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}

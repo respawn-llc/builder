@@ -19,7 +19,9 @@ func TestCurrentNodeManagedWorktreePathContextProtectsNamespaceWithoutCurrentWor
 		},
 	}
 
-	pathContext, err := starter.currentNodeManagedWorktreePathContext(launch.SessionPlan{}, workflowstore.ExecutionRoot{})
+	pathContext, err := starter.currentNodeManagedWorktreePathContext(launch.SessionPlan{
+		ManagedWorktreeRoots: []string{filepath.Join(baseDir, "other-agent")},
+	}, workflowstore.ExecutionRoot{})
 	if err != nil {
 		t.Fatalf("currentNodeManagedWorktreePathContext: %v", err)
 	}

@@ -285,6 +285,10 @@ func (r fixedProjectWorkspaceBoundaryResolver) ResolveSessionProjectWorkspaceBou
 	}, nil
 }
 
+func (r fixedProjectWorkspaceBoundaryResolver) ResolveProjectManagedWorktreeRoots(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, background *shelltool.Manager, storeOptions ...session.StoreOption) *sessionruntime.Authority {
 	return sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: root,

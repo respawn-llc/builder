@@ -180,7 +180,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
 	if strings.TrimSpace(plan.BaseSettings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.BaseSettings.Worktrees.BaseDir, currentWorktreeRoot)
+		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.BaseSettings.Worktrees.BaseDir, currentWorktreeRoot, plan.ManagedWorktreeRoots)
 		if err != nil {
 			return nil, err
 		}

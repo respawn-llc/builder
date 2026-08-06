@@ -46,6 +46,10 @@ func (r testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(cont
 	}, nil
 }
 
+func (r testProjectBoundaryResolver) ResolveProjectManagedWorktreeRoots(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func newPersistenceBackedTestPlanner(cfg config.App, containerDir string, persistence *sessiontest.Persistence) Planner {
 	planner := newTestPlanner(cfg, containerDir, persistence.Options()...)
 	planner.PersistedSessions = persistence

@@ -12,6 +12,7 @@ import (
 	testsetup "core/internal/testharness/testsetup"
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/config"
 	"core/shared/toolspec"
 )
 
@@ -47,7 +48,7 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	}
 	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -116,6 +117,27 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 				t.Fatalf("unexpected managed worktree warning: %+v", result.ModelWarnings)
 			}
 		})
+	}
+}
+
+func TestManagedWorktreePathContextIgnoresOrdinaryWorkspaceInsideBase(t *testing.T) {
+	base := t.TempDir()
+	workspaceRoot := filepath.Join(base, "ordinary-workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	target := filepath.Join(workspaceRoot, "file.txt")
+	writeEditTestFile(t, target, "before\n", 0o644)
+	context, err := tools.NewManagedWorktreePathContext(base, nil, nil)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	resolvedTarget, err := config.ResolveExistingPathRealPath(target)
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if context.IsForeignManagedWorktreePath(resolvedTarget) {
+		t.Fatal("ordinary Workspace under managed base was classified as foreign")
 	}
 }
 

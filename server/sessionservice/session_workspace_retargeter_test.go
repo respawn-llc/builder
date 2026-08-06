@@ -201,7 +201,7 @@ func (f realSessionRetargetFixture) openRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}
-			context.ManagedWorktree, err = tools.NewManagedWorktreePathContext(f.managedBase, &f.sourceBinding.CanonicalRoot)
+			context.ManagedWorktree, err = tools.NewManagedWorktreePathContext(f.managedBase, nil, nil)
 			if err != nil {
 				t.Fatalf("NewManagedWorktreePathContext: %v", err)
 			}
@@ -357,8 +357,8 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	}); err != nil {
 		t.Fatalf("inspect retargeted filesystem context: %v", err)
 	}
-	if !foreign {
-		t.Fatal("retargeted Workspace was not protected by managed-worktree policy")
+	if foreign {
+		t.Fatal("ordinary retargeted Workspace under the managed base was classified as a foreign Worktree")
 	}
 }
 
