@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -12,6 +13,217 @@ import (
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
+
+func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing.T) {
+	t.Run("overlapping traces and measured zero", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		now := time.Unix(100, 0)
+		state := engine.transcriptRuntimeState()
+		state.now = func() time.Time { return now }
+		executor := &defaultStepExecutor{engine: engine}
+		firstOutput, firstPart := int64(0), int64(0)
+		secondOutput, secondPart := int64(1), int64(0)
+		first := &llm.ReasoningSourceCoordinate{OutputIndex: &firstOutput, PartIndex: &firstPart}
+		second := &llm.ReasoningSourceCoordinate{OutputIndex: &secondOutput, PartIndex: &secondPart}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: first, Text: "first",
+		})); err != nil {
+			t.Fatalf("seed first trace: %v", err)
+		}
+		now = now.Add(1500 * time.Millisecond)
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: first, Text: "first update",
+		})); err != nil {
+			t.Fatalf("update first trace: %v", err)
+		}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: second, Text: "second",
+		})); err != nil {
+			t.Fatalf("seed second trace: %v", err)
+		}
+		now = now.Add(1000 * time.Millisecond)
+		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{
+			{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "first", SourceCoordinate: first},
+			{Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "second", SourceCoordinate: second},
+		}); err != nil {
+			t.Fatalf("reconcile overlapping traces: %v", err)
+		}
+		events, err := collectTestEventRecords(store)
+		if err != nil {
+			t.Fatalf("collect persisted traces: %v", err)
+		}
+		var durations []int64
+		for _, event := range events {
+			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
+			if ok && entry.Role == string(transcript.EntryRoleReasoning) {
+				if entry.DurationMs == nil {
+					t.Fatalf("persisted reasoning trace omits duration: %+v", entry)
+				}
+				durations = append(durations, *entry.DurationMs)
+			}
+		}
+		if len(durations) != 2 || durations[0] != 2500 || durations[1] != 1000 {
+			t.Fatalf("persisted durations = %v, want [2500 1000]", durations)
+		}
+
+		zeroOutput, zeroPart := int64(2), int64(0)
+		zero := &llm.ReasoningSourceCoordinate{OutputIndex: &zeroOutput, PartIndex: &zeroPart}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: zero, Text: "zero",
+		})); err != nil {
+			t.Fatalf("seed zero trace: %v", err)
+		}
+		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "zero", SourceCoordinate: zero,
+		}}); err != nil {
+			t.Fatalf("reconcile zero trace: %v", err)
+		}
+		events, err = collectTestEventRecords(store)
+		if err != nil {
+			t.Fatalf("collect zero trace: %v", err)
+		}
+		var zeroDuration *int64
+		for _, event := range events {
+			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
+			if ok && entry.Text == "zero" {
+				zeroDuration = entry.DurationMs
+			}
+		}
+		if zeroDuration == nil || *zeroDuration != 0 {
+			t.Fatalf("zero trace duration = %v, want present zero", zeroDuration)
+		}
+	})
+
+	t.Run("failed commit retries from original start", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		now := time.Unix(200, 0)
+		engine.transcriptRuntimeState().now = func() time.Time { return now }
+		executor := &defaultStepExecutor{engine: engine}
+		output, part := int64(0), int64(0)
+		coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: coordinate, Text: "retry",
+		})); err != nil {
+			t.Fatalf("seed retry trace: %v", err)
+		}
+		now = now.Add(time.Second)
+		blocker := mustBlockTestEventLogAppends(t, store)
+		err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "retry", SourceCoordinate: coordinate,
+		}})
+		if err == nil {
+			t.Fatal("blocked reasoning commit unexpectedly succeeded")
+		}
+		if restoreErr := blocker.Restore(); restoreErr != nil {
+			t.Fatalf("restore blocked event log: %v", restoreErr)
+		}
+		now = now.Add(time.Second)
+		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "retry", SourceCoordinate: coordinate,
+		}}); err != nil {
+			t.Fatalf("retry reasoning commit: %v", err)
+		}
+		events, err := collectTestEventRecords(store)
+		if err != nil {
+			t.Fatalf("collect retry trace: %v", err)
+		}
+		for _, event := range events {
+			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
+			if ok && entry.Text == "retry" {
+				if entry.DurationMs == nil || *entry.DurationMs != 2000 {
+					t.Fatalf("retry duration = %v, want 2000ms", entry.DurationMs)
+				}
+				return
+			}
+		}
+		t.Fatal("retry reasoning trace was not persisted")
+	})
+
+	t.Run("reset starts a fresh interval and completed-only is absent", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		now := time.Unix(300, 0)
+		engine.transcriptRuntimeState().now = func() time.Time { return now }
+		executor := &defaultStepExecutor{engine: engine}
+		oldOutput, oldPart := int64(0), int64(0)
+		old := &llm.ReasoningSourceCoordinate{OutputIndex: &oldOutput, PartIndex: &oldPart}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: old, Text: "old",
+		})); err != nil {
+			t.Fatalf("seed old trace: %v", err)
+		}
+		now = now.Add(2 * time.Second)
+		if err := executor.resetProvisionalReasoning("step"); err != nil {
+			t.Fatalf("reset old trace: %v", err)
+		}
+		freshOutput, freshPart := int64(1), int64(0)
+		fresh := &llm.ReasoningSourceCoordinate{OutputIndex: &freshOutput, PartIndex: &freshPart}
+		if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+			SourceCoordinate: fresh, Text: "fresh",
+		})); err != nil {
+			t.Fatalf("seed fresh trace: %v", err)
+		}
+		now = now.Add(300 * time.Millisecond)
+		if err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
+			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "fresh", SourceCoordinate: fresh,
+		}}); err != nil {
+			t.Fatalf("reconcile fresh trace: %v", err)
+		}
+		events, err := collectTestEventRecords(store)
+		if err != nil {
+			t.Fatalf("collect reset trace: %v", err)
+		}
+		for _, event := range events {
+			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
+			if ok && entry.Text == "fresh" {
+				if entry.DurationMs == nil || *entry.DurationMs != 300 {
+					t.Fatalf("fresh duration = %v, want 300ms", entry.DurationMs)
+				}
+			}
+			if ok && entry.Text == "old" {
+				t.Fatalf("reset trace was persisted: %+v", entry)
+			}
+		}
+
+	})
+}
+
+func TestReasoningTraceDurationRestoresThroughPersistedTranscript(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	output, part := int64(0), int64(0)
+	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &part}
+	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
+		SourceCoordinate: coordinate, Text: "restored",
+	})); err != nil {
+		t.Fatalf("seed restored trace: %v", err)
+	}
+	if err := (&defaultStepExecutor{engine: engine}).reconcileReasoning("step", []llm.ReasoningEntry{{
+		Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "restored", SourceCoordinate: coordinate,
+	}}); err != nil {
+		t.Fatalf("persist restored trace: %v", err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close original engine: %v", err)
+	}
+	reopenedStore := mustOpenTestSession(t, store.Dir())
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := reopened.restoreMessages(); err != nil {
+		t.Fatalf("restore persisted transcript: %v", err)
+	}
+	snapshot := hydrationSnapshot(t, reopened)
+	for _, row := range snapshot.CommittedRows {
+		if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil {
+			if row.ReasoningTrace.DurationMs == nil {
+				t.Fatal("restored reasoning trace omitted duration")
+			}
+			return
+		}
+	}
+	t.Fatalf("restored reasoning trace row missing: %+v", snapshot.CommittedRows)
+}
 
 func TestCompletedResponseAbortThenReasoningResetWithoutAssistantStream(t *testing.T) {
 	var events []Event
@@ -521,6 +733,9 @@ func TestReasoningProjectionDoesNotRewritePersistedText(t *testing.T) {
 		if local, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok &&
 			local.Role == string(transcript.EntryRoleReasoning) {
 			persistedRows++
+			if local.DurationMs != nil {
+				t.Fatalf("completed-only duration = %v, want absent", local.DurationMs)
+			}
 			if local.Text != raw {
 				t.Fatalf("persisted reasoning text = %q, want %q", local.Text, raw)
 			}

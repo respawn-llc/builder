@@ -206,9 +206,10 @@ func cloneTranscriptReasoningTraceState(state *TranscriptReasoningTraceState) Tr
 		return TranscriptReasoningTraceState{}
 	}
 	out := TranscriptReasoningTraceState{
-		StepID: state.StepID,
-		Source: *llm.CloneReasoningSourceCoordinate(&state.Source),
-		Text:   state.Text,
+		StepID:    state.StepID,
+		Source:    *llm.CloneReasoningSourceCoordinate(&state.Source),
+		Text:      state.Text,
+		startedAt: state.startedAt,
 	}
 	out.Identity.Provider = llm.CloneReasoningItemIdentity(state.Identity.Provider)
 	out.ProviderMetadata = llm.CloneReasoningItemIdentity(state.ProviderMetadata)

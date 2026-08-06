@@ -68,6 +68,7 @@ type TranscriptToolRowFact struct {
 type TranscriptReasoningTraceRowFact struct {
 	Text                string
 	CompactText         string
+	DurationMs          *int64
 	ProvisionalIdentity *TranscriptReasoningTraceIdentity
 }
 
@@ -443,6 +444,7 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			ReasoningTrace: &TranscriptReasoningTraceRowFact{
 				Text:        presentation.Text,
 				CompactText: presentation.CompactText,
+				DurationMs:  textutil.Pointer(entry.DurationMs),
 			},
 		}, true
 	case "tool_call":

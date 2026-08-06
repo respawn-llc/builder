@@ -195,10 +195,12 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	t.Parallel()
 	afterToolCallID := "call-1"
+	durationMs := int64(1234)
 	localEntry := storedLocalEntry{
 		Visibility:      transcript.EntryVisibilityDetail,
 		Role:            "developer",
 		Text:            "operator feedback",
+		DurationMs:      &durationMs,
 		CondensedText:   textutil.Value("feedback"),
 		DiagnosticKey:   textutil.Value("diagnostic-1"),
 		NoticeID:        textutil.Value("notice-1"),

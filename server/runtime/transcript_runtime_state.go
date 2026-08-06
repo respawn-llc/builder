@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -25,10 +26,16 @@ type transcriptRuntimeState struct {
 	liveTools               *transcriptLiveToolLedger
 	reasoning               *transcriptReasoningAggregate
 	latestRollbackCandidate *rollbacktarget.CandidateLocator
+	now                     func() time.Time
 }
 
 func newTranscriptRuntimeState(cwd string) *transcriptRuntimeState {
-	return &transcriptRuntimeState{cwd: strings.TrimSpace(cwd), chat: newChatStore(), liveTools: newTranscriptLiveToolLedger()}
+	return &transcriptRuntimeState{
+		cwd:       strings.TrimSpace(cwd),
+		chat:      newChatStore(),
+		liveTools: newTranscriptLiveToolLedger(),
+		now:       time.Now,
+	}
 }
 
 func (s *transcriptRuntimeState) SetWorkingDir(workdir string) bool {
@@ -214,9 +221,10 @@ func (s *transcriptRuntimeState) SetReasoningState(stepID string, delta llm.Reas
 		return &trace.Identity, nil
 	}
 	trace := &TranscriptReasoningTraceState{
-		StepID: stepID,
-		Source: *llm.CloneReasoningSourceCoordinate(delta.SourceCoordinate),
-		Text:   delta.Text,
+		StepID:    stepID,
+		Source:    *llm.CloneReasoningSourceCoordinate(delta.SourceCoordinate),
+		Text:      delta.Text,
+		startedAt: s.now(),
 	}
 	if delta.ItemIdentity != nil {
 		trace.Identity.Provider = llm.CloneReasoningItemIdentity(delta.ItemIdentity)
@@ -228,6 +236,41 @@ func (s *transcriptRuntimeState) SetReasoningState(stepID string, delta llm.Reas
 	s.reasoning.bySource[coordinate] = len(s.reasoning.traces)
 	s.reasoning.traces = append(s.reasoning.traces, trace)
 	return &trace.Identity, nil
+}
+
+func (s *transcriptRuntimeState) ReasoningDurationMs(
+	stepID string,
+	coordinate *llm.ReasoningSourceCoordinate,
+) (*int64, error) {
+	if s == nil || coordinate == nil {
+		return nil, nil
+	}
+	if err := coordinate.Validate(); err != nil {
+		return nil, err
+	}
+	key := transcriptReasoningCoordinate{
+		output: *coordinate.OutputIndex,
+		part:   *coordinate.PartIndex,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reasoning == nil || s.reasoning.stepID != strings.TrimSpace(stepID) {
+		return nil, fmt.Errorf("reasoning trace owner step is not active")
+	}
+	index, ok := s.reasoning.bySource[key]
+	if !ok {
+		return nil, fmt.Errorf("reasoning trace source coordinate was not provisionally emitted")
+	}
+	trace := s.reasoning.traces[index]
+	if trace.startedAt.IsZero() {
+		return nil, fmt.Errorf("reasoning trace start time is missing")
+	}
+	elapsed := s.now().Sub(trace.startedAt)
+	if elapsed < 0 {
+		return nil, fmt.Errorf("reasoning trace clock moved backwards")
+	}
+	duration := elapsed.Milliseconds()
+	return &duration, nil
 }
 
 func (s *transcriptRuntimeState) ObserveReasoningItemIdentity(

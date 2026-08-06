@@ -75,12 +75,17 @@ func (s *defaultStepExecutor) reconcileReasoning(stepID string, entries []llm.Re
 				}
 			}
 			identity := cloneTranscriptReasoningTraceIdentity(&trace.trace.Identity)
+			durationMs, durationErr := s.engine.transcriptRuntimeState().ReasoningDurationMs(stepID, entry.SourceCoordinate)
+			if durationErr != nil {
+				return durationErr
+			}
 			receipt, err := s.engine.steerWithCommitReceipt(
 				stepID,
 				steerReasoningLocalEntryIntent(storedLocalEntry{
 					Visibility: transcript.EntryVisibilityDetail,
 					Role:       string(transcript.EntryRoleReasoning),
 					Text:       entry.Text,
+					DurationMs: durationMs,
 				}, *identity),
 			)
 			if receipt.Committed {

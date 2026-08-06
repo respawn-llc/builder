@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"time"
+
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/runtimeids"
@@ -42,6 +44,7 @@ type TranscriptReasoningTraceState struct {
 	Identity         TranscriptReasoningTraceIdentity
 	ProviderMetadata *llm.ReasoningItemIdentity
 	Text             string
+	startedAt        time.Time
 }
 
 type TranscriptReviewerState struct {
