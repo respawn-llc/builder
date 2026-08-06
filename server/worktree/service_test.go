@@ -11,6 +11,7 @@ import (
 	"core/shared/serverapi"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -302,7 +303,7 @@ func TestCreateWorktreeRejectsExplicitRootNestedInManagedWorktreeFromOtherProjec
 		t.Fatalf("MkdirAll other managed root: %v", err)
 	}
 	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
-		ID:            "other-project-managed-root",
+		ID:            uuid.NewString(),
 		WorkspaceID:   otherBinding.WorkspaceID,
 		CanonicalRoot: otherManagedRoot,
 		Managed:       true,

@@ -131,12 +131,19 @@ func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, er
 			if err != nil {
 				return false, err
 			}
-			if t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved) {
+			if err := t.checkForeignManagedWorktreePath(resolved); err != nil {
 				return true, nil
 			}
 		}
 	}
 	return false, nil
+}
+
+func (t *Tool) checkForeignManagedWorktreePath(resolved string) error {
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved) {
+		return fmt.Errorf("%s", tools.ForeignManagedWorktreeEditDeniedMessage)
+	}
+	return nil
 }
 
 func (t *Tool) apply(

@@ -141,6 +141,28 @@ func TestManagedWorktreePathContextIgnoresOrdinaryWorkspaceInsideBase(t *testing
 	}
 }
 
+func TestManagedWorktreePathContextRejectsNestedRoots(t *testing.T) {
+	base := t.TempDir()
+	outer := filepath.Join(base, "outer")
+	inner := filepath.Join(outer, "inner")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatalf("mkdir nested roots: %v", err)
+	}
+	if _, err := tools.NewManagedWorktreePathContext(base, nil, []string{outer, inner}); err == nil {
+		t.Fatal("managed worktree path context accepted nested managed roots")
+	}
+	if _, err := tools.NewManagedWorktreePathContext(base, &inner, []string{outer}); err == nil {
+		t.Fatal("managed worktree path context accepted a current root nested in a foreign root")
+	}
+	context, err := tools.NewManagedWorktreePathContext(base, &outer, []string{outer})
+	if err != nil {
+		t.Fatalf("managed worktree path context with registered current root: %v", err)
+	}
+	if _, err := context.WithCurrentWorktreeRoot(&inner); err == nil {
+		t.Fatal("managed worktree path context rebound to an unregistered nested root")
+	}
+}
+
 func TestExactReplaceAndReplaceAll(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")

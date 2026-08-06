@@ -48,11 +48,21 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string, 
 		if !pathWithin(base, resolved) {
 			return nil, fmt.Errorf("managed worktree root %q is outside managed worktree base %q", resolved, base)
 		}
+		for _, managedRoot := range context.managedRoots {
+			if properlyNestedPaths(managedRoot, resolved) {
+				return nil, fmt.Errorf("managed worktree roots %q and %q overlap", managedRoot, resolved)
+			}
+		}
 		if !slices.Contains(context.managedRoots, resolved) {
 			context.managedRoots = append(context.managedRoots, resolved)
 		}
 	}
 	slices.Sort(context.managedRoots)
+	if context.currentRoot != nil {
+		if err := validateCurrentManagedWorktreeRoot(*context.currentRoot, context.managedRoots); err != nil {
+			return nil, err
+		}
+	}
 	return context, nil
 }
 
@@ -89,6 +99,9 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 	if !pathWithin(c.baseRoot, current) {
 		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, c.baseRoot)
 	}
+	if err := validateCurrentManagedWorktreeRoot(current, next.managedRoots); err != nil {
+		return nil, err
+	}
 	next.currentRoot = &current
 	return next, nil
 }
@@ -120,4 +133,29 @@ func pathWithin(root string, path string) bool {
 	}
 	rel, err := filepath.Rel(rootIdentity, pathIdentity)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func validateCurrentManagedWorktreeRoot(current string, managedRoots []string) error {
+	registered := false
+	for _, managedRoot := range managedRoots {
+		if samePathIdentity(current, managedRoot) {
+			registered = true
+			continue
+		}
+		if properlyNestedPaths(current, managedRoot) {
+			return fmt.Errorf("managed worktree root %q overlaps current managed worktree root %q", managedRoot, current)
+		}
+	}
+	if !registered {
+		return fmt.Errorf("current managed worktree root %q is not a registered managed worktree root", current)
+	}
+	return nil
+}
+
+func properlyNestedPaths(first string, second string) bool {
+	return !samePathIdentity(first, second) && (pathWithin(first, second) || pathWithin(second, first))
+}
+
+func samePathIdentity(first string, second string) bool {
+	return pathWithin(first, second) && pathWithin(second, first)
 }

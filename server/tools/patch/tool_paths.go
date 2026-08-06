@@ -61,7 +61,17 @@ func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, app
 	if err != nil {
 		return "", err
 	}
-	return t.guardResolvedPath(ctx, path, real, approvedOutside)
+	if err := t.checkForeignManagedWorktreePath(real); err != nil {
+		return "", err
+	}
+	real, err = t.guardResolvedPath(ctx, path, real, approvedOutside)
+	if err != nil {
+		return "", err
+	}
+	if err := t.checkForeignManagedWorktreePath(real); err != nil {
+		return "", err
+	}
+	return real, nil
 }
 
 func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {

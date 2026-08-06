@@ -61,6 +61,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 		if err != nil {
 			return err
 		}
+		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
+			return err
+		}
 		targets = append(targets, documentPath{raw: raw, resolved: resolved})
 		return nil
 	}
@@ -102,6 +105,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 	for _, target := range targets {
 		resolved, err := s.tool.guardResolvedPath(s.ctx, target.raw, target.resolved, s.approvedOutside)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
 			return nil, err
 		}
 		paths = append(paths, resolved)
