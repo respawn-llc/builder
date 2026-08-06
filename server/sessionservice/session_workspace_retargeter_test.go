@@ -352,7 +352,7 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	}
 	var foreign bool
 	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
-		foreign = maintenance.PreviousFilesystemContext.ManagedWorktree.IsForeignManagedWorktreePath(result.Binding.CanonicalRoot, result.Binding.CanonicalRoot)
+		foreign = maintenance.PreviousFilesystemContext.ManagedWorktree.IsForeignManagedWorktreePath(result.Binding.CanonicalRoot)
 		return nil
 	}); err != nil {
 		t.Fatalf("inspect retargeted filesystem context: %v", err)
