@@ -237,6 +237,7 @@ func TestManagedRootAllocatorPanicsAfterCollisionAttemptsAreExhausted(t *testing
 func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "base")
 	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	source := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	absolute := filepath.Join(t.TempDir(), "outside")
@@ -257,7 +258,7 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := allocator.resolveExplicitRoot(tt.request)
+			got, err := allocator.resolveExplicitRoot(tt.request, source)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("resolveExplicitRoot(%q) succeeded", tt.request)
@@ -267,7 +268,7 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveExplicitRoot(%q): %v", tt.request, err)
 			}
-			want, err := config.CanonicalWorkspaceRoot(tt.want)
+			want, err := config.ResolveExistingAncestorRealPath(tt.want)
 			if err != nil {
 				t.Fatalf("canonical expected root: %v", err)
 			}
@@ -275,6 +276,35 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 				t.Fatalf("resolveExplicitRoot(%q) = %q, want %q", tt.request, got, want)
 			}
 		})
+	}
+}
+
+func TestManagedRootAllocatorRejectsRelativeSymlinkEscape(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base")
+	outside := t.TempDir()
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "link")); err != nil {
+		t.Fatalf("symlink base child: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	if _, err := allocator.resolveExplicitRoot("link/new", t.TempDir()); err == nil {
+		t.Fatal("relative symlink escape was accepted")
+	}
+}
+
+func TestManagedRootAllocatorRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	for _, request := range []string{"source/nested", source} {
+		if _, err := allocator.resolveExplicitRoot(request, source); err == nil {
+			t.Fatalf("explicit root %q overlapped source workspace", request)
+		}
 	}
 }
 

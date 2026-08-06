@@ -627,7 +627,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		if requestedRoot == "" {
 			return TaskWorktreeMaterialization{}, errors.New("requested managed worktree root is required")
 		}
-		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(requestedRoot)
+		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(requestedRoot, req.Workspace.RootPath)
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
@@ -1135,7 +1135,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 		rootKind = managedRootKindAutomatic
 	} else {
-		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath)
+		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath, workspaceCtx.workspaceRoot)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}

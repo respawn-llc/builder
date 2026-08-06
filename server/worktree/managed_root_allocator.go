@@ -109,7 +109,7 @@ func (a *managedRootAllocator) automaticBase() (string, error) {
 	return a.base.path, nil
 }
 
-func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string, error) {
+func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string, sourceWorkspaceRoot string) (string, error) {
 	trimmed := strings.TrimSpace(requestedRoot)
 	if trimmed == "" {
 		return "", errors.New("requested managed worktree root is required")
@@ -118,37 +118,35 @@ func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string
 	if err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(expanded) {
-		base, err := a.automaticBase()
-		if err != nil {
-			return "", err
-		}
-		resolved, err := config.ResolveExistingAncestorRealPath(expanded)
-		if err != nil {
-			return "", err
-		}
-		if !sameOrDescendantPath(base, resolved) {
-			return "", fmt.Errorf("absolute managed worktree root %q is outside base %q", expanded, base)
-		}
-		canonical, err := config.CanonicalWorkspaceRoot(expanded)
-		if err != nil {
-			return "", err
-		}
-		return canonical, nil
-	}
 	base, err := a.automaticBase()
 	if err != nil {
 		return "", err
 	}
-	cleaned := filepath.Clean(expanded)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("relative worktree root %q escapes base dir", requestedRoot)
+	var candidate string
+	if filepath.IsAbs(expanded) {
+		candidate = expanded
+	} else {
+		cleaned := filepath.Clean(expanded)
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("relative worktree root %q escapes base dir", requestedRoot)
+		}
+		candidate = filepath.Join(base, cleaned)
 	}
-	candidate := filepath.Join(base, cleaned)
-	if !sameOrDescendantPath(base, candidate) {
-		return "", fmt.Errorf("managed worktree path %q escapes base %q", candidate, base)
+	resolved, err := config.ResolveExistingAncestorRealPath(candidate)
+	if err != nil {
+		return "", err
 	}
-	return config.CanonicalWorkspaceRoot(candidate)
+	if !sameOrDescendantPath(base, resolved) {
+		return "", fmt.Errorf("managed worktree root %q is outside base %q", requestedRoot, base)
+	}
+	source, err := config.CanonicalWorkspaceRoot(sourceWorkspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize source workspace root: %w", err)
+	}
+	if sameOrDescendantPath(source, resolved) || sameOrDescendantPath(resolved, source) {
+		return "", fmt.Errorf("managed worktree root %q overlaps source workspace %q", requestedRoot, source)
+	}
+	return resolved, nil
 }
 
 func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (string, error) {

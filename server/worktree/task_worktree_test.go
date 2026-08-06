@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -49,6 +50,52 @@ func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want no provisional candidate", row.ManagedWorktreeID)
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	record.CanonicalRoot = filepath.Join(env.workspaceRoot, "nested")
+	record.UpdatedAt = time.Now().UTC()
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(record.CanonicalRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot overlapping root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   record.UpdatedAt.UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot overlapping root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if _, err := os.Stat(record.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("overlapping root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
 	}
 }
 

@@ -210,6 +210,50 @@ func TestCreateWorktreePreservesExplicitRoot(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeRejectsExplicitRootThroughBaseSymlinkBeforeGit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(env.baseDir, "link")); err != nil {
+		t.Fatalf("symlink base child: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-symlink-escape",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join("link", "new"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-symlink-escape",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a relative root that escaped through a base symlink")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed explicit symlink creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-source-overlap",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(env.workspaceRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-source-overlap",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed overlapping explicit creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
 func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")
@@ -601,7 +645,8 @@ func TestResolveWorktreeCreateTargetClassifiesBranchDetachedRefAndNewBranch(t *t
 func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), "missing-base")
 	service := &Service{managedRoots: newManagedRootAllocator(baseDir, nil)}
-	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit")
+	sourceRoot := t.TempDir()
+	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit", sourceRoot)
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
 	}
@@ -609,7 +654,7 @@ func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T)
 	if err != nil {
 		t.Fatalf("canonical base: %v", err)
 	}
-	want, err := config.CanonicalWorkspaceRoot(filepath.Join(canonicalBase, "nested/explicit"))
+	want, err := config.ResolveExistingAncestorRealPath(filepath.Join(canonicalBase, "nested/explicit"))
 	if err != nil {
 		t.Fatalf("canonical expected root: %v", err)
 	}
