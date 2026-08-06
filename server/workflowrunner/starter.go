@@ -421,11 +421,7 @@ func (s *Starter) startCurrentNodeAgent(
 						PreCompactionTokens: preCompactionTokens,
 						CompactionMode:      turnEngine.CompactionMode(),
 						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
-							result := turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
-							return workflowruntime.PostCompletionCompactionResult{
-								CommitReceipt: result.CommitReceipt,
-								Diagnostic:    result.Diagnostic,
-							}
+							return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
 						},
 					})
 				}
