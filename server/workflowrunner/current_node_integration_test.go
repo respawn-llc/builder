@@ -1019,6 +1019,24 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunnerCancellationFinalizesInterruptedSourceScope(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(t, ScriptedCancellation())
+	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(
+		t,
+		f.store,
+		string(config.WorkflowCompletionModeTool),
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(source) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForControllerCurrentNodeFinalized(t, source)
+}
+
 func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
