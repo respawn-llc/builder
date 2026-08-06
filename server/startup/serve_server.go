@@ -559,6 +559,10 @@ func (d *startupGatewayDependencies) snapshotConfig() config.App {
 	return d.cfg
 }
 
+func (d *startupGatewayDependencies) DebugEnabled() bool {
+	return d.snapshotConfig().Settings.Debug
+}
+
 type startupServerStatusService struct {
 	base      apicontract.ServerStatusService
 	readiness interface {
