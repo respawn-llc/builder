@@ -136,6 +136,22 @@ func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string, sourceW
 	if err != nil {
 		return "", err
 	}
+	return a.validateResolvedRoot(resolved, sourceWorkspaceRoot, requestedRoot)
+}
+
+func (a *managedRootAllocator) validatePersistedRoot(root string, sourceWorkspaceRoot string) (string, error) {
+	resolved, err := config.ResolveExistingPathRealPath(strings.TrimSpace(root))
+	if err != nil {
+		return "", fmt.Errorf("resolve persisted managed worktree root: %w", err)
+	}
+	return a.validateResolvedRoot(resolved, sourceWorkspaceRoot, root)
+}
+
+func (a *managedRootAllocator) validateResolvedRoot(resolved string, sourceWorkspaceRoot string, requestedRoot string) (string, error) {
+	base, err := a.automaticBase()
+	if err != nil {
+		return "", err
+	}
 	if !sameOrDescendantPath(base, resolved) {
 		return "", fmt.Errorf("managed worktree root %q is outside base %q", requestedRoot, base)
 	}
