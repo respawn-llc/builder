@@ -138,6 +138,7 @@ func TestTranscriptHydrationRejectsDuplicateReasoningTraceIdentityAndWrongOwner(
 func TestTranscriptReasoningTraceCommittedRowCarriesProjectedTextAndNullableCorrelation(t *testing.T) {
 	stepID := transcriptTestStepID(t)
 	index := int64(0)
+	durationMs := int64(321)
 	identity := TranscriptReasoningTraceIdentity{
 		Provider: &TranscriptProviderReasoningTraceIdentity{
 			ItemID:       "rs_1",
@@ -153,6 +154,7 @@ func TestTranscriptReasoningTraceCommittedRowCarriesProjectedTextAndNullableCorr
 			StepID:              stepID,
 			CompactText:         "Planning",
 			Text:                "Planning\nDetails",
+			DurationMs:          &durationMs,
 			ProvisionalIdentity: &identity,
 		},
 	}
@@ -162,6 +164,32 @@ func TestTranscriptReasoningTraceCommittedRowCarriesProjectedTextAndNullableCorr
 	row.ReasoningTrace.ProvisionalIdentity = nil
 	if err := row.Validate(); err != nil {
 		t.Fatalf("validate completed-only reasoning row: %v", err)
+	}
+	zeroDurationMs := int64(0)
+	for _, test := range []struct {
+		name  string
+		value *int64
+		wire  string
+	}{{"absent", nil, "null"}, {"zero", &zeroDurationMs, "0"}, {"positive", &durationMs, "321"}} {
+		row.ReasoningTrace.DurationMs = test.value
+		data, err := json.Marshal(row.ReasoningTrace)
+		if err != nil {
+			t.Fatalf("marshal %s duration: %v", test.name, err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatalf("decode %s duration: %v", test.name, err)
+		}
+		if got := string(fields["duration_ms"]); got != test.wire {
+			t.Fatalf("%s duration wire = %s, want %s", test.name, got, test.wire)
+		}
+		if _, ok := fields["DurationMs"]; ok {
+			t.Fatalf("%s duration used Go field name", test.name)
+		}
+	}
+	durationMs = -1
+	if err := row.Validate(); err == nil {
+		t.Fatal("accepted negative reasoning duration")
 	}
 }
 

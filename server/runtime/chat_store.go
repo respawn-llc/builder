@@ -24,6 +24,7 @@ type ChatEntry struct {
 	RollbackTargetID     *string
 	Role                 string
 	Text                 string
+	DurationMs           *int64
 	CondensedText        string
 	Phase                llm.MessagePhase
 	MessageType          llm.MessageType

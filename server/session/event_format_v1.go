@@ -153,6 +153,10 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 		if typed.AfterToolCallID, normalizeErr = normalizeOptionalEventIdentity("after-tool call identity", typed.AfterToolCallID); normalizeErr != nil {
 			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
 		}
+		if typed.DurationMs != nil {
+			duration := *typed.DurationMs
+			typed.DurationMs = &duration
+		}
 		payload = typed
 	case ReviewerFeedbackRecord:
 		typed.Suggestions = append([]string(nil), typed.Suggestions...)
@@ -248,6 +252,7 @@ type LocalEntryRecord struct {
 	Visibility      EntryVisibility `json:"visibility"`
 	Role            string          `json:"role"`
 	Text            string          `json:"text"`
+	DurationMs      *int64          `json:"duration_ms,omitempty"`
 	CondensedText   *string         `json:"condensed_text,omitempty"`
 	DiagnosticKey   *string         `json:"diagnostic_key,omitempty"`
 	NoticeID        *string         `json:"notice_id,omitempty"`
@@ -407,6 +412,9 @@ func (r LocalEntryRecord) validate() error {
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return fmt.Errorf("text is required")
+	}
+	if r.DurationMs != nil && *r.DurationMs < 0 {
+		return fmt.Errorf("duration_ms must not be negative")
 	}
 	return nil
 }

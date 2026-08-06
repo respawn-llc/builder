@@ -282,6 +282,7 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 		Visibility:    normalizeRuntimeEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          strings.TrimSpace(entry.Text),
+		DurationMs:    textutil.Pointer(entry.DurationMs),
 		CondensedText: condensedText,
 		NoticeID:      noticeID,
 	}

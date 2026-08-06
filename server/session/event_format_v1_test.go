@@ -458,10 +458,12 @@ func TestEventLogV1ToolCompletionRejectsAttachmentLinkedToAnotherCall(t *testing
 }
 
 func TestEventLogV1LocalEntryRecordRoundTrip(t *testing.T) {
+	durationMs := int64(1234)
 	record, err := NewEventRecord(3, nil, LocalEntryRecord{
 		Visibility: EntryVisibilityDetail,
 		Role:       "error",
 		Text:       "compaction failed",
+		DurationMs: &durationMs,
 	})
 	if err != nil {
 		t.Fatalf("create local entry record: %v", err)
@@ -479,8 +481,18 @@ func TestEventLogV1LocalEntryRecordRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T, want LocalEntryRecord", mustEventRecordPayload(decoded))
 	}
-	if entry.Visibility != EntryVisibilityDetail || entry.Role != "error" || entry.Text != "compaction failed" {
+	if entry.Visibility != EntryVisibilityDetail || entry.Role != "error" || entry.Text != "compaction failed" ||
+		entry.DurationMs == nil || *entry.DurationMs != durationMs {
 		t.Fatalf("entry = %#v", entry)
+	}
+	negativeDurationMs := int64(-1)
+	if _, err := NewEventRecord(1, nil, LocalEntryRecord{
+		Visibility: EntryVisibilityDetail,
+		Role:       "reasoning",
+		Text:       "trace",
+		DurationMs: &negativeDurationMs,
+	}); err == nil {
+		t.Fatal("negative local-entry duration was accepted")
 	}
 }
 

@@ -64,6 +64,7 @@ type TranscriptReasoningTraceRow struct {
 	StepID              runtimeids.StepID
 	CompactText         string
 	Text                string
+	DurationMs          *int64 `json:"duration_ms"`
 	ProvisionalIdentity *TranscriptReasoningTraceIdentity
 }
 
@@ -308,6 +309,9 @@ func (r TranscriptReasoningTraceRow) Validate() error {
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return fmt.Errorf("transcript reasoning trace row text is required")
+	}
+	if r.DurationMs != nil && *r.DurationMs < 0 {
+		return fmt.Errorf("transcript reasoning trace row duration_ms must not be negative")
 	}
 	if r.ProvisionalIdentity != nil {
 		return r.ProvisionalIdentity.Validate()

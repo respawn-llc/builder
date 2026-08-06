@@ -725,6 +725,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 			StepID:              mustTranscriptStepID(fact.StepID, "committed reasoning trace row"),
 			CompactText:         fact.ReasoningTrace.CompactText,
 			Text:                fact.ReasoningTrace.Text,
+			DurationMs:          textutil.Pointer(fact.ReasoningTrace.DurationMs),
 			ProvisionalIdentity: transcriptReasoningTraceIdentityFromRuntime(fact.ReasoningTrace.ProvisionalIdentity),
 		}
 	case runtime.TranscriptCommittedRowFactNotice:

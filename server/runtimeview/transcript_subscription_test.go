@@ -342,6 +342,7 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 
 func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) {
 	part := int64(0)
+	durationMs := int64(321)
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:   runtime.EventLocalEntryAdded,
 		StepID: transcriptProjectionStepID,
@@ -349,6 +350,7 @@ func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) 
 			Visibility: transcript.EntryVisibilityDetail,
 			Role:       string(transcript.EntryRoleReasoning),
 			Text:       "**Planning\nDetails**",
+			DurationMs: &durationMs,
 		},
 		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
 			Provider: &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part},
@@ -363,11 +365,58 @@ func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) 
 		row.ReasoningTrace == nil ||
 		row.ReasoningTrace.Text != "Planning\nDetails" ||
 		row.ReasoningTrace.CompactText != "Planning" ||
+		row.ReasoningTrace.DurationMs == nil ||
+		*row.ReasoningTrace.DurationMs != durationMs ||
 		row.ReasoningTrace.ProvisionalIdentity == nil {
 		t.Fatalf("projected reasoning row = %+v", row)
 	}
 	if err := row.Validate(); err != nil {
 		t.Fatalf("projected reasoning row failed validation: %v", err)
+	}
+}
+
+func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T) {
+	durationMs := int64(321)
+	fact := runtime.TranscriptCommittedRowFact{
+		StepID:  transcriptProjectionStepID,
+		Kind:    runtime.TranscriptCommittedRowFactReasoningTrace,
+		Locator: transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+		ReasoningTrace: &runtime.TranscriptReasoningTraceRowFact{
+			Text:        "Planning\nDetails",
+			CompactText: "Planning",
+			DurationMs:  &durationMs,
+		},
+	}
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: []runtime.TranscriptCommittedRowFact{fact},
+	})
+	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].ReasoningTrace == nil ||
+		hydration.CommittedRows[0].ReasoningTrace.DurationMs == nil ||
+		*hydration.CommittedRows[0].ReasoningTrace.DurationMs != durationMs {
+		t.Fatalf("hydrated reasoning duration = %+v", hydration.CommittedRows)
+	}
+
+	page, err := TranscriptPageFromSegment(
+		"58e121b5-30f7-4d0f-a1fa-fb3e6695e39c",
+		"name",
+		clientui.ConversationFreshnessEstablished,
+		runtime.TranscriptSegmentPage{Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
+			StepID:     transcriptProjectionStepID,
+			Role:       string(transcript.EntryRoleReasoning),
+			Text:       "Planning\nDetails",
+			DurationMs: &durationMs,
+			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
+				EventSequence: 1,
+			},
+		}}}},
+	)
+	if err != nil {
+		t.Fatalf("project bounded transcript page: %v", err)
+	}
+	if len(page.Entries) != 1 || page.Entries[0].ReasoningTrace == nil ||
+		page.Entries[0].ReasoningTrace.DurationMs == nil ||
+		*page.Entries[0].ReasoningTrace.DurationMs != durationMs {
+		t.Fatalf("paged reasoning duration = %+v", page.Entries)
 	}
 }
 

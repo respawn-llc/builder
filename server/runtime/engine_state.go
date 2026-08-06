@@ -718,6 +718,7 @@ type storedLocalEntry struct {
 	Visibility    transcript.EntryVisibility `json:"visibility,omitempty"`
 	Role          string                     `json:"role"`
 	Text          string                     `json:"text"`
+	DurationMs    *int64                     `json:"duration_ms,omitempty"`
 	CondensedText *string                    `json:"condensed_text,omitempty"`
 	DiagnosticKey *string                    `json:"diagnostic_key,omitempty"`
 	NoticeID      *string                    `json:"notice_id,omitempty"`
