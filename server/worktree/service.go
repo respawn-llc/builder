@@ -610,7 +610,7 @@ func (s *Service) registeredWorktreeRoot(ctx context.Context, workspaceRoot stri
 	return false, nil
 }
 
-func (s *Service) validateManagedRootForCreation(ctx context.Context, root string, kind managedRootKind, exemptRoot string) error {
+func (s *Service) validateManagedRootForCreation(ctx context.Context, root string, kind managedRootKind, exemptRoot *string) error {
 	existingRoots, err := s.metadata.ListManagedWorktreeRoots(ctx)
 	if err == nil {
 		err = s.managedRoots.validateNoManagedRootOverlap(root, existingRoots, exemptRoot)
@@ -648,9 +648,9 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 			return TaskWorktreeMaterialization{}, err
 		}
 	}
-	exemptRoot := ""
+	var exemptRoot *string
 	if req.ExistingRecord != nil {
-		exemptRoot = req.ExistingRecord.CanonicalRoot
+		exemptRoot = &req.ExistingRecord.CanonicalRoot
 	}
 	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, exemptRoot); err != nil {
 		return TaskWorktreeMaterialization{}, err
@@ -1156,7 +1156,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 			return serverapi.WorktreeCreateResponse{}, err
 		}
 	}
-	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, ""); err != nil {
+	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, nil); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	createdBranch, err := s.addManagedWorktree(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec, rootKind)

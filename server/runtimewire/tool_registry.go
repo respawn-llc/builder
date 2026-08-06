@@ -326,12 +326,9 @@ func NewFilesystemContext(workdir string, targetRoot string, boundary metadata.P
 	if err != nil {
 		return tools.FilesystemContext{}, err
 	}
-	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
+	working, target, err := validatedFilesystemRoots(workdir, targetRoot)
 	if err != nil {
 		return tools.FilesystemContext{}, err
-	}
-	if !filesystemRootContains(target, working.RealPath) {
-		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
 	scope := tools.ProjectWorkspaceScope{ProjectID: normalizedBoundary.ProjectID, Roots: make([]tools.ProjectWorkspaceRoot, 0, len(normalizedBoundary.Workspaces))}
 	for _, workspace := range normalizedBoundary.Workspaces {
@@ -351,12 +348,9 @@ func NewFilesystemContext(workdir string, targetRoot string, boundary metadata.P
 }
 
 func WithExecutionTarget(current tools.FilesystemContext, workdir string, targetRoot string, managed *tools.ManagedWorktreePathContext) (tools.FilesystemContext, error) {
-	working, target, err := requiredFilesystemRoots(workdir, targetRoot)
+	working, target, err := validatedFilesystemRoots(workdir, targetRoot)
 	if err != nil {
 		return tools.FilesystemContext{}, err
-	}
-	if !filesystemRootContains(target, working.RealPath) {
-		return tools.FilesystemContext{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
 	next := current.Clone()
 	next.Access.WorkingDirectory = working
@@ -365,7 +359,7 @@ func WithExecutionTarget(current tools.FilesystemContext, workdir string, target
 	return next, nil
 }
 
-func requiredFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot, tools.FilesystemRoot, error) {
+func validatedFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot, tools.FilesystemRoot, error) {
 	working, err := requiredRootForPath(workdir)
 	if err != nil {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve working directory: %w", err)
@@ -373,6 +367,9 @@ func requiredFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot, 
 	target, err := requiredRootForPath(targetRoot)
 	if err != nil {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve execution target root: %w", err)
+	}
+	if !filesystemRootContains(target, working.RealPath) {
+		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
 	return working, target, nil
 }

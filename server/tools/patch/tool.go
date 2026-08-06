@@ -84,7 +84,9 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	}
 	foreignManagedWorktree, err := t.targetsForeignManagedWorktree(doc)
 	if err != nil {
-		return tools.ErrorResult(c, err.Error()), nil
+		return tools.ErrorResultWith(c, err.Error(), func(any) (json.RawMessage, error) {
+			return json.Marshal(errorPayload(err))
+		}), nil
 	}
 	if foreignManagedWorktree {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
@@ -132,7 +134,7 @@ func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, er
 				return false, err
 			}
 			if err := t.checkForeignManagedWorktreePath(resolved); err != nil {
-				return true, nil
+				return false, err
 			}
 		}
 	}
