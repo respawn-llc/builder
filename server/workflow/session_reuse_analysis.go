@@ -65,6 +65,11 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 			branches[branch] = struct{}{}
 		}
 	}
+	for _, edge := range input.Workflow.Edges {
+		if branch := TransitionBranchKey(strings.TrimSpace(string(edge.Key))); branch != "" {
+			branches[branch] = struct{}{}
+		}
+	}
 
 	references := make([]CurrentNodeReference, 0, len(nodeIDs)*(len(branches)+1))
 	seen := make(map[CurrentNodeReferenceKey]struct{}, cap(references))
@@ -198,7 +203,10 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		return reuseTransition{}, false
 	}
 	groupEdges := a.edgesByGroup[edge.TransitionGroupID]
-	targetLineage, selected := a.targetLineage(state, edge, target)
+	targetBranch := a.nextBranch(state.branch, edge, target, len(groupEdges))
+	lookupState := state
+	lookupState.branch = targetBranch
+	targetLineage, selected := a.targetLineage(lookupState, edge, target)
 	if !selected {
 		return reuseTransition{}, false
 	}
@@ -216,7 +224,7 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}
 	targetState := reusePathState{
 		nodeID:           edge.TargetNodeID,
-		branch:           a.nextBranch(state.branch, edge, target, len(groupEdges)),
+		branch:           targetBranch,
 		currentLineage:   targetLineage,
 		completedDormant: completedDormant,
 		dormancyBlocked:  dormancyBlocked,

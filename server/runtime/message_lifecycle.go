@@ -261,8 +261,10 @@ func workflowPostCompletionActivityForSessionRecord(payload any) workflowPostCom
 			message.MessageType = &messageType
 		}
 		return workflowPostCompletionMessageActivity(message)
-	case session.ToolCompletionRecord, session.CacheRequestObservationRecord:
+	case session.ToolCompletionRecord:
 		return workflowPostCompletionDurableActivity
+	case session.CacheRequestObservationRecord:
+		return workflowPostCompletionNoActivity
 	default:
 		return workflowPostCompletionNoActivity
 	}

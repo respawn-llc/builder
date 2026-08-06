@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflowruntime"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -68,11 +69,6 @@ type compactionResult struct {
 	provider          string
 }
 
-type workflowPostCompletionCompactionResult struct {
-	CommitReceipt session.CommitReceipt
-	Diagnostic    error
-}
-
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
@@ -101,7 +97,7 @@ func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) erro
 	return err
 }
 
-func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowPostCompletionCompactionResult {
+func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
 }
@@ -159,7 +155,7 @@ func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx cont
 	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
 }
 
-func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowPostCompletionCompactionResult {
+func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
 	receipt, err := c.compactContext(
 		ctx,
 		compactionModeWorkflowPostCompletion,
@@ -169,7 +165,7 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 		nil,
 		false,
 	)
-	return workflowPostCompletionCompactionResult{
+	return workflowruntime.PostCompletionCompactionResult{
 		CommitReceipt: receipt,
 		Diagnostic:    err,
 	}

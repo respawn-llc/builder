@@ -349,6 +349,26 @@ func TestWorkflowContinuationPreservesBoundaryAcrossFailedCACAttempt(t *testing.
 	}
 }
 
+func TestWorkflowPostCompletionRestoreIgnoresCacheRequestObservation(t *testing.T) {
+	t.Parallel()
+	state := newCompactionRuntimeState()
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := state.SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+
+	activity := workflowPostCompletionActivityForSessionRecord(session.CacheRequestObservationRecord{})
+	if activity != workflowPostCompletionNoActivity {
+		t.Fatalf("cache request observation activity = %d, want no activity", activity)
+	}
+	if state.ApplyWorkflowPostCompletionActivity(activity) {
+		t.Fatal("cache request observation consumed the post-completion boundary")
+	}
+	if !state.WorkflowPostCompletionBoundary() {
+		t.Fatal("cache request observation removed the post-completion boundary")
+	}
+}
+
 func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
