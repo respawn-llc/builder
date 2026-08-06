@@ -172,7 +172,16 @@ func (r RuntimeLiveWatchResponse) Validate() error {
 		if r.Outcome.Question == nil {
 			return errors.New("question outcome requires question")
 		}
-		return r.Outcome.Question.Validate()
+		if err := r.Outcome.Question.Validate(); err != nil {
+			return err
+		}
+		if r.Outcome.Question.Ask != nil && r.Outcome.Question.Ask.SessionID != r.SessionID {
+			return errors.New("question ask session does not match live watch session")
+		}
+		if r.Outcome.Question.Approval != nil && r.Outcome.Question.Approval.SessionID != r.SessionID {
+			return errors.New("question approval session does not match live watch session")
+		}
+		return nil
 	case RuntimeLiveWatchFinalAnswer:
 		if r.Outcome.FinalAnswer == nil {
 			return errors.New("final answer outcome requires final answer")

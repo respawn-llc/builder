@@ -490,6 +490,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	taskID := "task-1"
 	sessionID := uuid.NewString()
 	approvalID := "approval-1"
+	successorQuestion := "Next?"
 	remote := &stubQuestionTaskRemote{
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
@@ -505,7 +506,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 				},
 			}}},
 			{Items: []serverapi.WorkflowAttentionItem{
-				taskQuestionAttention(taskID, sessionID, "Implementer", "ask-next", "Next?", 2),
+				taskQuestionAttention(taskID, sessionID, "Implementer", "ask-next", successorQuestion, 2),
 			}},
 		},
 		approvalResponses: []serverapi.ApprovalListPendingBySessionResponse{{
@@ -540,7 +541,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 		request.Decision != clientui.ApprovalDecisionAllowOnce || request.Commentary != nil {
 		t.Fatalf("approval request = %+v", request)
 	}
-	if !strings.Contains(stdout.String(), "Next?") {
+	if !strings.Contains(stdout.String(), successorQuestion) {
 		t.Fatalf("successor question output = %q", stdout.String())
 	}
 	if len(remote.attentionRequests) != 2 {
