@@ -25,6 +25,7 @@ Control an active shared run from another shell or agent:
 kent run steer <session-id> "adjust the next step" # steer a running agent
 kent run stop <session-id> # gracefully interrupt the run
 kent run wait <session-id> # wait for the model's turn to end
+kent run watch <session-id> # report the next question or terminal outcome
 ```
 
 When a human invokes `kent run steer`, the running Session receives a user message. When another Kent Session invokes it, the running Session receives a developer-role agent steer that identifies the source Session and includes the command form for replying.
@@ -37,6 +38,15 @@ kent question answer --session <session-id> --option 1 --commentary "Additional 
 kent questions --task KENT-335
 kent questions answer --task KENT-335 --commentary "Freeform answer"
 ```
+
+Workflow Tasks can be observed without polling:
+
+```bash
+kent task wait KENT-335
+kent task watch KENT-335
+```
+
+These commands are one-shot server-side waits. `wait` ignores Questions but reports the next interruption, error, or terminal completion; `watch` reports the next Question, interruption, error, or terminal completion. A reported Question includes a runnable `kent question answer` command.
 
 Use exactly one of `--session` or `--task`. Task short IDs resolve in the current workspace's Project unless `--project` selects another Project. A Task with pending Questions in several Sessions is ambiguous; Kent answers nothing and lists each candidate Session name and ID.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -641,6 +642,27 @@ func (c *Remote) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTask
 	return validateWorkflowResponse("get workflow task", response, err)
 }
 
+func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](c, ctx, protocol.MethodWorkflowTaskObserve, req)
+	if err = normalizeWorkflowTaskObservationRPCError(err); err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkflowTaskObservationResponse{}, fmt.Errorf("validate workflow task observation response: %w", err)
+	}
+	return response, nil
+}
+
+func normalizeWorkflowTaskObservationRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: workflow task observation RPC stream closed: %v", serverapi.ErrStreamFailed, err)
+	}
+	return err
+}
+
 func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 	var resp serverapi.SessionPlanResponse
 	return resp, c.call(ctx, protocol.MethodSessionPlan, req, &resp)
@@ -827,6 +849,17 @@ func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequ
 
 func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+}
+
+func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
+	response, err := callDedicatedRPC[serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](c, ctx, "runtime-live-watch", protocol.MethodRuntimeLiveWatch, req)
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("validate runtime live watch response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {

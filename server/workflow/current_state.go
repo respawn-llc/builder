@@ -133,6 +133,30 @@ type CurrentNodeInterruptionDetail struct {
 	ConfiguredExecutionTargetUnavailable *ConfiguredExecutionTargetUnavailable `json:"configured_execution_target_unavailable,omitempty"`
 }
 
+const CurrentNodeInterruptionDiagnosticField = "error"
+
+func NewCurrentNodeInterruptionDetail(code string, diagnostic error) CurrentNodeInterruptionDetail {
+	detail := CurrentNodeInterruptionDetail{
+		Code:   strings.TrimSpace(code),
+		Fields: map[string]string{},
+	}
+	if diagnostic != nil {
+		detail.Fields = map[string]string{CurrentNodeInterruptionDiagnosticField: diagnostic.Error()}
+	}
+	return detail
+}
+
+func (d CurrentNodeInterruptionDetail) Diagnostic() *string {
+	if d.Fields == nil {
+		return nil
+	}
+	value, ok := d.Fields[CurrentNodeInterruptionDiagnosticField]
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
 type CurrentNodeInterruption struct {
 	Reason     CurrentNodeInterruptionReason
 	Detail     CurrentNodeInterruptionDetail

@@ -703,42 +703,48 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(ctx context.Context, id s
 	}}, nil
 }
 
-func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) {
+func (r *RuntimeRegistry) PromptPendingScope(scope sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest, createdAt time.Time) error {
 	if r == nil {
-		return
+		return nil
 	}
-	if err := resource.Validate(); err != nil || scopeID.IsZero() {
-		panic(fmt.Sprintf("execution prompt pending projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
+	resource, ok := scope.Resource()
+	if !ok {
+		panic(fmt.Sprintf("workflow prompt scope %s has no session resource", scope.ID()))
 	}
 	id := resource.SessionID().String()
 	entry := r.authorityEntryByRef(resource)
 	var snapshot PendingPromptSnapshot
 	projected := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var admitted bool
-		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt)
+		snapshot, admitted = r.pendingPrompts.Begin(id, resource, scope.ID(), req, createdAt)
 		return admitted
 	})
 	if projected && entry != nil {
 		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 		r.publishAttentionPending(id, snapshot)
-		r.publishTaskQuestionWaiting(id, snapshot)
+		wakeErr := r.publishTaskQuestionWaitingForScope(scope, snapshot)
 		r.publishCurrentRuntimeActivity(id)
+		if wakeErr != nil {
+			return wakeErr
+		}
 	}
+	return nil
 }
 
-func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
+func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScope, requestID string) error {
 	if r == nil {
-		return
+		return nil
 	}
-	if err := resource.Validate(); err != nil || scopeID.IsZero() {
-		panic(fmt.Sprintf("execution prompt resolved projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
+	resource, ok := scope.Resource()
+	if !ok {
+		panic(fmt.Sprintf("workflow prompt scope %s has no session resource", scope.ID()))
 	}
 	id := resource.SessionID().String()
 	var snapshot PendingPromptSnapshot
 	entry := r.authorityEntryByRef(resource)
 	resolved := r.withCurrentAuthorityEntry(resource, func(_ *authorityRuntimeEntry) bool {
 		var ok bool
-		snapshot, ok = r.pendingPrompts.Complete(id, resource, scopeID, requestID)
+		snapshot, ok = r.pendingPrompts.Complete(id, resource, scope.ID(), requestID)
 		return ok
 	})
 	if resolved {
@@ -748,6 +754,7 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 		r.publishAttentionResolved(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
 	}
+	return nil
 }
 
 func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, sessionID string, snapshot PendingPromptSnapshot) {

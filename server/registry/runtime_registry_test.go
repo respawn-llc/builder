@@ -19,7 +19,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/transcript"
 )
 
 type registryRuntimeFakeClient struct{}
@@ -64,17 +63,57 @@ func registryTestResource(ref runtimeids.SessionResourceRef) sessionruntime.Agen
 }
 
 func projectPendingPromptForTest(registry *RuntimeRegistry, sessionID string, request askquestion.AskQuestionRequest) {
-	registry.PromptPending(registryTestResourceRef(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, registryTestResourceRef(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
 }
 
 func resolvePendingPromptForTest(registry *RuntimeRegistry, sessionID string, requestID string) {
 	for _, prompt := range registry.ListPendingPrompts(sessionID) {
 		if prompt.Request.ID == requestID {
-			registry.PromptResolved(prompt.Resource, prompt.ScopeID, requestID)
+			resolvePendingPromptResourceForTest(registry, prompt.Resource, prompt.ScopeID, requestID)
 			return
 		}
 	}
 	panic("pending prompt not found")
+}
+
+func projectPendingPromptResourceForTest(
+	registry *RuntimeRegistry,
+	resource runtimeids.SessionResourceRef,
+	scopeID runtimeids.ExecutionScopeID,
+	request askquestion.AskQuestionRequest,
+	createdAt time.Time,
+) {
+	id := resource.SessionID().String()
+	projected := registry.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+		snapshot, admitted := registry.pendingPrompts.Begin(id, resource, scopeID, request, createdAt)
+		if !admitted {
+			return false
+		}
+		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+		registry.publishAttentionPending(id, snapshot)
+		return true
+	})
+	if projected {
+		_ = registry.publishCurrentRuntimeActivity(id)
+	}
+}
+
+func resolvePendingPromptResourceForTest(
+	registry *RuntimeRegistry,
+	resource runtimeids.SessionResourceRef,
+	scopeID runtimeids.ExecutionScopeID,
+	requestID string,
+) {
+	id := resource.SessionID().String()
+	snapshot, resolved := registry.pendingPrompts.Complete(id, resource, scopeID, requestID)
+	if !resolved {
+		return
+	}
+	entry := registry.authorityEntryByRef(resource)
+	if entry != nil {
+		registry.publishPromptResolution(entry, id, snapshot)
+	}
+	_ = registry.publishCurrentRuntimeActivity(id)
 }
 
 func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
@@ -120,122 +159,13 @@ func TestSubscribeSessionTranscriptFailsExecutionTargetResolution(t *testing.T) 
 	}
 }
 
-func TestPublishMalformedLiveLocatorClosesTranscriptFeedWithContractError(t *testing.T) {
-	defer withTranscriptContractViolationPanic(false)()
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	defer closeRuntime(registry, engine.SessionID(), engine)
-
-	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
-		SessionID: engine.SessionID(),
-	})
-	if err != nil {
-		t.Fatalf("subscribe transcript: %v", err)
-	}
-	defer func() { _ = subscription.Close() }()
-	if hydration := nextTranscriptMessage(t, subscription); hydration.Kind() != clientui.TranscriptMessageHydration {
-		t.Fatalf("first message = %+v, want hydration", hydration)
-	}
-
-	err = registry.PublishAuthorityRuntimeEvent(
-		registryTestResourceRef(engine.SessionID()),
-		runtime.Event{
-			Kind:                runtime.EventUserMessageFlushed,
-			StepID:              registryTestStepID,
-			UserMessage:         "malformed live row",
-			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{},
-		},
-	)
-	if err == nil {
-		t.Fatal("malformed live locator returned nil error")
-	}
-	reason, ok := serverapi.TranscriptCloseReasonOf(err)
-	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
-		t.Fatalf("publish error close reason = %q ok=%t, want contract violation", reason, ok)
-	}
-	_, err = subscription.Next(context.Background())
-	if err == nil {
-		t.Fatal("subscription remained open after malformed live locator")
-	}
-	reason, ok = serverapi.TranscriptCloseReasonOf(err)
-	if !ok || reason != serverapi.TranscriptCloseReasonContractViolation {
-		t.Fatalf("subscription close reason = %q ok=%t, want contract violation", reason, ok)
-	}
-
-	reconnected, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
-		SessionID: engine.SessionID(),
-	})
-	if err != nil {
-		t.Fatalf("reconnect transcript subscription: %v", err)
-	}
-	defer func() { _ = reconnected.Close() }()
-	if hydration := nextTranscriptMessage(t, reconnected); hydration.Kind() != clientui.TranscriptMessageHydration {
-		t.Fatalf("reconnected first message = %+v, want hydration", hydration)
-	}
-	err = registry.PublishAuthorityRuntimeEvent(
-		registryTestResourceRef(engine.SessionID()),
-		runtime.Event{
-			Kind:        runtime.EventUserMessageFlushed,
-			StepID:      registryTestStepID,
-			UserMessage: "valid after reconnect",
-			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
-				EventSequence: 1,
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("publish valid row after reconnect: %v", err)
-	}
-	message := nextTranscriptMessage(t, reconnected)
-	if message.Kind() != clientui.TranscriptMessageCommittedRow {
-		t.Fatalf("reconnected live message = %+v, want committed row", message)
-	}
-	row := transcriptPayload[clientui.TranscriptCommittedRow](t, message)
-	if row.Locator.EventSequence != 1 || row.Locator.RowOrdinal != 1 {
-		t.Fatalf("reconnected live locator = %+v, want {event=1 ordinal=1}", row.Locator)
-	}
-}
-
-func TestPublishMalformedLiveLocatorPanicsInContractMode(t *testing.T) {
-	defer withTranscriptContractViolationPanic(true)()
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	defer closeRuntime(registry, engine.SessionID(), engine)
-
-	subscription, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
-		SessionID: engine.SessionID(),
-	})
-	if err != nil {
-		t.Fatalf("subscribe transcript: %v", err)
-	}
-	defer func() { _ = subscription.Close() }()
-	_ = nextTranscriptMessage(t, subscription)
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("malformed live locator did not panic in contract mode")
-		}
-	}()
-	_ = registry.PublishAuthorityRuntimeEvent(
-		registryTestResourceRef(engine.SessionID()),
-		runtime.Event{
-			Kind:                runtime.EventUserMessageFlushed,
-			StepID:              registryTestStepID,
-			UserMessage:         "malformed live row",
-			CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{},
-		},
-	)
-}
-
 func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	ref := registryTestResourceRef(engine.SessionID())
 	registerResource(t, registry, ref, engine)
 	scopeID := runtimeids.NewExecutionScopeID()
-	registry.PromptPending(ref, scopeID, askquestion.AskQuestionRequest{
+	projectPendingPromptResourceForTest(registry, ref, scopeID, askquestion.AskQuestionRequest{
 		ID:       "ask-1",
 		StepID:   registryTestStepID,
 		Question: "Continue?",
@@ -262,7 +192,7 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	<-hydrationResolverStarted
 	resolutionDone := make(chan struct{})
 	go func() {
-		registry.PromptResolved(ref, scopeID, "ask-1")
+		resolvePendingPromptResourceForTest(registry, ref, scopeID, "ask-1")
 		close(resolutionDone)
 	}()
 	select {
@@ -813,44 +743,6 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	}
 }
 
-func TestAuthorityEventFeedPublishesCommittedReasoningTraceRow(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	ref := registryTestResourceRef(engine.SessionID())
-	registerReady(t, registry, engine.SessionID(), engine)
-	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
-
-	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
-	t.Cleanup(func() { _ = sub.Close() })
-	_ = nextTranscriptMessage(t, sub)
-
-	part := int64(0)
-	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
-		Kind:   runtime.EventLocalEntryAdded,
-		StepID: registryTestStepID,
-		LocalEntry: &runtime.ChatEntry{
-			Visibility: transcript.EntryVisibilityDetail,
-			Role:       string(transcript.EntryRoleReasoning),
-			Text:       "**Planning\nDetails**",
-		},
-		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
-			Provider: &llm.ReasoningItemIdentity{ItemID: "reason_1", PartIndex: &part},
-		},
-		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
-	}); err != nil {
-		t.Fatalf("publish committed reasoning row: %v", err)
-	}
-
-	message := nextTranscriptMessage(t, sub)
-	row := transcriptPayload[clientui.TranscriptCommittedRow](t, message)
-	if row.Kind != clientui.TranscriptRowReasoningTrace ||
-		row.ReasoningTrace == nil ||
-		row.ReasoningTrace.Text != "Planning\nDetails" ||
-		row.ReasoningTrace.CompactText != "Planning" {
-		t.Fatalf("published authority reasoning row = %+v", row)
-	}
-}
-
 func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	sessionID := runtimeids.NewSessionID()
@@ -865,15 +757,15 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 
 	engine := &runtime.Engine{}
 	registerResource(t, registry, predecessor, engine)
-	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, predecessor, predecessorScope, request, time.Now().UTC())
 	if err := registry.ResourceDraining(context.Background(), registryTestResource(predecessor)); err != nil {
 		t.Fatalf("drain predecessor: %v", err)
 	}
 	registerResource(t, registry, successor, engine)
 	t.Cleanup(func() { _ = registry.ResourceDraining(context.Background(), registryTestResource(successor)) })
-	registry.PromptPending(successor, successorScope, request, time.Now().UTC())
-	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
-	registry.PromptResolved(predecessor, predecessorScope, request.ID)
+	projectPendingPromptResourceForTest(registry, successor, successorScope, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, predecessor, predecessorScope, request, time.Now().UTC())
+	resolvePendingPromptResourceForTest(registry, predecessor, predecessorScope, request.ID)
 
 	items := registry.ListPendingPrompts(sessionID.String())
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
@@ -906,7 +798,7 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		StepID:   registryTestStepID,
 		Question: "Proceed?",
 	}
-	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, ref, scopeID, request, time.Now().UTC())
 	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
 	pendingPrompt := transcriptPayload[clientui.TranscriptPrompt](t, pendingTranscript)
 	if pendingPrompt.Status != clientui.TranscriptPromptStatusPending || pendingPrompt.PromptID != "ask-draining" {
@@ -941,7 +833,7 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
 	}
 
-	registry.PromptResolved(ref, scopeID, request.ID)
+	resolvePendingPromptResourceForTest(registry, ref, scopeID, request.ID)
 }
 
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {

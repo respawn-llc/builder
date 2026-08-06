@@ -2,10 +2,10 @@ package registry
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"strings"
 
-	"core/shared/clientui"
+	"core/server/sessionruntime"
 	"core/shared/serverapi"
 )
 
@@ -17,46 +17,39 @@ func (r *RuntimeRegistry) WithWorkflowEventPublisher(publisher func(context.Cont
 	return r
 }
 
-func (r *RuntimeRegistry) publishTaskQuestionWaiting(sessionID string, snapshot PendingPromptSnapshot) {
+func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntime.ExecutionScope, snapshot PendingPromptSnapshot) error {
 	if r == nil || r.workflowEventPublisher == nil {
-		return
+		return nil
 	}
-	target := snapshot.Request.AttentionTarget
-	if target == nil || target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
-		return
+	ref, ok := scope.Workflow()
+	if !ok {
+		return nil
 	}
-	projectID := strings.TrimSpace(target.ProjectID)
-	taskID := strings.TrimSpace(target.TaskID)
-	trimmedSessionID := strings.TrimSpace(sessionID)
+	resource, ok := scope.Resource()
+	if !ok {
+		return nil
+	}
+	projectID := strings.TrimSpace(ref.ProjectID)
+	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
+	sessionID := resource.SessionID().String()
 	askID := strings.TrimSpace(snapshot.Request.ID)
-	if projectID == "" || taskID == "" || trimmedSessionID == "" || askID == "" {
-		slog.Warn(
-			"skip workflow question waiting event with invalid identifiers",
-			"project_id", projectID,
-			"task_id", taskID,
-			"session_id", trimmedSessionID,
-			"ask_id", askID,
-		)
-		return
+	switch {
+	case projectID == "":
+		return fmt.Errorf("workflow prompt scope %s has no project id", scope.ID())
+	case taskID == "":
+		return fmt.Errorf("workflow prompt scope %s has no task id", scope.ID())
+	case askID == "":
+		return fmt.Errorf("workflow prompt scope %s has a prompt without an id", scope.ID())
 	}
-	event := serverapi.WorkflowProjectEvent{
-		ProjectID:        &projectID,
-		WorkflowID:       target.WorkflowID,
-		Resource:         serverapi.WorkflowProjectEventResourceTask,
-		Action:           serverapi.WorkflowProjectEventActionQuestionWaiting,
-		PrimaryEntityID:  taskID,
-		RelatedIDs:       []string{trimmedSessionID, askID},
+	workflowID := ref.WorkflowID
+	if err := r.workflowEventPublisher(context.Background(), serverapi.WorkflowProjectEvent{
+		ProjectID: &projectID, WorkflowID: &workflowID,
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionQuestionWaiting,
+		PrimaryEntityID: taskID, RelatedIDs: []string{sessionID, askID},
 		OccurredAtUnixMs: snapshot.CreatedAt.UTC().UnixMilli(),
+	}); err != nil {
+		return fmt.Errorf("publish workflow question waiting event: %w", err)
 	}
-	if err := r.workflowEventPublisher(context.Background(), event); err != nil {
-		slog.Warn(
-			"publish workflow question waiting event failed",
-			"project_id", projectID,
-			"workflow_id", target.WorkflowID,
-			"task_id", target.TaskID,
-			"session_id", sessionID,
-			"ask_id", snapshot.Request.ID,
-			"error", err,
-		)
-	}
+	return nil
 }

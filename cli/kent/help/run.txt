@@ -3,6 +3,7 @@ Usage:
   kent run steer [--persistence-root <root>] <session-id> <message...>
   kent run stop [--persistence-root <root>] <session-id>
   kent run wait [--persistence-root <root>] [--output-mode=json] <session-id>
+  kent run watch [--persistence-root <root>] <session-id>
 
 Run a headless subagent session. This will start a real Kent agent with optional specified role and a specific prompt to stay quieter during work.
 
@@ -18,6 +19,7 @@ Active-run controls:
   `steer` queues a message for an active run.
   `stop` interrupts an active run.
   `wait` waits for an active run to finish.
+  `watch` observes the next outcome of an active run.
 
 Subagents:
   `--agent <role>` selects a named role from `[subagents.<role>]` section of the user configuration. For agents, available agents are the default (no flag), fast, and any listed in the developer reminder you received.

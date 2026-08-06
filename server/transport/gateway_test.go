@@ -117,6 +117,17 @@ func TestProtocolErrorMapsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorMapsStreamFailureAsStreamFailure(t *testing.T) {
+	source := serverapi.ErrStreamFailed
+	code, message := protocolError(source)
+	if code != protocol.ErrCodeStreamFailed {
+		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeStreamFailed)
+	}
+	if message != source.Error() {
+		t.Fatalf("protocol error message = %q, want %q", message, source.Error())
+	}
+}
+
 func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	source := errors.Join(
 		fmt.Errorf("delete target: %w", serverapi.ErrWorktreeBlocked),

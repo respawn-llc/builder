@@ -507,12 +507,13 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
 
+	commentary := "approved by client B"
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       fixture.planA.SessionID,
 		ApprovalID:      string(approvalPrompt.PromptID),
 		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      "approved by client B",
+		Commentary:      &commentary,
 	}); err != nil {
 		t.Fatalf("AnswerApproval from attached client B: %v", err)
 	}

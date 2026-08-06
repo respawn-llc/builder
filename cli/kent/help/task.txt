@@ -10,6 +10,8 @@ Usage of kent task:
   kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--offset <n>] [--limit <n>] [--json]
   kent task search <query> [--fts5] [--case-sensitive] [--context <n>] [--include-comments] [--project <project>]... [--status <status>[,<status>...]] [--page-size <n>] [--offset <n>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
+  kent task wait <short-id-or-task-id> [--project <project>]
+  kent task watch <short-id-or-task-id> [--project <project>]
   kent task delete <short-id-or-task-id> [--project <project>]
   kent task dep add --blocker <short-id-or-task-id> --blocked <short-id-or-task-id> [--project <project>] [--json]
   kent task dep remove --blocker <short-id-or-task-id> --blocked <short-id-or-task-id> [--project <project>] [--json]

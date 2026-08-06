@@ -98,12 +98,13 @@ func askAnswerRequest(clientRequestID string) serverapi.AskAnswerRequest {
 }
 
 func approvalAnswerRequest(clientRequestID string) serverapi.ApprovalAnswerRequest {
+	commentary := "looks good"
 	return serverapi.ApprovalAnswerRequest{
 		ClientRequestID: clientRequestID,
 		SessionID:       "session-1",
 		ApprovalID:      "approval-1",
 		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      "looks good",
+		Commentary:      &commentary,
 	}
 }
 

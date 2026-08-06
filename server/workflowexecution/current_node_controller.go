@@ -387,7 +387,9 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			c.mu.Unlock()
 			return nil
 		}); err != nil {
-			return err
+			exactErr := err
+			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+			return errors.Join(exactErr, resolveErr)
 		}
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
@@ -417,22 +419,22 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		completed, err := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		completed, completionErr := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: transitionID,
 			OutputValues: outputValues,
 			Commentary:   commentary,
 		})
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		if completionErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
-		intents, err := currentNodeAutomaticIntents(completed.AutomaticIntents)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
+		if intentErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, intentErr
 		}
-		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
+		if startErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, startErr
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -502,10 +504,7 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			ctx,
 			source.Reference,
 			reasonProtocolViolationCap,
-			workflow.CurrentNodeInterruptionDetail{
-				Code:   string(reasonProtocolViolationCap),
-				Fields: map[string]string{"error": workflowProtocolViolationCause(req).Error()},
-			},
+			workflow.NewCurrentNodeInterruptionDetail(string(reasonProtocolViolationCap), workflowProtocolViolationCause(req)),
 		); err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
@@ -600,10 +599,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	reason workflow.CurrentNodeInterruptionReason,
 	cause error,
 ) error {
-	detail := workflow.CurrentNodeInterruptionDetail{Code: string(reason)}
-	if cause != nil {
-		detail.Fields = map[string]string{"error": cause.Error()}
-	}
+	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
 	var lease sessionruntime.WorkflowExecutionLease
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
