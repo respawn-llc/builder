@@ -14,25 +14,23 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { TaskSearchError, errorMessage, type TaskSearchGroup, type TaskSearchResponse } from "@/api";
-import { queryKeys, useAppServices, useTaskSearchMemory } from "@/app-facade";
+import { queryKeys, useAppServices } from "@/app-facade";
 import {
   Button,
   CommandPaletteDialog,
   ErrorState,
   InfiniteListBoundary,
-  InteractiveChip,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
 } from "@/ui";
 import {
-  adjacentSearchResult,
-  useTaskSearchSelection,
   type TaskSearchScrollRequest,
+  type useTaskSearchSelection,
 } from "./taskSearchSelection";
 import { useRetainedQueryData } from "./useRetainedQueryData";
 import { TaskSearchResultRow, type TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
 
-const searchDebounceMs = 300;
+export const taskSearchDebounceMs = 300;
 const taskSearchPageSize = 40;
 const retainedTaskSearchPages = 3;
 const taskSearchContext = 20;
@@ -45,103 +43,7 @@ const taskSearchErrorDialogHeight = 240;
 
 type SearchPage = Readonly<{ offset: number | null; projectID: string | null; query: string; response: TaskSearchResponse }>;
 
-export function BoardTaskSearchChrome({
-  projectID,
-  onOpenTask,
-}: Readonly<{
-  projectID: string;
-  onOpenTask(taskID: string): void;
-}>) {
-  return <TaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />;
-}
-
-export function GlobalTaskSearchChrome({
-  onOpenTask,
-}: Readonly<{
-  onOpenTask(taskID: string): void;
-}>) {
-  return <TaskSearchChrome onOpenTask={onOpenTask} projectID={null} />;
-}
-
-function TaskSearchChrome({
-  onOpenTask,
-  projectID,
-}: Readonly<{
-  onOpenTask(taskID: string): void;
-  projectID: string | null;
-}>) {
-  const { t } = useTranslation();
-  const memory = useTaskSearchMemory();
-  const [open, setOpen] = useState(false);
-  const pendingTaskIDRef = useRef<string | null>(null);
-  const query = memory.query;
-  const debouncedQuery = useDebouncedText(query, searchDebounceMs);
-  const search = useTaskSearch(projectID, open, debouncedQuery);
-  const selection = useTaskSearchSelection(projectID, search.displayedQuery, search.results);
-  const revealActiveSelection = selection.revealActive;
-
-  const close = useCallback((): void => {
-    setOpen(false);
-  }, []);
-  const activate = useCallback(
-    (result: SearchResult): void => {
-      pendingTaskIDRef.current = result.group.taskID;
-      close();
-    },
-    [close],
-  );
-  const completeClose = useCallback((): void => {
-    const taskID = pendingTaskIDRef.current;
-    pendingTaskIDRef.current = null;
-    if (taskID !== null) {
-      onOpenTask(taskID);
-    }
-  }, [onOpenTask]);
-  const openSearch = useCallback((): void => {
-    pendingTaskIDRef.current = null;
-    revealActiveSelection();
-    setOpen(true);
-  }, [revealActiveSelection]);
-  useTaskSearchShortcuts(projectID === null ? openSearch : null);
-  const moveSelection = useCallback(
-    (direction: -1 | 1): void => {
-      const next = adjacentSearchResult(search.results, selection.activeKey, direction);
-      if (next !== null) {
-        selection.selectAndReveal(next.key);
-      }
-    },
-    [search.results, selection],
-  );
-  return (
-    <>
-      <InteractiveChip
-        aria-label={t("taskSearch.open")}
-        className={projectID === null ? "h-6 w-6 justify-center p-0" : undefined}
-        onClick={openSearch}
-        selected={open}
-        size={projectID === null ? "compact" : "default"}
-        style={projectID === null ? undefined : { paddingInline: "var(--space-3)" }}
-        tone={open ? "primary" : "neutral"}
-      >
-        <SearchIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
-        {projectID === null ? null : t("taskSearch.open")}
-      </InteractiveChip>
-      <TaskSearchDialog
-        onActivate={activate}
-        onClose={close}
-        onExitComplete={completeClose}
-        onMoveSelection={moveSelection}
-        onQueryChange={memory.setQuery}
-        open={open}
-        query={query}
-        search={search}
-        selection={selection}
-      />
-    </>
-  );
-}
-
-function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
+export function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
   useEffect(() => {
     if (onOpen === null) {
       return undefined;
@@ -170,7 +72,7 @@ function isTaskSearchShortcut(event: globalThis.KeyboardEvent): boolean {
   return saveShortcut || altSpaceShortcut;
 }
 
-function useDebouncedText(value: string, delayMs: number): string {
+export function useDebouncedText(value: string, delayMs: number): string {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -183,7 +85,7 @@ function useDebouncedText(value: string, delayMs: number): string {
   return debounced;
 }
 
-function useTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
+export function useTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
   const { api } = useAppServices();
   const trimmedQuery = debouncedQuery.trim();
   const searchable = Array.from(trimmedQuery).length >= 3;
@@ -234,7 +136,7 @@ function useTaskSearch(projectID: string | null, open: boolean, debouncedQuery: 
   };
 }
 
-function TaskSearchDialog({
+export function TaskSearchDialog({
   onActivate,
   onClose,
   onExitComplete,

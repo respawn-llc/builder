@@ -117,7 +117,8 @@
 - Separate native windows do not provide global Search.
 - A board has a `Search` chip immediately after the Unblocked chip. It uses the same visual treatment and height as the Labels chip.
 - The board Search chip opens Project-scoped Search that spans every Workflow linked to that Project.
-- Selecting either Search entry point opens one centered command-palette dialog over a blurred backdrop. The dialog uses a frosted-glass surface.
+- Selecting either Search entry point opens the single centered command-palette dialog over a blurred backdrop. A Project-scoped invocation supplies the optional `projectId` navigation parameter, and a global invocation omits it. The dialog uses a frosted-glass surface.
+- Opening either entry point while Search is open replaces the dialog's navigation scope instead of opening another dialog.
 - Opening Search animates the backdrop from unblurred to blurred. Its island fades in while moving upward by 30 pixels into place.
 - Closing Search reverses that motion: the backdrop unblurs while the island fades and moves 30 pixels downward. Search remains mounted until the complete exit finishes. Search uses the fast motion duration. These motions are subject to reduced-motion preference.
 - Search and its blurred backdrop appear above the main content and an open Task sidebar. Opening Search does not close or otherwise change the sidebar.

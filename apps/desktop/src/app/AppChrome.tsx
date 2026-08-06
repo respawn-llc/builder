@@ -5,7 +5,11 @@ import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from 
 import { useTranslation } from "react-i18next";
 
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
-import { GlobalTaskSearchChrome } from "@/features/board";
+import {
+  TaskSearchGlobalTrigger,
+  TaskSearchHost,
+  TaskSearchProvider,
+} from "@/features/board";
 import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
 import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
@@ -31,9 +35,11 @@ export type AppChromeProps = Readonly<{
 
 export function AppChrome({ children }: AppChromeProps) {
   return (
-    <SidebarProvider>
-      <AppChromeContent>{children}</AppChromeContent>
-    </SidebarProvider>
+    <TaskSearchProvider>
+      <SidebarProvider>
+        <AppChromeContent>{children}</AppChromeContent>
+      </SidebarProvider>
+    </TaskSearchProvider>
   );
 }
 
@@ -46,16 +52,9 @@ function AppChromeContent({ children }: AppChromeProps) {
   const topTreatment = appChromeTopTreatmentForPlatform(nativeBridge.capabilities.platform);
   const title = useCurrentWindowChromeTitle();
   const update = useDesktopUpdate(nativeBridge, logger);
-  const { openSidebar } = useSidebar();
-  const openGlobalTask = useCallback(
-    (taskID: string): void => {
-      void openSidebar({ kind: "taskDetail", mode: "overlay", taskID });
-    },
-    [openSidebar],
-  );
-
   return (
     <main className="window-glass-fill grid h-screen w-screen overflow-hidden pt-[var(--native-titlebar-height)]">
+      <TaskSearchHost />
       <div
         aria-hidden="true"
         className={topTreatment.classNames.join(" ")}
@@ -74,7 +73,7 @@ function AppChromeContent({ children }: AppChromeProps) {
         className={`app-region-no-drag fixed top-[8px] z-30 flex h-6 items-center ${macOS ? "left-[var(--native-home-link-left-macos)]" : "right-[var(--space-4)]"}`}
         data-testid="app-chrome-navigation"
       >
-        <AppChromeGlobalSearch macOS={macOS} onOpenTask={openGlobalTask} position="leading" />
+        <AppChromeGlobalSearch macOS={macOS} position="leading" />
         {stack.hasHistory && !macOS ? (
           <HistoryButtons
             backLabel={t("app.back")}
@@ -107,7 +106,7 @@ function AppChromeContent({ children }: AppChromeProps) {
             stack={stack}
           />
         ) : null}
-        <AppChromeGlobalSearch macOS={macOS} onOpenTask={openGlobalTask} position="trailing" />
+        <AppChromeGlobalSearch macOS={macOS} position="trailing" />
         {debugThemeOverrideEnabled ? <DebugThemeToggle label={t("app.toggleTheme")} /> : null}
         {title !== null && macOS ? (
           <div className={appChromeInlineTitleClassNames.join(" ")} data-testid="app-chrome-title">
@@ -144,18 +143,13 @@ function AppChromeContent({ children }: AppChromeProps) {
 
 function AppChromeGlobalSearch({
   macOS,
-  onOpenTask,
   position,
 }: Readonly<{
   macOS: boolean;
-  onOpenTask(taskID: string): void;
   position: "leading" | "trailing";
 }>) {
   const visible = position === "leading" ? !macOS : macOS;
-  if (!visible) {
-    return null;
-  }
-  return <GlobalTaskSearchChrome onOpenTask={onOpenTask} />;
+  return visible ? <TaskSearchGlobalTrigger /> : null;
 }
 
 // macOS keeps the traffic lights and nav cluster on the left, so the update chip

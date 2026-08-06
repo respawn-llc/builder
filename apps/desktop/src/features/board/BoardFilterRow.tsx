@@ -1,5 +1,5 @@
 import { BoardFilterChrome } from "./BoardLabelFilter";
-import { BoardTaskSearchChrome } from "./BoardTaskSearch";
+import { TaskSearchProjectTrigger } from "./TaskSearchChrome";
 
 export function BoardFilterRow({
   onOpenTask,
@@ -11,7 +11,7 @@ export function BoardFilterRow({
   return (
     <>
       <BoardFilterChrome />
-      <BoardTaskSearchChrome onOpenTask={onOpenTask} projectID={projectID} />
+      <TaskSearchProjectTrigger onOpenTask={onOpenTask} projectID={projectID} />
     </>
   );
 }
