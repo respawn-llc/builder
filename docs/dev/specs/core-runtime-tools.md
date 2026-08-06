@@ -14,8 +14,8 @@
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; it never becomes an absent or stale target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
 - A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
-- The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, server work queues, execution lifecycle, reconciliation, and persistence disposition.
-- Transport owns request identity and idempotency. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide execution, reconciliation, or persistence outcomes.
+- The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, idempotency, server work queues, execution lifecycle, reconciliation, and persistence disposition.
+- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide idempotency, execution, reconciliation, or persistence outcomes.
 
 ## Skills And Generated Assets
 
