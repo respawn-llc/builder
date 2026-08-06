@@ -82,6 +82,85 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	}
 }
 
+func TestNormalGenerationLive400RepairWaitsForMatchingStartThenRetriesOnce(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		errors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.APIStatusError{StatusCode: 400},
+		},
+		responses: []llm.Response{finalTextResponse("repaired")},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	customInput := "custom input"
+	call := llm.ToolCall{
+		ID:          "normal-live-custom",
+		Name:        "custom_tool",
+		Custom:      true,
+		CustomInput: &customInput,
+	}
+	const originalStepID = "normal-live-original-step"
+	steerDanglingToolCall(t, eng, originalStepID, call)
+	eng.rememberPendingToolCallStarts(map[string]int{call.ID: 1})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "blocked repair"); !llm.HasHTTPStatus(err, 400) {
+		t.Fatalf("generation with matching live start error = %v, want HTTP 400", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("generation calls with matching live start = %d, want one and no retry", len(client.calls))
+	}
+	if repairRequestHasToolOutput(eng.transcriptRuntimeState().SnapshotItems(), call.ID) {
+		t.Fatal("normal generation repaired while the matching live start remained")
+	}
+	if warnings := typedLiveRepairWarnings(t, store); len(warnings) != 0 {
+		t.Fatalf("normal generation warnings while live start remained = %d, want none", len(warnings))
+	}
+
+	eng.forgetPendingToolCallStart(call.ID)
+	if _, err := eng.SubmitUserMessage(context.Background(), "repair now"); err != nil {
+		t.Fatalf("normal generation after live start retirement: %v", err)
+	}
+	if len(client.calls) != 3 {
+		t.Fatalf("normal generation calls = %d, want blocked send plus one repaired retry pair", len(client.calls))
+	}
+	firstRepairAttempt := client.calls[1]
+	retry := client.calls[2]
+	if firstRepairAttempt.Model != retry.Model ||
+		firstRepairAttempt.SessionID != retry.SessionID ||
+		firstRepairAttempt.ToolChoiceMode != retry.ToolChoiceMode ||
+		firstRepairAttempt.PromptCacheKey != retry.PromptCacheKey ||
+		firstRepairAttempt.PromptCacheScope != retry.PromptCacheScope ||
+		firstRepairAttempt.EnableNativeWebSearch != retry.EnableNativeWebSearch {
+		t.Fatalf(
+			"normal generation retry changed provider operation identity: first=%+v retry=%+v",
+			firstRepairAttempt,
+			retry,
+		)
+	}
+	if !repairRequestHasToolCall(firstRepairAttempt.Items, call.ID) ||
+		repairRequestHasToolOutput(firstRepairAttempt.Items, call.ID) {
+		t.Fatal("normal generation first repair attempt did not retain the dangling custom call")
+	}
+	if !repairRequestHasToolCall(retry.Items, call.ID) ||
+		!repairRequestHasToolOutputType(retry.Items, call.ID, llm.ResponseItemTypeCustomToolOutput) {
+		t.Fatal("normal generation retry did not rebuild with the original custom call and custom output")
+	}
+	stepID, outputKind, completion := repairCompletionTypedFacts(t, store, call.ID)
+	if stepID == nil || *stepID != originalStepID {
+		t.Fatalf("normal generation repair step = %v, want original %q", stepID, originalStepID)
+	}
+	if outputKind != session.ToolOutputKindCustom {
+		t.Fatalf("normal generation output kind = %q, want custom", outputKind)
+	}
+	if !completion.IsError || !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
+		t.Fatalf("normal generation live disposition = error:%t output:%s", completion.IsError, completion.Output)
+	}
+	if warnings := typedLiveRepairWarnings(t, store); len(warnings) != 1 {
+		t.Fatalf("normal generation typed repair warnings = %d, want one", len(warnings))
+	}
+}
+
 func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -363,6 +442,100 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	}
 }
 
+func TestCompactionLive400RepairWaitsForMatchingStartThenRetriesOnce(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		compactionErrors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.APIStatusError{StatusCode: 400},
+			nil,
+		},
+		compactionResponses: []llm.CompactionResponse{{
+			Usage: llm.Usage{WindowTokens: 100},
+		}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	customInput := "custom input"
+	call := llm.ToolCall{
+		ID:          "compaction-live-custom",
+		Name:        "custom_tool",
+		Custom:      true,
+		CustomInput: &customInput,
+	}
+	const originalStepID = "compaction-live-original-step"
+	steerDanglingToolCall(t, eng, originalStepID, call)
+	eng.rememberPendingToolCallStarts(map[string]int{call.ID: 1})
+	request := llm.CompactionRequest{
+		Model:      "gpt-5",
+		SessionID:  store.Meta().SessionID,
+		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+	}
+
+	if _, _, _, err := eng.compactWithContextRepairRetry(
+		context.Background(),
+		"compaction-operation-step",
+		client,
+		request,
+	); !llm.HasHTTPStatus(err, 400) {
+		t.Fatalf("compaction with matching live start error = %v, want HTTP 400", err)
+	}
+	if len(client.compactionCalls) != 1 {
+		t.Fatalf("compaction calls with matching live start = %d, want one and no retry", len(client.compactionCalls))
+	}
+	if repairRequestHasToolOutput(eng.transcriptRuntimeState().SnapshotItems(), call.ID) {
+		t.Fatal("compaction repaired while the matching live start remained")
+	}
+	if warnings := typedLiveRepairWarnings(t, store); len(warnings) != 0 {
+		t.Fatalf("compaction warnings while live start remained = %d, want none", len(warnings))
+	}
+
+	eng.forgetPendingToolCallStart(call.ID)
+	if _, _, _, err := eng.compactWithContextRepairRetry(
+		context.Background(),
+		"compaction-operation-step",
+		client,
+		request,
+	); err != nil {
+		t.Fatalf("compaction after live start retirement: %v", err)
+	}
+	if len(client.compactionCalls) != 3 {
+		t.Fatalf("compaction calls = %d, want blocked send plus one repaired retry pair", len(client.compactionCalls))
+	}
+	firstRepairAttempt := client.compactionCalls[1]
+	retry := client.compactionCalls[2]
+	if firstRepairAttempt.Model != retry.Model ||
+		firstRepairAttempt.SessionID != retry.SessionID ||
+		firstRepairAttempt.Instructions != retry.Instructions {
+		t.Fatalf(
+			"compaction retry changed provider operation identity: first=%+v retry=%+v",
+			firstRepairAttempt,
+			retry,
+		)
+	}
+	if !repairRequestHasToolCall(firstRepairAttempt.InputItems, call.ID) ||
+		repairRequestHasToolOutput(firstRepairAttempt.InputItems, call.ID) {
+		t.Fatal("compaction first repair attempt did not retain the dangling custom call")
+	}
+	if !repairRequestHasToolCall(retry.InputItems, call.ID) ||
+		!repairRequestHasToolOutputType(retry.InputItems, call.ID, llm.ResponseItemTypeCustomToolOutput) {
+		t.Fatal("compaction retry did not rebuild with the original custom call and custom output")
+	}
+	stepID, outputKind, completion := repairCompletionTypedFacts(t, store, call.ID)
+	if stepID == nil || *stepID != originalStepID {
+		t.Fatalf("compaction repair step = %v, want original %q", stepID, originalStepID)
+	}
+	if outputKind != session.ToolOutputKindCustom {
+		t.Fatalf("compaction output kind = %q, want custom", outputKind)
+	}
+	if !completion.IsError || !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
+		t.Fatalf("compaction live disposition = error:%t output:%s", completion.IsError, completion.Output)
+	}
+	if warnings := typedLiveRepairWarnings(t, store); len(warnings) != 1 {
+		t.Fatalf("compaction typed repair warnings = %d, want one", len(warnings))
+	}
+}
+
 func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -562,4 +735,61 @@ func repairRequestHasToolOutput(items []llm.ResponseItem, callID string) bool {
 		}
 	}
 	return false
+}
+
+func repairRequestHasToolOutputType(
+	items []llm.ResponseItem,
+	callID string,
+	outputType llm.ResponseItemType,
+) bool {
+	for _, item := range items {
+		if item.Type != outputType {
+			continue
+		}
+		if got, ok := textutil.OptionalTrimmed(item.CallID); ok && got == callID {
+			return true
+		}
+	}
+	return false
+}
+
+func repairCompletionTypedFacts(
+	t *testing.T,
+	store *session.Store,
+	callID string,
+) (*string, session.ToolOutputKind, storedToolCompletion) {
+	t.Helper()
+	record, completion := repairCompletionRecord(t, store, callID)
+	payload, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+	if !ok {
+		t.Fatalf("repair record for call %q has payload %T", callID, mustSessionEventPayload(record))
+	}
+	return record.StepID(), payload.OutputKind, completion
+}
+
+func typedLiveRepairWarnings(
+	t *testing.T,
+	store *session.Store,
+) []storedLocalEntry {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if err != nil {
+		t.Fatalf("read bounded live-repair warnings: %v", err)
+	}
+	var warnings []storedLocalEntry
+	for _, record := range window.Records {
+		entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
+		if !ok {
+			continue
+		}
+		stored, err := storedLocalEntryFromSessionRecord(entry)
+		if err != nil {
+			t.Fatalf("restore live-repair warning: %v", err)
+		}
+		if stored.Visibility == transcript.EntryVisibilityOngoing &&
+			stored.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			warnings = append(warnings, stored)
+		}
+	}
+	return warnings
 }
