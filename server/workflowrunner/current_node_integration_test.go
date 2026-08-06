@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	agentruntime "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -36,18 +38,19 @@ import (
 const currentNodeRunnerWait = 30 * time.Second
 
 type currentNodeRunnerFixture struct {
-	cfg          config.App
-	metadata     *metadata.Store
-	store        *workflowstore.Store
-	authority    *sessionruntime.Authority
-	runtimes     *registry.RuntimeRegistry
-	controller   *workflowexecution.CurrentNodeController
-	starter      *Starter
-	dependencies *workflowview.TaskDependencies
-	projectID    string
-	workspaceID  string
-	workspace    string
-	client       currentNodeRunnerClient
+	cfg             config.App
+	metadata        *metadata.Store
+	store           *workflowstore.Store
+	authority       *sessionruntime.Authority
+	runtimes        *registry.RuntimeRegistry
+	controller      *workflowexecution.CurrentNodeController
+	starter         *Starter
+	dependencies    *workflowview.TaskDependencies
+	projectID       string
+	workspaceID     string
+	workspace       string
+	client          currentNodeRunnerClient
+	persistenceGate *sessiontest.PersistenceGate
 
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
@@ -131,6 +134,21 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 }
 
 func newCurrentNodeRunnerFixtureWithClient(t *testing.T, client currentNodeRunnerClient) *currentNodeRunnerFixture {
+	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, false)
+}
+
+func newCurrentNodeRunnerFixtureWithPersistenceGate(
+	t *testing.T,
+	client currentNodeRunnerClient,
+) *currentNodeRunnerFixture {
+	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, true)
+}
+
+func newCurrentNodeRunnerFixtureWithClientAndPersistence(
+	t *testing.T,
+	client currentNodeRunnerClient,
+	withPersistenceGate bool,
+) *currentNodeRunnerFixture {
 	t.Helper()
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -178,11 +196,23 @@ func newCurrentNodeRunnerFixtureWithClient(t *testing.T, client currentNodeRunne
 		workspace:   binding.CanonicalRoot,
 		client:      client,
 	}
+	storeOptions := metadataStore.AuthoritativeSessionStoreOptions()
+	if withPersistenceGate {
+		persisted := gatedMetadataSessionPersistence{
+			sessions: sessiontest.NewPersistence(),
+			metadata: metadataStore,
+		}
+		fixture.persistenceGate = sessiontest.NewPersistenceGate(persisted)
+		storeOptions = []session.StoreOption{
+			session.WithPersistenceObserver(fixture.persistenceGate),
+			session.WithPersistedSessionResolver(persisted),
+		}
+	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
 	var controller *workflowexecution.CurrentNodeController
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+		StoreOptions:    storeOptions,
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			controller.ExecutionFinalized(scope)
 		}),
@@ -714,6 +744,70 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 			*item.MessageType == llm.MessageTypeCompactionSoonReminder {
 			t.Fatal("loop reassignment request included a same-assignment compaction reminder")
 		}
+	}
+}
+
+func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing.T) {
+	diagnostic := errors.New("workflow post-completion finalization diagnostic")
+	var diagnosticMatched atomic.Bool
+	var postCompactionObservation atomic.Bool
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("completed review")},
+		ScriptedFinalAnswer(`{"transition":"review","commentary":"implementation complete"}`),
+		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes requested"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, client)
+	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if len(client.CompactionCalls()) == 0 {
+			return false
+		}
+		if !postCompactionObservation.Swap(true) {
+			return false
+		}
+		diagnosticMatched.Store(true)
+		return true
+	}, diagnostic)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	threshold := 1
+	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
+	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	implementation := f.startTask(t, task)
+
+	approval := f.waitForPendingApproval(t, task.ID)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("loop post-completion compactions = %d, want one", len(client.CompactionCalls()))
+	}
+	if !diagnosticMatched.Load() {
+		t.Fatal("post-completion finalization diagnostic was not exercised")
+	}
+	pending, err := f.store.ListPendingApprovals(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list pending Approval after finalization diagnostic: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != approval.ID {
+		t.Fatalf("pending Approvals after finalization diagnostic = %+v, want original Approval", pending)
+	}
+	f.waitForControllerCurrentNodeFinalized(t, implementation)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply CAC target Approval after finalization diagnostic: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 2)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("CAC continuation compactions = %d, want committed source replacement only", len(client.CompactionCalls()))
+	}
+	if requests[1].PromptCacheKey == "" || requests[1].PromptCacheKey == requests[0].PromptCacheKey {
+		t.Fatalf(
+			"CAC continuation cache keys = %q/%q, want one fresh key after committed replacement",
+			requests[0].PromptCacheKey,
+			requests[1].PromptCacheKey,
+		)
 	}
 }
 
@@ -1345,7 +1439,7 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 		ScriptedFinalAnswer(`{"commentary":"branch"}`),
 		ScriptedFinalAnswer(`{"commentary":"branch"}`),
 	)
-	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store, false)
 	task := f.createTask(t, workflowID)
 	source := f.startTask(t, task)
 
@@ -1379,6 +1473,85 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 	}
 }
 
+func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{
+			ProviderID:               "test",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			SupportsPromptCacheKey:   true,
+		},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("completed fan-out source")},
+		ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch a"}`),
+		ScriptedFinalAnswer(`{"commentary":"branch b"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	threshold := 1
+	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store, true)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, source)
+	if len(client.CompactionCalls()) != 1 {
+		t.Fatalf("fan-out source post-completion compactions = %d, want one", len(client.CompactionCalls()))
+	}
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply fan-out Approval: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 3)
+	for index, request := range requests[1:] {
+		summaries := 0
+		for _, item := range request.Items {
+			if item.Type == llm.ResponseItemTypeMessage &&
+				item.MessageType != nil &&
+				*item.MessageType == llm.MessageTypeCompactionSummary {
+				summaries++
+			}
+		}
+		if summaries != 1 {
+			t.Fatalf("branch request %d compaction summaries = %d, want one", index+2, summaries)
+		}
+	}
+	if requests[1].PromptCacheKey == "" ||
+		requests[2].PromptCacheKey == "" ||
+		requests[1].PromptCacheKey == requests[2].PromptCacheKey ||
+		requests[0].PromptCacheKey == requests[1].PromptCacheKey ||
+		requests[0].PromptCacheKey == requests[2].PromptCacheKey {
+		t.Fatalf(
+			"fan-out cache lineage keys = %q/%q/%q, want three distinct non-empty keys",
+			requests[0].PromptCacheKey,
+			requests[1].PromptCacheKey,
+			requests[2].PromptCacheKey,
+		)
+	}
+	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	if err != nil {
+		t.Fatalf("resolve source Session association: %v", err)
+	}
+	branchSessionIDs := make(map[runtimeids.SessionID]struct{}, len(branchNodeIDs))
+	for branchKey, nodeID := range branchNodeIDs {
+		reference, err := workflow.NewCurrentNodeReference(task.ID, nodeID, &branchKey)
+		if err != nil {
+			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
+		}
+		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
+		if err != nil {
+			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
+		}
+		if association.SessionID == sourceAssociation.SessionID {
+			t.Fatalf("branch %q reused source Session %q after pre-compaction", branchKey, association.SessionID)
+		}
+		branchSessionIDs[association.SessionID] = struct{}{}
+	}
+	if len(branchSessionIDs) != len(branchNodeIDs) {
+		t.Fatalf("fan-out branch Session lineages = %+v, want one distinct clone per branch", branchSessionIDs)
+	}
+}
+
 func TestCurrentNodeFanoutRuntimePreparationFailureKeepsAssignedBranchesResumable(t *testing.T) {
 	sourceResponseStarted := make(chan struct{})
 	sourceResponseRelease := make(chan struct{})
@@ -1401,7 +1574,7 @@ func TestCurrentNodeFanoutRuntimePreparationFailureKeepsAssignedBranchesResumabl
 			Response: ScriptedFinalAnswer(`{"transition":"split","commentary":"source"}`).Response,
 		},
 	)
-	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store)
+	workflowID, branchNodeIDs := createCurrentNodeFanoutContinuationWorkflow(t, f.store, false)
 	task := f.createTask(t, workflowID)
 	f.starter.store = currentNodeStartContextStore{
 		RuntimeStore: f.store,
@@ -1719,6 +1892,7 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 func createCurrentNodeFanoutContinuationWorkflow(
 	t *testing.T,
 	store *workflowstore.Store,
+	requiresApproval bool,
 ) (runtimeids.WorkflowID, map[workflow.TransitionBranchKey]workflow.NodeID) {
 	t.Helper()
 	ctx := context.Background()
@@ -1774,8 +1948,8 @@ func createCurrentNodeFanoutContinuationWorkflow(
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
 		{ID: workflow.EdgeID("edge-start-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source."},
-		{ID: workflow.EdgeID("edge-branch-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"], ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch A."},
-		{ID: workflow.EdgeID("edge-branch-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"], ContextMode: workflow.ContextModeContinueSession, PromptTemplate: "Branch B."},
+		{ID: workflow.EdgeID("edge-branch-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"], ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch A."},
+		{ID: workflow.EdgeID("edge-branch-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"], ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch B."},
 		{ID: workflow.EdgeID("edge-join-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-join-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-done-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
