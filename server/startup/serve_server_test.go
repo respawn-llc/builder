@@ -351,12 +351,12 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *EmbeddedServer) 
 		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
 	}
 	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Perform the work.",
+		WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work.",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge: %v", err)
 	}
 	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, ContextMode: "new_session",
+		WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge: %v", err)
 	}

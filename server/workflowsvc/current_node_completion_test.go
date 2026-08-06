@@ -323,6 +323,10 @@ func (currentNodeCompletionUnavailableTaskDetail) GetTaskByProjectShortID(contex
 	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
 }
 
+func (currentNodeCompletionUnavailableTaskDetail) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
+	return nil, errors.New("current nodes unavailable")
+}
+
 func (currentNodeCompletionUnavailableTaskDetail) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
 	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
 }

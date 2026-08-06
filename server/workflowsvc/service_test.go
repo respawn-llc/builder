@@ -25,7 +25,6 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -84,13 +83,13 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start", SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start", TransitionGroupID: "group-start", Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start", TransitionGroupID: "group-start", Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
 		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done", SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done", TransitionGroupID: "group-done", Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done", TransitionGroupID: "group-done", Key: "done", TargetNodeID: doneID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	validated, err := service.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{WorkflowID: created.Workflow.ID, Mode: serverapi.WorkflowValidationModeExecution})
@@ -682,6 +681,59 @@ func TestServiceGraphMutationsUseStoreEditPolicyInsteadOfTaskWideQuiescence(t *t
 	if len(execution.quiescentTaskIDs) != 0 {
 		t.Fatalf("graph mutations checked Task-wide Quiescence: %v", execution.quiescentTaskIDs)
 	}
+}
+
+func TestServiceSaveWorkflowGraphProjectsSelectorApplicabilityWithRoleCatalog(t *testing.T) {
+	service, binding, _ := newWorkflowServiceTestServiceWithRoleResolver(t, testsetup.QuestionsEnabled("coder", "reviewer"))
+	ctx := context.Background()
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	source, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(source.Definition)
+	edgeID := "edge-next-" + workflowID.String()
+	var selectedEdge *serverapi.WorkflowGraphDraftEdge
+	for index := range graph.Edges {
+		if graph.Edges[index].ID != edgeID {
+			continue
+		}
+		graph.Edges[index].AssigneeSelection = "previous_node"
+		graph.Edges[index].Parameters = append(graph.Edges[index].Parameters, serverapi.WorkflowParameter{
+			Key:     "role",
+			Purpose: "target_assignee",
+		})
+		selectedEdge = &graph.Edges[index]
+		break
+	}
+	if selectedEdge == nil {
+		t.Fatalf("graph edge %q not found", edgeID)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || saved.Definition == nil {
+		t.Fatalf("SaveWorkflowGraph response = %+v, want saved definition", saved)
+	}
+	for _, derivedEdge := range saved.Definition.DerivedWiring.Edges {
+		if derivedEdge.EdgeID != edgeID {
+			continue
+		}
+		applicability := derivedEdge.AssigneeSelectionApplicability
+		if !applicability.Available ||
+			!applicability.ParameterVisible ||
+			applicability.Reason != serverapi.WorkflowSelectorApplicabilityReasonEligible {
+			t.Fatalf("saved selector applicability = %+v, want catalog-backed eligible selector", applicability)
+		}
+		return
+	}
+	t.Fatalf("saved definition omitted derived wiring for edge %q", edgeID)
 }
 
 func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
@@ -2179,8 +2231,8 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: scriptDoneTransitionID, SourceNodeID: scriptID, TransitionID: "script_done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID.String(), TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, ContextMode: "new_session"},
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-script-done-" + workflowID.String(), TransitionGroupID: scriptDoneTransitionID, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-agent-script-" + workflowID.String(), TransitionGroupID: scriptTransitionID, Key: "script", TargetNodeID: scriptID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-script-done-" + workflowID.String(), TransitionGroupID: scriptDoneTransitionID, Key: "done", TargetNodeID: doneID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
 	)
 	savedScript, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
@@ -2418,7 +2470,7 @@ func (r *blockingWorkflowGraphRoleResolver) Arm() {
 	r.mu.Unlock()
 }
 
-func (r *blockingWorkflowGraphRoleResolver) RoleExists(string) bool {
+func (r *blockingWorkflowGraphRoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
 	r.mu.Lock()
 	shouldBlock := r.armed && !r.startedOnce
 	if shouldBlock {
@@ -2429,11 +2481,11 @@ func (r *blockingWorkflowGraphRoleResolver) RoleExists(string) bool {
 		close(r.started)
 		<-r.release
 	}
-	return true
+	return workflow.TargetAgentRole{Identity: role, QuestionsEnabled: true}, true
 }
 
-func (r *blockingWorkflowGraphRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
-	return true
+func (r *blockingWorkflowGraphRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return nil
 }
 
 type blockingWorkflowGraphEventPublisher struct {
@@ -2634,6 +2686,7 @@ func newWorkflowServiceReadModels(
 		TaskDependencies: dependencies,
 		Activity:         activity,
 		Attention:        attention,
+		Approvals:        emptyWorkflowApprovalView{},
 	}
 }
 
@@ -2672,6 +2725,12 @@ func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.Tas
 }
 
 type emptyWorkflowPendingPromptSource struct{}
+
+type emptyWorkflowApprovalView struct{}
+
+func (emptyWorkflowApprovalView) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return serverapi.ApprovalListPendingBySessionResponse{}, nil
+}
 
 func (emptyWorkflowPendingPromptSource) ListPendingPrompts(string) ([]workflowview.PendingPromptSnapshot, error) {
 	return nil, nil
@@ -2784,13 +2843,13 @@ func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, servi
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start-" + created.Workflow.ID.String(), SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: "group-start-" + created.Workflow.ID.String(), Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: "group-start-" + created.Workflow.ID.String(), Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Do work."}); err != nil {
 		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done-" + created.Workflow.ID.String(), SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: "group-done-" + created.Workflow.ID.String(), Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: "group-done-" + created.Workflow.ID.String(), Key: "done", TargetNodeID: doneID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	return created.Workflow.ID
@@ -2847,13 +2906,13 @@ func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, ser
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: doneGroup, SourceNodeID: implementID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: "new_session", PromptTemplate: "Plan work."}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Plan work."}); err != nil {
 		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID.String(), TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implementID, ContextMode: "new_session", PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []serverapi.WorkflowParameter{{Key: "prior_summary", Description: "Prior summary."}}}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID.String(), TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implementID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []serverapi.WorkflowParameter{{Key: "prior_summary", Description: "Prior summary.", Purpose: "ordinary"}}}); err != nil {
 		t.Fatalf("AddWorkflowEdge next: %v", err)
 	}
-	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	return created.Workflow.ID
@@ -2920,7 +2979,18 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for _, edge := range def.Edges {
-		graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{ID: edge.ID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters})
+		if edge.AssigneeSelection == "" {
+			edge.AssigneeSelection = "configured"
+		}
+		if edge.ThinkingSelection == "" {
+			edge.ThinkingSelection = "configured"
+		}
+		for index := range edge.Parameters {
+			if edge.Parameters[index].Purpose == "" {
+				edge.Parameters[index].Purpose = "ordinary"
+			}
+		}
+		graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{ID: edge.ID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: edge.AssigneeSelection, ThinkingSelection: edge.ThinkingSelection, RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters})
 	}
 	return graph
 }

@@ -217,6 +217,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			def := validWorkflow(t)
 			tt.edit(t, &def)
+			def = normalizeWorkflowEdgeShape(def)
 
 			result := validateForTask(def)
 
@@ -392,6 +393,35 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertHasCodes(t, result, workflow.CodeProvisionFieldOverlap)
 	})
 
+}
+
+func TestValidationRejectsPromptReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	edge := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	edge.Parameters = append(edge.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	edge.PromptTemplate = "Use {{.Params.role}}."
+
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+}
+
+func TestValidationRejectsPriorReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	producer := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	producer.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	producer.Parameters = append(producer.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	consumer := edgeByIDForValidationTest(t, &def, "edge_implement_done")
+	consumer.PromptTemplate = "Use {{.Params.implement.role}}."
+
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
 }
 
 func TestFanoutJoinTopology(t *testing.T) {
@@ -660,7 +690,7 @@ func TestContextSourceValidation(t *testing.T) {
 }
 
 func validWorkflow(t *testing.T) workflow.Definition {
-	return workflow.Definition{
+	return normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_default"),
 		DisplayName: "Default Workflow",
 		Nodes: []workflow.Node{
@@ -687,11 +717,11 @@ func validWorkflow(t *testing.T) workflow.Definition {
 				OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 			},
 		},
-	}
+	})
 }
 
 func fanoutWorkflow(t *testing.T) workflow.Definition {
-	def := workflow.Definition{
+	def := normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_fanout"),
 		DisplayName: "Fanout Workflow",
 		Nodes: []workflow.Node{
@@ -717,12 +747,12 @@ func fanoutWorkflow(t *testing.T) workflow.Definition {
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_impl_b_join", Key: "join_b", TransitionGroupID: "group_impl_b_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_join_done", Key: "done", TransitionGroupID: "group_join_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
-	}
+	})
 	return def
 }
 
 func reviewAcceptanceWorkflow(t *testing.T) workflow.Definition {
-	return workflow.Definition{
+	return normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_review_acceptance"),
 		DisplayName: "Review Acceptance Workflow",
 		Nodes: []workflow.Node{
@@ -754,7 +784,7 @@ func reviewAcceptanceWorkflow(t *testing.T) workflow.Definition {
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_accept_open_pr", Key: "open_pr", TransitionGroupID: "group_accept_open_pr", TargetNodeID: "node_open_pr", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Open PR."},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_open_pr_done", Key: "done", TransitionGroupID: "group_open_pr_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
-	}
+	})
 }
 
 func validateForTask(def workflow.Definition) workflow.ValidationResult {

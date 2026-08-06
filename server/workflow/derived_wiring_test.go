@@ -30,6 +30,42 @@ func TestDeriveWiringPropagatesTransitionParametersAcrossNormalEdge(t *testing.T
 	})
 }
 
+func TestDeriveWiringFiltersAutoConsumedSelectorProvisionFields(t *testing.T) {
+	def := parameterWorkflow(t)
+	edge := edgeByIDForDerivedTest(t, &def, "edge_plan_implement")
+	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+	edge.Parameters = append([]workflow.Parameter{
+		{Key: "agent_role", Purpose: workflow.ParameterPurposeTargetAssignee},
+		{Key: "thinking_level", Purpose: workflow.ParameterPurposeTargetThinking},
+	}, edge.Parameters...)
+
+	derived := workflow.DeriveWiringWithCatalog(def, selectorCatalog{
+		explicit: []workflow.TargetAgentRole{{
+			Identity:              "coder",
+			ExplicitAgentCallable: true,
+			Thinking: workflow.ThinkingCapability{
+				ReasoningCapable: true,
+				Finite:           true,
+				Levels:           []string{"low"},
+			},
+		}},
+	})
+
+	assertInputBindings(t, derived.InputBindingsForEdge(edge.ID), []workflow.InputBinding{
+		{Name: "plan", Source: workflow.BindingSourceTransitionOutput, Field: "plan"},
+		{Name: "risk", Source: workflow.BindingSourceTransitionOutput, Field: "risk"},
+	})
+	assertOutputFields(t, derived.RequiredProvisionFieldsForEdge(edge.ID), []workflow.OutputField{
+		{Name: "plan", Description: "Implementation plan."},
+		{Name: "risk", Description: "Known implementation risk."},
+	})
+	assertOutputFields(t, derived.PossibleProvisionFieldsForNode("node_plan"), []workflow.OutputField{
+		{Name: "plan", Description: "Implementation plan."},
+		{Name: "risk", Description: "Known implementation risk."},
+	})
+}
+
 func TestDeriveWiringUnionsFanoutBranchParametersPerTransitionGroup(t *testing.T) {
 	def := fanoutParameterWorkflow(t)
 
@@ -149,7 +185,7 @@ func TestDeriveWiringSkipsNonAgentSourceParameters(t *testing.T) {
 }
 
 func parameterWorkflow(t *testing.T) workflow.Definition {
-	return workflow.Definition{
+	return normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_parameters"),
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
@@ -188,7 +224,7 @@ func parameterWorkflow(t *testing.T) workflow.Definition {
 				Parameters:        []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}},
 			},
 		},
-	}
+	})
 }
 
 func fanoutParameterWorkflow(t *testing.T) workflow.Definition {

@@ -31,7 +31,7 @@
 - Scratch rehydration emits committed assistant final answers from their full saved Markdown through the same stable projection as ordinary final answers. The compact ongoing assistant preview rule does not apply to rehydrated final answers.
 - Assistant finalization matches the committed entry to its Streaming Message identity and compares only with the active stream source. If committed text extends the streamed source, Ongoing Mode emits only the missing suffix. Any other mismatch without a real connection gap is a developer error.
 - **Pending tool activity lives only in the Mutable Band. It shows a loading spinner until Kent commits the completed tool row to Scrollback.**
-- Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for reviewer status/suggestion entries, `⇄` for file edits (edit/patch tools), `$` for shell tool calls including failed shell exits, `⚠` for warnings, `!` for error notices and default tool errors, `ℹ` for ongoing-visible neutral notices (such as goal and worktree messages), and `?` for questions.
+- Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for Reviewer feedback, `⇄` for file edits (edit/patch tools), `$` for shell tool calls including failed shell exits, `⚠` for warnings, `!` for Reviewer errors, other error notices, and default tool errors, `ℹ` for ongoing-visible neutral notices (such as goal and worktree messages), and `?` for questions.
 - The first immutable row of every user turn uses `❯`; the first immutable row of every final assistant response uses `❮`, including responses entering scrollback through source-backed streaming promotion. Later logical lines begin at column one with no role-prefix padding; terminal soft wraps reflow naturally. Width-formatted constructs may reserve the first-line prefix width in their layout budget without adding leading padding.
 - **Pending tool-call previews in live region use the same rendering/layout as committed tool-call previews, with no pending-only labels.**
 - A pending Question's live row shows only the Question text. It does not show a tool name or prompt kind.
@@ -106,11 +106,14 @@
 - `skills`: `D`
 - `subagents`: `D`
 - `environment`: `D`
+- `agent_steer`: `O`
 - `compaction_summary`: `O`, using compact label in ongoing/collapsed detail and full summary on expansion.
 - `interruption`: `O`
 - `error_feedback`: `O`
 - `compaction_soon_reminder`: `D`
-- `reviewer_feedback`: represented by reviewer transcript roles. Verbose reviewer suggestions use `O` and render their complete suggestion list in ongoing scrollback. Reviewer status uses `OC` and its compact ongoing line must not use an ellipsis to imply hidden detail.
+- Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row regardless of this setting. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
+- Reviewer errors use `O` and show their complete failure detail.
+- Reviewer running and completion lifecycle create no transcript row.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
@@ -128,7 +131,8 @@
 - final assistant turns: `O`
 - assistant commentary/thinking turns: `D`
 - tool calls: `OC`
-- reviewer suggestions/status: `OC` or `O`
+- Reviewer feedback: `OC` or `O` as defined above.
+- Reviewer errors: `O`.
 - Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither Reasoning Trace rows nor assistant commentary/thinking rows.
 - Kent decides which messages become transcript entries and which role they use.
 - The TUI decides how each role appears in Ongoing Mode and Detail Mode.
@@ -145,6 +149,7 @@
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- A transcript message with type `agent_steer` uses the `❯` symbol and full-strength foreground Markdown styling. Ongoing renders the complete model-visible message. Collapsed Detail uses the ordinary compact preview, and expanded Detail renders the complete model-visible message.
 - `agents.md`, `skills`, `subagents`, `environment`, `compaction_summary`, `headless_mode`, `headless_mode_exit`, `active_goal_continuation`, and `workflow_mode` render selected content as Markdown. `handoff_future_message` and Compaction-Preserved User Messages remain plaintext.
 - Stable ongoing user and final/streamed assistant Markdown emits width-independent logical lines so the terminal owns prose wrapping and copied prose contains no width-generated line breaks. Markdown soft line breaks flow as spaces; hard breaks and preformatted source boundaries remain explicit. GFM tables render through the Markdown library at the terminal width in effect when they enter scrollback, using continuous Unicode `│`, `─`, and `┼` separators without an outer frame.
 - Shell tool calls use shared syntax highlighting, faint styling, and shell syntax for the active operating system.
@@ -158,13 +163,13 @@
 - Worktree-enter rows use the faint foreground system-notice style.
 - Worktree-exit rows use full-strength foreground text.
 - `subagents` developer-context rows use the faint foreground system-notice style.
-- Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
+- Reviewer feedback rows use success text. Reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
 - The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected. Expanded compaction summary and reminder content uses the normal notice role; other selected content retains its semantic role.
-- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer symbols follow the row's Success or Error state. Compact compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
+- Role symbols use their own semantic colors. Successful tools use Success. Shell tools with raw output use Warning. Backgrounded shell tools use Secondary. Non-zero foreground shell exits keep `$` and use Error. Other failed tools use Error. Reviewer feedback uses Success and Reviewer errors use Error. Compact compaction uses Secondary. Goal and Workflow use Primary. Background shell completion uses Primary regardless of exit status. Warnings use Warning and errors use Error.
 - Kent determines status from typed facts, not display text.
 - Kent does not invent a semantic color for an unspecified symbol.
 - Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.
@@ -191,7 +196,8 @@
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
 - Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
-- Multiple queued user steering messages flushed at one boundary coalesce into one user message separated by blank lines.
+- A pending steer issued from another Session shows its complete wrapped message.
+- Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
 - Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
@@ -303,10 +309,10 @@
 
 - Ring terminal bell when a new `ask_question` is shown.
 - Ring on turn end only if the TUI observed at least two tool calls for an eligible turn.
-- A supervisor-reviewed turn-end notification is requested only after the supervisor workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
+- A Reviewer-reviewed turn-end notification is requested only after the Reviewer workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
 - Notifications never delay queued model work.
 - If transcript delivery lags, Kent can omit a notification, delay it until a later Queue drain, or use an earlier observed preview.
-- When the TUI observes a supervisor-reviewed turn boundary before notification, its preview uses the final answer produced before supervisor feedback is addressed.
+- When the TUI observes a Reviewer-reviewed turn boundary before notification, its preview uses the final answer produced before Reviewer feedback is addressed.
 - A queued prompt drain emits at most one turn-end notification when any observed turn in the drain meets the two-tool threshold, using the last final answer observed by the TUI even when that turn has fewer than two tool calls.
 - Turn-end text includes assistant preview when available, else `<session title>: turn complete`.
 - Ask notifications include `<session title>: Question: <question>` or `<session title>: Action required: <question>`.
@@ -360,6 +366,8 @@
 - Reviewer runs only after completed assistant final handoff and only if the turn executed at least one tool call.
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
-- If suggestions exist, Kent adds them as a developer message and runs one extra main-agent follow-up.
-- The exact follow-up no-op token is `NO_OP`. When the agent emits it, Kent keeps the original assistant final answer.
+- A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
+- If suggestions exist, Kent runs one extra main-agent follow-up. A successful follow-up creates exactly one Reviewer feedback row after that follow-up's committed output. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
+- If Kent cannot apply nonempty Reviewer feedback, the current engine and Session fail and create neither a Reviewer feedback row nor a Reviewer error row for that result. This includes a missing follow-up answer and the exact `NO_OP` answer.
 - The Reviewer runs once and does not review its own follow-up.

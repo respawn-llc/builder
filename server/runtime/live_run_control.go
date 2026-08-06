@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"core/server/llm"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 var ErrNoActiveLiveRun = errors.New("no active live run")
@@ -193,6 +195,14 @@ func (t *goalLoopInterruptTracker) resolve(err error, snapshot *RunSnapshot) {
 }
 
 func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, beforeQueue)
+}
+
+func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSteer, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+	return e.queueMessageForActiveRun(ctx, steer.Message(), clientRequestID, beforeQueue)
+}
+
+func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
@@ -202,7 +212,7 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	if text == "" {
+	if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
 		return QueuedUserMessage{}, false, errors.New("empty message")
 	}
 	e.ensureOrchestrationCollaborators()
@@ -224,7 +234,7 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID.String()}
+	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), ClientRequestID: clientRequestID.String(), Message: message}
 	finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
 		e.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
@@ -233,7 +243,16 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 	}
 	committed = true
 	e.outputMutationMu.Lock()
-	item = e.messageFlow.QueueUserMessageWithID(item)
+	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
+	if queueErr != nil {
+		e.outputMutationMu.Unlock()
+		queueItemID := mustQueueItemID(item.ID)
+		e.liveRun.finishQueueItemPublication(queueItemID)
+		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
+		return QueuedUserMessage{}, false, queueErr
+	}
+	item = queuedItem
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 	e.outputMutationMu.Unlock()
 	queueItemID := mustQueueItemID(item.ID)
@@ -312,7 +331,7 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	e.liveRun.clearStoppedQueueItems(failed)
 }
 
-func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) []queuedUserSteeringIntent {
+func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queuedUserMessage {
 	if e == nil || len(items) == 0 {
 		return items
 	}
@@ -339,7 +358,7 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) 
 	return filtered
 }
 
-func (e *Engine) commitLiveRunQueueItemsUnlessStopped(items []queuedUserSteeringIntent, commit func() error) (bool, error) {
+func (e *Engine) commitLiveRunQueueItemsUnlessStopped(items []queuedUserMessage, commit func() error) (bool, error) {
 	if e == nil {
 		if commit == nil {
 			return true, nil
@@ -607,6 +626,12 @@ func (c *liveRunCoordinator) rollbackAdmission(admission liveRunAdmission) {
 
 func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
 	c.mu.Lock()
+	for id := range ids {
+		delete(c.stoppedQueueItems, id)
+	}
+	if len(c.stoppedQueueItems) == 0 {
+		c.stoppedQueueItems = nil
+	}
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
@@ -616,7 +641,6 @@ func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]s
 	for id := range ids {
 		delete(group.taggedQueueItems, id)
 		delete(group.publishingItems, id)
-		delete(c.stoppedQueueItems, id)
 	}
 	if len(group.taggedQueueItems) == 0 {
 		group.taggedQueueItems = nil

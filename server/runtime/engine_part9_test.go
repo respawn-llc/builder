@@ -531,11 +531,11 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 		}
 	}
 	wantCleanupKinds := []EventKind{
+		EventReasoningDeltaReset,
 		EventConversationUpdated,
 		EventAssistantDeltaReset,
 		EventReasoningDeltaReset,
 		EventConversationUpdated,
-		EventReasoningDeltaReset,
 	}
 	if len(cleanupKinds) != len(wantCleanupKinds) {
 		t.Fatalf("cleanup event kinds = %v, want %v", cleanupKinds, wantCleanupKinds)

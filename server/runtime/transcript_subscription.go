@@ -1,8 +1,11 @@
 package runtime
 
 import (
+	"time"
+
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -13,7 +16,8 @@ type TranscriptHydrationSnapshot struct {
 	ActiveAssistantMetadata *AssistantStreamMetadata
 	ActiveAssistantStreamID *uuid.UUID
 	ActiveAssistantPhase    llm.MessagePhase
-	ActiveReasoning         *TranscriptReasoningState
+	ActiveThinkingStatus    *TranscriptThinkingStatusState
+	ActiveReasoningTraces   []TranscriptReasoningTraceState
 	InFlightTools           []TranscriptLiveToolStart
 	QueuedMessages          []QueuedUserMessage
 	ActiveReviewer          *TranscriptReviewerState
@@ -24,11 +28,23 @@ type TranscriptHydrationSnapshot struct {
 	GoalSuspended           bool
 }
 
-type TranscriptReasoningState struct {
-	StepID        string
-	Key           string
-	Text          string
-	CurrentStatus *llm.ReasoningStatus
+type TranscriptThinkingStatusState struct {
+	StepID string
+	Text   string
+}
+
+type TranscriptReasoningTraceIdentity struct {
+	Provider *llm.ReasoningItemIdentity
+	Kent     *runtimeids.ReasoningTraceID
+}
+
+type TranscriptReasoningTraceState struct {
+	StepID           string
+	Source           llm.ReasoningSourceCoordinate
+	Identity         TranscriptReasoningTraceIdentity
+	ProviderMetadata *llm.ReasoningItemIdentity
+	Text             string
+	startedAt        time.Time
 }
 
 type TranscriptReviewerState struct {
@@ -66,7 +82,7 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 		return TranscriptHydrationSnapshot{}
 	}
 	snapshot := chat.deliverySnapshot()
-	reasoning := e.transcriptRuntimeState().ReasoningSnapshot()
+	thinkingStatus, reasoningTraces := e.transcriptRuntimeState().ReasoningSnapshot()
 	var queuedMessages []QueuedUserMessage
 	if e.messageFlow != nil {
 		queuedMessages = e.messageFlow.PendingUserMessages()
@@ -78,7 +94,8 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 		ActiveAssistantMetadata: cloneAssistantStreamMetadata(snapshot.StreamingMetadata),
 		ActiveAssistantStreamID: cloneTranscriptStreamID(snapshot.StreamingStreamID),
 		ActiveAssistantPhase:    snapshot.StreamingPhase,
-		ActiveReasoning:         reasoning,
+		ActiveThinkingStatus:    thinkingStatus,
+		ActiveReasoningTraces:   reasoningTraces,
 		InFlightTools:           e.transcriptRuntimeState().LiveToolSnapshot(),
 		QueuedMessages:          queuedMessages,
 		ActiveReviewer:          e.reviewerRuntimeState().ActiveStepSnapshot(),

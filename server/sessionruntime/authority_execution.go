@@ -57,8 +57,8 @@ type WorkflowPromptResolution struct {
 var ErrWorkflowPromptAmbiguous = errors.New("workflow prompt is ambiguous")
 
 type ExecutionPromptFeed interface {
-	PromptPending(runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID, tools.AskQuestionRequest, time.Time)
-	PromptResolved(runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID, string)
+	PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time) error
+	PromptResolvedScope(ExecutionScope, string) error
 }
 
 type execution struct {
@@ -264,7 +264,7 @@ func (e *execution) retireWorkflowLocked() {
 }
 
 func (e *execution) cleanup() error {
-	e.prompts.Close(context.Canceled)
+	promptErr := e.prompts.Close(context.Canceled)
 	var bindingErr error
 	if e.workflow != nil {
 		bindingErr = e.workflow.Close()
@@ -273,7 +273,7 @@ func (e *execution) cleanup() error {
 		bindingErr = e.resource.engine.FinishCurrentNodeExecutionActivation()
 	}
 	if e.resource == nil {
-		return bindingErr
+		return errors.Join(promptErr, bindingErr)
 	}
 	resource := e.resource
 	resource.mu.Lock()
@@ -289,7 +289,7 @@ func (e *execution) cleanup() error {
 			),
 		)
 	}
-	cleanupErr := bindingErr
+	cleanupErr := errors.Join(promptErr, bindingErr)
 	if resource.askBroker != nil {
 		switch {
 		case resource.askScope == nil:
@@ -399,7 +399,7 @@ func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed Ex
 	}
 }
 
-func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionRequest) (response tools.AskQuestionResponse, returnErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -431,7 +431,13 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
-	s.publishPending(snapshot)
+	if err := s.publishPending(snapshot); err != nil {
+		s.mu.Lock()
+		delete(s.pending, requestID)
+		s.mu.Unlock()
+		close(entry.publicationDone)
+		return tools.AskQuestionResponse{}, err
+	}
 	close(entry.publicationDone)
 	s.mu.Lock()
 	s.observePromptSuccessorLocked(requestID)
@@ -444,7 +450,9 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		}
 		s.mu.Unlock()
 		if current == entry {
-			s.publishResolved(snapshot)
+			if err := s.publishResolved(snapshot); err != nil && returnErr == nil {
+				returnErr = err
+			}
 		}
 	}()
 	select {
@@ -504,9 +512,9 @@ func (s *executionPromptStore) submit(
 		delete(s.pending, requestID)
 		s.mu.Unlock()
 		<-entry.publicationDone
-		s.publishResolved(entry.snapshot)
+		publicationErr := s.publishResolved(entry.snapshot)
 		entry.response <- executionPromptResult{err: err}
-		return PromptResponseAcceptance{}, err
+		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
 	}
 	acceptance := PromptResponseAcceptance{}
 	if latchSuccessor {
@@ -520,9 +528,9 @@ func (s *executionPromptStore) submit(
 	delete(s.pending, requestID)
 	s.mu.Unlock()
 	<-entry.publicationDone
-	s.publishResolved(entry.snapshot)
+	publicationErr := s.publishResolved(entry.snapshot)
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
-	return acceptance, nil
+	return acceptance, publicationErr
 }
 
 func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) ([]string, error) {
@@ -589,18 +597,19 @@ func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) (
 	return append([]string(nil), batch.BatchPromptIDs[batch.CandidateOrdinal+1:]...), nil
 }
 
-func (s *executionPromptStore) Close(err error) {
+func (s *executionPromptStore) Close(err error) error {
 	if err == nil {
 		err = context.Canceled
 	}
 	if s.authority == nil {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	closure := s.closeLocked(err)
 	s.mu.Unlock()
-	s.publishClosure(closure)
+	publicationErr := s.publishClosure(closure)
 	s.releaseClosure(closure)
+	return publicationErr
 }
 
 func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
@@ -632,11 +641,13 @@ func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
 	return closure
 }
 
-func (s *executionPromptStore) publishClosure(closure executionPromptClosure) {
+func (s *executionPromptStore) publishClosure(closure executionPromptClosure) error {
+	var publicationErr error
 	for _, entry := range closure.entries {
 		<-entry.publicationDone
-		s.publishResolved(entry.snapshot)
+		publicationErr = errors.Join(publicationErr, s.publishResolved(entry.snapshot))
 	}
+	return publicationErr
 }
 
 func (s *executionPromptStore) releaseClosure(closure executionPromptClosure) {
@@ -750,26 +761,18 @@ func (s *executionPromptStore) pendingReferences() ([]PendingPromptReference, er
 	return references, nil
 }
 
-func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {
+func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) error {
 	if s.feed == nil {
-		return
+		return nil
 	}
-	resource, ok := snapshot.Scope.Resource()
-	if !ok {
-		panic(fmt.Sprintf("agent execution prompt scope %s has no session resource", snapshot.Scope.ID()))
-	}
-	s.feed.PromptPending(resource, snapshot.Scope.ID(), cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
+	return s.feed.PromptPendingScope(snapshot.Scope, cloneExecutionPromptRequest(snapshot.Request), snapshot.CreatedAt)
 }
 
-func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot) {
+func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot) error {
 	if s.feed == nil {
-		return
+		return nil
 	}
-	resource, ok := snapshot.Scope.Resource()
-	if !ok {
-		panic(fmt.Sprintf("agent execution prompt scope %s has no session resource", snapshot.Scope.ID()))
-	}
-	s.feed.PromptResolved(resource, snapshot.Scope.ID(), snapshot.Request.ID)
+	return s.feed.PromptResolvedScope(snapshot.Scope, snapshot.Request.ID)
 }
 
 func (a *Authority) AwaitPromptResponse(ctx context.Context, scopeID runtimeids.ExecutionScopeID, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {

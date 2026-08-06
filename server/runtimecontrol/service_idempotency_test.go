@@ -462,9 +462,9 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 
 func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	firstQueued := engine.QueueUserMessage("same")
-	otherQueued := engine.QueueUserMessage("other")
-	duplicateQueued := engine.QueueUserMessage("same")
+	firstQueued := mustQueueRuntimeControlMessage(t, engine, "same")
+	otherQueued := mustQueueRuntimeControlMessage(t, engine, "other")
+	duplicateQueued := mustQueueRuntimeControlMessage(t, engine, "same")
 	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, QueueItemID: duplicateQueued.ID}
 
 	first, err := service.DiscardQueuedUserMessage(context.Background(), req)

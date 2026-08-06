@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 func (h TranscriptHydration) Validate() error {
@@ -19,20 +20,41 @@ func (h TranscriptHydration) Validate() error {
 	if h.CommittedRows == nil {
 		return fmt.Errorf("transcript hydration committed rows are required")
 	}
+	seenLocators := make(map[transcript.CommittedRowLocator]struct{}, len(h.CommittedRows))
 	for index, row := range h.CommittedRows {
 		if err := row.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration committed row %d: %w", index, err)
 		}
+		if row.Kind == TranscriptRowReasoningTrace &&
+			row.ReasoningTrace != nil &&
+			row.ReasoningTrace.ProvisionalIdentity != nil {
+			return fmt.Errorf("transcript hydration committed reasoning trace %d cannot carry live provisional correlation", index)
+		}
+		if _, exists := seenLocators[row.Locator]; exists {
+			return fmt.Errorf("transcript hydration repeats committed row locator %+v", row.Locator)
+		}
+		seenLocators[row.Locator] = struct{}{}
 	}
 	if h.ActiveAssistant != nil {
 		if err := h.ActiveAssistant.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration active assistant: %w", err)
 		}
 	}
-	if h.ActiveReasoning != nil {
-		if err := h.ActiveReasoning.Validate(); err != nil {
-			return fmt.Errorf("validate transcript hydration active reasoning: %w", err)
+	if h.ActiveThinkingStatus != nil {
+		if err := h.ActiveThinkingStatus.Validate(); err != nil {
+			return fmt.Errorf("validate transcript hydration active thinking status: %w", err)
 		}
+	}
+	seenReasoningIdentities := make(map[string]struct{}, len(h.ActiveReasoningTraces))
+	for index, trace := range h.ActiveReasoningTraces {
+		if err := trace.Validate(); err != nil {
+			return fmt.Errorf("validate transcript hydration active reasoning trace %d: %w", index, err)
+		}
+		identity := trace.Identity.String()
+		if _, exists := seenReasoningIdentities[identity]; exists {
+			return fmt.Errorf("transcript hydration repeats active reasoning trace identity %q", identity)
+		}
+		seenReasoningIdentities[identity] = struct{}{}
 	}
 	if h.ActiveStep != nil {
 		if err := h.ActiveStep.Validate(); err != nil {
@@ -111,8 +133,13 @@ func (h TranscriptHydration) validateActiveOwnership() error {
 			return err
 		}
 	}
-	if h.ActiveReasoning != nil {
-		if err := validateHydrationStepOwner("active reasoning", h.ActiveReasoning.StepID, activeStep); err != nil {
+	if h.ActiveThinkingStatus != nil {
+		if err := validateHydrationStepOwner("active thinking status", h.ActiveThinkingStatus.StepID, activeStep); err != nil {
+			return err
+		}
+	}
+	for index, trace := range h.ActiveReasoningTraces {
+		if err := validateHydrationStepOwner(fmt.Sprintf("active reasoning trace %d", index), trace.StepID, activeStep); err != nil {
 			return err
 		}
 	}

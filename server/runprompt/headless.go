@@ -18,6 +18,7 @@ import (
 	askquestion "core/server/tools"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -80,7 +81,11 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if plan.Goal != nil {
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
-	runtimePlan, err := l.prepareRuntime(ctx, plan, progress)
+	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)
+	if err != nil {
+		return nil, err
+	}
+	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer)
 	if err != nil {
 		return nil, err
 	}
@@ -101,13 +106,41 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	}, nil
 }
 
+func agentSteerForRunPrompt(req serverapi.RunPromptRequest, openingExisting bool) (*runtime.AgentSteer, error) {
+	if !openingExisting || req.CallerSessionID == nil {
+		return nil, nil
+	}
+	sourceID, err := runtimeids.ParseSessionID(*req.CallerSessionID)
+	if err != nil {
+		return nil, err
+	}
+	steer, err := runtime.NewAgentSteer(sourceID, req.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return &steer, nil
+}
+
 type headlessRuntimePlan struct {
 	handle     sessionruntime.ExecutionHandle
 	sessionID  string
-	submission chan string
+	submission chan headlessPromptSubmission
 	content    string
 	name       string
 	onActive   func()
+	agentSteer *runtime.AgentSteer
+}
+
+type headlessPromptSubmission struct {
+	prompt string
+	steer  *runtime.AgentSteer
+}
+
+func (p *headlessRuntimePlan) PromptHistoryText(fallback string) string {
+	if p != nil && p.agentSteer != nil && p.agentSteer.Message().Content != nil {
+		return *p.agentSteer.Message().Content
+	}
+	return fallback
 }
 
 func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
@@ -121,7 +154,7 @@ func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
 	return errors.Join(stopErr, p.handle.Close(context.Background()))
 }
 
-func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink) (*headlessRuntimePlan, error) {
+func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink, agentSteer *runtime.AgentSteer) (*headlessRuntimePlan, error) {
 	if l.boot.RuntimeAuthority == nil {
 		return nil, errors.New("headless run prompt requires a session runtime authority")
 	}
@@ -184,7 +217,8 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	prepared := &headlessRuntimePlan{
 		sessionID:  sessionID.String(),
-		submission: make(chan string),
+		submission: make(chan headlessPromptSubmission),
+		agentSteer: agentSteer,
 	}
 	handle, err := l.boot.RuntimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: plan.Descriptor,
@@ -194,21 +228,28 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			return RunPromptAskHandler(req)
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			var prompt string
+			var submission headlessPromptSubmission
 			select {
-			case prompt = <-prepared.submission:
+			case submission = <-prepared.submission:
 			case <-runCtx.Done():
 				return context.Cause(runCtx)
 			}
 			return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				var waitHandle *runtime.LiveRunWaitHandle
 				var waitStartErr error
-				assistant, submitErr := engine.SubmitUserMessageWithHooks(engineCtx, prompt, func() {
-					waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
-					if waitStartErr == nil && prepared.onActive != nil {
-						prepared.onActive()
+				submit := func() (llm.Message, error) {
+					onActive := func() {
+						waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
+						if waitStartErr == nil && prepared.onActive != nil {
+							prepared.onActive()
+						}
 					}
-				}, nil)
+					if submission.steer != nil {
+						return engine.SubmitAgentSteerWithHooks(engineCtx, *submission.steer, onActive, nil)
+					}
+					return engine.SubmitUserMessageWithHooks(engineCtx, submission.prompt, onActive, nil)
+				}
+				assistant, submitErr := submit()
 				prepared.content = preservePresentAssistantContent(
 					prepared.content,
 					assistant,
@@ -261,7 +302,7 @@ func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt st
 	}
 	r.plan.onActive = r.publishSessionStarted
 	select {
-	case r.plan.submission <- prompt:
+	case r.plan.submission <- headlessPromptSubmission{prompt: prompt, steer: r.plan.agentSteer}:
 	case <-ctx.Done():
 		return serverapi.RunPromptResponse{}, context.Cause(ctx)
 	}

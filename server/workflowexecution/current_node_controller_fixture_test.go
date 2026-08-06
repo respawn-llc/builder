@@ -475,6 +475,17 @@ func (s *currentNodeControllerStore) InterruptCurrentNode(ctx context.Context, r
 	return s.InterruptAdmittedCurrentNode(ctx, reference, reason, detail)
 }
 
+func (s *currentNodeControllerStore) InterruptCurrentNodes(ctx context.Context, references []workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error) {
+	interrupted := make([]workflow.CurrentNodeReference, 0, len(references))
+	for _, reference := range references {
+		if err := s.InterruptCurrentNode(ctx, reference, reason, detail); err != nil {
+			return interrupted, err
+		}
+		interrupted = append(interrupted, reference)
+	}
+	return interrupted, nil
+}
+
 func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error) {
 	return append([]workflow.CurrentNodeReference(nil), s.recovered...), nil
 }

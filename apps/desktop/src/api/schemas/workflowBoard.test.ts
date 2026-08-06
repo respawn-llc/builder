@@ -229,8 +229,7 @@ describe("workflow board schemas", () => {
           },
         },
       ],
-      previous_page_token: null,
-      next_page_token: null,
+      next_offset: null,
       generated_at_unix_ms: 1,
     });
 
@@ -242,8 +241,7 @@ describe("workflow board schemas", () => {
       },
       sourceWorkspace: { availability: "unlinked" },
     });
-    expect(page.previousPageToken).toBeNull();
-    expect(page.nextPageToken).toBeNull();
+    expect(page.nextOffset).toBeNull();
   });
 
   it("decodes server-owned dependency progress and rejects invalid progress", () => {
@@ -257,8 +255,7 @@ describe("workflow board schemas", () => {
           dependency_progress: { satisfied_count: 1, total_count: 2 },
         },
       ],
-      previous_page_token: null,
-      next_page_token: null,
+      next_offset: null,
       generated_at_unix_ms: 1,
     };
 
@@ -288,8 +285,7 @@ describe("workflow board schemas", () => {
         workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [legacyBodyCard],
-        previous_page_token: null,
-        next_page_token: null,
+        next_offset: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();
@@ -306,8 +302,7 @@ describe("workflow board schemas", () => {
         workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [flatPreviewCard],
-        previous_page_token: null,
-        next_page_token: null,
+        next_offset: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();
@@ -318,8 +313,7 @@ describe("workflow board schemas", () => {
         workflow_id: "11111111-1111-4111-8111-111111111111",
         node_id: "node-1",
         cards: [{ ...card, preview: { markdown: card.preview.markdown } }],
-        previous_page_token: null,
-        next_page_token: null,
+        next_offset: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();
@@ -338,8 +332,7 @@ describe("workflow board schemas", () => {
             },
           },
         ],
-        previous_page_token: null,
-        next_page_token: null,
+        next_offset: null,
         generated_at_unix_ms: 1,
       }),
     ).toThrow();

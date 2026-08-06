@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -149,6 +150,27 @@ func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *tes
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for closed prompt")
+	}
+}
+
+type failingPromptFeed struct{ err error }
+
+func (f failingPromptFeed) PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time) error {
+	return f.err
+}
+
+func (failingPromptFeed) PromptResolvedScope(ExecutionScope, string) error {
+	return nil
+}
+
+func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing.T) {
+	store := newExecutionPromptStoreForTest(t, failingPromptFeed{err: errors.New("task wake failed")})
+	_, err := store.Await(context.Background(), tools.AskQuestionRequest{ID: "ask-failed", Question: "Proceed?"})
+	if err == nil {
+		t.Fatal("prompt succeeded after pending publication failure")
+	}
+	if store.hasPendingID("ask-failed") {
+		t.Fatal("failed prompt remained pending in execution store")
 	}
 }
 
@@ -313,22 +335,22 @@ func newGatedPromptFeed() *gatedPromptFeed {
 	}
 }
 
-func (f *gatedPromptFeed) PromptPending(
-	_ runtimeids.SessionResourceRef,
-	_ runtimeids.ExecutionScopeID,
+func (f *gatedPromptFeed) PromptPendingScope(
+	_ ExecutionScope,
 	_ tools.AskQuestionRequest,
 	_ time.Time,
-) {
+) error {
 	close(f.pendingStarted)
 	<-f.allowPending
 	close(f.pendingPublished)
+	return nil
 }
 
-func (f *gatedPromptFeed) PromptResolved(
-	_ runtimeids.SessionResourceRef,
-	_ runtimeids.ExecutionScopeID,
+func (f *gatedPromptFeed) PromptResolvedScope(
+	_ ExecutionScope,
 	_ string,
-) {
+) error {
 	close(f.resolutionStarted)
 	<-f.allowResolution
+	return nil
 }

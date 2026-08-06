@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
@@ -33,10 +34,13 @@ type steeringIntent struct {
 
 type steeringItem struct {
 	message                     *steeringMessage
+	assistantCommit             *steeringAssistantCommit
 	goalNoticeAndStatus         *steeringGoalNoticeAndStatus
 	committedAssistant          *steeringCommittedAssistantMessage
 	completedResponseResolution *steeringCompletedResponseResolution
 	localEntry                  *steeringLocalEntry
+	reviewerFeedback            *steeringReviewerFeedback
+	reviewerError               *steeringReviewerError
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
 	queuedFlush                 *steeringQueuedUserMessageFlush
@@ -50,9 +54,23 @@ type steeringItem struct {
 }
 
 type steeringMessage struct {
-	message     llm.Message
-	eventPolicy steeringMessageEventPolicy
-	persist     bool
+	message               llm.Message
+	eventPolicy           steeringMessageEventPolicy
+	persist               bool
+	provenanceDestination **TranscriptCommittedRowProvenance
+	emitUserFlushEvent    bool
+}
+
+type steeringAssistantCommit struct {
+	message           llm.Message
+	executableCallIDs map[string]struct{}
+	result            *steeringAssistantCommitResult
+}
+
+type steeringAssistantCommitResult struct {
+	provenance *TranscriptCommittedRowProvenance
+	coordinate *committedAssistantCoordinate
+	resolution completedResponseResolutionOutcome
 }
 
 type steeringGoalNoticeAndStatus struct {
@@ -61,12 +79,23 @@ type steeringGoalNoticeAndStatus struct {
 }
 
 type steeringLocalEntry struct {
-	entry storedLocalEntry
+	entry                  storedLocalEntry
+	reasoningTraceIdentity *TranscriptReasoningTraceIdentity
+}
+
+type steeringReviewerFeedback struct {
+	suggestions []string
+	visibility  transcript.EntryVisibility
+}
+
+type steeringReviewerError struct {
+	detail string
 }
 
 type steeringCommittedAssistantMessage struct {
 	message    llm.Message
 	coordinate *committedAssistantCoordinate
+	provenance *TranscriptCommittedRowProvenance
 }
 
 type committedAssistantCoordinate struct {
@@ -78,7 +107,7 @@ type completedResponseResolutionInstructionKind uint8
 const (
 	completedResponseResolutionInstructionInvalid completedResponseResolutionInstructionKind = iota
 	completedResponseResolutionInstructionFinalize
-	completedResponseResolutionInstructionDiscard
+	completedResponseResolutionInstructionAbort
 )
 
 type completedResponseResolutionInstruction struct {
@@ -116,9 +145,13 @@ type steeringStreamingOutput struct {
 	assistantDelta *llm.AssistantDelta
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
+	clearReasoning bool
+	reasoningReset *steeringReasoningReset
 	resetEvents    bool
 	abortReason    *AssistantStreamAbortReason
 }
+
+type steeringReasoningReset struct{}
 
 type steeringCacheWarning struct {
 	warning    transcript.CacheWarning
@@ -140,13 +173,13 @@ type steeringLiveToolAbort struct {
 }
 
 type steeringQueuedUserMessageFlush struct {
-	text       string
+	message    llm.Message
 	batch      []string
 	queueItems []QueuedUserMessage
 }
 
 type steeringQueuedUserMessageRestore struct {
-	items []queuedUserSteeringIntent
+	items []queuedUserMessage
 }
 
 type steeringMessageEventPolicy uint8
@@ -169,6 +202,31 @@ func steerMessagesWithPersistenceIntent(priority steeringPriority, eventPolicy s
 	return steeringIntent{priority: priority, items: items}
 }
 
+func steerAssistantCommitIntent(
+	msg llm.Message,
+	executableCallIDs map[string]struct{},
+	result *steeringAssistantCommitResult,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{
+			assistantCommit: &steeringAssistantCommit{
+				message:           msg,
+				executableCallIDs: executableCallIDs,
+				result:            result,
+			},
+		}},
+	}
+}
+
+func steerUserMessageWithFlushIntent(msg llm.Message) steeringIntent {
+	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{msg})
+	var provenance *TranscriptCommittedRowProvenance
+	intent.items[0].message.provenanceDestination = &provenance
+	intent.items[0].message.emitUserFlushEvent = true
+	return intent
+}
+
 func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
 	copyEntry := entry
 	return steeringIntent{
@@ -177,6 +235,27 @@ func steerLocalEntryIntent(entry storedLocalEntry) steeringIntent {
 			entry: copyEntry,
 		}}},
 	}
+}
+
+func steerReasoningLocalEntryIntent(entry storedLocalEntry, identity TranscriptReasoningTraceIdentity) steeringIntent {
+	copyEntry := entry
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{localEntry: &steeringLocalEntry{
+			entry:                  copyEntry,
+			reasoningTraceIdentity: &identity,
+		}}},
+	}
+}
+
+func steerReviewerFeedbackIntent(suggestions []string, visibility transcript.EntryVisibility) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerFeedback: &steeringReviewerFeedback{
+		suggestions: append([]string(nil), suggestions...), visibility: visibility,
+	}}}}
+}
+
+func steerReviewerErrorIntent(detail string) steeringIntent {
+	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{detail: detail}}}}
 }
 
 func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer string, items []llm.ResponseItem) steeringIntent {
@@ -206,22 +285,22 @@ func steerToolCompletionIntent(result tools.Result) steeringIntent {
 	}
 }
 
-func steerQueuedUserMessageFlushIntent(text string, batch []string, queueItems []QueuedUserMessage) steeringIntent {
+func steerQueuedUserMessageFlushIntent(message llm.Message, batch []string, queueItems []QueuedUserMessage) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityUser,
 		items: []steeringItem{{queuedFlush: &steeringQueuedUserMessageFlush{
-			text:       text,
+			message:    message,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
 		}}},
 	}
 }
 
-func steerQueuedUserMessageRestoreIntent(items []queuedUserSteeringIntent) steeringIntent {
+func steerQueuedUserMessageRestoreIntent(items []queuedUserMessage) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityUser,
 		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
-			items: append([]queuedUserSteeringIntent(nil), items...),
+			items: append([]queuedUserMessage(nil), items...),
 		}}},
 	}
 }
@@ -251,24 +330,33 @@ func steerLiveToolAbortIntent(reason string) steeringIntent {
 	}
 }
 
-func steerCommittedAssistantMessageIntent(msg llm.Message, coordinate *committedAssistantCoordinate) steeringIntent {
+func steerCommittedAssistantMessageIntent(msg llm.Message, coordinate *committedAssistantCoordinate, provenances ...*TranscriptCommittedRowProvenance) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
 			message:    msg,
 			coordinate: cloneCommittedAssistantCoordinate(coordinate),
+			provenance: firstTranscriptCommittedRowProvenance(provenances),
 		}}},
 	}
 }
 
-func completedResponseFinalizeInstruction(msg llm.Message, coordinate *committedAssistantCoordinate) completedResponseResolutionInstruction {
+func completedResponseFinalizeInstruction(msg llm.Message, coordinate *committedAssistantCoordinate, provenances ...*TranscriptCommittedRowProvenance) completedResponseResolutionInstruction {
 	return completedResponseResolutionInstruction{
 		kind: completedResponseResolutionInstructionFinalize,
 		committedAssistant: &steeringCommittedAssistantMessage{
 			message:    msg,
 			coordinate: cloneCommittedAssistantCoordinate(coordinate),
+			provenance: firstTranscriptCommittedRowProvenance(provenances),
 		},
 	}
+}
+
+func firstTranscriptCommittedRowProvenance(values []*TranscriptCommittedRowProvenance) *TranscriptCommittedRowProvenance {
+	if len(values) == 0 {
+		return nil
+	}
+	return cloneTranscriptCommittedRowProvenance(values[0])
 }
 
 func cloneCommittedAssistantCoordinate(coordinate *committedAssistantCoordinate) *committedAssistantCoordinate {
@@ -279,10 +367,10 @@ func cloneCommittedAssistantCoordinate(coordinate *committedAssistantCoordinate)
 	return &copyCoordinate
 }
 
-func completedResponseDiscardInstruction() completedResponseResolutionInstruction {
+func completedResponseAbortInstruction() completedResponseResolutionInstruction {
 	reason := AssistantStreamAbortSuperseded
 	return completedResponseResolutionInstruction{
-		kind:        completedResponseResolutionInstructionDiscard,
+		kind:        completedResponseResolutionInstructionAbort,
 		abortReason: &reason,
 	}
 }
@@ -318,6 +406,29 @@ func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: &reason}}},
+	}
+}
+
+func steerClearReasoningStateIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearReasoning: true}}},
+	}
+}
+
+func (e *Engine) resetReasoningAndClearStreamingState(stepID string) error {
+	if e == nil {
+		return nil
+	}
+	resetErr := e.steer(stepID, steerResetReasoningStateIntent())
+	clearErr := e.steer(stepID, steerClearStreamingStateIntent())
+	return errors.Join(resetErr, clearErr)
+}
+
+func steerResetReasoningStateIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{reasoningReset: &steeringReasoningReset{}}}},
 	}
 }
 
@@ -417,9 +528,65 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
-	if item.message != nil {
-		receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
+	if item.assistantCommit != nil {
+		commit := item.assistantCommit
+		if commit.result == nil {
+			return errors.New("assistant commit steering item requires a result destination")
+		}
+		receipt, err := e.appendMessageRaw(stepID, commit.message, steeringMessageEventNone, true, &commit.result.provenance)
 		item.recordCommitReceipt(receipt)
+		if err != nil || !receipt.Committed {
+			return err
+		}
+		if len(VisibleChatEntriesFromMessage(commit.message)) == 0 {
+			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
+			commit.result.resolution = outcome
+			return resolveErr
+		}
+		coordinate, toolCallStarts := committedStartsForPersistedAssistantMessage(e, commit.message, commit.executableCallIDs)
+		commit.result.coordinate = coordinate
+		e.rememberPendingToolCallStarts(toolCallStarts)
+		if committedAssistantMessageFinalizesStreaming(commit.message) {
+			if coordinate == nil {
+				return errors.New("persisted assistant text row has no committed transcript coordinate")
+			}
+			instruction := completedResponseFinalizeInstruction(commit.message, coordinate, commit.result.provenance)
+			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, instruction)
+			commit.result.resolution = outcome
+			return resolveErr
+		}
+		commit.result.resolution = completedResponseResolutionOutcome{
+			kind: completedResponseResolutionAbsent,
+		}
+		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
+			message:    commit.message,
+			coordinate: cloneCommittedAssistantCoordinate(coordinate),
+			provenance: cloneTranscriptCommittedRowProvenance(commit.result.provenance),
+		}, nil, nil); err != nil {
+			return err
+		}
+		outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
+		commit.result.resolution = outcome
+		return resolveErr
+	}
+	if item.message != nil {
+		receipt, err := e.appendMessageRaw(
+			stepID,
+			item.message.message,
+			item.message.eventPolicy,
+			item.message.persist,
+			item.message.provenanceDestination,
+		)
+		item.recordCommitReceipt(receipt)
+		if err == nil && receipt.Committed && item.message.emitUserFlushEvent {
+			if flushed := flushedUserMessageEvent(
+				*item.message.provenanceDestination,
+				item.message.message,
+				stepID,
+			); flushed != nil {
+				err = errors.Join(err, e.emitRaw(*flushed))
+			}
+		}
 		return err
 	}
 	if item.goalNoticeAndStatus != nil {
@@ -429,6 +596,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			notice.message,
 			steeringMessageEventDefault,
 			true,
+			nil,
 		)
 		item.recordCommitReceipt(receipt)
 		if !receipt.Committed {
@@ -457,8 +625,50 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return nil
 	}
 	if item.localEntry != nil {
-		receipt, err := e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)
+		receipt, _, err := e.appendPersistedLocalEntryRecordRaw(
+			stepID,
+			item.localEntry.entry,
+			item.localEntry.reasoningTraceIdentity,
+		)
 		item.recordCommitReceipt(receipt)
+		return err
+	}
+	if item.reviewerFeedback != nil {
+		id := runtimeids.NewReviewerFeedbackID()
+		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(item.reviewerFeedback.visibility)
+		if visibilityErr != nil {
+			return visibilityErr
+		}
+		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), item.reviewerFeedback.suggestions...), Visibility: visibility}
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		item.recordCommitReceipt(receipt)
+		if receipt.Committed {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID, &provenance)
+			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+		}
+		return err
+	}
+	if item.reviewerError != nil {
+		id := runtimeids.NewReviewerErrorID()
+		record := session.ReviewerErrorRecord{ID: id, Detail: item.reviewerError.detail}
+		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		item.recordCommitReceipt(receipt)
+		if receipt.Committed {
+			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+			err = errors.Join(err, provenanceErr)
+			if provenanceErr != nil {
+				return err
+			}
+			entry := reviewerErrorChatEntryFromSessionRecord(record, stepID, &provenance)
+			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+		}
 		return err
 	}
 	if item.historyReplace != nil {
@@ -468,12 +678,12 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.toolCompletion != nil {
 		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
-		receipt, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
+		receipt, provenance, feedbackProvenance, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
 			result := cloneToolResult(completion.Result)
 			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}))
 			if completion.OperatorFeedback != nil {
 				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
 				err = errors.Join(err, e.emitRaw(Event{
@@ -481,13 +691,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 					StepID:                     stepID,
 					LocalEntry:                 entry,
 					CommittedTranscriptChanged: true,
+					CommittedProvenance:        cloneTranscriptCommittedRowProvenance(feedbackProvenance),
 				}))
 			}
 		}
 		return err
 	}
 	if item.queuedFlush != nil {
-		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
+		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.message, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
 		return err
 	}
@@ -503,11 +714,23 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if evt.StepID == "" {
 			evt.StepID = stepID
 		}
-		switch evt.Kind {
-		case EventReviewerStarted:
+		if evt.Kind == EventReviewerStarted {
+			revision, err := e.TranscriptRevision()
+			if err != nil {
+				return err
+			}
 			e.reviewerRuntimeState().SetActiveStep(evt.StepID)
-		case EventReviewerCompleted:
+			return e.emitRawAtRevision(evt, revision)
+		}
+		if evt.Kind == EventReviewerCompleted {
 			e.reviewerRuntimeState().ClearActiveStep(evt.StepID)
+			revision, err := e.TranscriptRevision()
+			if err != nil {
+				return err
+			}
+			return e.emitRawAtRevision(evt, revision)
+		}
+		switch evt.Kind {
 		case EventCompactionStarted:
 			if evt.Compaction != nil {
 				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
@@ -529,20 +752,24 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if adaptErr != nil {
 			return fmt.Errorf("adapt cache warning record: %w", adaptErr)
 		}
-		_, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 		item.recordCommitReceipt(receipt)
 		if appendErr != nil && !receipt.Committed {
 			return appendErr
 		}
-		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
+		provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+		if provenanceErr != nil {
+			return errors.Join(appendErr, provenanceErr)
+		}
+		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility, &provenance)
 		if item.cacheWarning.emit {
-			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true}))
+			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return appendErr
 	}
 	if item.cacheObservation != nil {
 		observation := item.cacheObservation
-		_, receipt, appendErr := e.eventLog.AppendRecordsAtomic(textutil.OptionalExactString(stepID), observation.records)
+		records, receipt, appendErr := e.eventLog.AppendRecordsAtomic(textutil.OptionalExactString(stepID), observation.records)
 		item.recordCommitReceipt(receipt)
 		if !receipt.Committed {
 			return appendErr
@@ -551,9 +778,27 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if observation.hasWarning {
 			warning := observation.warning
 			visibility := normalizeRuntimeEntryVisibility(observation.visibility)
-			e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
+			var warningProvenance *TranscriptCommittedRowProvenance
+			for _, record := range records {
+				payload, payloadErr := record.Payload()
+				if payloadErr != nil {
+					return errors.Join(appendErr, payloadErr)
+				}
+				if _, ok := payload.(session.CacheWarningRecord); ok {
+					provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+					if provenanceErr != nil {
+						return errors.Join(appendErr, provenanceErr)
+					}
+					warningProvenance = &provenance
+					break
+				}
+			}
+			if warningProvenance == nil {
+				return errors.Join(appendErr, errors.New("cache warning append did not return its warning record"))
+			}
+			e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility, warningProvenance)
 			if observation.emit {
-				appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true}))
+				appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: warningProvenance}))
 			}
 		}
 		return appendErr
@@ -562,6 +807,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
 	}
 	if item.streaming != nil {
+		if item.streaming.reasoningReset != nil {
+			e.transcriptRuntimeState().ResetReasoningTraces(stepID)
+			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+		}
+		if item.streaming.clearReasoning {
+			e.transcriptRuntimeState().ClearReasoningState(stepID)
+			return nil
+		}
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
 			if delta.Text == "" {
@@ -576,8 +829,16 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		if item.streaming.reasoningDelta != nil {
 			delta := *item.streaming.reasoningDelta
-			e.transcriptRuntimeState().SetReasoningState(stepID, delta)
-			return e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
+			identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
+			if err != nil {
+				return err
+			}
+			return e.emitRaw(Event{
+				Kind:                   EventReasoningDelta,
+				StepID:                 stepID,
+				ReasoningDelta:         &delta,
+				ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
+			})
 		}
 		var clearedMetadata *AssistantStreamMetadata
 		var clearedStreamID *uuid.UUID
@@ -608,13 +869,24 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if adaptErr != nil {
 		return session.CommitReceipt{}, fmt.Errorf("adapt history replacement record: %w", adaptErr)
 	}
-	_, receipt, appendErr := e.eventLog.AppendCompactionHistoryReplacement(
+	appended, receipt, appendErr := e.eventLog.AppendCompactionHistoryReplacement(
 		textutil.OptionalExactString(stepID),
 		record,
 	)
 	if appendErr != nil && !receipt.Committed {
 		return receipt, appendErr
 	}
+	provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
+	if provenanceErr != nil {
+		return receipt, errors.Join(appendErr, provenanceErr)
+	}
+	for index := range replacement.projectedEntries {
+		replacement.projectedEntries[index].StepID = strings.TrimSpace(stepID)
+	}
+	replacement.projectedEntries = assignHistoryReplacementEntryProvenance(
+		replacement.projectedEntries,
+		&provenance,
+	)
 	e.lockedContractState().MarkPromptFacingSnapshotsStale()
 	// Compaction reinjects canonical generation context, including base meta,
 	// into the same replacement payload. Mirror the restore-time length signal
@@ -669,6 +941,15 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 	}
 	for idx, entry := range entries {
 		copyEntry := clonePersistedChatEntry(entry)
+		provenance := cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+		if _, projected := transcriptCommittedRowFactFromChatEntry(copyEntry); projected && (provenance == nil || provenance.ProjectedOrdinal == nil) {
+			return fmt.Errorf(
+				"history replacement projected row %d lacks filtered ordinal (step_id=%q role=%q)",
+				idx,
+				copyEntry.StepID,
+				copyEntry.Role,
+			)
+		}
 		if err := e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
@@ -678,6 +959,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 			CommittedEntryStart:        start + idx,
 			CommittedEntryStartSet:     true,
 			CommittedEntryCount:        start + idx + 1,
+			CommittedProvenance:        provenance,
 		}); err != nil {
 			return err
 		}

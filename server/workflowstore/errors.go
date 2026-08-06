@@ -309,14 +309,15 @@ func (e WorkflowValidationError) HasCode(code workflow.ValidationErrorCode) bool
 type CompletionCode = string
 
 const (
-	CompletionCodeTransitionIDRequired  CompletionCode = "transition_id_required"
-	CompletionCodeInvalidTransitionID   CompletionCode = "invalid_transition_id"
-	CompletionCodeNoOutgoingTransition  CompletionCode = "no_outgoing_transition"
-	CompletionCodeRequiredOutputMissing CompletionCode = "required_output_missing"
-	CompletionCodeUnknownOutputField    CompletionCode = "unknown_output_field"
-	CompletionCodeOutputFieldRequired   CompletionCode = "output_field_required"
-	CompletionCodeOutputTooLarge        CompletionCode = "output_too_large"
-	CompletionCodeCommentaryTooLarge    CompletionCode = "commentary_too_large"
+	CompletionCodeTransitionIDRequired       CompletionCode = "transition_id_required"
+	CompletionCodeInvalidTransitionID        CompletionCode = "invalid_transition_id"
+	CompletionCodeNoOutgoingTransition       CompletionCode = "no_outgoing_transition"
+	CompletionCodeRequiredOutputMissing      CompletionCode = "required_output_missing"
+	CompletionCodeUnknownOutputField         CompletionCode = "unknown_output_field"
+	CompletionCodeOutputFieldRequired        CompletionCode = "output_field_required"
+	CompletionCodeOutputTooLarge             CompletionCode = "output_too_large"
+	CompletionCodeCommentaryTooLarge         CompletionCode = "commentary_too_large"
+	CompletionCodeUnavailableTargetAgentRole CompletionCode = "workflow.target_agent.unavailable_role"
 )
 
 // HasCode reports whether the completion validation error contains an issue with

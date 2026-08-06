@@ -479,7 +479,7 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // typed suggestion list belongs in native scrollback. Answered questions are
 // the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
-	if isVerboseReviewerSuggestionsRow(row) {
+	if isFullOngoingNoticeRow(row) {
 		return transcriptrender.ModeOngoingFull
 	}
 	switch row.Visibility {
@@ -492,9 +492,12 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	}
 }
 
-func isVerboseReviewerSuggestionsRow(row clientui.TranscriptCommittedRow) bool {
+func isFullOngoingNoticeRow(row clientui.TranscriptCommittedRow) bool {
 	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
 		return false
+	}
+	if row.Notice.MessageType != nil && *row.Notice.MessageType == clientui.TranscriptMessageAgentSteer {
+		return true
 	}
 	return transcript.EntryRole(row.Notice.Diagnostic.Code) == transcript.EntryRoleReviewerSuggestions
 }
@@ -557,7 +560,7 @@ func committedRowLines(
 	linkPresentation transcriptrender.MarkdownLinkPresentation,
 ) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
-	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
+	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice, clientui.TranscriptRowReviewerFeedback, clientui.TranscriptRowReviewerError:
 		rendered := transcriptrender.RenderCommittedRowWithLinkPresentation(
 			row,
 			width,

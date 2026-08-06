@@ -2308,6 +2308,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -2330,6 +2332,8 @@ type GetWorkflowEdgeRow struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -2350,6 +2354,8 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 		&i.TransitionGroupID,
 		&i.EdgeKey,
 		&i.TargetNodeID,
+		&i.AssigneeSelection,
+		&i.ThinkingSelection,
 		&i.RequiresApproval,
 		&i.ContextMode,
 		&i.ContextSourceKind,
@@ -3129,7 +3135,10 @@ INSERT INTO task_current_nodes (
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
-    interrupted_at_unix_ms
+    interrupted_at_unix_ms,
+    effective_assignee,
+    effective_thinking,
+    assignee_origin
 ) VALUES (
     ?1,
     ?2,
@@ -3141,7 +3150,10 @@ INSERT INTO task_current_nodes (
     ?8,
     ?9,
     ?10,
-    ?11
+    ?11,
+    ?12,
+    ?13,
+    ?14
 )
 `
 
@@ -3157,6 +3169,9 @@ type InsertTaskCurrentNodeParams struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
 }
 
 func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) error {
@@ -3172,8 +3187,11 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
 		arg.InterruptedAtUnixMs,
+		arg.EffectiveAssignee,
+		arg.EffectiveThinking,
+		arg.AssigneeOrigin,
 	)
-	err = recordQueryError(ctx, err, insertTaskCurrentNode, 11)
+	err = recordQueryError(ctx, err, insertTaskCurrentNode, 14)
 
 	return err
 }
@@ -3356,6 +3374,8 @@ INSERT INTO workflow_edges (
     transition_group_id,
     edge_key,
     target_node_id,
+    assignee_selection,
+    thinking_selection,
     requires_approval,
     context_mode,
     context_source_kind,
@@ -3378,7 +3398,9 @@ INSERT INTO workflow_edges (
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14,
+    ?15
 )
 `
 
@@ -3387,6 +3409,8 @@ type InsertWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -3404,6 +3428,8 @@ func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -3414,7 +3440,7 @@ func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdge
 		arg.OutputRequirementsJson,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowEdge, 13)
+	err = recordQueryError(ctx, err, insertWorkflowEdge, 15)
 
 	return err
 }
@@ -3921,7 +3947,19 @@ WITH board_node_tasks AS (
         t.execution_target_provenance,
         t.created_at_unix_ms,
         t.updated_at_unix_ms,
-        t.metadata_json
+        t.metadata_json,
+
+(
+    SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
+    FROM (
+        SELECT label.ordinal
+        FROM task_label_assignments assignment
+        JOIN project_labels label ON label.id = assignment.label_id
+        WHERE assignment.task_id = t.id
+        ORDER BY label.ordinal ASC, label.id ASC
+    ) ordered_label
+)
+ AS label_ordinals
     FROM task_records t
     WHERE t.project_id = ?1
       AND t.workflow_id = ?2
@@ -4007,35 +4045,45 @@ WITH board_node_tasks AS (
           )
       )
 ),
-older_page AS (
-    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
-    FROM board_node_tasks t
-    WHERE ?9 = 'older'
-      AND (
-          ?10 IS NULL
-          OR t.updated_at_unix_ms < ?10
-          OR (
-              t.updated_at_unix_ms = ?10
-              AND t.id < ?11
-          )
-      )
-    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT ?12
+board_sort AS (
+    SELECT
+        CAST(?9 AS TEXT) AS sort_field,
+        CAST(?10 AS TEXT) AS sort_direction
 ),
-newer_page AS (
-    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json
+board_sort_keys AS (
+    SELECT
+        t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.execution_target_mode, t.execution_target_requested_ref, t.execution_target_resolved_ref, t.execution_target_commit_oid, t.execution_target_provenance, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json, t.label_ordinals,
+        CASE WHEN sort.sort_field = 'labels' AND t.label_ordinals IS NULL THEN 1 ELSE 0 END AS sort_null_labels,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN t.updated_at_unix_ms END AS sort_updated_ascending,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN t.updated_at_unix_ms END AS sort_updated_descending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN t.created_at_unix_ms END AS sort_created_ascending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN t.created_at_unix_ms END AS sort_created_descending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN t.label_ordinals END AS sort_labels_ascending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN t.label_ordinals END AS sort_labels_descending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN t.task_seq END AS sort_short_id_ascending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN t.task_seq END AS sort_short_id_descending,
+        CASE WHEN sort.sort_direction = 'asc' THEN t.task_seq END AS sort_tiebreak_ascending,
+        CASE WHEN sort.sort_direction = 'desc' THEN t.task_seq END AS sort_tiebreak_descending
     FROM board_node_tasks t
-    WHERE ?9 = 'newer'
-      AND ?10 IS NOT NULL
-      AND (
-          t.updated_at_unix_ms > ?10
-          OR (
-              t.updated_at_unix_ms = ?10
-              AND t.id > ?11
-          )
-      )
-    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT ?12
+    CROSS JOIN board_sort sort
+),
+paged_board_tasks AS (
+    SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, created_at_unix_ms, updated_at_unix_ms, metadata_json, label_ordinals, sort_null_labels, sort_updated_ascending, sort_updated_descending, sort_created_ascending, sort_created_descending, sort_labels_ascending, sort_labels_descending, sort_short_id_ascending, sort_short_id_descending, sort_tiebreak_ascending, sort_tiebreak_descending
+    FROM board_sort_keys
+    ORDER BY
+        sort_null_labels ASC,
+        sort_updated_ascending ASC,
+        sort_updated_descending DESC,
+        sort_created_ascending ASC,
+        sort_created_descending DESC,
+        sort_labels_ascending ASC,
+        sort_labels_descending DESC,
+        sort_short_id_ascending ASC,
+        sort_short_id_descending DESC,
+        sort_tiebreak_ascending ASC,
+        sort_tiebreak_descending DESC
+    LIMIT ?12 + 1
+    OFFSET ?11
 ),
 dependency_progress AS (
     SELECT
@@ -4049,9 +4097,7 @@ dependency_progress AS (
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
     FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
     WHERE td.blocked_task_id IN (
-        SELECT id FROM older_page
-        UNION ALL
-        SELECT id FROM newer_page
+        SELECT id FROM paged_board_tasks
     )
     GROUP BY td.blocked_task_id
 )
@@ -4078,49 +4124,35 @@ SELECT
     page.metadata_json,
     dependency_progress.dependency_satisfied_count,
     dependency_progress.dependency_total_count
-FROM older_page page
+FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-UNION ALL
-SELECT
-    page.id,
-    page.project_id,
-    page.project_workflow_link_id,
-    page.workflow_id,
-    page.workflow_revision_seen,
-    page.task_seq,
-    page.short_id,
-    page.title,
-    page.body,
-    page.source_url,
-    page.source_workspace_id,
-    page.managed_worktree_id,
-    page.execution_target_mode,
-    page.execution_target_requested_ref,
-    page.execution_target_resolved_ref,
-    page.execution_target_commit_oid,
-    page.execution_target_provenance,
-    page.created_at_unix_ms,
-    page.updated_at_unix_ms,
-    page.metadata_json,
-    dependency_progress.dependency_satisfied_count,
-    dependency_progress.dependency_total_count
-FROM newer_page page
-LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
+ORDER BY
+    page.sort_null_labels ASC,
+    page.sort_updated_ascending ASC,
+    page.sort_updated_descending DESC,
+    page.sort_created_ascending ASC,
+    page.sort_created_descending DESC,
+    page.sort_labels_ascending ASC,
+    page.sort_labels_descending DESC,
+    page.sort_short_id_ascending ASC,
+    page.sort_short_id_descending DESC,
+    page.sort_tiebreak_ascending ASC,
+    page.sort_tiebreak_descending DESC
 `
 
 type ListBoardNodeTasksParams struct {
-	ProjectID             string
-	WorkflowID            runtimeids.WorkflowID
-	LabelFilterKind       interface{}
-	LabelFilterMode       interface{}
-	LabelIdsJson          interface{}
-	ExcludedLabelIdsJson  interface{}
-	DependencyFilter      interface{}
-	NodeID                string
-	CursorDirection       interface{}
-	CursorUpdatedAtUnixMs interface{}
-	CursorTaskID          sql.NullString
-	LimitRows             int64
+	ProjectID            string
+	WorkflowID           runtimeids.WorkflowID
+	LabelFilterKind      interface{}
+	LabelFilterMode      interface{}
+	LabelIdsJson         interface{}
+	ExcludedLabelIdsJson interface{}
+	DependencyFilter     interface{}
+	NodeID               string
+	SortField            string
+	SortDirection        string
+	OffsetRows           int64
+	LimitRows            interface{}
 }
 
 type ListBoardNodeTasksRow struct {
@@ -4158,9 +4190,9 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.ExcludedLabelIdsJson,
 		arg.DependencyFilter,
 		arg.NodeID,
-		arg.CursorDirection,
-		arg.CursorUpdatedAtUnixMs,
-		arg.CursorTaskID,
+		arg.SortField,
+		arg.SortDirection,
+		arg.OffsetRows,
 		arg.LimitRows,
 	)
 	err = recordQueryError(ctx, err, listBoardNodeTasks, 12)
@@ -4204,784 +4236,6 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardNodeTasksUpdatedAsc = `-- name: ListBoardNodeTasksUpdatedAsc :many
-SELECT
-    task.id,
-    CAST(?1 AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(?2 AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = ?3
-  AND (
-      ?4 = 'none'
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(?6) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(?7) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?6) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?7) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          ?4 = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = ?8
-  )
-
-  AND (
-      ?9 IS NULL
-      OR (
-          ?10 = 'older'
-          AND (task.updated_at_unix_ms, task.task_seq) > (
-              CAST(?11 AS INTEGER),
-              CAST(?9 AS INTEGER)
-          )
-      )
-  )
-
-ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
-LIMIT ?12
-`
-
-type ListBoardNodeTasksUpdatedAscParams struct {
-	ProjectID             string
-	WorkflowID            []byte
-	ProjectWorkflowLinkID string
-	LabelFilterKind       interface{}
-	LabelFilterMode       interface{}
-	LabelIdsJson          interface{}
-	ExcludedLabelIdsJson  interface{}
-	NodeID                string
-	CursorTaskSeq         interface{}
-	CursorDirection       interface{}
-	CursorUpdatedAtUnixMs sql.NullInt64
-	LimitRows             int64
-}
-
-type ListBoardNodeTasksUpdatedAscRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  []byte
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
-}
-
-func (q *Queries) ListBoardNodeTasksUpdatedAsc(ctx context.Context, arg ListBoardNodeTasksUpdatedAscParams) ([]ListBoardNodeTasksUpdatedAscRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardNodeTasksUpdatedAsc,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.ProjectWorkflowLinkID,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.ExcludedLabelIdsJson,
-		arg.NodeID,
-		arg.CursorTaskSeq,
-		arg.CursorDirection,
-		arg.CursorUpdatedAtUnixMs,
-		arg.LimitRows,
-	)
-	err = recordQueryError(ctx, err, listBoardNodeTasksUpdatedAsc, 12)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListBoardNodeTasksUpdatedAscRow
-	for rows.Next() {
-		var i ListBoardNodeTasksUpdatedAscRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		), listBoardNodeTasksUpdatedAsc, 12); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasksUpdatedAsc, 12); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasksUpdatedAsc, 12); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardNodeTasksUpdatedAscPrevious = `-- name: ListBoardNodeTasksUpdatedAscPrevious :many
-SELECT
-    task.id,
-    CAST(?1 AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(?2 AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = ?3
-  AND (
-      ?4 = 'none'
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(?6) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(?7) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?6) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?7) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          ?4 = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = ?8
-  )
-
-  AND ?9 IS NOT NULL
-  AND (task.updated_at_unix_ms, task.task_seq) < (
-      CAST(?10 AS INTEGER),
-      CAST(?9 AS INTEGER)
-  )
-
-ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
-LIMIT ?11
-`
-
-type ListBoardNodeTasksUpdatedAscPreviousParams struct {
-	ProjectID             string
-	WorkflowID            []byte
-	ProjectWorkflowLinkID string
-	LabelFilterKind       interface{}
-	LabelFilterMode       interface{}
-	LabelIdsJson          interface{}
-	ExcludedLabelIdsJson  interface{}
-	NodeID                string
-	CursorTaskSeq         interface{}
-	CursorUpdatedAtUnixMs sql.NullInt64
-	LimitRows             int64
-}
-
-type ListBoardNodeTasksUpdatedAscPreviousRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  []byte
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
-}
-
-func (q *Queries) ListBoardNodeTasksUpdatedAscPrevious(ctx context.Context, arg ListBoardNodeTasksUpdatedAscPreviousParams) ([]ListBoardNodeTasksUpdatedAscPreviousRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardNodeTasksUpdatedAscPrevious,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.ProjectWorkflowLinkID,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.ExcludedLabelIdsJson,
-		arg.NodeID,
-		arg.CursorTaskSeq,
-		arg.CursorUpdatedAtUnixMs,
-		arg.LimitRows,
-	)
-	err = recordQueryError(ctx, err, listBoardNodeTasksUpdatedAscPrevious, 11)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListBoardNodeTasksUpdatedAscPreviousRow
-	for rows.Next() {
-		var i ListBoardNodeTasksUpdatedAscPreviousRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		), listBoardNodeTasksUpdatedAscPrevious, 11); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasksUpdatedAscPrevious, 11); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasksUpdatedAscPrevious, 11); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardNodeTasksUpdatedDesc = `-- name: ListBoardNodeTasksUpdatedDesc :many
-SELECT
-    task.id,
-    CAST(?1 AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(?2 AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = ?3
-  AND (
-      ?4 = 'none'
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(?6) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(?7) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?6) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?7) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          ?4 = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = ?8
-  )
-
-  AND (
-      ?9 IS NULL
-      OR (
-          ?10 = 'older'
-          AND (task.updated_at_unix_ms, task.task_seq) < (
-              CAST(?11 AS INTEGER),
-              CAST(?9 AS INTEGER)
-          )
-      )
-  )
-
-ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
-LIMIT ?12
-`
-
-type ListBoardNodeTasksUpdatedDescParams struct {
-	ProjectID             string
-	WorkflowID            []byte
-	ProjectWorkflowLinkID string
-	LabelFilterKind       interface{}
-	LabelFilterMode       interface{}
-	LabelIdsJson          interface{}
-	ExcludedLabelIdsJson  interface{}
-	NodeID                string
-	CursorTaskSeq         interface{}
-	CursorDirection       interface{}
-	CursorUpdatedAtUnixMs sql.NullInt64
-	LimitRows             int64
-}
-
-type ListBoardNodeTasksUpdatedDescRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  []byte
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
-}
-
-func (q *Queries) ListBoardNodeTasksUpdatedDesc(ctx context.Context, arg ListBoardNodeTasksUpdatedDescParams) ([]ListBoardNodeTasksUpdatedDescRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardNodeTasksUpdatedDesc,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.ProjectWorkflowLinkID,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.ExcludedLabelIdsJson,
-		arg.NodeID,
-		arg.CursorTaskSeq,
-		arg.CursorDirection,
-		arg.CursorUpdatedAtUnixMs,
-		arg.LimitRows,
-	)
-	err = recordQueryError(ctx, err, listBoardNodeTasksUpdatedDesc, 12)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListBoardNodeTasksUpdatedDescRow
-	for rows.Next() {
-		var i ListBoardNodeTasksUpdatedDescRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		), listBoardNodeTasksUpdatedDesc, 12); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasksUpdatedDesc, 12); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasksUpdatedDesc, 12); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listBoardNodeTasksUpdatedDescPrevious = `-- name: ListBoardNodeTasksUpdatedDescPrevious :many
-SELECT
-    task.id,
-    CAST(?1 AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(?2 AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = ?3
-  AND (
-      ?4 = 'none'
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(?6) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(?7) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          ?4 = 'named'
-          AND ?5 = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?6) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(?7) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          ?4 = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = ?8
-  )
-
-  AND ?9 IS NOT NULL
-  AND (task.updated_at_unix_ms, task.task_seq) > (
-      CAST(?10 AS INTEGER),
-      CAST(?9 AS INTEGER)
-  )
-
-ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
-LIMIT ?11
-`
-
-type ListBoardNodeTasksUpdatedDescPreviousParams struct {
-	ProjectID             string
-	WorkflowID            []byte
-	ProjectWorkflowLinkID string
-	LabelFilterKind       interface{}
-	LabelFilterMode       interface{}
-	LabelIdsJson          interface{}
-	ExcludedLabelIdsJson  interface{}
-	NodeID                string
-	CursorTaskSeq         interface{}
-	CursorUpdatedAtUnixMs sql.NullInt64
-	LimitRows             int64
-}
-
-type ListBoardNodeTasksUpdatedDescPreviousRow struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  []byte
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
-}
-
-func (q *Queries) ListBoardNodeTasksUpdatedDescPrevious(ctx context.Context, arg ListBoardNodeTasksUpdatedDescPreviousParams) ([]ListBoardNodeTasksUpdatedDescPreviousRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardNodeTasksUpdatedDescPrevious,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.ProjectWorkflowLinkID,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.ExcludedLabelIdsJson,
-		arg.NodeID,
-		arg.CursorTaskSeq,
-		arg.CursorUpdatedAtUnixMs,
-		arg.LimitRows,
-	)
-	err = recordQueryError(ctx, err, listBoardNodeTasksUpdatedDescPrevious, 11)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListBoardNodeTasksUpdatedDescPreviousRow
-	for rows.Next() {
-		var i ListBoardNodeTasksUpdatedDescPreviousRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.ProjectWorkflowLinkID,
-			&i.WorkflowID,
-			&i.WorkflowRevisionSeen,
-			&i.TaskSeq,
-			&i.ShortID,
-			&i.Title,
-			&i.Body,
-			&i.SourceUrl,
-			&i.SourceWorkspaceID,
-			&i.ManagedWorktreeID,
-			&i.ExecutionTargetMode,
-			&i.ExecutionTargetRequestedRef,
-			&i.ExecutionTargetResolvedRef,
-			&i.ExecutionTargetCommitOid,
-			&i.ExecutionTargetProvenance,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.MetadataJson,
-		), listBoardNodeTasksUpdatedDescPrevious, 11); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasksUpdatedDescPrevious, 11); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasksUpdatedDescPrevious, 11); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6346,22 +5600,27 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 
 const listTaskCurrentNodes = `-- name: ListTaskCurrentNodes :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id = ?1
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id = ?1
 ORDER BY
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key
 `
 
 type ListTaskCurrentNodesRow struct {
@@ -6376,6 +5635,10 @@ type ListTaskCurrentNodesRow struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
+	NodeKind               string
 }
 
 func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]ListTaskCurrentNodesRow, error) {
@@ -6400,6 +5663,10 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
+			&i.EffectiveAssignee,
+			&i.EffectiveThinking,
+			&i.AssigneeOrigin,
+			&i.NodeKind,
 		), listTaskCurrentNodes, 1); err != nil {
 			return nil, err
 		}
@@ -6416,23 +5683,28 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 
 const listTaskCurrentNodesByTasks = `-- name: ListTaskCurrentNodesByTasks :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id IN (/*SLICE:task_ids*/?)
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id IN (/*SLICE:task_ids*/?)
 ORDER BY
-    task_id,
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key
+    current_node.task_id,
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key
 `
 
 type ListTaskCurrentNodesByTasksRow struct {
@@ -6447,6 +5719,10 @@ type ListTaskCurrentNodesByTasksRow struct {
 	InterruptionReason     sql.NullString
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
+	NodeKind               string
 }
 
 func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []string) ([]ListTaskCurrentNodesByTasksRow, error) {
@@ -6481,6 +5757,10 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
 			&i.InterruptedAtUnixMs,
+			&i.EffectiveAssignee,
+			&i.EffectiveThinking,
+			&i.AssigneeOrigin,
+			&i.NodeKind,
 		), query, 1); err != nil {
 			return nil, err
 		}
@@ -7346,6 +6626,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -7368,6 +6650,8 @@ type ListWorkflowEdgesRow struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -7395,6 +6679,8 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.W
 			&i.TransitionGroupID,
 			&i.EdgeKey,
 			&i.TargetNodeID,
+			&i.AssigneeSelection,
+			&i.ThinkingSelection,
 			&i.RequiresApproval,
 			&i.ContextMode,
 			&i.ContextSourceKind,
@@ -9640,30 +8926,32 @@ SET
     transition_group_id = ?1,
     edge_key = ?2,
     target_node_id = ?3,
-    requires_approval = ?4,
-    context_mode = ?5,
-    context_source_kind = ?6,
-    context_source_node_key = ?7,
-    prompt_template = ?8,
-    parameters_json = ?9,
-    input_bindings_json = ?10,
-    output_requirements_json = ?11
-WHERE workflow_edges.id = ?12
+    assignee_selection = ?4,
+    thinking_selection = ?5,
+    requires_approval = ?6,
+    context_mode = ?7,
+    context_source_kind = ?8,
+    context_source_node_key = ?9,
+    prompt_template = ?10,
+    parameters_json = ?11,
+    input_bindings_json = ?12,
+    output_requirements_json = ?13
+WHERE workflow_edges.id = ?14
   AND (
       SELECT source.workflow_id
       FROM workflow_edges existing
       JOIN workflow_transition_groups tg ON tg.id = existing.transition_group_id
       JOIN workflow_nodes source ON source.id = tg.source_node_id
-      WHERE existing.id = ?12
-  ) = ?13
+      WHERE existing.id = ?14
+  ) = ?15
   AND EXISTS (
       SELECT 1
       FROM workflow_transition_groups new_tg
       JOIN workflow_nodes new_source ON new_source.id = new_tg.source_node_id
       JOIN workflow_nodes target ON target.id = ?3
       WHERE new_tg.id = ?1
-        AND new_source.workflow_id = ?13
-        AND target.workflow_id = ?13
+        AND new_source.workflow_id = ?15
+        AND target.workflow_id = ?15
   )
 `
 
@@ -9671,6 +8959,8 @@ type UpdateWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -9688,6 +8978,8 @@ func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -9699,7 +8991,7 @@ func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdge
 		arg.EdgeID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowEdge, 13)
+	err = recordQueryError(ctx, err, updateWorkflowEdge, 15)
 
 	if err != nil {
 		return 0, err
@@ -10246,7 +9538,7 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 }
 
 const upsertWorkflowEdge = `-- name: UpsertWorkflowEdge :execrows
-INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
+INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
     ?1,
     ?2,
@@ -10260,20 +9552,24 @@ SELECT
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14,
+    ?15
 WHERE EXISTS (
     SELECT 1
     FROM workflow_transition_groups tg
     JOIN workflow_nodes source ON source.id = tg.source_node_id
     JOIN workflow_nodes target ON target.id = ?4
     WHERE tg.id = ?2
-      AND source.workflow_id = ?14
-      AND target.workflow_id = ?14
+      AND source.workflow_id = ?16
+      AND target.workflow_id = ?16
 )
 ON CONFLICT(id) DO UPDATE SET
     transition_group_id = excluded.transition_group_id,
     edge_key = excluded.edge_key,
     target_node_id = excluded.target_node_id,
+    assignee_selection = excluded.assignee_selection,
+    thinking_selection = excluded.thinking_selection,
     requires_approval = excluded.requires_approval,
     context_mode = excluded.context_mode,
     context_source_kind = excluded.context_source_kind,
@@ -10302,6 +9598,8 @@ type UpsertWorkflowEdgeParams struct {
 	TransitionGroupID      string
 	EdgeKey                string
 	TargetNodeID           string
+	AssigneeSelection      string
+	ThinkingSelection      string
 	RequiresApproval       int64
 	ContextMode            string
 	ContextSourceKind      string
@@ -10320,6 +9618,8 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.TransitionGroupID,
 		arg.EdgeKey,
 		arg.TargetNodeID,
+		arg.AssigneeSelection,
+		arg.ThinkingSelection,
 		arg.RequiresApproval,
 		arg.ContextMode,
 		arg.ContextSourceKind,
@@ -10331,7 +9631,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowEdge, 14)
+	err = recordQueryError(ctx, err, upsertWorkflowEdge, 16)
 
 	if err != nil {
 		return 0, err

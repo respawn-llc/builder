@@ -455,7 +455,30 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 			return StartTaskResult{}, err
 		}
 	}
-	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID)
+	var targetSelection *workflow.AgentExecutionSelection
+	if prepared.target.Kind() == workflow.NodeKindAgent {
+		selectionPlan, selectionErr := workflow.PlanTransitionSelection(workflow.TransitionParameterContractRequest{
+			Edge:       prepared.startEdge,
+			SourceKind: prepared.start.Kind(),
+			TargetKind: prepared.target.Kind(),
+			TargetRole: workflow.NodeSubagentRole(prepared.target),
+			Catalog:    s.roleResolver,
+			Materialization: &workflow.TransitionSelectionMaterializationRequest{
+				FallbackRole: workflow.NodeSubagentRole(prepared.target),
+			},
+		})
+		var value workflow.AgentExecutionSelection
+		if selectionErr == nil && selectionPlan.ExecutionSelection != nil {
+			value = *selectionPlan.ExecutionSelection
+		} else if selectionErr == nil {
+			selectionErr = errors.New("transition selection planner omitted Agent execution selection")
+		}
+		if selectionErr != nil {
+			return StartTaskResult{}, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
+		}
+		targetSelection = &value
+	}
+	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID, targetSelection)
 	if err != nil {
 		return StartTaskResult{}, err
 	}

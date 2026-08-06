@@ -8,16 +8,19 @@ import {
 } from "./taskSearchQueries";
 
 describe("Task Search query ownership", () => {
-  it("invalidates only one Project scope", async () => {
+  it("invalidates one Project scope and the global scope", async () => {
     const queryClient = new QueryClient();
     const target = queryKeys.taskSearch("project-1", "search");
+    const global = queryKeys.taskSearch(null, "search");
     const unrelated = queryKeys.taskSearch("project-2", "search");
     queryClient.setQueryData(target, {});
+    queryClient.setQueryData(global, {});
     queryClient.setQueryData(unrelated, {});
 
     await invalidateProjectTaskSearches(queryClient, "project-1");
 
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(global)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
   });
 
@@ -25,25 +28,31 @@ describe("Task Search query ownership", () => {
     const queryClient = new QueryClient();
     const first = queryKeys.taskSearch("project-1", "search");
     const second = queryKeys.taskSearch("project-2", "search");
+    const global = queryKeys.taskSearch(null, "search");
     queryClient.setQueryData(first, {});
     queryClient.setQueryData(second, {});
+    queryClient.setQueryData(global, {});
 
     await invalidateAllTaskSearches(queryClient);
 
     expect(queryClient.getQueryState(first)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(second)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(global)?.isInvalidated).toBe(true);
   });
 
-  it("removes only a deleted Project scope", () => {
+  it("removes a deleted Project scope and invalidates global Search", async () => {
     const queryClient = new QueryClient();
     const deleted = queryKeys.taskSearch("project-1", "search");
     const retained = queryKeys.taskSearch("project-2", "search");
+    const global = queryKeys.taskSearch(null, "search");
     queryClient.setQueryData(deleted, {});
     queryClient.setQueryData(retained, {});
+    queryClient.setQueryData(global, {});
 
-    removeProjectTaskSearches(queryClient, "project-1");
+    await removeProjectTaskSearches(queryClient, "project-1");
 
     expect(queryClient.getQueryState(deleted)).toBeUndefined();
     expect(queryClient.getQueryState(retained)).toBeDefined();
+    expect(queryClient.getQueryState(global)?.isInvalidated).toBe(true);
   });
 });

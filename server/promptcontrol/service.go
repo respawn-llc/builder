@@ -90,12 +90,16 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
+	commentary := ""
+	if req.Commentary != nil {
+		commentary = *req.Commentary
+	}
 	memoReq := approvalAnswerMemoRequest{
 		SessionID:    req.SessionID,
 		ApprovalID:   req.ApprovalID,
 		ErrorMessage: req.ErrorMessage,
 		Decision:     req.Decision,
-		Commentary:   req.Commentary,
+		Commentary:   commentary,
 	}
 	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
 		if req.ErrorMessage != "" {
@@ -106,7 +110,7 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 			RequestID: req.ApprovalID,
 			Approval: &askquestion.AskQuestionApprovalPayload{
 				Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
-				Commentary: req.Commentary,
+				Commentary: commentary,
 			},
 		}, nil)
 		return struct{}{}, err

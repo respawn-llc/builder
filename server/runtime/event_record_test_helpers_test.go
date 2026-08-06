@@ -58,7 +58,11 @@ func mustEventLogConversationFreshness(
 
 func mustQueueUserMessage(t *testing.T, engine *Engine, text string) QueuedUserMessage {
 	t.Helper()
-	return engine.QueueUserMessage(text)
+	item, err := engine.QueueUserMessage(text)
+	if err != nil {
+		t.Fatalf("queue user message: %v", err)
+	}
+	return item
 }
 
 func mustQueueUserMessageWithClientRequestID(
@@ -68,7 +72,20 @@ func mustQueueUserMessageWithClientRequestID(
 	clientRequestID string,
 ) QueuedUserMessage {
 	t.Helper()
-	return engine.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	item, err := engine.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	if err != nil {
+		t.Fatalf("queue user message with client request ID: %v", err)
+	}
+	return item
+}
+
+func mustQueuedUserMessageText(t *testing.T, item QueuedUserMessage) string {
+	t.Helper()
+	text, err := item.DisplayText()
+	if err != nil {
+		t.Fatalf("queued message text: %v", err)
+	}
+	return text
 }
 
 func mustDiscardQueuedUserMessage(

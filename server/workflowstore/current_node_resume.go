@@ -76,7 +76,15 @@ func (s *Store) PreflightTaskResume(
 		if err != nil {
 			return nil, err
 		}
-		for _, binding := range derived.CurrentNodeInputBindingsForEdge(edge.ID) {
+		target, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		consumption, err := resumeTransitionProtectedParameterConsumption(definition, edge, target, currentNode, s.roleResolver)
+		if err != nil {
+			return nil, err
+		}
+		for _, binding := range resumeCurrentNodeInputBindings(edge, derived.CurrentNodeInputBindingsForEdge(edge.ID), consumption) {
 			if _, materialized := currentNode.CurrentInputValues[binding.Name]; materialized {
 				continue
 			}
@@ -90,6 +98,79 @@ func (s *Store) PreflightTaskResume(
 		classifications = append(classifications, classification)
 	}
 	return classifications, nil
+}
+
+func resumeTransitionProtectedParameterConsumption(
+	definition workflow.Definition,
+	edge workflow.Edge,
+	target workflow.Node,
+	currentNode workflow.CurrentNode,
+	catalog workflow.TargetAgentCatalog,
+) (workflow.ProtectedParameterConsumption, error) {
+	edgeCount := 0
+	for _, candidate := range definition.Edges {
+		if candidate.TransitionGroupID == edge.TransitionGroupID {
+			edgeCount++
+		}
+	}
+	request := workflow.TransitionParameterContractRequest{
+		Edge:                  edge,
+		TargetKind:            target.Kind(),
+		TargetRole:            workflow.NodeSubagentRole(target),
+		FanOut:                edgeCount > 1,
+		Catalog:               catalog,
+		TargetSessionPolicy:   workflow.AssigneeSessionPolicyEstablishTarget,
+		TargetSessionResolved: false,
+	}
+	if selection := currentNode.AgentExecutionSelection; selection != nil &&
+		selection.Origin == workflow.AssigneeOriginRetainedSession {
+		retainedRole := workflow.TargetAgentRole{Identity: selection.Assignee}
+		if catalog != nil {
+			if resolved, ok := catalog.ResolveConfiguredRole(selection.Assignee); ok {
+				retainedRole = resolved
+			}
+		}
+		request.RetainedTargetRole = &retainedRole
+		request.TargetSessionPolicy = workflow.AssigneeSessionPolicyPreserve
+		request.TargetSessionResolved = true
+	}
+	group, err := transitionGroupForEdge(definition, edge)
+	if err != nil {
+		return workflow.ProtectedParameterConsumption{}, err
+	}
+	source, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
+	if err != nil {
+		return workflow.ProtectedParameterConsumption{}, err
+	}
+	request.SourceKind = source.Kind()
+	return workflow.PlanTransitionProtectedParameterConsumption(request), nil
+}
+
+func resumeCurrentNodeInputBindings(
+	edge workflow.Edge,
+	bindings []workflow.InputBinding,
+	consumption workflow.ProtectedParameterConsumption,
+) []workflow.InputBinding {
+	filtered := make([]workflow.InputBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		parameter, protected := transitionParameterByKey(edge, binding.Field)
+		if !protected {
+			filtered = append(filtered, binding)
+			continue
+		}
+		switch workflow.CanonicalParameterPurpose(parameter.Purpose) {
+		case workflow.ParameterPurposeTargetAssignee:
+			if consumption.Assignee != workflow.ProtectedParameterConsumptionRequiredValidate {
+				continue
+			}
+		case workflow.ParameterPurposeTargetThinking:
+			if consumption.Thinking != workflow.ProtectedParameterConsumptionRequiredValidate {
+				continue
+			}
+		}
+		filtered = append(filtered, binding)
+	}
+	return filtered
 }
 
 func (s *Store) interruptedExecutableCurrentNodesWithDefinition(

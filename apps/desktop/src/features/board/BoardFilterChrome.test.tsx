@@ -8,14 +8,28 @@ import type {
   BoardFilterGenerationController,
   BoardFilterGenerationSnapshot,
 } from "./BoardFilterGenerationController";
+import type { BoardNodeCardsSort } from "@/api";
 
-const labelRuntime = vi.hoisted(() => ({
-  state: { filter: { kind: "named", mode: "all", labelIDs: ["label-1"] } },
-  dispatch: vi.fn(),
-}));
+type LabelRuntimeState =
+  | Readonly<{ filter: { kind: "none" } }>
+  | Readonly<{ filter: { kind: "named"; mode: "all"; labelIDs: string[] } }>;
+
+const labelRuntime = vi.hoisted(
+  (): {
+    state: LabelRuntimeState;
+    dispatch: ReturnType<typeof vi.fn>;
+  } => ({
+    state: {
+      filter: { kind: "named", mode: "all", labelIDs: ["label-1"] },
+    },
+    dispatch: vi.fn(),
+  }),
+);
 interface GenerationRuntime {
   snapshot: BoardFilterGenerationSnapshot;
   controller: Pick<BoardFilterGenerationController, "getSnapshot" | "setDesiredFilter">;
+  sort: BoardNodeCardsSort;
+  setSort(sort: BoardNodeCardsSort): void;
 }
 const generationRuntime = vi.hoisted((): GenerationRuntime => ({
   snapshot: {
@@ -38,6 +52,8 @@ const generationRuntime = vi.hoisted((): GenerationRuntime => ({
     getSnapshot: () => generationRuntime.snapshot,
     setDesiredFilter: vi.fn(),
   },
+  sort: { field: "updated", direction: "desc" },
+  setSort: vi.fn(),
 }));
 
 vi.mock("@/shared/labels", () => ({
@@ -60,15 +76,7 @@ vi.mock("@/shared/labels", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string) => {
-      if (key === "board.unblocked") {
-        return "dependency-control";
-      }
-      if (key === "labels.filterCount") {
-        return "label-control";
-      }
-      return key;
-    },
+    t: (key: string) => key,
   }),
 }));
 
@@ -76,7 +84,12 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
   useBoardFilterGeneration: () => generationRuntime,
 }));
 
+vi.mock("./TaskSearchChrome", () => ({
+  TaskSearchProjectTrigger: () => <button type="button" />,
+}));
+
 import { BoardFilterChrome } from "./BoardLabelFilter";
+import { BoardFilterRow } from "./BoardFilterRow";
 
 describe("BoardFilterChrome", () => {
   it("toggles Unblocked through the latest desired composite filter", async () => {
@@ -94,7 +107,10 @@ describe("BoardFilterChrome", () => {
     };
     const view = render(<BoardFilterChrome />);
 
-    const chip = screen.getByRole("button", { name: "dependency-control" });
+    const chip = screen.getAllByRole("button").at(-1);
+    if (chip === undefined) {
+      throw new Error("Expected the dependency filter control.");
+    }
     expect(chip).toHaveAttribute("aria-pressed", "false");
     await user.click(chip);
 
@@ -111,10 +127,7 @@ describe("BoardFilterChrome", () => {
       },
     };
     view.rerender(<BoardFilterChrome />);
-    expect(screen.getByRole("button", { name: "dependency-control" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getAllByRole("button").at(-1)).toHaveAttribute("aria-pressed", "true");
   });
 
   it("preserves the dependency filter when the Labels filter changes", async () => {
@@ -132,11 +145,49 @@ describe("BoardFilterChrome", () => {
     };
     render(<BoardFilterChrome />);
 
-    await user.click(screen.getByRole("button", { name: "label-control" }));
+    const labelTrigger = screen.getAllByRole("button").at(0);
+    if (labelTrigger === undefined) {
+      throw new Error("Expected the label filter control.");
+    }
+    await user.click(labelTrigger);
 
     expect(generationRuntime.controller.setDesiredFilter).toHaveBeenCalledWith({
       labelFilter: { kind: "none" },
       dependencyFilter: true,
     });
   });
+
+  it("keeps Labels, Sort, Unblocked, and Search in the board chrome order", () => {
+    labelRuntime.state = { filter: { kind: "none" } };
+    generationRuntime.snapshot = {
+      active: {
+        generation: 1,
+        filter: {
+          labelFilter: { kind: "none" },
+          dependencyFilter: true,
+        },
+        retiring: false,
+      },
+      desiredFilter: null,
+    };
+    render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
+
+    const controls = screen.getAllByRole("button");
+    expect(controls).toHaveLength(4);
+    const labels = controlAt(controls, 0);
+    const sort = controlAt(controls, 1);
+    const unblocked = controlAt(controls, 2);
+    const search = controlAt(controls, 3);
+    expect(labels.compareDocumentPosition(sort) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(sort.compareDocumentPosition(unblocked) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(unblocked.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
 });
+
+function controlAt(controls: readonly HTMLElement[], index: number): HTMLElement {
+  const control = controls[index];
+  if (control === undefined) {
+    throw new Error(`Expected board chrome control at index ${String(index)}.`);
+  }
+  return control;
+}

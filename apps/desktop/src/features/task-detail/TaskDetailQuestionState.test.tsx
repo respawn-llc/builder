@@ -547,6 +547,8 @@ function ordinaryAttention(
     },
     recommendedOptionIndex,
     currentNode: {
+      effectiveAssignee: null,
+      effectiveThinking: null,
       nodeID: "node-1",
       transitionBranchKey: null,
       sessionID: "session-1",

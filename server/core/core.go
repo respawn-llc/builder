@@ -329,6 +329,10 @@ func (s *Core) Config() config.App {
 	return s.safeBundles().Projects.cfg
 }
 
+func (s *Core) DebugEnabled() bool {
+	return s != nil && s.Config().Settings.Debug
+}
+
 func (s *Core) MetadataStore() *metadata.Store {
 	if s == nil {
 		return nil

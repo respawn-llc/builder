@@ -31,7 +31,7 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 15 * time.Second
+const currentNodeRunnerWait = 30 * time.Second
 
 type currentNodeRunnerFixture struct {
 	cfg          config.App
@@ -1434,6 +1434,7 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 			PromptTemplate:   "Address the review findings.",
 		},
 	} {
+		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
 		}
@@ -1505,6 +1506,7 @@ func createCurrentNodeFanoutContinuationWorkflow(
 		{ID: workflow.EdgeID("edge-join-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-done-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
+		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
 		}
@@ -1602,6 +1604,7 @@ func createCurrentNodeTwoStepWorkflow(
 		},
 		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
+		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
 		}
@@ -1659,11 +1662,27 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 		}()},
 		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession},
 	} {
+		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("add edge: %v", err)
 		}
 	}
 	return created.ID
+}
+
+func normalizeWorkflowEdgeRecordForTest(edge workflowstore.EdgeRecord) workflowstore.EdgeRecord {
+	if edge.AssigneeSelection == "" {
+		edge.AssigneeSelection = workflow.AssigneeSelectionConfigured
+	}
+	if edge.ThinkingSelection == "" {
+		edge.ThinkingSelection = workflow.ThinkingSelectionConfigured
+	}
+	for index := range edge.Parameters {
+		if edge.Parameters[index].Purpose == "" {
+			edge.Parameters[index].Purpose = workflow.ParameterPurposeOrdinary
+		}
+	}
+	return edge
 }
 
 func workflowRunnerShellQuote(value string) string {

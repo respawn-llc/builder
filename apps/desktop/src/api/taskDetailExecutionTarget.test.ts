@@ -14,7 +14,13 @@ describe("task detail execution target contract", () => {
     });
     expect(detail.worktreePath).toBe("/tmp/worktree");
     expect(detail.currentNodes).toEqual([
-      { nodeID: "node-1", transitionBranchKey: null, sessionID: "session-1" },
+      {
+        effectiveAssignee: null,
+        effectiveThinking: null,
+        nodeID: "node-1",
+        transitionBranchKey: null,
+        sessionID: "session-1",
+      },
     ]);
     expect(detail.liveSessionIDs).toEqual(["session-1"]);
     expect(detail.currentScripts).toEqual([]);
@@ -92,6 +98,8 @@ describe("task detail execution target contract", () => {
 
     expect(detail.currentNodes).toEqual(
       currentNodes.map((node) => ({
+        effectiveAssignee: null,
+        effectiveThinking: null,
         nodeID: node.node_id,
         transitionBranchKey: node.transition_branch_key,
         sessionID: node.session_id,

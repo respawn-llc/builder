@@ -284,12 +284,16 @@ func (c *ownerlessRetirementLLMClient) callCount() int {
 	return c.calls
 }
 
-func (f authorityPromptFeed) PromptPending(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req tools.AskQuestionRequest, _ time.Time) {
-	f <- authorityPromptEvent{resource: resource, scopeID: scopeID, requestID: req.ID}
+func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.AskQuestionRequest, _ time.Time) error {
+	resource, _ := scope.Resource()
+	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: req.ID}
+	return nil
 }
 
-func (f authorityPromptFeed) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
-	f <- authorityPromptEvent{resource: resource, scopeID: scopeID, requestID: requestID, resolved: true}
+func (f authorityPromptFeed) PromptResolvedScope(scope ExecutionScope, requestID string) error {
+	resource, _ := scope.Resource()
+	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: requestID, resolved: true}
+	return nil
 }
 
 func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {
@@ -724,7 +728,10 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 		t.Fatalf("wait ownerless execution: %v", err)
 	}
 	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item := engine.QueueUserMessage("steer retained runtime")
+		item, queueErr := engine.QueueUserMessage("steer retained runtime")
+		if queueErr != nil {
+			return queueErr
+		}
 		if !engine.DiscardQueuedUserMessage(item.ID) {
 			return errors.New("discard retained runtime steering")
 		}
@@ -780,7 +787,10 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 	<-executionStarted
 	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item := engine.QueueUserMessage("accepted before execution exit")
+		item, queueErr := engine.QueueUserMessage("accepted before execution exit")
+		if queueErr != nil {
+			return queueErr
+		}
 		if item.ID == "" {
 			return errors.New("queued user message has no id")
 		}
@@ -1511,6 +1521,26 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 	if first.Resource() == second.Resource() {
 		t.Fatal("replacement reused the retired resource generation")
+	}
+
+	var staleCallbackCalls int
+	staleErr := authority.WithRuntime(context.Background(), first.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+		staleCallbackCalls++
+		thinking, err := workflow.NewThinkingValue("max")
+		if err != nil {
+			return err
+		}
+		if err := engine.SetWorkflowThinkingValue(thinking); err != nil {
+			return err
+		}
+		_, err = engine.SteerWorkflowAssignment(runtime.WorkflowAssignment{})
+		return err
+	})
+	if staleErr == nil {
+		t.Fatal("stale assignment callback unexpectedly succeeded")
+	}
+	if staleCallbackCalls != 0 {
+		t.Fatalf("stale assignment callback calls = %d, want 0", staleCallbackCalls)
 	}
 
 	if _, err := first.Release(context.Background(), RuntimeReleaseDetach); err != nil {

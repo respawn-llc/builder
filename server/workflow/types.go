@@ -33,6 +33,44 @@ const (
 	ContextModeCompactAndContinueSession ContextMode = "compact_and_continue_session"
 )
 
+type AssigneeSelection string
+
+const (
+	AssigneeSelectionConfigured   AssigneeSelection = "configured"
+	AssigneeSelectionPreviousNode AssigneeSelection = "previous_node"
+)
+
+func CanonicalAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	return AssigneeSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	canonical := CanonicalAssigneeSelection(selection)
+	if canonical == "" {
+		return AssigneeSelectionConfigured
+	}
+	return canonical
+}
+
+type ThinkingSelection string
+
+const (
+	ThinkingSelectionConfigured   ThinkingSelection = "configured"
+	ThinkingSelectionPreviousNode ThinkingSelection = "previous_node"
+)
+
+func CanonicalThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	return ThinkingSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	canonical := CanonicalThinkingSelection(selection)
+	if canonical == "" {
+		return ThinkingSelectionConfigured
+	}
+	return canonical
+}
+
 type ContextSourceKind string
 
 const (
@@ -346,6 +384,8 @@ type Edge struct {
 	Key                ModelKey
 	TransitionGroupID  TransitionGroupID
 	TargetNodeID       NodeID
+	AssigneeSelection  AssigneeSelection
+	ThinkingSelection  ThinkingSelection
 	ContextMode        ContextMode
 	ContextSource      ContextSource
 	RequiresApproval   bool
@@ -355,9 +395,40 @@ type Edge struct {
 	OutputRequirements []OutputRequirement
 }
 
+func (edge Edge) Canonical() Edge {
+	edge.AssigneeSelection = CanonicalAssigneeSelection(edge.AssigneeSelection)
+	edge.ThinkingSelection = CanonicalThinkingSelection(edge.ThinkingSelection)
+	edge.ContextSource = CanonicalContextSource(edge.ContextSource)
+	edge.Parameters = append([]Parameter(nil), edge.Parameters...)
+	for index := range edge.Parameters {
+		edge.Parameters[index] = edge.Parameters[index].Canonical()
+	}
+	edge.InputBindings = append([]InputBinding(nil), edge.InputBindings...)
+	edge.OutputRequirements = append([]OutputRequirement(nil), edge.OutputRequirements...)
+	return edge
+}
+
 type Parameter struct {
-	Key         string `json:"key"`
-	Description string `json:"description"`
+	Key         string           `json:"key"`
+	Description string           `json:"description"`
+	Purpose     ParameterPurpose `json:"purpose"`
+}
+
+type ParameterPurpose string
+
+const (
+	ParameterPurposeOrdinary       ParameterPurpose = "ordinary"
+	ParameterPurposeTargetAssignee ParameterPurpose = "target_assignee"
+	ParameterPurposeTargetThinking ParameterPurpose = "target_thinking"
+)
+
+func CanonicalParameterPurpose(purpose ParameterPurpose) ParameterPurpose {
+	return ParameterPurpose(strings.TrimSpace(string(purpose)))
+}
+
+func (parameter Parameter) Canonical() Parameter {
+	parameter.Purpose = CanonicalParameterPurpose(parameter.Purpose)
+	return parameter
 }
 
 type OutputField struct {

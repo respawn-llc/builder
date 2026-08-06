@@ -123,6 +123,8 @@ type WorkflowEdge struct {
 	TransitionGroupID  string                      `json:"transition_group_id"`
 	Key                string                      `json:"key"`
 	TargetNodeID       string                      `json:"target_node_id"`
+	AssigneeSelection  string                      `json:"assignee_selection"`
+	ThinkingSelection  string                      `json:"thinking_selection"`
 	RequiresApproval   bool                        `json:"requires_approval"`
 	ContextMode        string                      `json:"context_mode"`
 	ContextSource      WorkflowContextSource       `json:"context_source"`
@@ -147,6 +149,7 @@ type WorkflowOutputField struct {
 type WorkflowParameter struct {
 	Key         string `json:"key"`
 	Description string `json:"description"`
+	Purpose     string `json:"purpose"`
 }
 
 type WorkflowJoinInputProvider struct {
@@ -187,10 +190,78 @@ type WorkflowDerivedTransitionGroupWiring struct {
 }
 
 type WorkflowDerivedEdgeWiring struct {
-	EdgeID                  string                 `json:"edge_id"`
-	InputBindings           []WorkflowInputBinding `json:"input_bindings,omitempty"`
-	RequiredProvisionFields []WorkflowOutputField  `json:"required_provision_fields,omitempty"`
-	RequiredProviderFields  []WorkflowOutputField  `json:"required_provider_fields,omitempty"`
+	EdgeID                         string                        `json:"edge_id"`
+	InputBindings                  []WorkflowInputBinding        `json:"input_bindings,omitempty"`
+	RequiredProvisionFields        []WorkflowOutputField         `json:"required_provision_fields,omitempty"`
+	RequiredProviderFields         []WorkflowOutputField         `json:"required_provider_fields,omitempty"`
+	AssigneeSelectionApplicability WorkflowSelectorApplicability `json:"assignee_selection_applicability"`
+	ThinkingSelectionApplicability WorkflowSelectorApplicability `json:"thinking_selection_applicability"`
+}
+
+type WorkflowSelectorApplicabilityReason string
+
+const (
+	WorkflowSelectorApplicabilityReasonEligible                 WorkflowSelectorApplicabilityReason = "eligible"
+	WorkflowSelectorApplicabilityReasonTopology                 WorkflowSelectorApplicabilityReason = "topology"
+	WorkflowSelectorApplicabilityReasonContextSource            WorkflowSelectorApplicabilityReason = "context_source"
+	WorkflowSelectorApplicabilityReasonNoCallableRoles          WorkflowSelectorApplicabilityReason = "no_callable_roles"
+	WorkflowSelectorApplicabilityReasonNoThinkingSupport        WorkflowSelectorApplicabilityReason = "no_thinking_support"
+	WorkflowSelectorApplicabilityReasonUnavailableConfiguration WorkflowSelectorApplicabilityReason = "unavailable_configuration"
+	WorkflowSelectorApplicabilityReasonSoleCallableRole         WorkflowSelectorApplicabilityReason = "sole_callable_role"
+	WorkflowSelectorApplicabilityReasonNoThinkingLevels         WorkflowSelectorApplicabilityReason = "no_thinking_levels"
+	WorkflowSelectorApplicabilityReasonSoleThinkingLevel        WorkflowSelectorApplicabilityReason = "sole_thinking_level"
+)
+
+type WorkflowSelectorApplicability struct {
+	Available        bool                                `json:"available"`
+	ParameterVisible bool                                `json:"parameter_visible"`
+	Reason           WorkflowSelectorApplicabilityReason `json:"reason"`
+}
+
+func (a WorkflowSelectorApplicability) Validate() error {
+	switch a.Reason {
+	case WorkflowSelectorApplicabilityReasonEligible,
+		WorkflowSelectorApplicabilityReasonTopology,
+		WorkflowSelectorApplicabilityReasonContextSource,
+		WorkflowSelectorApplicabilityReasonNoCallableRoles,
+		WorkflowSelectorApplicabilityReasonNoThinkingSupport,
+		WorkflowSelectorApplicabilityReasonUnavailableConfiguration,
+		WorkflowSelectorApplicabilityReasonSoleCallableRole,
+		WorkflowSelectorApplicabilityReasonNoThinkingLevels,
+		WorkflowSelectorApplicabilityReasonSoleThinkingLevel:
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "reason", "selector applicability reason is invalid")
+	}
+	if a.Reason == WorkflowSelectorApplicabilityReasonEligible && (!a.Available || !a.ParameterVisible) {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "available", "eligible selector applicability must be available")
+	}
+	if a.Reason != WorkflowSelectorApplicabilityReasonEligible && a.Available {
+		switch a.Reason {
+		case WorkflowSelectorApplicabilityReasonSoleCallableRole,
+			WorkflowSelectorApplicabilityReasonNoThinkingLevels,
+			WorkflowSelectorApplicabilityReasonSoleThinkingLevel:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "available", "unavailable selector applicability must not be available")
+		}
+	}
+	if a.Reason == WorkflowSelectorApplicabilityReasonSoleCallableRole ||
+		a.Reason == WorkflowSelectorApplicabilityReasonNoThinkingLevels ||
+		a.Reason == WorkflowSelectorApplicabilityReasonSoleThinkingLevel {
+		if !a.Available || a.ParameterVisible {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "parameter_visible", "automatic selector applicability must hide its parameter")
+		}
+	}
+	return nil
+}
+
+func (e WorkflowDerivedEdgeWiring) Validate() error {
+	if err := validateRequired("edge_id", e.EdgeID); err != nil {
+		return err
+	}
+	if err := e.AssigneeSelectionApplicability.Validate(); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "assignee_selection_applicability", err.Error())
+	}
+	return e.ThinkingSelectionApplicability.Validate()
 }
 
 type WorkflowDefinition struct {
@@ -241,6 +312,8 @@ type WorkflowGraphDraftEdge struct {
 	TransitionGroupID string                `json:"transition_group_id"`
 	Key               string                `json:"key"`
 	TargetNodeID      string                `json:"target_node_id"`
+	AssigneeSelection string                `json:"assignee_selection"`
+	ThinkingSelection string                `json:"thinking_selection"`
 	RequiresApproval  bool                  `json:"requires_approval"`
 	ContextMode       string                `json:"context_mode"`
 	ContextSource     WorkflowContextSource `json:"context_source"`
@@ -482,6 +555,8 @@ type WorkflowEdgeAddRequest struct {
 	TransitionGroupID string                `json:"transition_group_id"`
 	Key               string                `json:"key"`
 	TargetNodeID      string                `json:"target_node_id"`
+	AssigneeSelection string                `json:"assignee_selection"`
+	ThinkingSelection string                `json:"thinking_selection"`
 	ContextMode       string                `json:"context_mode"`
 	ContextSource     WorkflowContextSource `json:"context_source"`
 	RequiresApproval  bool                  `json:"requires_approval"`
@@ -499,6 +574,8 @@ type WorkflowEdgeUpdateRequest struct {
 	TransitionGroupID string                `json:"transition_group_id"`
 	Key               string                `json:"key"`
 	TargetNodeID      string                `json:"target_node_id"`
+	AssigneeSelection string                `json:"assignee_selection"`
+	ThinkingSelection string                `json:"thinking_selection"`
 	ContextMode       string                `json:"context_mode"`
 	ContextSource     WorkflowContextSource `json:"context_source"`
 	RequiresApproval  bool                  `json:"requires_approval"`
@@ -859,6 +936,8 @@ type WorkflowTaskCurrentNode struct {
 	NodeID              string  `json:"node_id"`
 	TransitionBranchKey *string `json:"transition_branch_key,omitempty"`
 	SessionID           *string `json:"session_id,omitempty"`
+	EffectiveAssignee   *string `json:"effective_assignee,omitempty"`
+	EffectiveThinking   *string `json:"effective_thinking,omitempty"`
 }
 
 type WorkflowTaskResumeRequest struct {
@@ -1345,7 +1424,8 @@ type WorkflowBoardNodeCardsListRequest struct {
 	LabelFilter      WorkflowTaskLabelFilter `json:"label_filter"`
 	DependencyFilter *bool                   `json:"dependency_filter,omitempty"`
 	PageSize         int                     `json:"page_size"`
-	PageToken        *string                 `json:"page_token"`
+	Sort             *WorkflowTaskListSort   `json:"sort,omitempty"`
+	Offset           *int                    `json:"offset,omitempty"`
 }
 
 type WorkflowBoardNodeCardsListResponse struct {
@@ -1353,8 +1433,7 @@ type WorkflowBoardNodeCardsListResponse struct {
 	WorkflowID        runtimeids.WorkflowID   `json:"workflow_id"`
 	NodeID            string                  `json:"node_id"`
 	Cards             []WorkflowBoardTaskCard `json:"cards"`
-	PreviousPageToken *string                 `json:"previous_page_token"`
-	NextPageToken     *string                 `json:"next_page_token"`
+	NextOffset        *int                    `json:"next_offset,omitempty"`
 	GeneratedAtUnixMs int64                   `json:"generated_at_unix_ms"`
 }
 
@@ -1991,17 +2070,17 @@ func validateWorkflowTransitionGroupFields(workflowID runtimeids.WorkflowID, gro
 }
 
 func (r WorkflowEdgeAddRequest) Validate() error {
-	return validateWorkflowEdgeFields(r.WorkflowID, "", r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.Parameters)
+	return validateWorkflowEdgeFields(r.WorkflowID, "", r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
 }
 
 func (r WorkflowEdgeUpdateRequest) Validate() error {
 	if err := validateRequired("edge_id", r.EdgeID); err != nil {
 		return err
 	}
-	return validateWorkflowEdgeFields(r.WorkflowID, r.EdgeID, r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.Parameters)
+	return validateWorkflowEdgeFields(r.WorkflowID, r.EdgeID, r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
 }
 
-func validateWorkflowEdgeFields(workflowID runtimeids.WorkflowID, edgeID string, transitionGroupID string, key string, targetNodeID string, contextMode string, contextSource WorkflowContextSource, parameters []WorkflowParameter) error {
+func validateWorkflowEdgeFields(workflowID runtimeids.WorkflowID, edgeID string, transitionGroupID string, key string, targetNodeID string, contextMode string, contextSource WorkflowContextSource, assigneeSelection string, thinkingSelection string, parameters []WorkflowParameter) error {
 	_ = edgeID
 	if err := validateRequiredWorkflowID(workflowID); err != nil {
 		return err
@@ -2017,8 +2096,72 @@ func validateWorkflowEdgeFields(workflowID runtimeids.WorkflowID, edgeID string,
 	if err := validateWorkflowContextSource(contextSource); err != nil {
 		return err
 	}
+	if err := validateWorkflowEdgeSelectionShape("parameters", assigneeSelection, thinkingSelection, parameters); err != nil {
+		return err
+	}
 	if len(parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 		return workflowRequestError(WorkflowRequestErrorTooLong, "parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
+	}
+	return nil
+}
+
+func validateWorkflowEdgeSelectionShape(fieldPrefix string, assigneeSelection string, thinkingSelection string, parameters []WorkflowParameter) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{fieldPrefix + ".assignee_selection", assigneeSelection},
+		{fieldPrefix + ".thinking_selection", thinkingSelection},
+	} {
+		switch strings.TrimSpace(field.value) {
+		case "configured", "previous_node":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, field.name, field.name+" must be configured or previous_node")
+		}
+	}
+	seenKeys := map[string]struct{}{}
+	seenPurposes := map[string]struct{}{}
+	for index, parameter := range parameters {
+		name := fmt.Sprintf("%s[%d]", fieldPrefix, index)
+		purpose := strings.TrimSpace(parameter.Purpose)
+		switch purpose {
+		case "ordinary", "target_assignee", "target_thinking":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".purpose", "parameter purpose is invalid")
+		}
+		if err := validateModelKey(name+".key", parameter.Key); err != nil {
+			return err
+		}
+		if workflowkey.ReservedParameter(strings.TrimSpace(parameter.Key)) {
+			return workflowRequestError(WorkflowRequestErrorInvalidKey, name+".key", "parameter key is reserved")
+		}
+		if _, exists := seenKeys[parameter.Key]; exists {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".key", "parameter keys must be unique")
+		}
+		seenKeys[parameter.Key] = struct{}{}
+		if purpose != "ordinary" {
+			if _, exists := seenPurposes[purpose]; exists {
+				return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".purpose", "protected parameter purposes must be unique")
+			}
+			seenPurposes[purpose] = struct{}{}
+		}
+		description := strings.TrimSpace(parameter.Description)
+		if purpose == "ordinary" && description == "" {
+			return workflowRequestError(WorkflowRequestErrorRequired, name+".description", "ordinary parameter description is required")
+		}
+		if len([]rune(description)) > workflowcontract.MaxParameterDescriptionChars {
+			return workflowRequestError(WorkflowRequestErrorTooLong, name+".description", "parameter description is too long")
+		}
+	}
+	if strings.TrimSpace(assigneeSelection) == "previous_node" {
+		if _, exists := seenPurposes["target_assignee"]; !exists {
+			return workflowRequestError(WorkflowRequestErrorRequired, fieldPrefix+".parameters", "assignee selection requires a target-assignee parameter")
+		}
+	}
+	if strings.TrimSpace(thinkingSelection) == "previous_node" {
+		if _, exists := seenPurposes["target_thinking"]; !exists {
+			return workflowRequestError(WorkflowRequestErrorRequired, fieldPrefix+".parameters", "thinking selection requires a target-thinking parameter")
+		}
 	}
 	return nil
 }
@@ -2241,6 +2384,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		if err := validateWorkflowContextSource(edge.ContextSource); err != nil {
 			return err
 		}
+		if err := validateWorkflowEdgeSelectionShape("graph.edges", edge.AssigneeSelection, edge.ThinkingSelection, edge.Parameters); err != nil {
+			return err
+		}
 		if len(edge.Parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.edges.parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
@@ -2333,6 +2479,16 @@ func (r WorkflowTaskDetail) Validate() error {
 	}
 	if err := validateLabelIDs("task.label_ids", r.LabelIDs); err != nil {
 		return err
+	}
+	for index, node := range r.CurrentNodes {
+		if err := validateWorkflowTaskCurrentNode(node); err != nil {
+			return prefixWorkflowProjectionValidationField("task.current_nodes", index, err)
+		}
+	}
+	for index, script := range r.CurrentScripts {
+		if err := validateWorkflowTaskCurrentNode(script.CurrentNode); err != nil {
+			return prefixWorkflowProjectionValidationField("task.current_scripts", index, err)
+		}
 	}
 	return r.Dependencies.Validate()
 }
@@ -2608,7 +2764,13 @@ func validateWorkflowTaskCurrentNode(node WorkflowTaskCurrentNode) error {
 			return err
 		}
 	}
-	return validateOptionalAttentionString("session_id", node.SessionID)
+	if err := validateOptionalAttentionString("session_id", node.SessionID); err != nil {
+		return err
+	}
+	if err := validateOptionalAttentionString("effective_assignee", node.EffectiveAssignee); err != nil {
+		return err
+	}
+	return validateOptionalAttentionString("effective_thinking", node.EffectiveThinking)
 }
 
 func validateWorkflowAttentionRecommendation(suggestions []string, index *int) error {
@@ -3093,11 +3255,20 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 	if r.PageSize > WorkflowBoardNodeCardsMaxPageSize {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", fmt.Sprintf("page_size must be <= %d", WorkflowBoardNodeCardsMaxPageSize))
 	}
-	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) == "" {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not be blank")
+	if r.Offset != nil && *r.Offset < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
 	}
-	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	if r.Sort != nil {
+		switch r.Sort.Field {
+		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldLabels, WorkflowTaskListSortFieldShortID:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.field", "sort field must be created, updated, labels, or short_id")
+		}
+		switch r.Sort.Direction {
+		case WorkflowTaskListSortDirectionAsc, WorkflowTaskListSortDirectionDesc:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort.direction", "sort direction must be asc or desc")
+		}
 	}
 	return nil
 }

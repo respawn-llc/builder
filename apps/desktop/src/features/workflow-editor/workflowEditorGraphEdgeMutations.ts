@@ -56,6 +56,7 @@ export function connectWorkflowNodes(
     workflowID: draft.workflow.id,
   };
   const edge: WorkflowEdge = {
+    assigneeSelection: "configured",
     contextMode: "new_session",
     contextSource: { kind: "immediate_source", nodeKey: "" },
     id: input.edgeID,
@@ -66,6 +67,7 @@ export function connectWorkflowNodes(
     promptTemplate: "",
     requiresApproval: false,
     targetNodeID: input.targetNodeID,
+    thinkingSelection: "configured",
     transitionGroupID: input.transitionGroupID,
     workflowID: draft.workflow.id,
   };
@@ -239,7 +241,8 @@ function connectNodeGroupFanoutBranch(
       target.key,
       edgesForTransitionGroup(draft, connection.transitionGroupID).map((edge) => edge.key),
     );
-  const edge = {
+  const edge: WorkflowEdge = {
+    assigneeSelection: "configured",
     contextMode: "new_session",
     contextSource: { kind: "immediate_source", nodeKey: "" },
     id: input.edgeID,
@@ -250,6 +253,7 @@ function connectNodeGroupFanoutBranch(
     promptTemplate: "",
     requiresApproval: false,
     targetNodeID: input.targetNodeID,
+    thinkingSelection: "configured",
     transitionGroupID: connection.transitionGroupID,
     workflowID: draft.workflow.id,
   };

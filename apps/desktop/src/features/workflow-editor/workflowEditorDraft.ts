@@ -22,6 +22,10 @@ import {
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
 import { draftParameterRowID, reorderDraftRows } from "./workflowEditorDraftRows";
+import {
+  isProtectedWorkflowParameter,
+  setWorkflowEdgeSelector,
+} from "./workflowEditorEdgeSelection";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
 import type {
   DraftWorkflowDefinition,
@@ -78,6 +82,16 @@ export type WorkflowEditorDraftAction =
     }>
   | Readonly<{ type: "assignJoinInputProvider"; nodeID: string; inputName: string; providerEdgeID: string }>
   | Readonly<{ type: "editEdgePrompt"; edgeID: string; promptTemplate: string }>
+  | Readonly<{
+      type: "setEdgeAssigneeSelection";
+      edgeID: string;
+      selection: WorkflowEdge["assigneeSelection"];
+    }>
+  | Readonly<{
+      type: "setEdgeThinkingSelection";
+      edgeID: string;
+      selection: WorkflowEdge["thinkingSelection"];
+    }>
   | Readonly<{ type: "addEdgeParameter"; edgeID: string }>
   | Readonly<{
       type: "updateEdgeParameter";
@@ -147,6 +161,8 @@ type EdgeFieldAction = Extract<
   {
     type:
       | "editEdgePrompt"
+      | "setEdgeAssigneeSelection"
+      | "setEdgeThinkingSelection"
       | "addEdgeParameter"
       | "updateEdgeParameter"
       | "deleteEdgeParameter"
@@ -193,6 +209,8 @@ const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldActi
 
 const edgeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<EdgeFieldAction["type"]>([
   "editEdgePrompt",
+  "setEdgeAssigneeSelection",
+  "setEdgeThinkingSelection",
   "addEdgeParameter",
   "updateEdgeParameter",
   "deleteEdgeParameter",
@@ -329,6 +347,14 @@ function reduceEdgeFieldAction(
         ...edge,
         promptTemplate: action.promptTemplate,
       }));
+    case "setEdgeAssigneeSelection":
+      return editDraftEdge(state, action.edgeID, false, (edge) =>
+        setWorkflowEdgeSelector(edge, "assignee", action.selection),
+      );
+    case "setEdgeThinkingSelection":
+      return editDraftEdge(state, action.edgeID, false, (edge) =>
+        setWorkflowEdgeSelector(edge, "thinking", action.selection),
+      );
     case "addEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
@@ -336,6 +362,7 @@ function reduceEdgeFieldAction(
           {
             description: "",
             key: "",
+            purpose: "ordinary",
             rowID: [edge.id, "parameter", state.version.toString(), edge.parameters.length.toString()].join(
               ":",
             ),
@@ -347,13 +374,18 @@ function reduceEdgeFieldAction(
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
         parameters: edge.parameters.map((parameter) =>
-          parameter.rowID === action.parameterRowID ? { ...parameter, ...action.patch } : parameter,
+          parameter.rowID === action.parameterRowID
+            ? { ...parameter, ...action.patch, purpose: parameter.purpose }
+            : parameter,
         ),
       }));
     case "deleteEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
-        parameters: edge.parameters.filter((parameter) => parameter.rowID !== action.parameterRowID),
+        parameters: edge.parameters.filter(
+          (parameter) =>
+            parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
+        ),
       }));
     case "reorderEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
@@ -387,7 +419,7 @@ export function workflowDefinitionFromDraft(draft: DraftWorkflowDefinition): Wor
     ...draft,
     edges: draft.edges.map((edge) => ({
       ...edge,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
+      parameters: edge.parameters.map(({ description, key, purpose }) => ({ description, key, purpose })),
     })),
     nodes: draft.nodes.map((node) => ({ ...node })),
   };
@@ -408,14 +440,16 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
   const definition = workflowDefinitionFromDraft(state.draft);
   return {
     edges: definition.edges.map((edge) => ({
+      assigneeSelection: edge.assigneeSelection,
       contextMode: edge.contextMode,
       contextSource: edge.contextSource,
       id: edge.id,
       key: edge.key,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
+      parameters: edge.parameters.map(({ description, key, purpose }) => ({ description, key, purpose })),
       promptTemplate: edge.promptTemplate,
       requiresApproval: edge.requiresApproval,
       targetNodeID: edge.targetNodeID,
+      thinkingSelection: edge.thinkingSelection,
       transitionGroupID: edge.transitionGroupID,
     })),
     nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),

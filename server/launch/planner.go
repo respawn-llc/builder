@@ -14,6 +14,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -121,6 +122,41 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
+	RequiredTools              []toolspec.ID
+	WorkflowThinking           WorkflowThinkingMutation
+}
+
+type WorkflowThinkingMutationKind uint8
+
+const (
+	WorkflowThinkingMutationUnchanged WorkflowThinkingMutationKind = iota
+	WorkflowThinkingMutationSet
+	WorkflowThinkingMutationClear
+)
+
+type WorkflowThinkingMutation struct {
+	kind  WorkflowThinkingMutationKind
+	value workflow.ThinkingValue
+}
+
+func KeepWorkflowThinking() WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationUnchanged}
+}
+
+func SetWorkflowThinking(value workflow.ThinkingValue) WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationSet, value: value}
+}
+
+func ClearWorkflowThinking() WorkflowThinkingMutation {
+	return WorkflowThinkingMutation{kind: WorkflowThinkingMutationClear}
+}
+
+func (mutation WorkflowThinkingMutation) Kind() WorkflowThinkingMutationKind {
+	return mutation.kind
+}
+
+func (mutation WorkflowThinkingMutation) Value() workflow.ThinkingValue {
+	return mutation.value
 }
 
 func optionalSessionName(name string) (*string, error) {
@@ -514,7 +550,51 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	return p.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+	next, warnings, err := p.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next, err = withRequiredRunPromptTools(next, options.RequiredTools)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next, err = withWorkflowThinking(next, options.WorkflowThinking)
+	return next, warnings, err
+}
+
+func withRequiredRunPromptTools(plan SessionPlan, required []toolspec.ID) (SessionPlan, error) {
+	if len(required) == 0 {
+		return plan, nil
+	}
+	enabled := cloneMapOrEmpty(plan.ActiveSettings.EnabledTools)
+	for _, tool := range required {
+		enabled[tool] = true
+	}
+	plan.ActiveSettings.EnabledTools = enabled
+	plan.EnabledTools = DedupeSortToolIDs(append(append([]toolspec.ID(nil), plan.EnabledTools...), required...))
+	return plan, nil
+}
+
+func withWorkflowThinking(plan SessionPlan, mutation WorkflowThinkingMutation) (SessionPlan, error) {
+	switch mutation.kind {
+	case WorkflowThinkingMutationUnchanged:
+		return plan, nil
+	case WorkflowThinkingMutationSet:
+		if err := mutation.value.Validate(); err != nil {
+			return SessionPlan{}, err
+		}
+	case WorkflowThinkingMutationClear:
+	default:
+		return SessionPlan{}, errors.New("workflow thinking mutation is invalid")
+	}
+	plan.ActiveSettings = cloneSettings(plan.ActiveSettings)
+	switch mutation.kind {
+	case WorkflowThinkingMutationClear:
+		plan.ActiveSettings.ThinkingLevel = ""
+	case WorkflowThinkingMutationSet:
+		plan.ActiveSettings.ThinkingLevel = string(mutation.value)
+	}
+	return plan, nil
 }
 
 func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

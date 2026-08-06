@@ -18,6 +18,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 )
 
@@ -179,7 +180,27 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
-	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
+	response := serverapi.SessionTranscriptPageResponse{Transcript: page}
+	if err := validateSessionTranscriptPageResponse(response); err != nil {
+		return serverapi.SessionTranscriptPageResponse{}, err
+	}
+	return response, nil
+}
+
+func validateSessionTranscriptPageResponse(response serverapi.SessionTranscriptPageResponse) error {
+	if err := response.Validate(); err != nil {
+		invariant.NewPolicy().Check(false, invariant.ReadModelPublicationDiagnostic(
+			invariant.ReadModelPublicationDiagnosticInput{
+				Operation:        "session_view.transcript_page",
+				SessionID:        response.Transcript.SessionID,
+				PublicationCause: err.Error(),
+				OwnerSnapshots:   "canonical_transcript_page",
+				ResolverInputs:   "session_transcript_page",
+			},
+		))
+		return fmt.Errorf("validate session transcript page response: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {

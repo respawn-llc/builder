@@ -191,24 +191,47 @@ func cloneTranscriptLiveToolStart(start TranscriptLiveToolStart) TranscriptLiveT
 	}
 }
 
-func cloneTranscriptReasoningState(state *TranscriptReasoningState) *TranscriptReasoningState {
+func cloneThinkingStatusState(state *TranscriptThinkingStatusState) *TranscriptThinkingStatusState {
 	if state == nil {
 		return nil
 	}
-	return &TranscriptReasoningState{
-		StepID:        state.StepID,
-		Key:           state.Key,
-		Text:          state.Text,
-		CurrentStatus: cloneReasoningStatus(state.CurrentStatus),
+	return &TranscriptThinkingStatusState{
+		StepID: state.StepID,
+		Text:   state.Text,
 	}
 }
 
-func cloneReasoningStatus(status *llm.ReasoningStatus) *llm.ReasoningStatus {
-	if status == nil {
+func cloneTranscriptReasoningTraceState(state *TranscriptReasoningTraceState) TranscriptReasoningTraceState {
+	if state == nil {
+		return TranscriptReasoningTraceState{}
+	}
+	out := TranscriptReasoningTraceState{
+		StepID:    state.StepID,
+		Source:    *llm.CloneReasoningSourceCoordinate(&state.Source),
+		Text:      state.Text,
+		startedAt: state.startedAt,
+	}
+	out.Identity.Provider = llm.CloneReasoningItemIdentity(state.Identity.Provider)
+	out.ProviderMetadata = llm.CloneReasoningItemIdentity(state.ProviderMetadata)
+	if state.Identity.Kent != nil {
+		id := *state.Identity.Kent
+		out.Identity.Kent = &id
+	}
+	return out
+}
+
+func cloneTranscriptReasoningTraceIdentity(identity *TranscriptReasoningTraceIdentity) *TranscriptReasoningTraceIdentity {
+	if identity == nil {
 		return nil
 	}
-	copyStatus := *status
-	return &copyStatus
+	out := &TranscriptReasoningTraceIdentity{
+		Provider: llm.CloneReasoningItemIdentity(identity.Provider),
+	}
+	if identity.Kent != nil {
+		id := *identity.Kent
+		out.Kent = &id
+	}
+	return out
 }
 
 func cloneTranscriptToolCallMeta(meta *transcript.ToolCallMeta) *transcript.ToolCallMeta {

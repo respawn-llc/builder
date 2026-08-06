@@ -133,6 +133,30 @@ type CurrentNodeInterruptionDetail struct {
 	ConfiguredExecutionTargetUnavailable *ConfiguredExecutionTargetUnavailable `json:"configured_execution_target_unavailable,omitempty"`
 }
 
+const CurrentNodeInterruptionDiagnosticField = "error"
+
+func NewCurrentNodeInterruptionDetail(code string, diagnostic error) CurrentNodeInterruptionDetail {
+	detail := CurrentNodeInterruptionDetail{
+		Code:   strings.TrimSpace(code),
+		Fields: map[string]string{},
+	}
+	if diagnostic != nil {
+		detail.Fields = map[string]string{CurrentNodeInterruptionDiagnosticField: diagnostic.Error()}
+	}
+	return detail
+}
+
+func (d CurrentNodeInterruptionDetail) Diagnostic() *string {
+	if d.Fields == nil {
+		return nil
+	}
+	value, ok := d.Fields[CurrentNodeInterruptionDiagnosticField]
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
 type CurrentNodeInterruption struct {
 	Reason     CurrentNodeInterruptionReason
 	Detail     CurrentNodeInterruptionDetail
@@ -168,12 +192,13 @@ func (v *MaterializedPriorValues) SetTransitionParameter(transitionKey ModelKey,
 }
 
 type CurrentNode struct {
-	Reference          CurrentNodeReference
-	EnteredByEdgeID    *EdgeID
-	CurrentInputValues map[string]string
-	PriorValues        MaterializedPriorValues
-	SessionID          *runtimeids.SessionID
-	Scheduling         *CurrentNodeScheduling
+	Reference               CurrentNodeReference
+	EnteredByEdgeID         *EdgeID
+	CurrentInputValues      map[string]string
+	PriorValues             MaterializedPriorValues
+	SessionID               *runtimeids.SessionID
+	Scheduling              *CurrentNodeScheduling
+	AgentExecutionSelection *AgentExecutionSelection
 }
 
 func NewCurrentNode(reference CurrentNodeReference, sessionID *runtimeids.SessionID, scheduling *CurrentNodeScheduling) (CurrentNode, error) {
@@ -187,6 +212,17 @@ func NewCurrentNodeWithMaterializedValues(
 	sessionID *runtimeids.SessionID,
 	scheduling *CurrentNodeScheduling,
 ) (CurrentNode, error) {
+	return NewCurrentNodeWithExecutionSelection(reference, currentInputValues, priorValues, sessionID, scheduling, nil)
+}
+
+func NewCurrentNodeWithExecutionSelection(
+	reference CurrentNodeReference,
+	currentInputValues map[string]string,
+	priorValues MaterializedPriorValues,
+	sessionID *runtimeids.SessionID,
+	scheduling *CurrentNodeScheduling,
+	selection *AgentExecutionSelection,
+) (CurrentNode, error) {
 	if err := reference.Validate(); err != nil {
 		return CurrentNode{}, err
 	}
@@ -199,12 +235,21 @@ func NewCurrentNodeWithMaterializedValues(
 	if err := validateCurrentNodeScheduling(scheduling); err != nil {
 		return CurrentNode{}, err
 	}
+	var clonedSelection *AgentExecutionSelection
+	if selection != nil {
+		if err := selection.Validate(); err != nil {
+			return CurrentNode{}, fmt.Errorf("current node Agent execution selection: %w", err)
+		}
+		value := selection.Clone()
+		clonedSelection = &value
+	}
 	node := CurrentNode{
-		Reference:          reference,
-		CurrentInputValues: cloneMaterializedInputValues(currentInputValues),
-		PriorValues:        cloneMaterializedPriorValues(priorValues),
-		SessionID:          cloneCurrentNodeSessionID(sessionID),
-		Scheduling:         cloneCurrentNodeScheduling(scheduling),
+		Reference:               reference,
+		CurrentInputValues:      cloneMaterializedInputValues(currentInputValues),
+		PriorValues:             cloneMaterializedPriorValues(priorValues),
+		SessionID:               cloneCurrentNodeSessionID(sessionID),
+		Scheduling:              cloneCurrentNodeScheduling(scheduling),
+		AgentExecutionSelection: clonedSelection,
 	}
 	return node, nil
 }
@@ -405,6 +450,7 @@ type PendingApprovalBranch struct {
 type PendingApprovalTarget struct {
 	CurrentNode CurrentNode
 	DisplayName string
+	NodeKind    NodeKind
 }
 
 type PendingApprovalContextSourceResolution struct {

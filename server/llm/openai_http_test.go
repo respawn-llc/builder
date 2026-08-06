@@ -1169,3 +1169,13 @@ func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *tes
 		t.Fatalf("expected prompt_cache_key omitted for openai-compatible provider, got %#v", jsonPayload["prompt_cache_key"])
 	}
 }
+
+func TestPrepareOpenAIInputItemsPreservesReasoningPresentationBytes(t *testing.T) {
+	raw := json.RawMessage(`{"type":"reasoning","id":"reason_1","summary":[{"type":"summary_text","text":"**raw reasoning**"}],"encrypted_content":"enc"}`)
+	prepared := PrepareOpenAIInputItems([]ResponseItem{{
+		Type: ResponseItemTypeReasoning, ID: textutil.Value("reason_1"), Raw: raw,
+	}})
+	if len(prepared) != 1 || string(prepared[0].Raw) != string(raw) {
+		t.Fatalf("prepared reasoning bytes = %q, want %q", prepared[0].Raw, raw)
+	}
+}

@@ -3,12 +3,15 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
@@ -86,10 +89,13 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
+	var statusMu sync.Mutex
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {
+				statusMu.Lock()
+				defer statusMu.Unlock()
 				statuses = append(statuses, *event.QueuedUserMessageStatus)
 			}
 		},
@@ -97,7 +103,7 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
 		t.Fatalf("prepare queued flush context: %v", err)
 	}
-	queued := engine.QueueUserMessageWithClientRequestID("queued input", "request-id")
+	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
 	blocker := mustBlockTestEventLogAppends(t, store)
 
 	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); err == nil {
@@ -109,20 +115,23 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	if engine.HasQueuedUserWork() {
 		t.Fatal("close drain retained uncommitted queued user work")
 	}
-	if len(statuses) != 3 {
-		t.Fatalf("queued user statuses = %+v", statuses)
+	statusMu.Lock()
+	statusSnapshot := append([]QueuedUserMessageStatusEvent(nil), statuses...)
+	statusMu.Unlock()
+	if len(statusSnapshot) != 3 {
+		t.Fatalf("queued user statuses = %+v", statusSnapshot)
 	}
-	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
+	if accepted := statusSnapshot[0]; accepted.Status != QueuedUserMessageAccepted ||
 		accepted.QueueItemID != queued.ID ||
 		accepted.ClientRequestID != queued.ClientRequestID {
 		t.Fatalf("accepted queue status = %+v", accepted)
 	}
-	if restored := statuses[1]; restored.Status != QueuedUserMessageAccepted ||
+	if restored := statusSnapshot[1]; restored.Status != QueuedUserMessageAccepted ||
 		restored.QueueItemID != queued.ID ||
 		restored.ClientRequestID != queued.ClientRequestID {
 		t.Fatalf("restored queue status = %+v", restored)
 	}
-	if failed := statuses[2]; failed.Status != QueuedUserMessageFailed ||
+	if failed := statusSnapshot[2]; failed.Status != QueuedUserMessageFailed ||
 		failed.QueueItemID != queued.ID ||
 		failed.ClientRequestID != queued.ClientRequestID ||
 		failed.FailureReason != QueuedUserMessageFailureClosing {
@@ -143,10 +152,13 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 		session.WithPersistenceObserver(gate),
 	)
 	var statuses []QueuedUserMessageStatusEvent
+	var statusMu sync.Mutex
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {
+				statusMu.Lock()
+				defer statusMu.Unlock()
 				statuses = append(statuses, *event.QueuedUserMessageStatus)
 			}
 		},
@@ -154,7 +166,7 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
 		t.Fatalf("prepare queued flush context: %v", err)
 	}
-	queued := engine.QueueUserMessageWithClientRequestID("queued input", "request-id")
+	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
 	gate.FailNext(observerErr)
 
 	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); !errors.Is(err, observerErr) {
@@ -163,15 +175,18 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	if engine.HasQueuedUserWork() {
 		t.Fatal("committed close-drain flush retained queued user work")
 	}
-	if len(statuses) != 2 {
-		t.Fatalf("queued user statuses = %+v", statuses)
+	statusMu.Lock()
+	statusSnapshot := append([]QueuedUserMessageStatusEvent(nil), statuses...)
+	statusMu.Unlock()
+	if len(statusSnapshot) != 2 {
+		t.Fatalf("queued user statuses = %+v", statusSnapshot)
 	}
-	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
+	if accepted := statusSnapshot[0]; accepted.Status != QueuedUserMessageAccepted ||
 		accepted.QueueItemID != queued.ID ||
 		accepted.ClientRequestID != queued.ClientRequestID {
 		t.Fatalf("accepted queue status = %+v", accepted)
 	}
-	if submitted := statuses[1]; submitted.Status != QueuedUserMessageSubmitted ||
+	if submitted := statusSnapshot[1]; submitted.Status != QueuedUserMessageSubmitted ||
 		submitted.QueueItemID != queued.ID ||
 		submitted.ClientRequestID != queued.ClientRequestID {
 		t.Fatalf("submitted queue status = %+v", submitted)
@@ -179,6 +194,132 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
 		t.Fatalf("committed close-drain flush persisted %d user messages", userMessages)
 	}
+}
+
+func TestQueuedFlushStopFailsTheRemainingTypedTail(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var statuses []QueuedUserMessageStatusEvent
+	var statusMu sync.Mutex
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statusMu.Lock()
+				defer statusMu.Unlock()
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+			}
+		},
+	})
+	engine.pauseQueuedUserAutoDrain()
+	t.Cleanup(engine.resumeQueuedUserAutoDrain)
+	engine.liveRun.beginStep(&RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  time.Now().UTC(),
+	})
+	first, accepted, err := engine.QueueUserMessageForActiveRun(context.Background(), "human", runtimeids.NewRuntimeClientRequestID(), nil)
+	if err != nil || !accepted {
+		t.Fatalf("queue human = %+v/%t/%v", first, accepted, err)
+	}
+	steer, err := NewAgentSteer(runtimeids.NewSessionID(), "agent")
+	if err != nil {
+		t.Fatalf("NewAgentSteer: %v", err)
+	}
+	second, accepted, err := engine.QueueAgentSteerForActiveRun(context.Background(), steer, runtimeids.NewRuntimeClientRequestID(), nil)
+	if err != nil || !accepted {
+		t.Fatalf("queue agent = %+v/%t/%v", second, accepted, err)
+	}
+	engine.liveRun.mu.Lock()
+	engine.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{mustQueueItemID(second.ID): {}})
+	engine.liveRun.mu.Unlock()
+
+	_, err = engine.messageFlow.FlushPendingUserInjections("018fdd67-89ab-4cde-8123-456789abc002", allPendingUserInjectionSelection{})
+	if err != nil {
+		t.Fatalf("FlushPendingUserInjections: %v", err)
+	}
+	statusMu.Lock()
+	statusSnapshot := append([]QueuedUserMessageStatusEvent(nil), statuses...)
+	statusMu.Unlock()
+	for _, status := range statusSnapshot {
+		if status.QueueItemID == second.ID && status.Status == QueuedUserMessageFailed {
+			if len(engine.messageFlow.PendingUserMessages()) != 0 {
+				t.Fatal("stopped queue tail remained pending")
+			}
+			return
+		}
+	}
+	t.Fatalf("statuses = %+v, want failed tail item %q", statusSnapshot, second.ID)
+}
+
+func TestQueuedFlushStopAfterCommittedGroupSkipsFollowUpModelAndClearsStoppedIDs(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("must not run")}}}}
+	var engine *Engine
+	var statuses []QueuedUserMessageStatusEvent
+	var statusMu sync.Mutex
+	var firstID string
+	var tailID string
+	engine = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.QueuedUserMessageStatus == nil {
+				return
+			}
+			status := *event.QueuedUserMessageStatus
+			statusMu.Lock()
+			statuses = append(statuses, status)
+			currentFirstID, currentTailID := firstID, tailID
+			statusMu.Unlock()
+			if status.Status != QueuedUserMessageSubmitted || status.QueueItemID != currentFirstID || currentTailID == "" {
+				return
+			}
+			engine.liveRun.mu.Lock()
+			engine.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{mustQueueItemID(currentTailID): {}})
+			engine.liveRun.mu.Unlock()
+		},
+	})
+	first, err := engine.QueueUserMessage("human")
+	if err != nil {
+		t.Fatalf("queue human: %v", err)
+	}
+	statusMu.Lock()
+	firstID = first.ID
+	statusMu.Unlock()
+	steer, err := NewAgentSteer(runtimeids.NewSessionID(), "agent")
+	if err != nil {
+		t.Fatalf("NewAgentSteer: %v", err)
+	}
+	second, err := engine.messageFlow.QueueUserMessageWithID(QueuedUserMessage{
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: steer.Message(),
+	})
+	if err != nil {
+		t.Fatalf("queue agent: %v", err)
+	}
+	statusMu.Lock()
+	tailID = second.ID
+	statusMu.Unlock()
+
+	_, _, err = engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("SubmitQueuedUserMessagesWithActiveHook: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("model calls after stopped tail = %d, want zero", len(client.calls))
+	}
+	if len(engine.messageFlow.PendingUserMessages()) != 0 {
+		t.Fatal("stopped tail remained pending")
+	}
+	engine.liveRun.mu.Lock()
+	defer engine.liveRun.mu.Unlock()
+	if len(engine.liveRun.stoppedQueueItems) != 0 {
+		t.Fatalf("stopped queue IDs = %d, want zero", len(engine.liveRun.stoppedQueueItems))
+	}
+	_ = first
+	_ = second
 }
 
 func boundedPersistedUserMessageCount(t *testing.T, store *session.Store) int {

@@ -13,7 +13,9 @@
 - Transcript delivery does not promise lossless continuity across subscription establishment, disconnection, process failure, or recovery. When a client detects discontinuity, it reopens the subscription and refreshes authoritative Session state instead of remaining silently stale.
 - A Session with no execution target hydrates without one. Failure to resolve an execution target fails Chat opening or reopening with a clear error; it never becomes an absent or stale target.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
-- The server owns exact Session-resource admission, Runtime Command ordering, and dormant Goal commands. Transport keeps request identity and idempotency only; it never owns ordering, queueing, execution lifecycle, reconciliation, or persistence disposition.
+- A failure to clear PendingModelRecovery remains live operational feedback. TUI and Desktop surface it through their typed operational-diagnostic or status-notice owner; it is neither persisted nor projected as committed transcript history.
+- The server owns exact Session-resource admission, Runtime Command ordering, dormant Goal commands, domain-operation ordering, idempotency, server work queues, execution lifecycle, reconciliation, and persistence disposition.
+- Transport preserves request identity for request/response correlation. Transport may sequence connection setup, bound concurrent handling of requests on one client connection, apply socket backpressure, correlate and write responses, and cancel and drain connection-bound request handling when that connection closes. These connection mechanics never order domain operations, retain server work after request handling, or decide idempotency, execution, reconciliation, or persistence outcomes.
 
 ## Skills And Generated Assets
 
@@ -30,7 +32,23 @@
 - The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
 - One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
-- `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn. Pending steered user text becomes one user message, with submissions separated by blank lines.
+- `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
+- A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
+- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
+- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
+- A steer issued from another Session contains exactly:
+
+```text
+Agent from session <source-session-id> said:
+> <submitted steer text>
+
+To respond, run: kent run steer <source-session-id> "message"
+```
+
+- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
+- The message includes the source Session ID and omits its name.
+- A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
+- Prompt history stores the complete wrapped message.
 - Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
 - A dormant Goal command is the sole persisted-transcript exception outside an Active Session Runtime: the server atomically confirms that no current agent resource owns the Session, then persists the durable Goal transition and one Goal notice without creating a runtime, live event, transaction, rollback, repair, retry, or extra admission lock. A concurrent live release surfaces its error rather than re-admitting.
 - Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client refreshes authoritative Session state. A later explicit user submission creates a new Runtime Command.
@@ -79,20 +97,21 @@
 - `ask_question` presents one shared question experience for model and runtime requests and pauses the active work until answered. Questions have no timeout or default cancellation.
 - The model can ask ordinary freeform or suggested questions only. Internal approvals are not model-callable.
 - Suggested questions support freeform commentary and use one-based `recommended_option_index`. In the TUI, `Tab` switches between suggestions and freeform editing. A recommendation uses a Success-colored marker and a faint recommended note; selecting that row also applies the ordinary selected-row style. Choosing empty freeform opens editing, and a freeform answer cannot be empty. Returning to suggestions preserves an unsent freeform draft.
-- Internal approvals offer exactly `Allow once`, `Allow for this session`, and `Deny`. Denial commentary travels only with the approval answer and authoritatively fails the guarded tool call. Allow commentary is sent as an ordinary user message before the Approval answer. The TUI's Queue-creation failure recovery for Allow commentary is defined in `tui-chat-core.md`.
+- Internal approvals carry ordered typed options whose labels are authoritative. Outside-workspace access ordinarily offers `Allow once`, `Allow for this session`, and `Deny`, but clients render the labels in the live request and never reconstruct them from decisions. TUI Approval-commentary delivery follows `tui-ask-prompts.md` and `tui-chat-core.md`; the Question CLI passes optional commentary directly through the existing Approval answer.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - Answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
 - When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. Accepting an answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
-- `kent question` shows the first pending ordinary Question. `kent questions` is an alias.
+- `kent question` shows the first pending ordinary Question or live internal access request. `kent questions` is an alias.
 - The Question CLI requires exactly one of `--session <session-id>` or `--task <task-id-or-short-id>`. A Task short ID uses `--project`, which defaults to the Project attached to the current workspace.
 - A Session selector cannot target the invoking agent's `KENT_SESSION_ID`.
-- A Task selector uses the live Workflow Question authority. If pending ordinary Questions belong to exactly one Session, the command selects that Session. If they belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
+- A Task selector uses the live Workflow Question authority. If pending ordinary Questions or access requests belong to exactly one Session, the command selects that Session. If they belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
 - A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
-- The show command writes the Question text. When suggestions exist, it follows with `Suggestions:` and a one-based numbered list. The recommended suggestion ends with ` (recommended)`.
-- The show command writes `No questions pending` and succeeds when no ordinary Question is pending.
+- The show command writes the Question or access-request text. When ordinary suggestions or access options exist, it follows with `Suggestions:` and a one-based numbered list. An ordinary recommended suggestion ends with ` (recommended)`. Access-option labels come from the authoritative internal Approval request.
+- The show command writes `No questions pending` and succeeds when no ordinary Question or access request is pending.
 - `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
-- `kent question answer` writes `No pending questions at the moment for that session` and exits with status `1` when no ordinary Question is pending.
-- After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions again. It writes `Next question: <question text>` followed by suggestions when another Question is pending in that Session. Otherwise it writes `Done, session resumed`.
+- An ordinary Question preserves the existing option and freeform answer behavior. In the Question CLI, a live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the existing Approval answer. Commentary alone never implies an access decision.
+- `kent question answer` writes `No pending questions at the moment for that session` and exits with status `1` when no ordinary Question or access request is pending.
+- After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again. It writes `Next question: <question text>` followed by suggestions or access options when another prompt is pending in that Session. Otherwise it writes `Done, session resumed`.
 
 ## Sessions, Location, And Transcript Bounds
 
@@ -198,7 +217,19 @@
 - Default progress mode is `--progress-mode=stderr`: committed assistant commentary and final text go to stdout; lifecycle notices go to stderr. New Sessions announce the actual configured launch command followed by `run steer <session-id> "prompt"` only after steering is available. Resumed Sessions do not announce it. Compaction-start and recoverable-failure notices remain visible; routine tool, reviewer, and completion status does not. `-q` and `--quiet` select final-result-only `--progress-mode=quiet`.
 - `kent run steer <session-id> <message...>` sends input to an active Session. It requires a Session ID, rejects attempts by a Session to target itself, prints `ok` when accepted, and makes the target print `Steered message: <full text>` with no later delivery notice. It never starts or queues work for an idle Session; instead it fails with the equivalent `kent run --continue <session-id> <message>` command.
 - `kent run stop <session-id>` interrupts an active Session regardless of client origin. It requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions. Accepted pending steering is not executed after stop; if it cannot resume before the runtime closes, Kent visibly reports it stopped or failed before dropping it.
-- `kent run wait <session-id>` waits for an active Session's final result. It requires a Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active. It follows ordinary abnormal-completion behavior; final text includes the ordinary continue hint. `--output-mode=json` has the same result shape as ordinary `kent run --output-mode=json`, and `wait` emits no progress.
+- `kent run wait <session-id>` waits for an active Session's final result. It requires a Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active. It stays blocked while a regular Question or access request is pending. It returns only for a final answer, execution error, or interruption. An explicit stop is an interruption. Final text includes the ordinary continue hint. `wait` emits no progress.
+- `kent run watch <session-id>` observes the selected Session's active execution once. It requires a Session ID and rejects attempts by a Session to target itself. It returns immediately for the first pending regular Question or access request, final answer, execution error, or interruption. Otherwise it waits for the next matching outcome in that active execution.
+- `kent task wait <task-id>` observes a Workflow Task without polling. It ignores pending Questions and access requests, but returns the next interruption, execution error, or terminal completion.
+- If `kent run watch` starts with no active execution and no pending Question or access request, it fails with the no-active-execution error. It does not return a historical result and does not wait for a later execution to start.
+- Run watch is Session-scoped. It does not target Script Nodes or follow a Session's Task into Script work.
+- A live internal access Approval, including an outside-workspace patch request, is an access-request Question for `kent question` and wait/watch presentation. Each authoritative ordered option carries its display label and typed allow-once, allow-session, or deny decision. A durable Workflow Transition Approval is a separate concept and is never a Question or wait/watch outcome.
+- `kent question --session|--task` shows the first pending ordinary Question or live internal access request. `kent question answer --session|--task` answers the same typed prompt. In the Question CLI, `--option` selects the corresponding typed access decision and optional `--commentary` is included directly in the existing Approval answer. Commentary without an option is invalid.
+- Run watch renders a Question through the same live-prompt presentation as `kent question --session`. It then prints a blank line and a directly targeted answer template.
+- A suggested Question uses `Answer with: kent question answer --session <session-id> --option <number>`. A freeform Question uses `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
+- An access request always uses the numbered-option answer template. Its labels come from the authoritative live prompt.
+- Run watch renders a final answer and continuation hint through the same presentation as Run wait.
+- Run watch prints authoritative reason and diagnostic text for execution errors and interruptions.
+- Run watch exits with code `0` after a Question or final answer, code `1` after an execution error, and code `130` after an interruption or explicit stop.
 - Control commands accept only `--persistence-root`, plus `--output-mode=json` for `wait`; they reject workspace, model, provider, agent, timeout, tools, and progress flags. Headless stdin is not a steering channel.
 - All attached clients have equal full control of one active Session: transcript and status, steering and queued input, question and approval answers, and every control operate on the same live execution. A busy execution applies input at its next allowed boundary or returns the same retryable completion rejection described above. Clients report server-authoritative live activity and do not infer busy state locally; an attached idle runtime accepts idle operations.
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.

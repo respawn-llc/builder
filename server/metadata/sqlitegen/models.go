@@ -249,6 +249,9 @@ type TaskCurrentNode struct {
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
 	EnteredByEdgeID        sql.NullString
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
 }
 
 type TaskDependency struct {
@@ -351,6 +354,8 @@ type WorkflowEdge struct {
 	ContextSourceNodeKey   string
 	PromptTemplate         string
 	ParametersJson         string
+	AssigneeSelection      string
+	ThinkingSelection      string
 }
 
 type WorkflowNode struct {

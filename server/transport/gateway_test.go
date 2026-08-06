@@ -117,6 +117,17 @@ func TestProtocolErrorMapsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorMapsStreamFailureAsStreamFailure(t *testing.T) {
+	source := serverapi.ErrStreamFailed
+	code, message := protocolError(source)
+	if code != protocol.ErrCodeStreamFailed {
+		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeStreamFailed)
+	}
+	if message != source.Error() {
+		t.Fatalf("protocol error message = %q, want %q", message, source.Error())
+	}
+}
+
 func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	source := errors.Join(
 		fmt.Errorf("delete target: %w", serverapi.ErrWorktreeBlocked),
@@ -782,6 +793,8 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
 		PromptTemplate:    "Search work.",
 	}); err != nil {
@@ -802,6 +815,8 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      terminalID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)

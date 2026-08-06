@@ -70,6 +70,8 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleGoalFeedback), Text: *msg.Content, CondensedText: condensed, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeErrorFeedback:
 		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleDeveloperFeedback), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
+	case llm.MessageTypeAgentSteer:
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleDeveloperFeedback), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeReviewerFeedback:
 		return ChatEntry{}, false
 	case llm.MessageTypeCompactionSoonReminder:
@@ -122,7 +124,8 @@ func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
 		llm.MessageTypeGoal,
-		llm.MessageTypeActiveGoalContinuation:
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeAgentSteer:
 		return false
 	default:
 		return true
@@ -174,7 +177,8 @@ func messageTypeTranscriptVisibility(messageType *llm.MessageType) transcript.En
 		llm.MessageTypeErrorFeedback,
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
-		llm.MessageTypeGoal:
+		llm.MessageTypeGoal,
+		llm.MessageTypeAgentSteer:
 		return transcript.EntryVisibilityOngoing
 	default:
 		return transcript.EntryVisibilityOngoing

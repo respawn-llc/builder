@@ -440,7 +440,7 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 				continue
 			}
 			if strings.TrimSpace(parsed.OutputValues[key]) == "" {
-				issues = append(issues, ValidationIssue{Code: "required_parameter_missing", Field: key, Message: "parameter is required by the selected transition"})
+				issues = append(issues, requiredParameterMissingIssue(parameter))
 			}
 		}
 	}
@@ -565,6 +565,21 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 	return ValidationIssue{Code: code, Field: field, Message: message}
 }
 
+func requiredParameterMissingIssue(parameter workflow.Parameter) ValidationIssue {
+	if workflow.CanonicalParameterPurpose(parameter.Purpose) == workflow.ParameterPurposeTargetAssignee {
+		return ValidationIssue{
+			Code:    "workflow.target_agent.unavailable_role",
+			Field:   strings.TrimSpace(parameter.Key),
+			Message: "a selectable target Agent role is required",
+		}
+	}
+	return ValidationIssue{
+		Code:    "required_parameter_missing",
+		Field:   strings.TrimSpace(parameter.Key),
+		Message: "parameter is required by the selected transition",
+	}
+}
+
 func selectedTransition(value string, provided bool, transitions []CompletionTransition) (CompletionTransition, bool, []ValidationIssue) {
 	if len(transitions) == 0 {
 		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this Current Node execution"}}
@@ -616,7 +631,11 @@ func normalizedParameters(parameters []workflow.Parameter) []workflow.Parameter 
 			continue
 		}
 		seen[key] = true
-		out = append(out, workflow.Parameter{Key: key, Description: strings.TrimSpace(parameter.Description)})
+		out = append(out, workflow.Parameter{
+			Key:         key,
+			Description: strings.TrimSpace(parameter.Description),
+			Purpose:     workflow.CanonicalParameterPurpose(parameter.Purpose),
+		})
 	}
 	return out
 }
@@ -631,7 +650,11 @@ func schemaParameters(transitions []CompletionTransition) []workflow.Parameter {
 				continue
 			}
 			seen[key] = true
-			out = append(out, workflow.Parameter{Key: key, Description: strings.TrimSpace(parameter.Description)})
+			out = append(out, workflow.Parameter{
+				Key:         key,
+				Description: strings.TrimSpace(parameter.Description),
+				Purpose:     workflow.CanonicalParameterPurpose(parameter.Purpose),
+			})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

@@ -231,6 +231,22 @@ const workflowOutputRequirementsSchema = z
   .nullish()
   .transform(emptyArray);
 
+const selectorApplicabilitySchema = z.object({
+  available: z.boolean(),
+  parameter_visible: z.boolean(),
+  reason: z.enum([
+    "eligible",
+    "topology",
+    "context_source",
+    "no_callable_roles",
+    "no_thinking_support",
+    "unavailable_configuration",
+    "sole_callable_role",
+    "no_thinking_levels",
+    "sole_thinking_level",
+  ]),
+});
+
 const workflowDerivedWiringSchema: z.ZodType<WorkflowDerivedWiring> = z
   .object({
     nodes: z
@@ -271,12 +287,24 @@ const workflowDerivedWiringSchema: z.ZodType<WorkflowDerivedWiring> = z
             input_bindings: workflowInputBindingsSchema,
             required_provision_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
             required_provider_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
+            assignee_selection_applicability: selectorApplicabilitySchema,
+            thinking_selection_applicability: selectorApplicabilitySchema,
           })
           .transform((value) => ({
             edgeID: value.edge_id,
             inputBindings: value.input_bindings,
             requiredProvisionFields: value.required_provision_fields,
             requiredProviderFields: value.required_provider_fields,
+            assigneeSelectionApplicability: {
+              available: value.assignee_selection_applicability.available,
+              parameterVisible: value.assignee_selection_applicability.parameter_visible,
+              reason: value.assignee_selection_applicability.reason,
+            },
+            thinkingSelectionApplicability: {
+              available: value.thinking_selection_applicability.available,
+              parameterVisible: value.thinking_selection_applicability.parameter_visible,
+              reason: value.thinking_selection_applicability.reason,
+            },
           })),
       )
       .nullish()
@@ -313,6 +341,8 @@ const workflowEdgesSchema = z
         transition_group_id: z.string(),
         key: z.string(),
         target_node_id: z.string(),
+        assignee_selection: z.enum(["configured", "previous_node"]),
+        thinking_selection: z.enum(["configured", "previous_node"]),
         requires_approval: z.boolean(),
         context_mode: z.string(),
         context_source: workflowContextSourceSchema,
@@ -327,6 +357,8 @@ const workflowEdgesSchema = z
         transitionGroupID: value.transition_group_id,
         key: value.key,
         targetNodeID: value.target_node_id,
+        assigneeSelection: value.assignee_selection,
+        thinkingSelection: value.thinking_selection,
         requiresApproval: value.requires_approval,
         contextMode: value.context_mode,
         contextSource: value.context_source,

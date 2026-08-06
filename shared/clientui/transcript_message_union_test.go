@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
@@ -55,6 +56,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			Visibility: transcript.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Assistant: &TranscriptAssistantRow{
 				StepID: transcriptTestStepID(t),
 				Text:   "Done",
@@ -69,12 +71,21 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			StepID: transcriptTestStepID(t), StreamID: streamID,
 			Reason: AssistantStreamAbortSuperseded,
 		}), TranscriptMessageAssistantStreamAbort},
-		{"reasoning update", NewTranscriptEvent(TranscriptReasoningUpdate{
-			StepID: transcriptTestStepID(t), Key: "rs_1:part:0",
-		}), TranscriptMessageReasoningUpdate},
-		{"reasoning reset", NewTranscriptEvent(TranscriptReasoningReset{
+		{"thinking status", NewTranscriptEvent(TranscriptThinkingStatusUpdate{
+			StepID: transcriptTestStepID(t), Text: "Thinking",
+		}), TranscriptMessageThinkingStatusUpdate},
+		{"reasoning trace", NewTranscriptEvent(TranscriptReasoningTraceUpdate{
 			StepID: transcriptTestStepID(t),
-		}), TranscriptMessageReasoningReset},
+			Identity: TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+				id := runtimeids.NewReasoningTraceID()
+				return &id
+			}()},
+			CompactText: "Planning",
+			Text:        "Planning",
+		}), TranscriptMessageReasoningTraceUpdate},
+		{"reasoning trace reset", NewTranscriptEvent(TranscriptReasoningTraceReset{
+			StepID: transcriptTestStepID(t),
+		}), TranscriptMessageReasoningTraceReset},
 		{"tool start", NewTranscriptEvent(TranscriptToolStart{
 			StepID: transcriptTestStepID(t), ToolCallID: ToolCallID("call-1"), ToolName: "shell",
 		}), TranscriptMessageToolStart},

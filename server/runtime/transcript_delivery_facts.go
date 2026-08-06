@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"sort"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
@@ -15,21 +17,29 @@ import (
 type TranscriptCommittedRowFactKind string
 
 const (
-	TranscriptCommittedRowFactUser      TranscriptCommittedRowFactKind = "user"
-	TranscriptCommittedRowFactAssistant TranscriptCommittedRowFactKind = "assistant"
-	TranscriptCommittedRowFactTool      TranscriptCommittedRowFactKind = "tool"
-	TranscriptCommittedRowFactNotice    TranscriptCommittedRowFactKind = "notice"
+	TranscriptCommittedRowFactUser             TranscriptCommittedRowFactKind = "user"
+	TranscriptCommittedRowFactAssistant        TranscriptCommittedRowFactKind = "assistant"
+	TranscriptCommittedRowFactTool             TranscriptCommittedRowFactKind = "tool"
+	TranscriptCommittedRowFactReasoningTrace   TranscriptCommittedRowFactKind = "reasoning_trace"
+	TranscriptCommittedRowFactNotice           TranscriptCommittedRowFactKind = "notice"
+	TranscriptCommittedRowFactReviewerFeedback TranscriptCommittedRowFactKind = "reviewer_feedback"
+	TranscriptCommittedRowFactReviewerError    TranscriptCommittedRowFactKind = "reviewer_error"
 )
 
 type TranscriptCommittedRowFact struct {
-	StepID     string
-	Visibility transcript.EntryVisibility
-	Integrity  transcript.RowIntegrity
-	Kind       TranscriptCommittedRowFactKind
-	User       *TranscriptUserRowFact
-	Assistant  *TranscriptAssistantRowFact
-	Tool       *TranscriptToolRowFact
-	Notice     *TranscriptNoticeRowFact
+	StepID           string
+	Visibility       transcript.EntryVisibility
+	Integrity        transcript.RowIntegrity
+	Kind             TranscriptCommittedRowFactKind
+	Locator          transcript.CommittedRowLocator
+	Provenance       *TranscriptCommittedRowProvenance
+	User             *TranscriptUserRowFact
+	Assistant        *TranscriptAssistantRowFact
+	Tool             *TranscriptToolRowFact
+	ReasoningTrace   *TranscriptReasoningTraceRowFact
+	Notice           *TranscriptNoticeRowFact
+	ReviewerFeedback *TranscriptReviewerFeedbackRowFact
+	ReviewerError    *TranscriptReviewerErrorRowFact
 }
 
 type TranscriptUserRowFact struct {
@@ -55,6 +65,13 @@ type TranscriptToolRowFact struct {
 	Presentation  *transcript.ToolCallMeta
 }
 
+type TranscriptReasoningTraceRowFact struct {
+	Text                string
+	CompactText         string
+	DurationMs          *int64
+	ProvisionalIdentity *TranscriptReasoningTraceIdentity
+}
+
 type TranscriptNoticeRowFact struct {
 	Reason               string
 	Severity             string
@@ -74,6 +91,17 @@ type TranscriptNoticeRowFact struct {
 	Compaction           *TranscriptCompactionNoticeFact
 }
 
+type TranscriptReviewerFeedbackRowFact struct {
+	ID              runtimeids.ReviewerFeedbackID
+	Suggestions     []string
+	SuggestionCount int
+}
+
+type TranscriptReviewerErrorRowFact struct {
+	ID     runtimeids.ReviewerErrorID
+	Detail string
+}
+
 type TranscriptCacheWarningFact struct {
 	Scope           string
 	Reason          string
@@ -90,7 +118,13 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 	var facts []TranscriptCommittedRowFact
 	switch evt.Kind {
 	case EventConversationUpdated, EventAssistantMessage:
-		facts = transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
+		facts = transcriptCommittedRowFactsFromMessage(
+			evt.Message,
+			evt.AssistantTranscriptStreamID,
+			nil,
+			nil,
+			transcriptMessageProjectionContext{Provenance: evt.CommittedProvenance},
+		)
 	case EventUserMessageFlushed:
 		if strings.TrimSpace(evt.UserMessage) == "" {
 			return nil
@@ -112,6 +146,19 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		}
 		if evt.LocalEntryProjected {
 			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				if fact.Kind == TranscriptCommittedRowFactReasoningTrace && fact.ReasoningTrace != nil {
+					fact.ReasoningTrace.ProvisionalIdentity = cloneTranscriptReasoningTraceIdentity(evt.ReasoningTraceIdentity)
+				}
+				facts = []TranscriptCommittedRowFact{fact}
+				break
+			}
+			return nil
+		}
+		if strings.TrimSpace(evt.LocalEntry.Role) == string(transcript.EntryRoleReasoning) {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				if fact.ReasoningTrace != nil {
+					fact.ReasoningTrace.ProvisionalIdentity = cloneTranscriptReasoningTraceIdentity(evt.ReasoningTraceIdentity)
+				}
 				facts = []TranscriptCommittedRowFact{fact}
 				break
 			}
@@ -123,16 +170,21 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		}
 		return nil
 	case EventInFlightClearFailed:
-		if strings.TrimSpace(evt.Error) == "" {
-			return nil
-		}
-		facts = []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", transcript.NoticeSeverityError, evt.Error)}
+		return nil
 	case EventBackgroundUpdated:
 		return nil
 	default:
 		return nil
 	}
-	return transcriptCommittedRowFactsForStep(evt.StepID, facts)
+	for index := range facts {
+		if evt.CommittedProvenance != nil {
+			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
+		} else if facts[index].Provenance == nil {
+			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
+		}
+	}
+	facts = transcriptCommittedRowFactsForStep(evt.StepID, facts)
+	return locateTranscriptCommittedRowFacts(facts)
 }
 
 func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
@@ -149,6 +201,34 @@ func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommitt
 	return facts
 }
 
+func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
+	sort.SliceStable(facts, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			facts[left].Provenance,
+			facts[right].Provenance,
+		)
+	})
+	ordinals := make(map[int64]int64, len(facts))
+	for index := range facts {
+		provenance := facts[index].Provenance
+		if provenance == nil {
+			return facts
+		}
+		ordinal := ordinals[provenance.EventSequence] + 1
+		if provenance.ProjectedOrdinal != nil {
+			ordinal = *provenance.ProjectedOrdinal
+		}
+		ordinals[provenance.EventSequence] = ordinal
+		facts[index].Locator = transcript.CommittedRowLocator{
+			EventSequence: provenance.EventSequence,
+			RowOrdinal:    ordinal,
+		}
+		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		facts[index].Provenance.ProjectedOrdinal = nil
+	}
+	return facts
+}
+
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
@@ -161,7 +241,7 @@ func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []Transcript
 			facts = append(facts, fact)
 		}
 	}
-	return facts
+	return locateTranscriptCommittedRowFacts(facts)
 }
 
 func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
@@ -180,7 +260,37 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 	}
 }
 
-func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
+type transcriptMessageProjectionContext struct {
+	Provenance           *TranscriptCommittedRowProvenance
+	CompletionProvenance map[string]*TranscriptCommittedRowProvenance
+}
+
+func transcriptCommittedRowFactsFromMessage(
+	msg llm.Message,
+	streamID *uuid.UUID,
+	completions map[string]tools.Result,
+	materializedToolCalls map[string]struct{},
+	contexts ...transcriptMessageProjectionContext,
+) []TranscriptCommittedRowFact {
+	facts := transcriptCommittedRowFactsFromMessageUnlocated(msg, streamID, completions, materializedToolCalls)
+	var provenance *TranscriptCommittedRowProvenance
+	var completionProvenance map[string]*TranscriptCommittedRowProvenance
+	if len(contexts) > 0 {
+		provenance = contexts[0].Provenance
+		completionProvenance = contexts[0].CompletionProvenance
+	}
+	for index := range facts {
+		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		if facts[index].Tool != nil && completionProvenance != nil {
+			if owner := completionProvenance[facts[index].Tool.ToolCallID]; owner != nil {
+				facts[index].Provenance = cloneTranscriptCommittedRowProvenance(owner)
+			}
+		}
+	}
+	return facts
+}
+
+func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
 	switch msg.Role {
 	case llm.RoleUser:
 		if msg.MessageType != nil &&
@@ -247,9 +357,40 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 }
 
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	fact, ok := transcriptCommittedRowFactFromChatEntryUnlocated(entry)
+	if ok {
+		fact.Provenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+	}
+	return fact, ok
+}
+
+func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
+	}
+	if entry.ReviewerFeedback != nil {
+		return TranscriptCommittedRowFact{
+			StepID:     entry.StepID,
+			Visibility: visibility,
+			Kind:       TranscriptCommittedRowFactReviewerFeedback,
+			ReviewerFeedback: &TranscriptReviewerFeedbackRowFact{
+				ID:              entry.ReviewerFeedback.ID,
+				Suggestions:     append([]string(nil), entry.ReviewerFeedback.Suggestions...),
+				SuggestionCount: len(entry.ReviewerFeedback.Suggestions),
+			},
+		}, true
+	}
+	if entry.ReviewerError != nil {
+		return TranscriptCommittedRowFact{
+			StepID:     entry.StepID,
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptCommittedRowFactReviewerError,
+			ReviewerError: &TranscriptReviewerErrorRowFact{
+				ID:     entry.ReviewerError.ID,
+				Detail: entry.ReviewerError.Detail,
+			},
+		}, true
 	}
 	role := strings.TrimSpace(entry.Role)
 	switch role {
@@ -290,6 +431,22 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
 		}, true
+	case string(transcript.EntryRoleReasoning):
+		if strings.TrimSpace(entry.Text) == "" {
+			return TranscriptCommittedRowFact{}, false
+		}
+		presentation := ProjectReasoningTrace(entry.Text)
+		return TranscriptCommittedRowFact{
+			StepID:     entry.StepID,
+			Kind:       TranscriptCommittedRowFactReasoningTrace,
+			Visibility: transcript.EntryVisibilityDetail,
+			Integrity:  transcript.RowIntegrityValid,
+			ReasoningTrace: &TranscriptReasoningTraceRowFact{
+				Text:        presentation.Text,
+				CompactText: presentation.CompactText,
+				DurationMs:  textutil.Pointer(entry.DurationMs),
+			},
+		}, true
 	case "tool_call":
 		return TranscriptCommittedRowFact{}, false
 	case "tool_result_ok", "tool_result_error":
@@ -322,9 +479,29 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 }
 
 func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
+	}
+	if role == transcript.EntryRoleReviewerStatus {
+		return TranscriptCommittedRowFact{}, false
+	}
+	fact, ok := transcriptNoticeRowFactFromChatEntryUnlocated(entry)
+	if ok {
+		fact.Provenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+	}
+	return fact, ok
+}
+
+func transcriptNoticeRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
+	if visibility == transcript.EntryVisibilityHidden {
+		return TranscriptCommittedRowFact{}, false
+	}
+	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
+	if role == transcript.EntryRoleReviewerSuggestions || role == transcript.EntryRoleReviewerError {
+		return legacyReviewerNoticeRowFactFromChatEntry(entry)
 	}
 	if entry.MessageType == llm.MessageTypeCompactionSummary {
 		return transcriptCompactionNoticeFact(
@@ -339,6 +516,23 @@ func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedR
 	fact.StepID = entry.StepID
 	fact.Visibility = transcriptVisibilityForIntegrity(
 		resolveTranscriptVisibility(visibility, defaultTranscriptNoticeVisibility(entry)),
+		integrity,
+	)
+	fact.Integrity = integrity
+	return fact, true
+}
+
+// TODO(KENT-405): delete this reader and its reopen/page coverage in 2.7.0.
+// It exists only for persisted pre-typed Reviewer local entries.
+func legacyReviewerNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	integrity := transcriptNoticeEntryIntegrity(entry)
+	fact := localEntryNoticeFact(entry)
+	fact.StepID = entry.StepID
+	fact.Visibility = transcriptVisibilityForIntegrity(
+		resolveTranscriptVisibility(
+			normalizeRuntimeEntryVisibility(entry.Visibility),
+			transcript.EntryVisibilityOngoing,
+		),
 		integrity,
 	)
 	fact.Integrity = integrity
@@ -439,7 +633,6 @@ func knownTranscriptNoticeRole(role string) bool {
 		transcript.EntryRoleInterruption,
 		transcript.EntryRoleGoalFeedback,
 		transcript.EntryRoleReasoning,
-		transcript.EntryRoleReviewerStatus,
 		transcript.EntryRoleReviewerError,
 		transcript.EntryRoleReviewerSuggestions:
 		return true
@@ -492,8 +685,6 @@ func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibili
 		transcript.EntryRoleDeveloperContext,
 		transcript.EntryRoleReasoning:
 		return transcript.EntryVisibilityDetail
-	case transcript.EntryRoleReviewerStatus:
-		return transcript.EntryVisibilityOngoingCollapsed
 	case transcript.EntryRoleReviewerSuggestions,
 		transcript.EntryRoleReviewerError:
 		return transcript.EntryVisibilityOngoing

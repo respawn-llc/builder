@@ -2,6 +2,7 @@ import type { BoardNodeCardsInput } from "./clientInputs";
 import { parseRpcResponse as parse } from "./clientParse";
 import { compactJsonObject } from "./json";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
+import { boardNodeCardsPageSize } from "./boardNodeCardsSorting";
 import type { BoardNodeCardsPage, WorkflowBoard } from "./models";
 import { boardNodeCardsPageSchema, workflowBoardSchema } from "./schemas/workflowBoard";
 import { workflowIDSchema } from "./schemas/workflowID";
@@ -44,8 +45,9 @@ export async function listBoardNodeCards(
         node_id: input.nodeID,
         label_filter: taskLabelFilterPayload(input.filter.labelFilter),
         dependency_filter: input.filter.dependencyFilter,
-        page_size: 25,
-        page_token: input.pageToken ?? null,
+        page_size: boardNodeCardsPageSize,
+        sort: input.sort,
+        offset: input.offset ?? 0,
       }),
     ),
   );

@@ -17,9 +17,26 @@ const (
 )
 
 type RoleResolver interface {
-	RoleExists(role string) bool
-	RoleToolEnabled(role string, tool toolspec.ID) bool
+	ResolveConfiguredRole(role string) (TargetAgentRole, bool)
+	ExplicitCallableRoles() []TargetAgentRole
 }
+
+type TargetAgentRole struct {
+	Identity              string
+	QuestionsEnabled      bool
+	ExplicitAgentCallable bool
+	Model                 string
+	ConfiguredThinking    string
+	Thinking              ThinkingCapability
+}
+
+type ThinkingCapability struct {
+	ReasoningCapable bool
+	Finite           bool
+	Levels           []string
+}
+
+type TargetAgentCatalog = RoleResolver
 
 const DefaultAgentRole = config.DefaultSubagentRole
 
@@ -89,8 +106,17 @@ const (
 	CodeInvalidJoinInputProvider         ValidationErrorCode = "workflow.validation.invalid_join_input_provider"
 	CodeInvalidFirstNodeInput            ValidationErrorCode = "workflow.validation.invalid_first_node_input"
 	CodeInvalidContextMode               ValidationErrorCode = "workflow.validation.invalid_context_mode"
+	CodeInvalidAssigneeSelection         ValidationErrorCode = "workflow.validation.invalid_assignee_selection"
+	CodeInvalidThinkingSelection         ValidationErrorCode = "workflow.validation.invalid_thinking_selection"
+	CodeInvalidParameterPurpose          ValidationErrorCode = "workflow.validation.invalid_parameter_purpose"
+	CodeMissingProtectedParameter        ValidationErrorCode = "workflow.validation.missing_protected_parameter"
+	CodeDuplicateProtectedParameter      ValidationErrorCode = "workflow.validation.duplicate_protected_parameter"
 	CodeInvalidContextSource             ValidationErrorCode = "workflow.validation.invalid_context_source"
 	CodeInvalidContinueSessionRole       ValidationErrorCode = "workflow.validation.invalid_continue_session_role"
+	CodeAssigneeSelectionInapplicable    ValidationErrorCode = "workflow.validation.assignee_selection_inapplicable"
+	CodeAssigneeSelectionUnavailable     ValidationErrorCode = "workflow.validation.assignee_selection_unavailable"
+	CodeThinkingSelectionInapplicable    ValidationErrorCode = "workflow.validation.thinking_selection_inapplicable"
+	CodeThinkingSelectionUnavailable     ValidationErrorCode = "workflow.validation.thinking_selection_unavailable"
 	CodeInvalidFanoutJoinTopology        ValidationErrorCode = "workflow.validation.invalid_fanout_join_topology"
 	CodeInvalidNodeGroup                 ValidationErrorCode = "workflow.validation.invalid_node_group"
 	CodeUnsupportedContextMode           ValidationErrorCode = "workflow.validation.unsupported_context_mode"
