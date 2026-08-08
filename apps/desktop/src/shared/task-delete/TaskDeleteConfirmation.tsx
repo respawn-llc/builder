@@ -4,12 +4,12 @@ import { Button, Dialog } from "@/ui";
 import { taskDeleteDialogWidth } from "./taskDeleteDialogLayout";
 
 export function TaskDeleteConfirmationDialog({
-  actionError = "",
+  actionError = null,
   disabled,
   onClose,
   onConfirm,
 }: Readonly<{
-  actionError?: string | undefined;
+  actionError?: string | null;
   disabled: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -34,12 +34,12 @@ export function TaskDeleteConfirmationDialog({
 }
 
 export function TaskDeleteConfirmationContent({
-  actionError = "",
+  actionError = null,
   disabled,
   onCancel,
   onConfirm,
 }: Readonly<{
-  actionError?: string | undefined;
+  actionError?: string | null;
   disabled: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -48,7 +48,7 @@ export function TaskDeleteConfirmationContent({
   return (
     <div className="grid gap-[var(--space-3)]">
       <p className="m-0 text-sm text-[var(--color-on-island)]">{t("board.deleteTaskBody")}</p>
-      {actionError.length > 0 ? (
+      {actionError !== null ? (
         <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-error)]">{actionError}</p>
       ) : null}
       <div className="grid grid-cols-2 gap-[var(--space-2)]">

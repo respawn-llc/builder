@@ -6,6 +6,21 @@ import { RpcError, rpcErrorCodes } from "@/api";
 import { appI18n } from "@/i18n";
 import { getCallCount, mountTaskDetailSurface, taskDetailResponse } from "@/test-support/task-detail";
 
+const statusError = vi.hoisted(() => vi.fn(() => "status-error"));
+vi.mock("sonner", () => {
+  const toast = Object.assign(
+    vi.fn(() => "status"),
+    {
+      dismiss: vi.fn(),
+      error: statusError,
+      info: vi.fn(() => "status-info"),
+      success: vi.fn(() => "status-success"),
+      warning: vi.fn(() => "status-warning"),
+    },
+  );
+  return { toast, Toaster: () => null };
+});
+
 function taskWithDelete(canDelete: boolean) {
   return {
     task: {
@@ -144,6 +159,10 @@ it("surfaces an exact-host dismissal failure without closing a replacement", asy
   await waitFor(() => {
     expect(onDeleteDismiss).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: deleteLabel })).not.toBeDisabled();
+    expect(statusError).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: "task-detail-delete-dismiss-error" }),
+    );
   });
 });
 

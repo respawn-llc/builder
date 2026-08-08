@@ -15,7 +15,7 @@ export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
   const { api, nativeBridge } = useAppServices();
   const queryClient = useQueryClient();
   const { push } = useStatusController();
-  const [actionError, setActionError] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const submittedRef = useRef(false);
 
@@ -25,7 +25,7 @@ export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
     }
     submittedRef.current = true;
     setPending(true);
-    setActionError("");
+    setActionError(null);
     try {
       await api.deleteTask(taskID);
       await invalidateAllTaskSearches(queryClient);

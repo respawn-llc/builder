@@ -25,8 +25,14 @@ export function useExactTaskDetailDeleteDismissal(
     }
     try {
       await dismiss();
+      if (currentToken.current !== token) {
+        return { kind: "stale" };
+      }
       return { kind: "accepted" };
     } catch (error) {
+      if (currentToken.current !== token) {
+        return { kind: "stale" };
+      }
       return { kind: "failed", error };
     }
   }, [dismiss, token]);

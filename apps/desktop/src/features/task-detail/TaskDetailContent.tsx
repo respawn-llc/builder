@@ -11,6 +11,7 @@ import {
 } from "./TaskDetailDescriptionPresentation";
 import { TaskDetailList } from "./TaskDetailList";
 import { TaskDeleteProvider } from "./TaskDeleteButton";
+import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { TaskInitiatingActionProvider } from "./TaskResumeButton";
@@ -130,19 +131,15 @@ export function TaskDetailContent({
       key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
-        const destination = {
-          kind: "taskDetail" as const,
-          initialFocus: { kind: "dependencies" as const },
-          taskID,
-        };
         if (activeDestination?.kind === "taskDetail") {
-          replaceSidebar({
-            ...activeDestination,
-            ...destination,
-          });
+          replaceSidebar(taskDetailSidebarDestination(activeDestination, taskID, { kind: "dependencies" }));
           return;
         }
-        void openSidebar(destination);
+        void openSidebar({
+          kind: "taskDetail",
+          initialFocus: { kind: "dependencies" },
+          taskID,
+        });
       }}
       taskID={detail.id}
     >
@@ -187,14 +184,7 @@ export function TaskDetailContent({
           }}
           onSelectDependencyTask={(taskID) => {
             if (activeDestination?.kind === "taskDetail") {
-              replaceSidebar({
-                kind: "taskDetail",
-                taskID,
-                ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
-                ...(activeDestination.onMutated === undefined
-                  ? {}
-                  : { onMutated: activeDestination.onMutated }),
-              });
+              replaceSidebar(taskDetailSidebarDestination(activeDestination, taskID));
               return;
             }
             void navigation.replaceTask(taskID);

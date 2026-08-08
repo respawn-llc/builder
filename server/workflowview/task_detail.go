@@ -262,20 +262,28 @@ func taskDetailLiveTargets(
 		})
 	}
 	sort.Slice(liveSessions, func(i, j int) bool { return liveSessions[i].SessionID < liveSessions[j].SessionID })
+	sortTaskDetailCurrentScripts(scripts)
+	return liveSessions, scripts, nil
+}
+
+func sortTaskDetailCurrentScripts(scripts []serverapi.WorkflowTaskCurrentScript) {
 	sort.Slice(scripts, func(i, j int) bool {
 		if scripts[i].CurrentNode.NodeID != scripts[j].CurrentNode.NodeID {
 			return scripts[i].CurrentNode.NodeID < scripts[j].CurrentNode.NodeID
 		}
-		return optionalStringValue(scripts[i].CurrentNode.TransitionBranchKey) < optionalStringValue(scripts[j].CurrentNode.TransitionBranchKey)
+		leftBranch := scripts[i].CurrentNode.TransitionBranchKey
+		rightBranch := scripts[j].CurrentNode.TransitionBranchKey
+		if leftBranch == nil {
+			return rightBranch != nil || scripts[i].Path < scripts[j].Path
+		}
+		if rightBranch == nil {
+			return false
+		}
+		if *leftBranch != *rightBranch {
+			return *leftBranch < *rightBranch
+		}
+		return scripts[i].Path < scripts[j].Path
 	})
-	return liveSessions, scripts, nil
-}
-
-func optionalStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRecord, primaryWorkspaceID string) (serverapi.ProjectWorkspaceSummary, error) {

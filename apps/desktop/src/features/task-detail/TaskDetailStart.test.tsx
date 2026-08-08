@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { appI18n } from "@/i18n";
 import {
   callParams,
   getCallCount,
@@ -45,11 +46,11 @@ it("starts the persisted Task without submitting a dirty title or description dr
   );
   const user = userEvent.setup();
 
-  const title = await screen.findByRole("textbox", { name: "Title" });
+  const title = await screen.findByRole("textbox", { name: appI18n.t("task.name") });
   await user.clear(title);
   await user.type(title, "Unsaved title");
-  await user.click(screen.getByRole("textbox", { name: "Description" }));
-  const description = await screen.findByRole("textbox", { name: "Description" });
+  await user.click(screen.getByRole("textbox", { name: appI18n.t("task.description") }));
+  const description = await screen.findByRole("textbox", { name: appI18n.t("task.description") });
   await user.clear(description);
   await user.type(description, "Unsaved description");
 
