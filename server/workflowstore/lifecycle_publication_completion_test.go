@@ -38,7 +38,7 @@ func TestLifecyclePublicationCompletesSerialCurrentNodeWithSuccessorRunBeforeSou
 		t.Fatalf("PublishExactRegistration: %v", err)
 	}
 
-	completed, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	completed, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -109,7 +109,7 @@ func TestLifecyclePublicationAppliesPendingApprovalWithSuccessorRun(t *testing.T
 		t.Fatalf("PublishTaskStart: %v", err)
 	}
 	source := started.Mutation.Created[0].Reference
-	completed, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	completed, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "ready"},
@@ -255,7 +255,7 @@ func TestLifecyclePublicationPublishesEverySameKindFanoutRun(t *testing.T) {
 		t.Fatalf("PublishTaskStart: %v", err)
 	}
 	source := started.Mutation.Created[0].Reference
-	completed, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	completed, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "ready"},
@@ -319,7 +319,7 @@ func TestLifecyclePublicationKeepsNonFinalJoinBlockedAndPublishesFinalJoinRun(t 
 		t.Fatalf("PublishTaskStart: %v", err)
 	}
 	source := started.Mutation.Created[0].Reference
-	split, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	split, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       source,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "ready"},
@@ -355,7 +355,7 @@ func TestLifecyclePublicationKeepsNonFinalJoinBlockedAndPublishesFinalJoinRun(t 
 	if branch, _ := first.Reference.TransitionBranchKey(); branch == "split_b" {
 		firstTransition, secondTransition = secondTransition, firstTransition
 	}
-	firstArrival, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	firstArrival, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       first.Reference,
 		TransitionID: firstTransition,
 		OutputValues: map[string]string{"joined": "branch complete"},
@@ -383,7 +383,7 @@ func TestLifecyclePublicationKeepsNonFinalJoinBlockedAndPublishesFinalJoinRun(t 
 	}})); err != nil {
 		t.Fatalf("retire first Join branch Run: %v", err)
 	}
-	finalArrival, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+	finalArrival, _, err := publication.PublishCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
 		Source:       second.Reference,
 		TransitionID: secondTransition,
 	}, func(result CurrentNodeCompletionResult) (TaskLifecycleDelta, func(error), error) {

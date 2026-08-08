@@ -165,16 +165,9 @@ func currentNodeExecutionPromptFeedForTest(
 
 func currentNodeRunningPublicationForTest(
 	controller workflowruntime.Controller,
-) func(sessionruntime.TaskExecution) error {
-	publisher, _ := controller.(interface {
-		PublishCurrentNodeRunningExecution(context.Context, sessionruntime.TaskExecution) error
-	})
-	if publisher == nil {
-		return nil
-	}
-	return func(running sessionruntime.TaskExecution) error {
-		return publisher.PublishCurrentNodeRunningExecution(context.Background(), running)
-	}
+) sessionruntime.WorkflowRunningPublication {
+	publication, _ := controller.(sessionruntime.WorkflowRunningPublication)
+	return publication
 }
 
 func (taskStatusProjectionTestAssignmentEnsurer) EnsureCurrentNodeAssignment(

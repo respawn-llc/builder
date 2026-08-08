@@ -423,34 +423,73 @@ func (s *Starter) startCurrentNodeAgent(
 			return turnErr
 		},
 		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, runErr error) error {
-			durableCtx := context.WithoutCancel(finalizeCtx)
-			if err := publishCurrentNodeFinalizing(durableCtx, controller, scope.ID()); err != nil {
-				return err
-			}
-			if runErr != nil {
-				reason := ReasonRuntimeFailed
-				if errors.Is(runErr, context.Canceled) || context.Cause(finalizeCtx) != nil {
-					reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
-				}
-				return s.failCurrentNodeScope(
-					durableCtx,
-					controller,
-					scope,
-					reason,
-					runErr,
-				)
-			}
-			finalizer, ok := controller.(workflowruntime.ResultFinalizer)
-			if !ok {
-				return errors.New("workflow controller does not finalize Current Node results")
-			}
-			return finalizer.FinalizeCurrentNodeResult(durableCtx, scope.ID(), runErr)
+			return s.finalizeCurrentNodeAgent(finalizeCtx, controller, scope.ID(), runErr)
 		},
 	})
 	if err != nil {
 		return prepared.cleanup(err)
 	}
 	return nil
+}
+
+func (s *Starter) finalizeCurrentNodeAgent(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+	runErr error,
+) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
+	}
+	if runErr != nil {
+		if publication, ok := controller.(sessionruntime.WorkflowRunningPublication); ok &&
+			!publication.WorkflowRunningPublished(scopeID) {
+			return s.failCurrentNodeScope(ctx, controller, scopeID, ReasonRuntimeFailed, runErr)
+		}
+	}
+	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
+		if context.Cause(ctx) != nil {
+			return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
+		}
+		return err
+	}
+	if runErr != nil {
+		reason := ReasonRuntimeFailed
+		failureCtx := ctx
+		if errors.Is(runErr, context.Canceled) || context.Cause(ctx) != nil {
+			reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+			failureCtx = context.WithoutCancel(ctx)
+		}
+		return s.failCurrentNodeScope(failureCtx, controller, scopeID, reason, runErr)
+	}
+	finalizer, ok := controller.(workflowruntime.ResultFinalizer)
+	if !ok {
+		return errors.New("workflow controller does not finalize Current Node results")
+	}
+	err := finalizer.FinalizeCurrentNodeResult(ctx, scopeID, runErr)
+	if context.Cause(ctx) != nil {
+		return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
+	}
+	return err
+}
+
+func (s *Starter) failCanceledCurrentNodeScope(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+	runErr error,
+) error {
+	cause := context.Cause(ctx)
+	if cause == nil {
+		return errors.New("canceled Current Node cleanup requires a canceled context")
+	}
+	return s.failCurrentNodeScope(
+		context.WithoutCancel(ctx),
+		controller,
+		scopeID,
+		string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled),
+		errors.Join(runErr, cause),
+	)
 }
 
 func currentNodeExecutionPromptFeed(
@@ -462,16 +501,9 @@ func currentNodeExecutionPromptFeed(
 
 func currentNodeRunningPublication(
 	controller workflowruntime.Controller,
-) func(sessionruntime.TaskExecution) error {
-	publisher, _ := controller.(interface {
-		PublishCurrentNodeRunningExecution(context.Context, sessionruntime.TaskExecution) error
-	})
-	if publisher == nil {
-		return nil
-	}
-	return func(running sessionruntime.TaskExecution) error {
-		return publisher.PublishCurrentNodeRunningExecution(context.Background(), running)
-	}
+) sessionruntime.WorkflowRunningPublication {
+	publication, _ := controller.(sessionruntime.WorkflowRunningPublication)
+	return publication
 }
 
 func publishCurrentNodeFinalizing(

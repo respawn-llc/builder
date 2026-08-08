@@ -436,9 +436,7 @@ retryAdmission:
 			admitted: true,
 		}
 	}
-	if err := handle.PublishRunning(ctx, func(running sessionruntime.TaskExecution) error {
-		return c.PublishCurrentNodeRunningExecution(ctx, running)
-	}); err != nil {
+	if err := handle.PublishRunning(ctx, c); err != nil {
 		return currentNodeAdmissionError{
 			cause:    errors.Join(err, run.exactPublication.await(ctx)),
 			admitted: true,
@@ -465,6 +463,19 @@ func (c *CurrentNodeController) PublishCurrentNodeRunningExecution(
 		return err
 	}
 	return c.PublishCurrentNodeExactExecution(ctx, exact)
+}
+
+func (c *CurrentNodeController) PublishWorkflowRunning(
+	ctx context.Context,
+	running sessionruntime.TaskExecution,
+) error {
+	return c.PublishCurrentNodeRunningExecution(ctx, running)
+}
+
+func (c *CurrentNodeController) WorkflowRunningPublished(
+	scopeID runtimeids.ExecutionScopeID,
+) bool {
+	return c != nil && c.publication.ExactExecutionPublished(scopeID)
 }
 
 func lifecycleExactExecutionFromRunning(
@@ -568,9 +579,38 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 			c.mu.Unlock()
 			return errors.New("Script Exact Scope has no Script target")
 		}
+		run.phase = currentNodeRunPublishing
+		if err := run.transitionDisposition(currentNodeRunDispositionPublishing, nil); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		c.exactScopes[exact.ScopeID] = key
 		c.mu.Unlock()
 
 		if err := c.publication.PublishExactRegistration(ctx, exact); err != nil {
+			c.mu.Lock()
+			if indexedKey, indexed := c.exactScopes[exact.ScopeID]; indexed && indexedKey == key {
+				delete(c.exactScopes, exact.ScopeID)
+			}
+			if current, currentExists := c.runs.get(key); currentExists && current == run {
+				switch current.disposition {
+				case currentNodeRunDispositionPublishing:
+					if rollbackErr := current.rollbackRunningPublication(); rollbackErr != nil {
+						c.mu.Unlock()
+						panic(fmt.Sprintf("roll back Exact registration Run transition: %v", rollbackErr))
+					}
+					current.phase = currentNodeRunGated
+				case currentNodeRunDispositionStopped:
+					current.phase = currentNodeRunGated
+				default:
+					c.mu.Unlock()
+					panic(fmt.Sprintf(
+						"failed Exact registration left Current Node Run in disposition %d",
+						current.disposition,
+					))
+				}
+			}
+			c.mu.Unlock()
 			return err
 		}
 
@@ -578,10 +618,12 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 		defer c.mu.Unlock()
 		publishedRun, publishedExists := c.runs.get(key)
 		_, publishedGate := c.gates[key]
+		indexedKey, publishedExact := c.exactScopes[exact.ScopeID]
 		if !publishedExists ||
 			publishedRun != run ||
 			!publishedGate ||
-			publishedRun.disposition != currentNodeRunDispositionQueued ||
+			!publishedExact ||
+			indexedKey != key ||
 			publishedRun.executionLease == nil ||
 			publishedRun.executionLease.ScopeID() != exact.ScopeID {
 			panic(fmt.Sprintf(
@@ -597,10 +639,16 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 			currentNodeAgentCapacityLive,
 		)
 		run.phase = currentNodeRunRunning
-		if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
-			panic(fmt.Sprintf("publish Exact registration Run transition: %v", err))
+		if run.disposition == currentNodeRunDispositionPublishing {
+			if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
+				panic(fmt.Sprintf("publish Exact registration Run transition: %v", err))
+			}
+		} else if run.disposition != currentNodeRunDispositionStopped {
+			panic(fmt.Sprintf(
+				"published Exact registration has Current Node Run disposition %d",
+				run.disposition,
+			))
 		}
-		c.exactScopes[exact.ScopeID] = key
 		if run.agentActivation != nil {
 			if activationFailure != nil {
 				run.agentActivation.resolve(currentNodeAgentActivationResult{}, activationFailure)
@@ -1613,7 +1661,7 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if admitted {
 		predecessor = workflowstore.CurrentNodeInterruptionFromAdmitted
 	}
-	err := c.publication.PublishCurrentNodeInterruption(
+	publicationOutcome, publicationErr := c.publication.PublishCurrentNodeInterruption(
 		ctx,
 		references,
 		predecessor,
@@ -1622,13 +1670,13 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 		detail,
 		nil,
 	)
-	if err != nil {
-		return err
+	if !publicationOutcome.Committed() {
+		return publicationErr
 	}
 	for _, reference := range references {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
 	}
-	return nil
+	return publicationErr
 }
 
 func currentNodeAutomaticIntents(source []workflowstore.CurrentNodeAutomaticIntent) ([]CurrentNodeAutomaticIntent, error) {

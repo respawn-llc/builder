@@ -245,7 +245,7 @@ func TestLifecycleCapturePinsCompatiblePairAcrossControlledPublicationBarriers(t
 			name:       "queued_to_stopped_removes_entry",
 			initialRun: true,
 			publish: func(ctx context.Context, publication *LifecyclePublication, reference workflow.CurrentNodeReference) error {
-				return publication.PublishCurrentNodeInterruption(
+				_, err := publication.PublishCurrentNodeInterruption(
 					ctx,
 					[]workflow.CurrentNodeReference{reference},
 					CurrentNodeInterruptionFromReadyOrAdmitted,
@@ -254,6 +254,7 @@ func TestLifecycleCapturePinsCompatiblePairAcrossControlledPublicationBarriers(t
 					workflow.NewCurrentNodeInterruptionDetail("capture barrier", nil),
 					nil,
 				)
+				return err
 			},
 		},
 	} {
@@ -409,7 +410,7 @@ func lifecyclePublicationCaptureFixture(
 	}
 	reference := started.Mutation.Created[0].Reference
 	if !initialRun {
-		if err := publication.PublishCurrentNodeInterruption(
+		if _, err := publication.PublishCurrentNodeInterruption(
 			ctx,
 			[]workflow.CurrentNodeReference{reference},
 			CurrentNodeInterruptionFromReadyOrAdmitted,
@@ -593,7 +594,7 @@ func TestLifecyclePublicationDoesNotWaitForPinnedCaptureDownstreamQueryWork(t *t
 
 	published := make(chan error, 1)
 	go func() {
-		published <- publication.PublishCurrentNodeInterruption(
+		_, err := publication.PublishCurrentNodeInterruption(
 			ctx,
 			[]workflow.CurrentNodeReference{reference},
 			CurrentNodeInterruptionFromReadyOrAdmitted,
@@ -602,6 +603,7 @@ func TestLifecyclePublicationDoesNotWaitForPinnedCaptureDownstreamQueryWork(t *t
 			workflow.NewCurrentNodeInterruptionDetail("downstream query barrier", nil),
 			nil,
 		)
+		published <- err
 	}()
 	select {
 	case err := <-published:

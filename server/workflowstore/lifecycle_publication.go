@@ -487,8 +487,20 @@ type ManualMovePublicationStage func(ManualMoveResult) (TaskLifecycleDelta, func
 
 type PreparedCurrentNodeCompletionPublication interface {
 	Result() CurrentNodeCompletionResult
-	Publish(context.Context) (CurrentNodeCompletionResult, error)
+	Publish(context.Context) (CurrentNodeCompletionResult, LifecyclePublicationOutcome, error)
 	Rollback(error) error
+}
+
+type LifecyclePublicationOutcome struct {
+	committed bool
+}
+
+func (o LifecyclePublicationOutcome) Committed() bool {
+	return o.committed
+}
+
+func CommittedLifecyclePublicationOutcome() LifecyclePublicationOutcome {
+	return LifecyclePublicationOutcome{committed: true}
 }
 
 type preparedCurrentNodeCompletionPublication struct {
@@ -554,10 +566,10 @@ func (p *LifecyclePublication) PublishCurrentNodeCompletion(
 	ctx context.Context,
 	req CurrentNodeCompletionRequest,
 	stage CurrentNodeCompletionPublicationStage,
-) (CurrentNodeCompletionResult, error) {
+) (CurrentNodeCompletionResult, LifecyclePublicationOutcome, error) {
 	prepared, err := p.PrepareCurrentNodeCompletion(ctx, req, stage)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, err
+		return CurrentNodeCompletionResult{}, LifecyclePublicationOutcome{}, err
 	}
 	return prepared.Publish(ctx)
 }
@@ -614,24 +626,25 @@ func (p *preparedCurrentNodeCompletionPublication) Result() CurrentNodeCompletio
 
 func (p *preparedCurrentNodeCompletionPublication) Publish(
 	ctx context.Context,
-) (CurrentNodeCompletionResult, error) {
+) (CurrentNodeCompletionResult, LifecyclePublicationOutcome, error) {
 	if p == nil || p.owner == nil || p.prepared == nil {
-		return CurrentNodeCompletionResult{}, errors.New("prepared Current Node completion publication is required")
+		return CurrentNodeCompletionResult{}, LifecyclePublicationOutcome{}, errors.New("prepared Current Node completion publication is required")
 	}
 	if err := p.owner.publishPrepared(ctx, p.prepared.preparedSQLLifecycleMutation, p.delta); err != nil {
 		p.rollbackRuntime(err)
-		return CurrentNodeCompletionResult{}, err
+		return CurrentNodeCompletionResult{}, LifecyclePublicationOutcome{}, err
 	}
+	outcome := LifecyclePublicationOutcome{committed: true}
 	if p.prepared.publishEvent {
 		if err := p.owner.store.publishCurrentNodeTaskEvent(
 			ctx,
 			p.request.Source.TaskID,
 			serverapi.WorkflowProjectEventActionCompleted,
 		); err != nil {
-			return CurrentNodeCompletionResult{}, err
+			return p.prepared.result, outcome, err
 		}
 	}
-	return p.prepared.result, nil
+	return p.prepared.result, outcome, nil
 }
 
 func (p *preparedCurrentNodeCompletionPublication) Rollback(cause error) error {
@@ -762,6 +775,25 @@ func (p *LifecyclePublication) PublishExactRegistration(
 	return nil
 }
 
+func (p *LifecyclePublication) ExactExecutionPublished(scopeID runtimeids.ExecutionScopeID) bool {
+	if p == nil || scopeID.IsZero() {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return false
+	}
+	for _, entry := range p.root {
+		for _, exact := range entry.exact {
+			if exact.ScopeID == scopeID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *LifecyclePublication) PublishExactPromptPending(
 	ctx context.Context,
 	scopeID runtimeids.ExecutionScopeID,
@@ -873,22 +905,22 @@ func (p *LifecyclePublication) PublishCurrentNodeInterruption(
 	reason workflow.CurrentNodeInterruptionReason,
 	detail workflow.CurrentNodeInterruptionDetail,
 	expectedExact []LifecycleExactExecution,
-) error {
+) (LifecyclePublicationOutcome, error) {
 	if !validLifecycleFieldPresence(expectedRun) {
-		return errors.New("interruption expected Run presence is invalid")
+		return LifecyclePublicationOutcome{}, errors.New("interruption expected Run presence is invalid")
 	}
 	prepared, err := p.store.prepareCurrentNodeInterruption(ctx, references, predecessor, reason, detail)
 	if err != nil {
-		return err
+		return LifecyclePublicationOutcome{}, err
 	}
 	expectedByKey := make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID, len(expectedExact))
 	for _, exact := range expectedExact {
 		key, keyErr := exact.CurrentNode.Key()
 		if keyErr != nil {
-			return errors.Join(keyErr, prepared.rollback())
+			return LifecyclePublicationOutcome{}, errors.Join(keyErr, prepared.rollback())
 		}
 		if exact.ScopeID.IsZero() {
-			return errors.Join(errors.New("interruption expected Exact Execution Scope id is invalid"), prepared.rollback())
+			return LifecyclePublicationOutcome{}, errors.Join(errors.New("interruption expected Exact Execution Scope id is invalid"), prepared.rollback())
 		}
 		expectedByKey[key] = exact.ScopeID
 	}
@@ -897,7 +929,7 @@ func (p *LifecyclePublication) PublishCurrentNodeInterruption(
 	for _, reference := range references {
 		key, keyErr := reference.Key()
 		if keyErr != nil {
-			return errors.Join(keyErr, prepared.rollback())
+			return LifecyclePublicationOutcome{}, errors.Join(keyErr, prepared.rollback())
 		}
 		runChanges = append(runChanges, LifecycleRunDelta{
 			CurrentNode: reference,
@@ -913,16 +945,18 @@ func (p *LifecyclePublication) PublishCurrentNodeInterruption(
 	}
 	delta, err := NewTaskLifecycleDelta(references[0].TaskID, runChanges, exactChanges)
 	if err != nil {
-		return errors.Join(err, prepared.rollback())
+		return LifecyclePublicationOutcome{}, errors.Join(err, prepared.rollback())
 	}
 	if err := p.publishPrepared(ctx, prepared.preparedSQLLifecycleMutation, delta); err != nil {
-		return err
+		return LifecyclePublicationOutcome{}, err
 	}
-	return p.store.publishCurrentNodeTaskEvent(
+	outcome := LifecyclePublicationOutcome{committed: true}
+	err = p.store.publishCurrentNodeTaskEvent(
 		ctx,
 		references[0].TaskID,
 		serverapi.WorkflowProjectEventActionInterrupted,
 	)
+	return outcome, err
 }
 
 func (p *LifecyclePublication) Publish(

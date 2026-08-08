@@ -5,7 +5,25 @@ import (
 	"os/exec"
 	"testing"
 	"time"
+
+	"core/shared/runtimeids"
 )
+
+type workflowRunningPublicationStub struct {
+	publish   func(context.Context, TaskExecution) error
+	published func(runtimeids.ExecutionScopeID) bool
+}
+
+func (p workflowRunningPublicationStub) PublishWorkflowRunning(
+	ctx context.Context,
+	running TaskExecution,
+) error {
+	return p.publish(ctx, running)
+}
+
+func (p workflowRunningPublicationStub) WorkflowRunningPublished(scopeID runtimeids.ExecutionScopeID) bool {
+	return p.published(scopeID)
+}
 
 func TestWorkflowScriptReportsStartedOnlyAfterAdmissionLeaseRelease(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
@@ -36,9 +54,12 @@ func TestWorkflowScriptReportsStartedOnlyAfterAdmissionLeaseRelease(t *testing.T
 	published := make(chan TaskExecution, 1)
 	publicationDone := make(chan error, 1)
 	go func() {
-		publicationDone <- handle.PublishRunning(context.Background(), func(running TaskExecution) error {
-			published <- running
-			return nil
+		publicationDone <- handle.PublishRunning(context.Background(), workflowRunningPublicationStub{
+			publish: func(_ context.Context, running TaskExecution) error {
+				published <- running
+				return nil
+			},
+			published: func(runtimeids.ExecutionScopeID) bool { return true },
 		})
 	}()
 	select {

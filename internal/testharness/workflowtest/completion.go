@@ -16,7 +16,7 @@ func CompleteCurrentNode(
 		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
 	defer func() { _ = publication.Close() }()
-	return publication.PublishCurrentNodeCompletion(
+	result, _, err := publication.PublishCurrentNodeCompletion(
 		ctx,
 		req,
 		func(result workflowstore.CurrentNodeCompletionResult) (workflowstore.TaskLifecycleDelta, func(error), error) {
@@ -36,4 +36,5 @@ func CompleteCurrentNode(
 			return delta, nil, err
 		},
 	)
+	return result, err
 }

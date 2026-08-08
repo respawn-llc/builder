@@ -59,7 +59,7 @@ type LifecyclePublication interface {
 		context.Context,
 		workflowstore.CurrentNodeCompletionRequest,
 		workflowstore.CurrentNodeCompletionPublicationStage,
-	) (workflowstore.CurrentNodeCompletionResult, error)
+	) (workflowstore.CurrentNodeCompletionResult, workflowstore.LifecyclePublicationOutcome, error)
 	PrepareCurrentNodeCompletion(
 		context.Context,
 		workflowstore.CurrentNodeCompletionRequest,
@@ -88,6 +88,7 @@ type LifecyclePublication interface {
 		context.Context,
 		workflowstore.LifecycleExactExecution,
 	) error
+	ExactExecutionPublished(runtimeids.ExecutionScopeID) bool
 	PublishExactPromptPending(
 		context.Context,
 		runtimeids.ExecutionScopeID,
@@ -107,7 +108,7 @@ type LifecyclePublication interface {
 		workflow.CurrentNodeInterruptionReason,
 		workflow.CurrentNodeInterruptionDetail,
 		[]workflowstore.LifecycleExactExecution,
-	) error
+	) (workflowstore.LifecyclePublicationOutcome, error)
 	PublishResume(
 		context.Context,
 		workflowstore.QueuedTaskLifecycleDelta,
@@ -579,14 +580,21 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			if err := c.beginCurrentNodeFinalizationPublication(exact, req.ScopeID); err != nil {
 				return errors.Join(err, prepared.Rollback(err))
 			}
-			completed, completionErr = prepared.Publish(ctx)
+			var publicationOutcome workflowstore.LifecyclePublicationOutcome
+			completed, publicationOutcome, completionErr = prepared.Publish(ctx)
 			c.finishCurrentNodeFinalizationPublication(exact)
+			if publicationOutcome.Committed() {
+				c.mu.Lock()
+				c.completed[req.ScopeID] = struct{}{}
+				c.mu.Unlock()
+				if confirmErr := c.authority.ConfirmWorkflowDisposition(req.ScopeID); confirmErr != nil &&
+					!errors.Is(confirmErr, sessionruntime.ErrExecutionNoLongerLive) {
+					completionErr = errors.Join(completionErr, confirmErr)
+				}
+			}
 			if completionErr != nil {
 				return completionErr
 			}
-			c.mu.Lock()
-			c.completed[req.ScopeID] = struct{}{}
-			c.mu.Unlock()
 			return nil
 		}); err != nil {
 			exactErr := err
@@ -628,7 +636,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		var starts []currentNodeQueuedStart
 		var pending []*pendingCurrentNodeAssignmentEnsure
 		var staged []stagedCurrentNodeRun
-		completed, completionErr := c.publication.PublishCurrentNodeCompletion(ctx, workflowstore.CurrentNodeCompletionRequest{
+		completed, publicationOutcome, completionErr := c.publication.PublishCurrentNodeCompletion(ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: transitionID,
 			OutputValues: outputValues,
@@ -660,7 +668,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 				c.rollbackStagedRunCreations(staged, cause)
 			}, nil
 		})
-		if completionErr != nil {
+		if !publicationOutcome.Committed() && completionErr != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
 		resolveErr := c.resolvePendingCurrentNodeAssignmentEnsures(ctx, starts, pending)
@@ -672,6 +680,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 			)
 		}
 		if err := errors.Join(
+			completionErr,
 			resolveErr,
 			c.completePublishedCurrentNodeAssignmentStarts(ctx, staged, outcome),
 		); err != nil {
@@ -737,7 +746,7 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			c.clearProtocolViolations(req.ScopeID)
 			return result, nil
 		}
-		if err := c.publication.PublishCurrentNodeInterruption(
+		publicationOutcome, err := c.publication.PublishCurrentNodeInterruption(
 			ctx,
 			[]workflow.CurrentNodeReference{source.Reference},
 			workflowstore.CurrentNodeInterruptionFromReadyOrAdmitted,
@@ -745,13 +754,14 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			reasonProtocolViolationCap,
 			workflow.NewCurrentNodeInterruptionDetail(string(reasonProtocolViolationCap), workflowProtocolViolationCause(req)),
 			nil,
-		); err != nil {
+		)
+		if !publicationOutcome.Committed() && err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
 		reference := source.Reference
 		interruptedReference = &reference
 		c.clearProtocolViolations(req.ScopeID)
-		return result, nil
+		return result, err
 	})
 	if err != nil {
 		return workflowruntime.ViolationResult{}, err
@@ -956,11 +966,31 @@ func (c *CurrentNodeController) FinalizeCurrentNodeResult(
 		if err == nil {
 			err = c.beginCurrentNodeFinalizationPublication(current, scopeID)
 		}
+		var publicationOutcome workflowstore.LifecyclePublicationOutcome
 		if err == nil {
-			_, err = prepared.Publish(ctx)
+			_, publicationOutcome, err = prepared.Publish(ctx)
 			c.finishCurrentNodeFinalizationPublication(current)
 		} else if prepared != nil {
 			err = errors.Join(err, prepared.Rollback(err))
+		}
+		if publicationOutcome.Committed() {
+			c.mu.Lock()
+			if current.pendingCompletionRequest != pendingRequest {
+				c.mu.Unlock()
+				return errors.New("Current Node pending completion changed during finalization")
+			}
+			current.pendingCompletionRequest = nil
+			c.completed[scopeID] = struct{}{}
+			c.mu.Unlock()
+			confirmErr := c.authority.ConfirmWorkflowDisposition(scopeID)
+			if errors.Is(confirmErr, sessionruntime.ErrExecutionNoLongerLive) {
+				confirmErr = nil
+			}
+			return errors.Join(
+				err,
+				confirmErr,
+				c.resolvePendingCurrentNodeAssignmentEnsures(ctx, starts, pending),
+			)
 		}
 		if err != nil {
 			c.mu.Lock()
@@ -1038,7 +1068,7 @@ func (c *CurrentNodeController) publishCurrentNodeFinalizationFailure(
 	}
 	const reason workflow.CurrentNodeInterruptionReason = "workflow_result_finalization_failed"
 	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
-	if err := c.publication.PublishCurrentNodeInterruption(
+	publicationOutcome, publicationErr := c.publication.PublishCurrentNodeInterruption(
 		ctx,
 		[]workflow.CurrentNodeReference{run.reference},
 		workflowstore.CurrentNodeInterruptionFromAdmitted,
@@ -1049,14 +1079,19 @@ func (c *CurrentNodeController) publishCurrentNodeFinalizationFailure(
 			CurrentNode: run.reference,
 			ScopeID:     scopeID,
 		}},
-	); err != nil {
-		return err
+	)
+	if !publicationOutcome.Committed() {
+		return publicationErr
 	}
 	c.mu.Lock()
 	run.stopOnce(currentNodeRunStopWorkerFailed, cause)
 	c.mu.Unlock()
 	c.publishPendingInterruptedCurrentNode(ctx, run.reference, reason)
-	return nil
+	confirmErr := c.authority.ConfirmWorkflowDisposition(scopeID)
+	if errors.Is(confirmErr, sessionruntime.ErrExecutionNoLongerLive) {
+		confirmErr = nil
+	}
+	return errors.Join(publicationErr, confirmErr)
 }
 
 func (c *CurrentNodeController) FailCurrentNodeScope(
@@ -1075,6 +1110,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	}
 	taskID := initial.reference.TaskID
 	c.mu.Unlock()
+	var notificationErr error
 	if err := c.lifecycle.Run(ctx, taskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if _, stopping := c.stopping[scopeID]; stopping {
@@ -1112,7 +1148,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 				ScopeID:     scopeID,
 			}}
 		}
-		if err := c.publication.PublishCurrentNodeInterruption(
+		publicationOutcome, publicationErr := c.publication.PublishCurrentNodeInterruption(
 			ctx,
 			[]workflow.CurrentNodeReference{lease.Workflow().CurrentNode},
 			workflowstore.CurrentNodeInterruptionFromAdmitted,
@@ -1120,8 +1156,9 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			reason,
 			detail,
 			expectedExact,
-		); err != nil {
-			return err
+		)
+		if !publicationOutcome.Committed() {
+			return publicationErr
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1129,6 +1166,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		if stillOwned && current == live {
 			current.stopOnce(currentNodeRunStopInterrupted, cause)
 		}
+		notificationErr = publicationErr
 		return nil
 	}); err != nil {
 		return err
@@ -1141,7 +1179,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	if handle, live := c.authority.ExecutionByScope(scopeID); live {
 		handle.RequestStop()
 	}
-	return nil
+	return notificationErr
 }
 
 func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.ExecutionScope) {

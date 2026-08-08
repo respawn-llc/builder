@@ -454,6 +454,9 @@ func TestCurrentNodeControllerAdmissionWorkerKeepsStoppedRunUntilExactScopeRetir
 		admissionWorkers: make(map[workflow.CurrentNodeReferenceKey]struct{}),
 	}
 	run := newCurrentNodeRun(reference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	if err := run.transitionDisposition(currentNodeRunDispositionPublishing, nil); err != nil {
+		t.Fatalf("stage Run as publishing: %v", err)
+	}
 	if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
 		t.Fatalf("transition Run to running: %v", err)
 	}

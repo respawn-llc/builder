@@ -91,6 +91,9 @@ func TestCurrentNodeRunDispositionsAreTypedAndTerminalWhenStopped(t *testing.T) 
 	if run.disposition != currentNodeRunDispositionQueued {
 		t.Fatalf("new Run disposition = %v, want queued", run.disposition)
 	}
+	if err := run.transitionDisposition(currentNodeRunDispositionPublishing, nil); err != nil {
+		t.Fatalf("transition Run to publishing: %v", err)
+	}
 	if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
 		t.Fatalf("transition Run to running: %v", err)
 	}

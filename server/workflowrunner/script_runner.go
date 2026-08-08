@@ -64,33 +64,62 @@ func (s *Starter) startCurrentNodeScript(
 		},
 		RunningPublication: currentNodeRunningPublication(controller),
 		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
-			durableCtx := context.WithoutCancel(finalizeCtx)
-			if err := publishCurrentNodeFinalizing(durableCtx, controller, scope.ID()); err != nil {
-				return err
-			}
-			if runErr != nil || result.Canceled || result.StdoutOverflow {
-				return s.failCurrentNodeScope(
-					durableCtx,
-					controller,
-					scope,
-					ReasonScriptExecutionFailed,
-					scriptExecutionFailure(result, runErr),
-				)
-			}
-			contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
-			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
-			if err != nil {
-				return s.failCurrentNodeScope(durableCtx, controller, scope, ReasonScriptCompletionFailed, err)
-			}
-			_, err = controller.CompleteCurrentNode(durableCtx, workflowruntime.CompletionRequest{
-				ScopeID:      scope.ID(),
-				TransitionID: parsed.TransitionID,
-				OutputValues: parsed.OutputValues,
-				Commentary:   parsed.Commentary,
-			})
-			return err
+			return s.finalizeCurrentNodeScript(finalizeCtx, input, controller, scope.ID(), result, runErr)
 		},
 	})
+	return err
+}
+
+func (s *Starter) finalizeCurrentNodeScript(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+	result sessionruntime.ScriptResult,
+	runErr error,
+) error {
+	if context.Cause(ctx) != nil {
+		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
+	}
+	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
+		if context.Cause(ctx) != nil {
+			return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
+		}
+		return err
+	}
+	if runErr != nil || result.Canceled || result.StdoutOverflow {
+		failureCtx := ctx
+		if result.Canceled || context.Cause(ctx) != nil {
+			failureCtx = context.WithoutCancel(ctx)
+		}
+		return s.failCurrentNodeScope(
+			failureCtx,
+			controller,
+			scopeID,
+			ReasonScriptExecutionFailed,
+			scriptExecutionFailure(result, runErr),
+		)
+	}
+	contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
+	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
+	if err != nil {
+		if context.Cause(ctx) != nil {
+			return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
+		}
+		return s.failCurrentNodeScope(ctx, controller, scopeID, ReasonScriptCompletionFailed, err)
+	}
+	if context.Cause(ctx) != nil {
+		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
+	}
+	_, err = controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+		ScopeID:      scopeID,
+		TransitionID: parsed.TransitionID,
+		OutputValues: parsed.OutputValues,
+		Commentary:   parsed.Commentary,
+	})
+	if context.Cause(ctx) != nil {
+		return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
+	}
 	return err
 }
 
@@ -140,7 +169,7 @@ func stringPointer(value string) *string {
 func (s *Starter) failCurrentNodeScope(
 	ctx context.Context,
 	controller workflowruntime.Controller,
-	scope sessionruntime.ExecutionScope,
+	scopeID runtimeids.ExecutionScopeID,
 	reason string,
 	cause error,
 ) error {
@@ -150,5 +179,5 @@ func (s *Starter) failCurrentNodeScope(
 	if !ok {
 		return errors.New("workflow runtime controller cannot interrupt a failed current node")
 	}
-	return failureController.FailCurrentNodeScope(ctx, scope.ID(), workflow.CurrentNodeInterruptionReason(reason), cause)
+	return failureController.FailCurrentNodeScope(ctx, scopeID, workflow.CurrentNodeInterruptionReason(reason), cause)
 }

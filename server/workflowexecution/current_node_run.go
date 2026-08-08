@@ -19,6 +19,7 @@ const (
 	currentNodeRunQueued currentNodeRunPhase = iota + 1
 	currentNodeRunReserved
 	currentNodeRunGated
+	currentNodeRunPublishing
 	currentNodeRunRunning
 )
 
@@ -26,6 +27,7 @@ type currentNodeRunDisposition uint8
 
 const (
 	currentNodeRunDispositionQueued currentNodeRunDisposition = iota + 1
+	currentNodeRunDispositionPublishing
 	currentNodeRunDispositionRunning
 	currentNodeRunDispositionStopped
 )
@@ -174,15 +176,24 @@ func (r *currentNodeRun) transitionDisposition(
 		return errors.New("current node Run is required")
 	}
 	switch next {
-	case currentNodeRunDispositionRunning:
+	case currentNodeRunDispositionPublishing:
 		if r.disposition != currentNodeRunDispositionQueued {
+			return fmt.Errorf("current node %v Run cannot transition from disposition %d to publishing", r.reference, r.disposition)
+		}
+		if stop != nil {
+			return errors.New("publishing Run disposition cannot carry a stop")
+		}
+	case currentNodeRunDispositionRunning:
+		if r.disposition != currentNodeRunDispositionPublishing {
 			return fmt.Errorf("current node %v Run cannot transition from disposition %d to running", r.reference, r.disposition)
 		}
 		if stop != nil {
 			return errors.New("running Run disposition cannot carry a stop")
 		}
 	case currentNodeRunDispositionStopped:
-		if r.disposition != currentNodeRunDispositionQueued && r.disposition != currentNodeRunDispositionRunning {
+		if r.disposition != currentNodeRunDispositionQueued &&
+			r.disposition != currentNodeRunDispositionPublishing &&
+			r.disposition != currentNodeRunDispositionRunning {
 			return fmt.Errorf("current node %v Run cannot transition from disposition %d to stopped", r.reference, r.disposition)
 		}
 		if stop == nil {
@@ -204,6 +215,22 @@ func (r *currentNodeRun) transitionDisposition(
 	if next == currentNodeRunDispositionStopped && r.exactPublication != nil {
 		r.exactPublication.resolve(stop.cause)
 	}
+	return nil
+}
+
+func (r *currentNodeRun) rollbackRunningPublication() error {
+	if r == nil {
+		return errors.New("current node Run is required")
+	}
+	if r.disposition != currentNodeRunDispositionPublishing {
+		return fmt.Errorf(
+			"current node %v Run cannot roll back publication from disposition %d",
+			r.reference,
+			r.disposition,
+		)
+	}
+	r.disposition = currentNodeRunDispositionQueued
+	r.stop = nil
 	return nil
 }
 

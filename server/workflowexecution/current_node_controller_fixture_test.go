@@ -314,6 +314,9 @@ func installLiveCurrentNodeRunLockedForTest(
 ) {
 	run := newCurrentNodeRun(reference, nodeKind, policy)
 	run.phase = currentNodeRunRunning
+	if err := run.transitionDisposition(currentNodeRunDispositionPublishing, nil); err != nil {
+		panic(fmt.Sprintf("stage live current node Run for test: %v", err))
+	}
 	if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
 		panic(fmt.Sprintf("install live current node Run for test: %v", err))
 	}
@@ -426,9 +429,11 @@ type currentNodeControllerStore struct {
 	interruptions          map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
 	interruptionCalls      map[workflow.CurrentNodeReferenceKey]int
 	interruptErr           error
+	interruptionEventErr   error
 	recovered              []workflow.CurrentNodeReference
 	completion             workflowstore.CurrentNodeCompletionResult
 	completions            int
+	completionEventErr     error
 	startTaskStarted       chan struct{}
 	startTaskRelease       chan struct{}
 	startTaskOnce          sync.Once
@@ -758,6 +763,21 @@ func (p *currentNodeControllerLifecyclePublication) PublishExactRegistration(
 	return nil
 }
 
+func (p *currentNodeControllerLifecyclePublication) ExactExecutionPublished(
+	scopeID runtimeids.ExecutionScopeID,
+) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, executions := range p.exact {
+		for _, exact := range executions {
+			if exact.ScopeID == scopeID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *currentNodeControllerLifecyclePublication) PublishExactPromptPending(
 	_ context.Context,
 	scopeID runtimeids.ExecutionScopeID,
@@ -832,7 +852,7 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 	reason workflow.CurrentNodeInterruptionReason,
 	detail workflow.CurrentNodeInterruptionDetail,
 	expectedExact []workflowstore.LifecycleExactExecution,
-) error {
+) (workflowstore.LifecyclePublicationOutcome, error) {
 	for _, reference := range references {
 		var err error
 		switch predecessor {
@@ -841,22 +861,22 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 		case workflowstore.CurrentNodeInterruptionFromReadyOrAdmitted:
 			err = p.store.InterruptCurrentNode(ctx, reference, reason, detail)
 		default:
-			return errors.New("current node interruption predecessor is invalid")
+			return workflowstore.LifecyclePublicationOutcome{}, errors.New("current node interruption predecessor is invalid")
 		}
 		if err != nil {
-			return err
+			return workflowstore.LifecyclePublicationOutcome{}, err
 		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return workflowstore.ErrLifecyclePublicationClosed
+		return workflowstore.LifecyclePublicationOutcome{}, workflowstore.ErrLifecyclePublicationClosed
 	}
 	expectedByNode := make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID, len(expectedExact))
 	for _, exact := range expectedExact {
 		key, err := exact.CurrentNode.Key()
 		if err != nil {
-			return err
+			return workflowstore.LifecyclePublicationOutcome{}, err
 		}
 		expectedByNode[key] = exact.ScopeID
 	}
@@ -867,7 +887,7 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 	for _, reference := range references {
 		key, err := reference.Key()
 		if err != nil {
-			return err
+			return workflowstore.LifecyclePublicationOutcome{}, err
 		}
 		runPresent := false
 		for _, queued := range p.root[taskID] {
@@ -877,7 +897,7 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 			}
 		}
 		if runPresent != (expectedRun == workflowstore.LifecycleFieldPresent) {
-			return errors.New("lifecycle Run predecessor conflict")
+			return workflowstore.LifecyclePublicationOutcome{}, errors.New("lifecycle Run predecessor conflict")
 		}
 		currentExact := p.exact[taskID]
 		foundExact := false
@@ -889,12 +909,12 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 			}
 			expected, expectsExact := expectedByNode[key]
 			if !expectsExact || expected != exact.ScopeID {
-				return errors.New("lifecycle Exact predecessor conflict")
+				return workflowstore.LifecyclePublicationOutcome{}, errors.New("lifecycle Exact predecessor conflict")
 			}
 			foundExact = true
 		}
 		if expected, expectsExact := expectedByNode[key]; expectsExact && (!foundExact || expected.IsZero()) {
-			return errors.New("lifecycle Exact predecessor conflict")
+			return workflowstore.LifecyclePublicationOutcome{}, errors.New("lifecycle Exact predecessor conflict")
 		}
 		p.exact[taskID] = filteredExact
 		filteredRuns := p.root[taskID][:0]
@@ -905,7 +925,10 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeInterrupti
 		}
 		p.root[taskID] = filteredRuns
 	}
-	return nil
+	p.store.mu.Lock()
+	eventErr := p.store.interruptionEventErr
+	p.store.mu.Unlock()
+	return workflowstore.CommittedLifecyclePublicationOutcome(), eventErr
 }
 
 func (p *currentNodeControllerLifecyclePublication) PublishTaskStart(
@@ -956,10 +979,10 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeCompletion
 	ctx context.Context,
 	req workflowstore.CurrentNodeCompletionRequest,
 	stage workflowstore.CurrentNodeCompletionPublicationStage,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflowstore.LifecyclePublicationOutcome, error) {
 	prepared, err := p.PrepareCurrentNodeCompletion(ctx, req, stage)
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflowstore.LifecyclePublicationOutcome{}, err
 	}
 	return prepared.Publish(ctx)
 }
@@ -978,21 +1001,24 @@ func (p *preparedCurrentNodeControllerCompletionPublication) Result() workflowst
 
 func (p *preparedCurrentNodeControllerCompletionPublication) Publish(
 	ctx context.Context,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflowstore.LifecyclePublicationOutcome, error) {
 	completed, err := p.publication.store.CompleteCurrentNode(ctx, p.request)
 	if err != nil {
 		if p.rollback != nil {
 			p.rollback(err)
 		}
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflowstore.LifecyclePublicationOutcome{}, err
 	}
 	if err := p.publication.Publish(ctx, p.delta); err != nil {
 		if p.rollback != nil {
 			p.rollback(err)
 		}
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflowstore.LifecyclePublicationOutcome{}, err
 	}
-	return completed, nil
+	p.publication.store.mu.Lock()
+	eventErr := p.publication.store.completionEventErr
+	p.publication.store.mu.Unlock()
+	return completed, workflowstore.CommittedLifecyclePublicationOutcome(), eventErr
 }
 
 func (p *preparedCurrentNodeControllerCompletionPublication) Rollback(cause error) error {
@@ -1724,6 +1750,7 @@ type recordingScriptRunner struct {
 	authority *sessionruntime.Authority
 	command   sessionruntime.ScriptCommand
 	started   chan workflow.CurrentNodeReference
+	handles   chan sessionruntime.ExecutionHandle
 }
 
 type completingScriptRunner struct {
@@ -1731,6 +1758,7 @@ type completingScriptRunner struct {
 	source    workflow.CurrentNodeReference
 	shellPath string
 	started   chan workflow.CurrentNodeReference
+	handles   chan sessionruntime.ExecutionHandle
 }
 
 type firstAdmissionBlockingScriptRunner struct {
@@ -1929,7 +1957,7 @@ func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context,
 
 func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	if reference.Equal(r.source) {
-		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 			Workflow: &lease,
 			Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", `printf '{"transition_id":"next"}'`}},
 			Finalize: func(ctx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
@@ -1943,6 +1971,9 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 				return err
 			},
 		})
+		if err == nil && r.handles != nil {
+			r.handles <- handle
+		}
 		return err
 	}
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
@@ -1956,12 +1987,15 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 }
 
 func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
-	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 		Workflow: &lease,
 		Command:  r.command,
 	})
 	if err == nil {
 		r.started <- reference
+		if r.handles != nil {
+			r.handles <- handle
+		}
 	}
 	return err
 }

@@ -30,7 +30,7 @@ type ScriptCommand struct {
 type ScriptExecutionRequest struct {
 	Workflow           *WorkflowExecutionLease
 	Command            ScriptCommand
-	RunningPublication func(TaskExecution) error
+	RunningPublication WorkflowRunningPublication
 	Finalize           func(context.Context, ExecutionScope, ScriptResult, error) error
 }
 
@@ -122,7 +122,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 				var finalizeErr error
 				if req.Finalize != nil {
 					finalizeErr = req.Finalize(
-						context.WithoutCancel(execution.ctx),
+						execution.ctx,
 						execution.scope,
 						result.clone(),
 						publicationErr,

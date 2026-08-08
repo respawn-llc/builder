@@ -18,11 +18,16 @@ import (
 
 type ExecutionHandle interface {
 	Scope() ExecutionScope
-	PublishRunning(context.Context, func(TaskExecution) error) error
+	PublishRunning(context.Context, WorkflowRunningPublication) error
 	RequestStop() bool
 	Stop(context.Context) error
 	Wait(context.Context) (ExecutionResult, error)
 	Close(context.Context) error
+}
+
+type WorkflowRunningPublication interface {
+	PublishWorkflowRunning(context.Context, TaskExecution) error
+	WorkflowRunningPublished(runtimeids.ExecutionScopeID) bool
 }
 
 type ExecutionResult struct {
@@ -34,6 +39,7 @@ type executionPhase uint8
 
 const (
 	executionPhaseQueued executionPhase = iota + 1
+	executionPhasePublishing
 	executionPhaseRunning
 	executionPhaseFinalizing
 )
@@ -113,7 +119,7 @@ type execution struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	started         chan struct{}
-	runningPublish  func(TaskExecution) error
+	runningPublish  WorkflowRunningPublication
 	publishOnce     sync.Once
 	publishDone     chan struct{}
 	publishErr      error
@@ -147,12 +153,12 @@ func (h executionHandle) Scope() ExecutionScope {
 
 func (h executionHandle) PublishRunning(
 	ctx context.Context,
-	publish func(TaskExecution) error,
+	publication WorkflowRunningPublication,
 ) error {
 	if h.execution == nil {
 		panic("execution handle is uninitialized")
 	}
-	if publish == nil {
+	if publication == nil {
 		return errors.New("running execution publication is required")
 	}
 	if ctx == nil {
@@ -171,7 +177,7 @@ func (h executionHandle) PublishRunning(
 		return startErr
 	}
 	h.execution.publishOnce.Do(func() {
-		h.execution.publishErr = publish(start)
+		h.execution.publishErr = publication.PublishWorkflowRunning(ctx, start)
 		close(h.execution.publishDone)
 	})
 	select {
@@ -305,7 +311,22 @@ func (e *execution) publishConfiguredRunning() error {
 	if e.runningPublish == nil {
 		return nil
 	}
-	return executionHandle{execution: e}.PublishRunning(e.ctx, e.runningPublish)
+	if err := (executionHandle{execution: e}).PublishRunning(e.ctx, e.runningPublish); err != nil {
+		return err
+	}
+	e.authority.mu.Lock()
+	if e.authority.byScope[e.scope.ID()] == e && e.phase == executionPhasePublishing {
+		e.phase = executionPhaseRunning
+	}
+	e.authority.mu.Unlock()
+	return nil
+}
+
+func (e *execution) workflowRunningPublished() bool {
+	if e.runningPublish == nil {
+		return true
+	}
+	return e.runningPublish.WorkflowRunningPublished(e.scope.ID())
 }
 
 func (e *execution) confirmDisposition() {
@@ -351,7 +372,9 @@ func (e *execution) beginWorkflowFinalization() {
 		e.authority.mu.Unlock()
 		return
 	}
-	if e.phase != executionPhaseQueued && e.phase != executionPhaseRunning {
+	if e.phase != executionPhaseQueued &&
+		e.phase != executionPhasePublishing &&
+		e.phase != executionPhaseRunning {
 		e.authority.mu.Unlock()
 		panic(fmt.Sprintf(
 			"workflow execution scope %s began finalization from phase %d",

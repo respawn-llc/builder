@@ -119,6 +119,12 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 		switch execution.phase {
 		case executionPhaseQueued:
 			state.Queued++
+		case executionPhasePublishing:
+			if execution.workflowRunningPublished() {
+				state.Running++
+			} else {
+				state.Queued++
+			}
 		case executionPhaseRunning:
 			pending, err := execution.prompts.pendingReferences()
 			if err != nil {
@@ -263,6 +269,7 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 		return errors.New("workflow execution index contains a non-workflow scope")
 	}
 	if execution.phase != executionPhaseQueued &&
+		execution.phase != executionPhasePublishing &&
 		execution.phase != executionPhaseRunning &&
 		execution.phase != executionPhaseFinalizing {
 		return errors.New("live workflow execution has an invalid phase")
@@ -270,7 +277,8 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	target := TaskExecution{
 		Ref:     ref,
 		ScopeID: execution.scope.ID(),
-		Queued:  execution.phase == executionPhaseQueued,
+		Queued: execution.phase == executionPhaseQueued ||
+			(execution.phase == executionPhasePublishing && !execution.workflowRunningPublished()),
 	}
 	pendingPrompts, err := execution.prompts.pendingReferences()
 	if err != nil {

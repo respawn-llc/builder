@@ -1265,6 +1265,50 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 	}
 }
 
+func TestCurrentNodeControllerRetiresCommittedCompletionAfterEventFailure(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-completion-event-failure", "node-source")
+	eventErr := errors.New("completion event delivery failed")
+	store := &currentNodeControllerStore{
+		completionEventErr: eventErr,
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	handles := make(chan sessionruntime.ExecutionHandle, 1)
+	controller = newCurrentNodeControllerForTest(t, store, &completingScriptRunner{
+		authority: authority,
+		source:    source,
+		shellPath: shellPath,
+		started:   make(chan workflow.CurrentNodeReference, 1),
+		handles:   handles,
+	}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start Current Node: %v", err)
+	}
+	handle := <-handles
+	if _, err := handle.Wait(context.Background()); !errors.Is(err, eventErr) {
+		t.Fatalf("Wait error = %v, want surfaced event failure %v", err, eventErr)
+	}
+	if _, live := authority.ExecutionByScope(handle.Scope().ID()); live {
+		t.Fatal("committed completion left Authority Exact Scope live")
+	}
+	if hasLiveCurrentNode(controller.Snapshot(), source) {
+		t.Fatalf("committed completion left controller Run live: %+v", controller.Snapshot())
+	}
+}
+
 func TestCurrentNodeControllerInterruptsAgentThatReturnsWithoutAcceptedCompletion(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-agent-finalizer-failure", "node-agent")
 	store := &currentNodeControllerStore{}

@@ -176,14 +176,16 @@ func TestLifecycleCaptureDoesNotWaitForScriptProcessStop(t *testing.T) {
 		},
 	}
 	stopRoot := t.TempDir()
+	runEntered := filepath.Join(stopRoot, "running")
 	stopEntered := filepath.Join(stopRoot, "entered")
 	stopRelease := filepath.Join(stopRoot, "release")
 	grace := 10 * time.Second
 	runner := &recordingScriptRunner{
 		command: sessionruntime.ScriptCommand{
 			Path: shellPath,
-			Args: []string{"-c", `trap 'touch "$STOP_ENTERED"; while [ ! -e "$STOP_RELEASE" ]; do sleep 0.01; done; exit 0' TERM; while :; do sleep 1; done`},
+			Args: []string{"-c", `trap 'touch "$STOP_ENTERED"; while [ ! -e "$STOP_RELEASE" ]; do sleep 0.01; done; exit 0' TERM; touch "$RUN_ENTERED"; while :; do sleep 1; done`},
 			Env: append(os.Environ(),
+				"RUN_ENTERED="+runEntered,
 				"STOP_ENTERED="+stopEntered,
 				"STOP_RELEASE="+stopRelease,
 			),
@@ -219,6 +221,10 @@ func TestLifecycleCaptureDoesNotWaitForScriptProcessStop(t *testing.T) {
 		t.Fatalf("StartTask: %v", err)
 	}
 	waitForRunningCurrentNode(t, authority, reference)
+	testsetup.RequireUntil(t, time.Now().Add(10*time.Second), 10*time.Millisecond, func() bool {
+		_, err := os.Stat(runEntered)
+		return err == nil
+	}, "Script process did not enter its running barrier")
 	interrupted := make(chan error, 1)
 	go func() {
 		interrupted <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID})

@@ -215,7 +215,11 @@ func (a *Authority) beginWorkflowExecution(item *execution) {
 		a.mu.Unlock()
 		panic(fmt.Sprintf("workflow execution scope %s began from phase %d", item.scope.ID(), item.phase))
 	}
-	item.phase = executionPhaseRunning
+	if item.runningPublish == nil {
+		item.phase = executionPhaseRunning
+	} else {
+		item.phase = executionPhasePublishing
+	}
 	ref, workflowScoped := item.scope.Workflow()
 	if !workflowScoped {
 		a.mu.Unlock()

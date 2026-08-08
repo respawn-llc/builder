@@ -77,9 +77,11 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		)
 	}
 	taskID := references[0].TaskID
+	var publicationOutcome workflowstore.LifecyclePublicationOutcome
 	persistenceErr := c.lifecycle.Run(cleanupCtx, taskID, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
-		return c.publication.PublishCurrentNodeInterruption(
+		var err error
+		publicationOutcome, err = c.publication.PublishCurrentNodeInterruption(
 			ctx,
 			references,
 			workflowstore.CurrentNodeInterruptionFromReadyOrAdmitted,
@@ -88,8 +90,9 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 			detail,
 			expectedExact,
 		)
+		return err
 	})
-	if persistenceErr == nil {
+	if publicationOutcome.Committed() {
 		for _, exact := range expectedExact {
 			if err := c.authority.ConfirmWorkflowDisposition(exact.ScopeID); err != nil &&
 				!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {

@@ -160,7 +160,7 @@ type AgentExecutionRequest struct {
 	Resource           AgentResourceSelection
 	Ask                ExecutionAskHandler
 	PromptFeed         ExecutionPromptFeed
-	RunningPublication func(TaskExecution) error
+	RunningPublication WorkflowRunningPublication
 	Runner             AgentRunner
 	Finalize           func(context.Context, ExecutionScope, error) error
 }

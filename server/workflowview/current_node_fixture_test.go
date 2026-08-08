@@ -587,9 +587,7 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
 	}
-	if err := handle.PublishRunning(f.ctx, func(sessionruntime.TaskExecution) error {
-		return nil
-	}); err != nil {
+	if err := handle.PublishRunning(f.ctx, workflowViewRunningPublicationStub{}); err != nil {
 		t.Fatalf("PublishRunning: %v", err)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
@@ -606,6 +604,21 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 		request:   request,
 		handle:    handle,
 	}
+}
+
+type workflowViewRunningPublicationStub struct{}
+
+func (workflowViewRunningPublicationStub) PublishWorkflowRunning(
+	context.Context,
+	sessionruntime.TaskExecution,
+) error {
+	return nil
+}
+
+func (workflowViewRunningPublicationStub) WorkflowRunningPublished(
+	runtimeids.ExecutionScopeID,
+) bool {
+	return true
 }
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {

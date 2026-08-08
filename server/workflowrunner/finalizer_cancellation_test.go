@@ -1,0 +1,185 @@
+package workflowrunner
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowruntime"
+	"core/server/workflowstore"
+	"core/shared/runtimeids"
+)
+
+func TestAgentFinalizerCancellationUsesTypedDurableInterruption(t *testing.T) {
+	controller := newCanceledFinalizerController()
+	scopeID := runtimeids.NewExecutionScopeID()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- (&Starter{}).finalizeCurrentNodeAgent(ctx, controller, scopeID, nil)
+	}()
+
+	controller.awaitFinalizing(t)
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Agent finalizer error = %v, want cancellation", err)
+	}
+	controller.assertCanceledInterruption(t, scopeID)
+	if controller.resultFinalizations != 0 {
+		t.Fatalf("Agent result finalizations = %d, want 0", controller.resultFinalizations)
+	}
+}
+
+func TestScriptFinalizerCancellationUsesTypedDurableInterruption(t *testing.T) {
+	controller := newCanceledFinalizerController()
+	scopeID := runtimeids.NewExecutionScopeID()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- (&Starter{}).finalizeCurrentNodeScript(
+			ctx,
+			workflowstore.CurrentNodeStartContext{},
+			controller,
+			scopeID,
+			sessionruntime.ScriptResult{Stdout: []byte(`{"transition":"done"}`)},
+			nil,
+		)
+	}()
+
+	controller.awaitFinalizing(t)
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Script finalizer error = %v, want cancellation", err)
+	}
+	controller.assertCanceledInterruption(t, scopeID)
+	if controller.completions != 0 {
+		t.Fatalf("Script completions = %d, want 0", controller.completions)
+	}
+}
+
+type canceledFinalizerController struct {
+	finalizingEntered chan struct{}
+	finalizingOnce    sync.Once
+
+	mu                  sync.Mutex
+	completions         int
+	resultFinalizations int
+	failures            []canceledFinalizerFailure
+}
+
+type canceledFinalizerFailure struct {
+	scopeID runtimeids.ExecutionScopeID
+	reason  workflow.CurrentNodeInterruptionReason
+	cause   error
+	ctxErr  error
+}
+
+func newCanceledFinalizerController() *canceledFinalizerController {
+	return &canceledFinalizerController{finalizingEntered: make(chan struct{})}
+}
+
+func (c *canceledFinalizerController) PublishCurrentNodeExactFinalizing(
+	ctx context.Context,
+	_ runtimeids.ExecutionScopeID,
+) error {
+	c.finalizingOnce.Do(func() { close(c.finalizingEntered) })
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+func (c *canceledFinalizerController) FailCurrentNodeScope(
+	ctx context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+	reason workflow.CurrentNodeInterruptionReason,
+	cause error,
+) error {
+	c.mu.Lock()
+	c.failures = append(c.failures, canceledFinalizerFailure{
+		scopeID: scopeID,
+		reason:  reason,
+		cause:   cause,
+		ctxErr:  context.Cause(ctx),
+	})
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *canceledFinalizerController) FinalizeCurrentNodeResult(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+	error,
+) error {
+	c.mu.Lock()
+	c.resultFinalizations++
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *canceledFinalizerController) CompleteCurrentNode(
+	context.Context,
+	workflowruntime.CompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	c.mu.Lock()
+	c.completions++
+	c.mu.Unlock()
+	return workflowruntime.CompletionResult{}, nil
+}
+
+func (*canceledFinalizerController) RecordProtocolViolation(
+	context.Context,
+	workflowruntime.ViolationRequest,
+) (workflowruntime.ViolationResult, error) {
+	return workflowruntime.ViolationResult{}, nil
+}
+
+func (*canceledFinalizerController) ResetProtocolViolationBudget(
+	context.Context,
+	workflowruntime.ViolationResetRequest,
+) error {
+	return nil
+}
+
+func (*canceledFinalizerController) ObserveCurrentNodeCompletion(
+	context.Context,
+	workflowruntime.CompletionObservationRequest,
+) (workflowruntime.CompletionObservationResult, error) {
+	return workflowruntime.CompletionObservationResult{}, nil
+}
+
+func (c *canceledFinalizerController) awaitFinalizing(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.finalizingEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("production finalizer did not enter finalizing publication")
+	}
+}
+
+func (c *canceledFinalizerController) assertCanceledInterruption(
+	t *testing.T,
+	scopeID runtimeids.ExecutionScopeID,
+) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.failures) != 1 {
+		t.Fatalf("typed interruption calls = %d, want 1", len(c.failures))
+	}
+	failure := c.failures[0]
+	if failure.scopeID != scopeID {
+		t.Fatalf("interrupted scope = %s, want %s", failure.scopeID, scopeID)
+	}
+	if failure.reason != workflow.CurrentNodeInterruptionReasonRuntimeCanceled {
+		t.Fatalf("interruption reason = %q, want %q", failure.reason, workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+	}
+	if failure.ctxErr != nil {
+		t.Fatalf("durable interruption context error = %v, want nil", failure.ctxErr)
+	}
+	if !errors.Is(failure.cause, context.Canceled) {
+		t.Fatalf("interruption cause = %v, want cancellation", failure.cause)
+	}
+}

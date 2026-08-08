@@ -77,6 +77,52 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 }
 
+func TestCurrentNodeControllerRetiresCommittedInterruptionAfterEventFailure(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-interruption-event-failure", "node-script")
+	eventErr := errors.New("interruption event delivery failed")
+	store := &currentNodeControllerStore{interruptionEventErr: eventErr}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	handles := make(chan sessionruntime.ExecutionHandle, 1)
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+		handles: handles,
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start Current Node: %v", err)
+	}
+	handle := <-handles
+	waitForRunningCurrentNode(t, authority, reference)
+	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, eventErr) {
+		t.Fatalf("Interrupt error = %v, want surfaced event failure %v", err, eventErr)
+	}
+	if _, live := authority.ExecutionByScope(handle.Scope().ID()); live {
+		t.Fatal("committed interruption left Authority Exact Scope live")
+	}
+	if hasLiveCurrentNode(controller.Snapshot(), reference) {
+		t.Fatalf("committed interruption left controller Run live: %+v", controller.Snapshot())
+	}
+}
+
 func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRetirement(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -731,6 +777,64 @@ func TestCurrentNodeControllerScopeFailureRetainsRunUntilInterruptionPublication
 				t.Fatalf("Run after successful publication = %+v, owned=%t, want typed stopped owner", run, owned)
 			}
 		})
+	}
+}
+
+func TestCurrentNodeControllerScopeFailureStopsCommittedRunAfterEventFailure(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-scope-event-failure",
+		"node-agent",
+	)
+	eventErr := errors.New("interruption event delivery failed")
+	store := &currentNodeControllerStore{interruptionEventErr: eventErr}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+	)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: reference,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	controller.mu.Lock()
+	installLiveCurrentNodeRunLockedForTest(
+		controller,
+		reference,
+		workflow.NodeKindAgent,
+		currentNodeAdmissionExplicitOverride,
+		lease,
+	)
+	controller.mu.Unlock()
+
+	err = controller.FailCurrentNodeScope(
+		context.Background(),
+		lease.ScopeID(),
+		"workflow_runtime_failed",
+		errors.New("runtime failed"),
+	)
+	if !errors.Is(err, eventErr) {
+		t.Fatalf("FailCurrentNodeScope error = %v, want %v", err, eventErr)
+	}
+	controller.mu.Lock()
+	run, _, owned := controller.runByScopeLocked(lease.ScopeID())
+	controller.mu.Unlock()
+	if !owned ||
+		run.disposition != currentNodeRunDispositionStopped ||
+		run.stop == nil ||
+		run.stop.reason != currentNodeRunStopInterrupted {
+		t.Fatalf("Run after committed event failure = %+v, owned=%t, want stopped owner", run, owned)
 	}
 }
 

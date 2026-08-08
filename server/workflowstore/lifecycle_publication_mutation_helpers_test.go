@@ -60,7 +60,7 @@ func completeCurrentNodeForStoreTest(
 		return CurrentNodeCompletionResult{}, err
 	}
 	defer func() { _ = publication.Close() }()
-	return publication.PublishCurrentNodeCompletion(
+	result, _, err := publication.PublishCurrentNodeCompletion(
 		ctx,
 		req,
 		func(result CurrentNodeCompletionResult) (TaskLifecycleDelta, func(error), error) {
@@ -80,6 +80,7 @@ func completeCurrentNodeForStoreTest(
 			return delta, nil, err
 		},
 	)
+	return result, err
 }
 
 func applyPendingApprovalForStoreTest(
