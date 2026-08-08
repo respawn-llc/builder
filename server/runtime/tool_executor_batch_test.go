@@ -193,6 +193,91 @@ func TestToolReportOperationalFailureAbortsResultGroupWithoutSyntheticInterrupti
 	}
 }
 
+func TestSiblingAbortDiscardsProvisionalJoinedResultCells(t *testing.T) {
+	t.Parallel()
+	handler := &serialSiblingAbortToolHandler{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolAskQuestion,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	handler.engine = engine
+	engine.ensureOrchestrationCollaborators()
+	prepared := []executorToolCall{
+		{
+			call: llm.ToolCall{
+				ID:   "completed-before-abort",
+				Name: string(toolspec.ToolAskQuestion),
+			},
+			toolID:    toolspec.ToolAskQuestion,
+			knownTool: true,
+		},
+		{
+			call: llm.ToolCall{
+				ID:   "abort-sibling",
+				Name: string(toolspec.ToolAskQuestion),
+			},
+			toolID:    toolspec.ToolAskQuestion,
+			knownTool: true,
+		},
+	}
+	collector, err := newResultGroupCollector(
+		resultGroupRosterFromPreparedCalls(prepared),
+	)
+	if err != nil {
+		t.Fatalf("new result group collector: %v", err)
+	}
+
+	completed, executeErr := engine.toolFlow.ExecuteToolCalls(
+		context.Background(),
+		"step",
+		prepared,
+		collector,
+	)
+	engine.closed.Store(false)
+	fatal := collector.fatalSnapshot()
+	if fatal == nil ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrEngineClosed) ||
+		!errors.Is(executeErr, ErrEngineClosed) {
+		t.Fatalf(
+			"sibling abort = execute:%v fatal:%+v, want uncommitted engine-closed abort",
+			executeErr,
+			fatal,
+		)
+	}
+	outcome, coordinateErr := engine.coordinateAcceptedResponsePostJoin(
+		"step",
+		prepared,
+		completed,
+		collector,
+		executeErr,
+	)
+	if !errors.As(coordinateErr, &fatal) {
+		t.Fatalf("post-join error = %v, want Result Group fatal", coordinateErr)
+	}
+	for index, cell := range completed {
+		if cell != nil {
+			t.Fatalf(
+				"completed cell %d = %+v, want absent after sibling abort",
+				index,
+				cell,
+			)
+		}
+	}
+	if outcome.results != nil {
+		t.Fatalf(
+			"post-join fatal results = %+v, want no materialized result cells",
+			outcome.results,
+		)
+	}
+}
+
 func TestHostedStartOperationalFailureAbortsResultGroupWithoutSyntheticInterruption(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(
@@ -475,8 +560,8 @@ func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
 		if got := probe.calls.Load(); got != 1 {
 			t.Fatalf("uncommitted tool handler calls = %d, want one", got)
 		}
-		if len(results) != 1 || results[0].IsError {
-			t.Fatalf("uncommitted tool results = %+v, want successful execution result", results)
+		if len(results) != 0 {
+			t.Fatalf("uncommitted fatal tool results = %+v, want none", results)
 		}
 		if err := blocker.Restore(); err != nil {
 			t.Fatalf("restore event-log append blocker: %v", err)
@@ -529,8 +614,8 @@ func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
 		if got := probe.calls.Load(); got != 1 {
 			t.Fatalf("committed tool handler calls = %d, want one", got)
 		}
-		if len(results) != 1 || results[0].IsError {
-			t.Fatalf("committed tool results = %+v, want successful execution result", results)
+		if len(results) != 0 {
+			t.Fatalf("committed fatal tool results = %+v, want none", results)
 		}
 
 		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
@@ -891,6 +976,24 @@ func (h *closeEngineBeforeResultReportHandler) Call(
 ) (tools.Result, error) {
 	h.calls.Add(1)
 	h.engine.closed.Store(true)
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+	}, nil
+}
+
+type serialSiblingAbortToolHandler struct {
+	engine *Engine
+}
+
+func (h *serialSiblingAbortToolHandler) Call(
+	_ context.Context,
+	call tools.Call,
+) (tools.Result, error) {
+	if call.ID == "abort-sibling" {
+		h.engine.closed.Store(true)
+	}
 	return tools.Result{
 		CallID: call.ID,
 		Name:   call.Name,

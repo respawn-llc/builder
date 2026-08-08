@@ -472,8 +472,8 @@ func runPersistedEffectRecoveryCase(
 	if failure == persistedEffectObserverFailure && !errors.Is(fatal.Cause, cause) {
 		t.Fatalf("%s observer cause = %v, want %v", toolID, fatal.Cause, cause)
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("%s provisional results = %+v, want one absent result", toolID, results)
+	if len(results) != 0 {
+		t.Fatalf("%s fatal results = %+v, want none", toolID, results)
 	}
 	if brokerCalls != 0 {
 		t.Fatalf("%s approval handler calls = %d, want none", toolID, brokerCalls)

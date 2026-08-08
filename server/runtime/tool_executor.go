@@ -164,6 +164,9 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	}
 
 	wg.Wait()
+	if collector.fatalSnapshot() != nil {
+		clear(results)
+	}
 	var joined error
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)

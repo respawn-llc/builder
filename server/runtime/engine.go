@@ -1228,7 +1228,7 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 	)
 	var goalErr error
 	if fatal := collector.fatalSnapshot(); fatal != nil {
-		return acceptedResponsePostJoinOutcome{results: results}, fatal
+		return acceptedResponsePostJoinOutcome{}, fatal
 	}
 	if closeErr != nil {
 		return acceptedResponsePostJoinOutcome{results: results}, closeErr

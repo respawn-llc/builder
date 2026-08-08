@@ -306,8 +306,8 @@ func TestQuestionBarrierPreCommitFailureBlocksInteractionAndSemanticResult(t *te
 	if skipped != 1 {
 		t.Fatalf("Question batch skip callbacks = %d, want one", skipped)
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("Question results = %+v, want no provisional semantic result", results)
+	if len(results) != 0 {
+		t.Fatalf("Question fatal results = %+v, want none", results)
 	}
 	if pending := broker.Pending(); len(pending) != 0 {
 		t.Fatalf("Question queued after barrier failure: %+v", pending)
@@ -380,8 +380,8 @@ func TestQuestionBarrierCommittedObserverFailureRetainsPrefixAndBlocksInteractio
 	if skipped != 1 {
 		t.Fatalf("Question batch skip callbacks = %d, want one", skipped)
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("Question results = %+v, want no provisional semantic result", results)
+	if len(results) != 0 {
+		t.Fatalf("Question fatal results = %+v, want none", results)
 	}
 	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); !found {
 		t.Fatal("committed observer failure did not project the ready sibling")
@@ -457,8 +457,8 @@ func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPr
 	if skipped != 1 {
 		t.Fatalf("Question batch skip callbacks = %d, want one", skipped)
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("Question results = %+v, want no provisional semantic result", results)
+	if len(results) != 0 {
+		t.Fatalf("Question fatal results = %+v, want none", results)
 	}
 	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); found {
 		t.Fatal("committed projection failure partially projected the ready sibling")
@@ -762,11 +762,8 @@ func runSecondQuestionBarrierAttentionCase(
 			skippedCalls,
 		)
 	}
-	if len(results) != 2 ||
-		results[0].CallID != "question" ||
-		results[0].IsError ||
-		results[1].CallID != "" {
-		t.Fatalf("two-Question results = %+v, want first complete and blocked second absent", results)
+	if len(results) != 0 {
+		t.Fatalf("two-Question fatal results = %+v, want none", results)
 	}
 	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("question-2"); found {
 		t.Fatal("collector fatal was converted into an interrupted or semantic second-Question result")

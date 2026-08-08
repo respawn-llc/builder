@@ -324,9 +324,10 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		err,
 		persistedCallbackErr,
 	)
-	if _, persist := runErrorFeedbackMessage(lifecycleErr); persist {
+	unpersistedLifecycleErr := removePendingModelRecoveryClearError(lifecycleErr)
+	if _, persist := runErrorFeedbackMessage(unpersistedLifecycleErr); persist {
 		if feedbackErr := b.engine.SteerBackgroundContinuationFailure(
-			lifecycleErr,
+			unpersistedLifecycleErr,
 		); feedbackErr != nil {
 			err = errors.Join(
 				err,
@@ -352,10 +353,29 @@ func removePersistedBackgroundCallbackError(
 	err error,
 	persisted *persistedBackgroundCallbackError,
 ) error {
-	if err == nil || persisted == nil {
+	if persisted == nil {
 		return err
 	}
-	if err == persisted {
+	return removeBackgroundErrorBranches(err, func(candidate error) bool {
+		return candidate == persisted
+	})
+}
+
+func removePendingModelRecoveryClearError(err error) error {
+	return removeBackgroundErrorBranches(err, func(candidate error) bool {
+		_, matches := candidate.(*pendingModelRecoveryClearError)
+		return matches
+	})
+}
+
+func removeBackgroundErrorBranches(
+	err error,
+	remove func(error) bool,
+) error {
+	if err == nil {
+		return nil
+	}
+	if remove(err) {
 		return nil
 	}
 	joined, ok := err.(interface{ Unwrap() []error })
@@ -364,9 +384,9 @@ func removePersistedBackgroundCallbackError(
 	}
 	remaining := make([]error, 0, len(joined.Unwrap()))
 	for _, child := range joined.Unwrap() {
-		if unpersisted := removePersistedBackgroundCallbackError(
+		if unpersisted := removeBackgroundErrorBranches(
 			child,
-			persisted,
+			remove,
 		); unpersisted != nil {
 			remaining = append(remaining, unpersisted)
 		}

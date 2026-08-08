@@ -24,6 +24,22 @@ var ErrExclusiveStepReservationPending = errors.New("manual compaction is alread
 // step end after terminal transcript state has already been published.
 var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
 
+type pendingModelRecoveryClearError struct {
+	cause error
+}
+
+func (e *pendingModelRecoveryClearError) Error() string {
+	return fmt.Sprintf("%v: %v", errPendingModelRecoveryClear, e.cause)
+}
+
+func (e *pendingModelRecoveryClearError) Unwrap() error {
+	return e.cause
+}
+
+func (e *pendingModelRecoveryClearError) Is(target error) bool {
+	return target == errPendingModelRecoveryClear
+}
+
 type defaultExclusiveStepLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
@@ -207,7 +223,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			if clearErr == nil {
 				return nil
 			}
-			wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
+			wrapped := &pendingModelRecoveryClearError{cause: clearErr}
 			_ = s.engine.steer(stepID, steerEventIntent(Event{
 				Kind:   EventInFlightClearFailed,
 				StepID: stepID,

@@ -890,6 +890,72 @@ func TestBackgroundTerminalLifecycleFailurePersistsSeparatelyFromCallbackFailure
 	}
 }
 
+func TestBackgroundPendingRecoveryClearFailurePersistsOneDeveloperDiagnostic(t *testing.T) {
+	t.Parallel()
+	clearErr := errors.New("background pending recovery clear failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	failureArmed := false
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("completed"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+		}}},
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if event.Kind == EventAssistantMessage && !failureArmed {
+					failureArmed = true
+					gate.FailNext(clearErr)
+				}
+			},
+		},
+	)
+	scheduler := &defaultBackgroundNoticeScheduler{
+		engine: engine,
+		steps:  engine.stepLifecycle,
+	}
+	scheduler.queueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	}, false)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); !errors.Is(
+		err,
+		errPendingModelRecoveryClear,
+	) || !errors.Is(err, clearErr) {
+		t.Fatalf(
+			"background pending recovery clear error = %v, want typed clear failure",
+			err,
+		)
+	}
+	if !failureArmed {
+		t.Fatal("background assistant commit did not arm clear failure")
+	}
+	diagnostics := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics++
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf(
+			"background pending recovery clear diagnostics = %d, want exactly one",
+			diagnostics,
+		)
+	}
+}
+
 func newProviderFailureOrderingEngine(
 	t *testing.T,
 	config Config,

@@ -255,8 +255,8 @@ func TestCompleteNodeBarrierPreCommitFailureBlocksWorkflowMutationAndResult(t *t
 	if controller.completeCalls.Load() != 0 {
 		t.Fatalf("uncommitted complete_node Workflow calls = %d, want zero", controller.completeCalls.Load())
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("uncommitted complete_node results = %+v, want absent provisional result", results)
+	if len(results) != 0 {
+		t.Fatalf("uncommitted complete_node fatal results = %+v, want none", results)
 	}
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore event-log blocker: %v", err)
@@ -320,8 +320,8 @@ func TestCompleteNodeBarrierCommittedObserverFailureRetainsPrefixAndBlocksMutati
 	if controller.completeCalls.Load() != 0 {
 		t.Fatalf("committed-observer complete_node Workflow calls = %d, want zero", controller.completeCalls.Load())
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("committed-observer complete_node results = %+v, want absent provisional result", results)
+	if len(results) != 0 {
+		t.Fatalf("committed-observer complete_node fatal results = %+v, want none", results)
 	}
 	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); !found {
 		t.Fatal("committed observer failure did not project the ready sibling")
@@ -387,8 +387,8 @@ func TestCompleteNodeBarrierCommittedProjectionFailureHydratesPrefixAndBlocksMut
 	if controller.completeCalls.Load() != 0 {
 		t.Fatalf("committed-projection complete_node Workflow calls = %d, want zero", controller.completeCalls.Load())
 	}
-	if len(results) != 1 || results[0].CallID != "" {
-		t.Fatalf("committed-projection complete_node results = %+v, want absent provisional result", results)
+	if len(results) != 0 {
+		t.Fatalf("committed-projection complete_node fatal results = %+v, want none", results)
 	}
 	if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); found {
 		t.Fatal("committed projection failure partially projected the ready sibling")
