@@ -22,7 +22,7 @@ type taskShowOutput struct {
 	ExecutionTarget      *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
 	WorktreePath         *string                               `json:"worktree_path"`
 	CurrentNodes         []serverapi.WorkflowTaskCurrentNode   `json:"current_nodes"`
-	LiveSessionIDs       []string                              `json:"live_session_ids"`
+	LiveSessions         []serverapi.WorkflowTaskLiveSession   `json:"live_sessions"`
 	CurrentScripts       []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
 	RetainedSessionCount int                                   `json:"retained_session_count"`
 	Status               serverapi.WorkflowTaskStatus          `json:"status"`
@@ -96,7 +96,7 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		ExecutionTarget:      task.ExecutionTarget,
 		WorktreePath:         task.WorktreePath,
 		CurrentNodes:         task.CurrentNodes,
-		LiveSessionIDs:       task.LiveSessionIDs,
+		LiveSessions:         task.LiveSessions,
 		CurrentScripts:       task.CurrentScripts,
 		RetainedSessionCount: task.RetainedSessionCount,
 		Status:               task.Status,
@@ -184,8 +184,8 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	if task.WorktreePath != nil {
 		fmt.Fprintf(stdout, "Worktree: %s\n", *task.WorktreePath)
 	}
-	for _, sessionID := range task.LiveSessionIDs {
-		fmt.Fprintf(stdout, "Current session: %s\n", sessionID)
+	for _, session := range task.LiveSessions {
+		fmt.Fprintf(stdout, "Current session: %s\n", session.SessionID)
 	}
 	fmt.Fprintf(stdout, "Retained sessions: %d\n", task.RetainedSessionCount)
 	for _, script := range task.CurrentScripts {
