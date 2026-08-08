@@ -119,6 +119,17 @@ func TestManagedRootAllocatorAllowsParentContainingSourceWorkspace(t *testing.T)
 	}
 }
 
+func TestManagedRootAllocatorTrimsExemptRootBeforeOverlapCheck(t *testing.T) {
+	base := t.TempDir()
+	existing := filepath.Join(base, "existing")
+	exempt := "  " + existing + "  "
+	allocator := newManagedRootAllocator(base, strings.NewReader("entropy"))
+
+	if err := allocator.validateNoManagedRootOverlap(existing, []string{existing}, &exempt); err != nil {
+		t.Fatalf("whitespace-padded exempt root was not honored: %v", err)
+	}
+}
+
 func TestManagedRootAllocatorReservesRegularAndTaskLeaves(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "worktrees")
 	workspace := filepath.Join(t.TempDir(), "Builder CLI")

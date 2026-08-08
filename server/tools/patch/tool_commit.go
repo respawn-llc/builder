@@ -101,6 +101,9 @@ func commitStagedFiles(
 		if _, seen := removedPaths[path]; seen {
 			return fileSnapshot{}, nil
 		}
+		if err := revalidateCommitPath(tool, path); err != nil {
+			return fileSnapshot{}, rollbackAfterFailure(err)
+		}
 		before, err := captureSnapshot(path)
 		if err != nil {
 			primary := fmt.Errorf("snapshot %s %s: %w", label, path, err)
@@ -171,6 +174,9 @@ func commitStagedFiles(
 				return nil, errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
 			}
 			return nil, primary
+		}
+		if err := revalidateCommitPath(tool, s.NewPath); err != nil {
+			return nil, rollbackAfterFailure(err)
 		}
 		before, err := captureSnapshot(s.NewPath)
 		if err != nil {

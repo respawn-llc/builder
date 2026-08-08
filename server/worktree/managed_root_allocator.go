@@ -170,17 +170,22 @@ func (a *managedRootAllocator) validateNoManagedRootOverlap(candidate string, ex
 	if candidate == "" {
 		return errors.New("managed worktree root is required")
 	}
-	if exemptRoot != nil && strings.TrimSpace(*exemptRoot) == "" {
-		return errors.New("exempt managed worktree root is required")
+	var normalizedExemptRoot *string
+	if exemptRoot != nil {
+		normalized := strings.TrimSpace(*exemptRoot)
+		if normalized == "" {
+			return errors.New("exempt managed worktree root is required")
+		}
+		normalizedExemptRoot = &normalized
 	}
 	for _, existingRoot := range existingRoots {
 		existingRoot = strings.TrimSpace(existingRoot)
 		if existingRoot == "" {
 			return errors.New("existing managed worktree root is required")
 		}
-		if exemptRoot != nil &&
-			sameOrDescendantPath(existingRoot, *exemptRoot) &&
-			sameOrDescendantPath(*exemptRoot, existingRoot) {
+		if normalizedExemptRoot != nil &&
+			sameOrDescendantPath(existingRoot, *normalizedExemptRoot) &&
+			sameOrDescendantPath(*normalizedExemptRoot, existingRoot) {
 			continue
 		}
 		if sameOrDescendantPath(existingRoot, candidate) || sameOrDescendantPath(candidate, existingRoot) {

@@ -111,27 +111,37 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 		}
 		var targetFilesystemContext tools.FilesystemContext
 		if activeRuntime != nil {
-			targetBoundary, rootErr := s.metadata.ResolveProjectWorkspaceBoundary(runCtx, currentPlan.TargetProject.ID)
-			if rootErr != nil {
-				return rootErr
-			}
-			attached, rootErr := s.metadata.ProjectWorkspaceAttached(runCtx, currentPlan.TargetProject.ID, currentPlan.TargetWorkspaceRoot)
-			if rootErr != nil {
-				return rootErr
-			}
-			if !attached {
-				targetBoundary, _, rootErr = targetBoundary.WithWorkspace(metadata.ProjectWorkspace{
-					CanonicalRoot: currentPlan.TargetWorkspaceRoot,
-				})
-				if rootErr != nil {
-					return rootErr
-				}
-			}
-			targetFilesystemContext, rootErr = runtimewire.NewFilesystemContext(currentPlan.TargetWorkspaceRoot, currentPlan.TargetWorkspaceRoot, targetBoundary)
-			if rootErr != nil {
-				return rootErr
-			}
 			previous := activeRuntime.PreviousFilesystemContext
+			var rootErr error
+			if currentPlan.CrossProject() {
+				targetBoundary, boundaryErr := s.metadata.ResolveProjectWorkspaceBoundary(runCtx, currentPlan.TargetProject.ID)
+				if boundaryErr != nil {
+					return boundaryErr
+				}
+				attached, attachedErr := s.metadata.ProjectWorkspaceAttached(runCtx, currentPlan.TargetProject.ID, currentPlan.TargetWorkspaceRoot)
+				if attachedErr != nil {
+					return attachedErr
+				}
+				if !attached {
+					targetBoundary, _, rootErr = targetBoundary.WithWorkspace(metadata.ProjectWorkspace{
+						CanonicalRoot: currentPlan.TargetWorkspaceRoot,
+					})
+					if rootErr != nil {
+						return rootErr
+					}
+				}
+				targetFilesystemContext, rootErr = runtimewire.NewFilesystemContext(currentPlan.TargetWorkspaceRoot, currentPlan.TargetWorkspaceRoot, targetBoundary)
+			} else {
+				targetFilesystemContext, rootErr = runtimewire.WithExecutionTarget(
+					previous,
+					currentPlan.TargetWorkspaceRoot,
+					currentPlan.TargetWorkspaceRoot,
+					nil,
+				)
+			}
+			if rootErr != nil {
+				return rootErr
+			}
 			if previous.ManagedWorktree != nil {
 				targetFilesystemContext.ManagedWorktree, rootErr = previous.ManagedWorktree.WithCurrentWorktreeRoot(nil)
 				if rootErr != nil {

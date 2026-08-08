@@ -680,7 +680,10 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 		t.Fatalf("seed delete target: %v", err)
 	}
 	foreignTarget := filepath.Join(foreignRoot, "foreign.txt")
-	stage, err := createStagedFile(foreignTarget, []byte("must not commit\n"), 0o644)
+	if err := os.Mkdir(foreignTarget, 0o755); err != nil {
+		t.Fatalf("seed foreign target directory: %v", err)
+	}
+	stage, err := createStagedFile(filepath.Join(currentRoot, "staged.txt"), []byte("must not commit\n"), 0o644)
 	if err != nil {
 		t.Fatalf("stage foreign target: %v", err)
 	}
@@ -703,8 +706,8 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 		t.Fatalf("expected managed-worktree revalidation error, got %v", err)
 	}
 	assertPatchFileContent(t, deleteTarget, "restore me\n")
-	if _, statErr := os.Stat(foreignTarget); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("foreign target was committed, stat err=%v", statErr)
+	if info, statErr := os.Stat(foreignTarget); statErr != nil || !info.IsDir() {
+		t.Fatalf("foreign target changed, stat=%v info=%v", statErr, info)
 	}
 }
 

@@ -625,6 +625,39 @@ func (s failingSessionRetargetBoundary) ResolveProjectWorkspaceBoundary(context.
 	return metadata.ProjectWorkspaceBoundary{}, s.err
 }
 
+func TestSessionWorkspaceRetargeterPreservesSameProjectWorkspaceSnapshot(t *testing.T) {
+	fixture := newRealSessionRetargetFixture(t, false)
+	fixture.openRuntime(t)
+	if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), fixture.sourceBinding.ProjectID, fixture.targetWorkspaceRoot); err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+
+	req := metadata.SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.child.Meta().SessionID,
+		WorkspaceRoot: fixture.targetWorkspaceRoot,
+	}
+	if _, err := fixture.retargeter(fixture.metadata, retargetProcessSource{}).RetargetWorkspace(context.Background(), req); err != nil {
+		t.Fatalf("RetargetWorkspace: %v", err)
+	}
+
+	var rebound tools.FilesystemContext
+	if err := fixture.authority.RunSessionMaintenance(context.Background(), fixture.childID.String(), func(_ context.Context, _ *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		rebound = maintenance.PreviousFilesystemContext.Clone()
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect same-project filesystem context: %v", err)
+	}
+	if rebound.Access.ProjectWorkspace.ProjectID != fixture.sourceBinding.ProjectID {
+		t.Fatalf("rebound Project ID = %q, want %q", rebound.Access.ProjectWorkspace.ProjectID, fixture.sourceBinding.ProjectID)
+	}
+	if len(rebound.Access.ProjectWorkspace.Roots) != 0 {
+		t.Fatalf("same-project retarget refreshed Workspace roots after activation: %+v", rebound.Access.ProjectWorkspace.Roots)
+	}
+	if canonicalRetargetTestPath(t, rebound.Access.ExecutionTargetRoot.LexicalPath) != canonicalRetargetTestPath(t, fixture.targetWorkspaceRoot) {
+		t.Fatalf("execution target root = %q, want %q", rebound.Access.ExecutionTargetRoot.LexicalPath, fixture.targetWorkspaceRoot)
+	}
+}
+
 func TestSessionWorkspaceRetargeterSurfacesTargetBoundaryLookupFailureBeforeMovingArtifact(t *testing.T) {
 	fixture := newRealSessionRetargetFixture(t, false)
 	fixture.openRuntime(t)
