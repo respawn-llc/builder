@@ -3,6 +3,7 @@ package workflowstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitelifecyclegen"
@@ -44,12 +46,17 @@ type lifecycleQuestionFact struct {
 	itemID           string
 	currentNode      workflow.CurrentNodeReference
 	scopeID          runtimeids.ExecutionScopeID
-	promptID         string
+	prompt           LifecyclePendingPromptReference
 }
 
 type lifecycleQuestionFactIdentity struct {
 	occurredAtUnixMs int64
 	itemID           string
+}
+
+type lifecycleQuestionPayloadKey struct {
+	scopeID  runtimeids.ExecutionScopeID
+	promptID string
 }
 
 type lifecycleQuestionIndex struct {
@@ -263,7 +270,7 @@ func lifecycleQuestionFacts(taskID workflow.TaskID, entry lifecycleTaskEntry) ([
 				itemID:           itemID,
 				currentNode:      exact.CurrentNode,
 				scopeID:          exact.ScopeID,
-				promptID:         prompt.ID,
+				prompt:           prompt,
 			})
 		}
 	}
@@ -282,7 +289,7 @@ func lifecycleQuestionFactEqual(left, right lifecycleQuestionFact) bool {
 		left.itemID != right.itemID ||
 		!left.currentNode.Equal(right.currentNode) ||
 		left.scopeID != right.scopeID ||
-		left.promptID != right.promptID {
+		left.prompt != right.prompt {
 		return false
 	}
 	return true
@@ -340,6 +347,7 @@ func (i *lifecycleQuestionIndex) replaceTaskQuestions(
 	taskID workflow.TaskID,
 	before lifecycleTaskEntry,
 	after lifecycleTaskEntry,
+	insertedPayloads map[lifecycleQuestionPayloadKey]LifecyclePendingPrompt,
 ) (err error) {
 	beforeFacts, err := lifecycleQuestionFacts(taskID, before)
 	if err != nil {
@@ -375,6 +383,9 @@ func (i *lifecycleQuestionIndex) replaceTaskQuestions(
 		}
 	}
 	if !changed {
+		if len(insertedPayloads) != 0 {
+			return errors.New("published lifecycle Question payload did not add an index item")
+		}
 		return nil
 	}
 	tx, err := i.db.BeginTx(ctx, nil)
@@ -387,6 +398,7 @@ func (i *lifecycleQuestionIndex) replaceTaskQuestions(
 		}
 	}()
 	queries := sqlitelifecyclegen.New(tx)
+	usedPayloads := make(map[lifecycleQuestionPayloadKey]struct{}, len(insertedPayloads))
 	for key, beforeFact := range beforeByKey {
 		afterFact, exists := afterByKey[key]
 		if exists && lifecycleQuestionFactEqual(beforeFact, afterFact) {
@@ -405,9 +417,25 @@ func (i *lifecycleQuestionIndex) replaceTaskQuestions(
 		if exists && lifecycleQuestionFactEqual(beforeFact, afterFact) {
 			continue
 		}
-		if insertErr := queries.InsertLifecycleQuestion(ctx, lifecycleQuestionInsertParams(afterFact)); insertErr != nil {
+		payloadKey := lifecycleQuestionPayloadKey{
+			scopeID:  afterFact.scopeID,
+			promptID: afterFact.prompt.ID,
+		}
+		payload, exists := insertedPayloads[payloadKey]
+		if !exists {
+			return fmt.Errorf("lifecycle Question index item %q has no published payload", afterFact.itemID)
+		}
+		params, paramsErr := lifecycleQuestionInsertParams(afterFact, payload)
+		if paramsErr != nil {
+			return paramsErr
+		}
+		if insertErr := queries.InsertLifecycleQuestion(ctx, params); insertErr != nil {
 			return fmt.Errorf("insert lifecycle Question index item %q: %w", afterFact.itemID, insertErr)
 		}
+		usedPayloads[payloadKey] = struct{}{}
+	}
+	if len(usedPayloads) != len(insertedPayloads) {
+		return errors.New("published lifecycle Question payload does not match an inserted index item")
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit lifecycle Question index mutation: %w", err)
@@ -415,14 +443,59 @@ func (i *lifecycleQuestionIndex) replaceTaskQuestions(
 	return nil
 }
 
-func lifecycleQuestionInsertParams(fact lifecycleQuestionFact) sqlitelifecyclegen.InsertLifecycleQuestionParams {
+func lifecycleQuestionInsertParams(
+	fact lifecycleQuestionFact,
+	prompt LifecyclePendingPrompt,
+) (sqlitelifecyclegen.InsertLifecycleQuestionParams, error) {
+	if lifecyclePendingPromptReference(prompt) != fact.prompt {
+		return sqlitelifecyclegen.InsertLifecycleQuestionParams{}, errors.New("lifecycle Question payload identity does not match its lifecycle fact")
+	}
+	if err := validateLifecyclePendingPrompt(prompt); err != nil {
+		return sqlitelifecyclegen.InsertLifecycleQuestionParams{}, err
+	}
+	suggestionsJSON, err := json.Marshal(append([]string{}, prompt.Suggestions...))
+	if err != nil {
+		return sqlitelifecyclegen.InsertLifecycleQuestionParams{}, fmt.Errorf("encode lifecycle Question suggestions: %w", err)
+	}
+	approvalDecisionsJSON, err := json.Marshal(append([]LifecycleApprovalDecision{}, prompt.ApprovalDecisions...))
+	if err != nil {
+		return sqlitelifecyclegen.InsertLifecycleQuestionParams{}, fmt.Errorf("encode lifecycle Question approval decisions: %w", err)
+	}
 	params := sqlitelifecyclegen.InsertLifecycleQuestionParams{
+		OccurredAtUnixMs:      fact.occurredAtUnixMs,
+		ItemID:                fact.itemID,
+		TaskID:                string(fact.currentNode.TaskID),
+		NodeID:                string(fact.currentNode.NodeID),
+		ScopeID:               fact.scopeID.String(),
+		PromptID:              fact.prompt.ID,
+		PromptKind:            int64(fact.prompt.Kind),
+		Question:              prompt.Question,
+		SuggestionsJSON:       string(suggestionsJSON),
+		ApprovalDecisionsJSON: string(approvalDecisionsJSON),
+	}
+	if branchKey, present := fact.currentNode.TransitionBranchKey(); present {
+		params.TransitionBranchKey = sql.NullString{
+			String: string(branchKey),
+			Valid:  true,
+		}
+	}
+	if prompt.RecommendedOptionIndex != nil {
+		params.RecommendedOptionIndex = sql.NullInt64{
+			Int64: int64(*prompt.RecommendedOptionIndex),
+			Valid: true,
+		}
+	}
+	return params, nil
+}
+
+func lifecycleQuestionDeleteParams(fact lifecycleQuestionFact) sqlitelifecyclegen.DeleteLifecycleQuestionParams {
+	params := sqlitelifecyclegen.DeleteLifecycleQuestionParams{
 		OccurredAtUnixMs: fact.occurredAtUnixMs,
 		ItemID:           fact.itemID,
 		TaskID:           string(fact.currentNode.TaskID),
 		NodeID:           string(fact.currentNode.NodeID),
 		ScopeID:          fact.scopeID.String(),
-		PromptID:         fact.promptID,
+		PromptID:         fact.prompt.ID,
 	}
 	if branchKey, present := fact.currentNode.TransitionBranchKey(); present {
 		params.TransitionBranchKey = sql.NullString{
@@ -431,10 +504,6 @@ func lifecycleQuestionInsertParams(fact lifecycleQuestionFact) sqlitelifecyclege
 		}
 	}
 	return params
-}
-
-func lifecycleQuestionDeleteParams(fact lifecycleQuestionFact) sqlitelifecyclegen.DeleteLifecycleQuestionParams {
-	return lifecycleQuestionInsertParams(fact)
 }
 
 func lifecycleQuestionPage(
@@ -468,6 +537,35 @@ func lifecycleQuestionPage(
 	if err != nil {
 		return nil, fmt.Errorf("list lifecycle Questions: %w", err)
 	}
+	return lifecycleQuestionsFromRows(root, rows)
+}
+
+func lifecycleQuestionsForTask(
+	ctx context.Context,
+	snapshot *lifecycleQuestionReadSnapshot,
+	root lifecycleRoot,
+	taskID workflow.TaskID,
+) ([]LifecyclePendingQuestion, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if snapshot == nil || snapshot.queries == nil {
+		return nil, errors.New("lifecycle Question read snapshot is required")
+	}
+	if taskID == "" {
+		return nil, errors.New("lifecycle Question Task id is required")
+	}
+	rows, err := snapshot.queries.ListLifecycleQuestionsForTask(ctx, string(taskID))
+	if err != nil {
+		return nil, fmt.Errorf("list lifecycle Questions for Task %q: %w", taskID, err)
+	}
+	return lifecycleQuestionsFromRows(root, rows)
+}
+
+func lifecycleQuestionsFromRows(
+	root lifecycleRoot,
+	rows []sqlitelifecyclegen.LifecycleQuestionRecord,
+) ([]LifecyclePendingQuestion, error) {
 	out := make([]LifecyclePendingQuestion, 0, len(rows))
 	for _, row := range rows {
 		taskID := workflow.TaskID(row.TaskID)
@@ -492,15 +590,21 @@ func lifecycleQuestionPage(
 		if !exists || exact.ScopeID.String() != row.ScopeID || exact.Agent == nil {
 			return nil, fmt.Errorf("lifecycle Question index Exact scope %q is absent", row.ScopeID)
 		}
-		var prompt *LifecyclePendingPrompt
+		var promptReference *LifecyclePendingPromptReference
 		for index := range exact.PendingPrompts {
 			if exact.PendingPrompts[index].ID == row.PromptID {
-				prompt = &exact.PendingPrompts[index]
+				promptReference = &exact.PendingPrompts[index]
 				break
 			}
 		}
-		if prompt == nil || prompt.CreatedAt.UnixMilli() != row.OccurredAtUnixMs {
+		if promptReference == nil ||
+			promptReference.CreatedAt.UnixMilli() != row.OccurredAtUnixMs ||
+			int64(promptReference.Kind) != row.PromptKind {
 			return nil, fmt.Errorf("lifecycle Question index prompt %q is inconsistent", row.PromptID)
+		}
+		prompt, err := lifecyclePendingPromptFromRow(row)
+		if err != nil {
+			return nil, err
 		}
 		expectedItemID, err := LifecycleQuestionItemID(exact.Agent.SessionID, prompt.ID)
 		if err != nil {
@@ -513,10 +617,43 @@ func lifecycleQuestionPage(
 			TaskID:      taskID,
 			CurrentNode: exact.CurrentNode,
 			SessionID:   exact.Agent.SessionID,
-			Prompt:      cloneLifecyclePendingPrompt(*prompt),
+			Prompt:      prompt,
 		})
 	}
 	return out, nil
+}
+
+func lifecyclePendingPromptFromRow(
+	row sqlitelifecyclegen.LifecycleQuestionRecord,
+) (LifecyclePendingPrompt, error) {
+	kind := LifecyclePendingPromptKind(row.PromptKind)
+	var suggestions []string
+	if err := json.Unmarshal([]byte(row.SuggestionsJSON), &suggestions); err != nil {
+		return LifecyclePendingPrompt{}, fmt.Errorf("decode lifecycle Question %q suggestions: %w", row.PromptID, err)
+	}
+	var approvalDecisions []LifecycleApprovalDecision
+	if err := json.Unmarshal([]byte(row.ApprovalDecisionsJSON), &approvalDecisions); err != nil {
+		return LifecyclePendingPrompt{}, fmt.Errorf("decode lifecycle Question %q approval decisions: %w", row.PromptID, err)
+	}
+	prompt := LifecyclePendingPrompt{
+		ID:                row.PromptID,
+		Kind:              kind,
+		CreatedAt:         time.UnixMilli(row.OccurredAtUnixMs).UTC(),
+		Question:          row.Question,
+		Suggestions:       suggestions,
+		ApprovalDecisions: approvalDecisions,
+	}
+	if row.RecommendedOptionIndex.Valid {
+		value := int(row.RecommendedOptionIndex.Int64)
+		if int64(value) != row.RecommendedOptionIndex.Int64 {
+			return LifecyclePendingPrompt{}, fmt.Errorf("lifecycle Question %q recommended option index overflows int", row.PromptID)
+		}
+		prompt.RecommendedOptionIndex = &value
+	}
+	if err := validateLifecyclePendingPrompt(prompt); err != nil {
+		return LifecyclePendingPrompt{}, fmt.Errorf("decode lifecycle Question %q: %w", row.PromptID, err)
+	}
+	return prompt, nil
 }
 
 func cloneLifecyclePendingPrompt(prompt LifecyclePendingPrompt) LifecyclePendingPrompt {

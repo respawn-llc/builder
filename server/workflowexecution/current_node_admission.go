@@ -504,17 +504,8 @@ func lifecycleExactExecutionFromRunning(
 	default:
 		return workflowstore.LifecycleExactExecution{}, errors.New("Authority running execution has an invalid target")
 	}
-	for _, prompt := range running.PendingPrompts {
-		target := workflowstore.LifecyclePendingPrompt{ID: prompt.ID}
-		switch prompt.Kind {
-		case sessionruntime.PendingPromptKindQuestion:
-			target.Kind = workflowstore.LifecyclePendingPromptQuestion
-		case sessionruntime.PendingPromptKindSessionApproval:
-			target.Kind = workflowstore.LifecyclePendingPromptSessionApproval
-		default:
-			return workflowstore.LifecycleExactExecution{}, errors.New("Authority running execution has an invalid pending prompt kind")
-		}
-		exact.PendingPrompts = append(exact.PendingPrompts, target)
+	if len(running.PendingPrompts) != 0 {
+		return workflowstore.LifecycleExactExecution{}, errors.New("Authority running execution pending prompts require typed prompt publication")
 	}
 	return exact, nil
 }

@@ -27,7 +27,7 @@ func (q *Queries) DeferForeignKeys(ctx context.Context) error {
 	return err
 }
 
-const createLifecycleQuestionIndex = "CREATE TABLE IF NOT EXISTS lifecycle_question_index (\n    occurred_at_unix_ms INTEGER NOT NULL CHECK (occurred_at_unix_ms > 0),\n    item_id TEXT NOT NULL CHECK (item_id <> '' AND item_id = trim(item_id)),\n    task_id TEXT NOT NULL CHECK (task_id <> '' AND task_id = trim(task_id)),\n    node_id TEXT NOT NULL CHECK (node_id <> '' AND node_id = trim(node_id)),\n    transition_branch_key TEXT CHECK (\n        transition_branch_key IS NULL\n        OR (transition_branch_key <> '' AND transition_branch_key = trim(transition_branch_key))\n    ),\n    scope_id TEXT NOT NULL CHECK (scope_id <> '' AND scope_id = trim(scope_id)),\n    prompt_id TEXT NOT NULL CHECK (prompt_id <> '' AND prompt_id = trim(prompt_id)),\n    PRIMARY KEY (occurred_at_unix_ms DESC, item_id DESC)\n);"
+const createLifecycleQuestionIndex = "CREATE TABLE IF NOT EXISTS lifecycle_question_index (\n    occurred_at_unix_ms INTEGER NOT NULL CHECK (occurred_at_unix_ms > 0),\n    item_id TEXT NOT NULL CHECK (item_id <> '' AND item_id = trim(item_id)),\n    task_id TEXT NOT NULL CHECK (task_id <> '' AND task_id = trim(task_id)),\n    node_id TEXT NOT NULL CHECK (node_id <> '' AND node_id = trim(node_id)),\n    transition_branch_key TEXT CHECK (\n        transition_branch_key IS NULL\n        OR (transition_branch_key <> '' AND transition_branch_key = trim(transition_branch_key))\n    ),\n    scope_id TEXT NOT NULL CHECK (scope_id <> '' AND scope_id = trim(scope_id)),\n    prompt_id TEXT NOT NULL CHECK (prompt_id <> '' AND prompt_id = trim(prompt_id)),\n    prompt_kind INTEGER NOT NULL CHECK (prompt_kind IN (1, 2)),\n    question TEXT NOT NULL,\n    suggestions_json TEXT NOT NULL CHECK (json_valid(suggestions_json) AND json_type(suggestions_json) = 'array'),\n    recommended_option_index INTEGER,\n    approval_decisions_json TEXT NOT NULL CHECK (\n        json_valid(approval_decisions_json)\n        AND json_type(approval_decisions_json) = 'array'\n    ),\n    PRIMARY KEY (occurred_at_unix_ms DESC, item_id DESC)\n);"
 
 func (q *Queries) CreateLifecycleQuestionIndex(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, createLifecycleQuestionIndex)
@@ -42,16 +42,21 @@ func (q *Queries) ClearLifecycleQuestionIndex(ctx context.Context) error {
 }
 
 type LifecycleQuestionRecord struct {
-	OccurredAtUnixMs    int64
-	ItemID              string
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey sql.NullString
-	ScopeID             string
-	PromptID            string
+	OccurredAtUnixMs       int64
+	ItemID                 string
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+	ScopeID                string
+	PromptID               string
+	PromptKind             int64
+	Question               string
+	SuggestionsJSON        string
+	RecommendedOptionIndex sql.NullInt64
+	ApprovalDecisionsJSON  string
 }
 
-const insertLifecycleQuestion = "INSERT INTO lifecycle_question_index (\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id\n) VALUES (?, ?, ?, ?, ?, ?, ?);"
+const insertLifecycleQuestion = "INSERT INTO lifecycle_question_index (\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id,\n    prompt_kind,\n    question,\n    suggestions_json,\n    recommended_option_index,\n    approval_decisions_json\n) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
 
 type InsertLifecycleQuestionParams = LifecycleQuestionRecord
 
@@ -64,13 +69,26 @@ func (q *Queries) InsertLifecycleQuestion(ctx context.Context, arg InsertLifecyc
 		arg.TransitionBranchKey,
 		arg.ScopeID,
 		arg.PromptID,
+		arg.PromptKind,
+		arg.Question,
+		arg.SuggestionsJSON,
+		arg.RecommendedOptionIndex,
+		arg.ApprovalDecisionsJSON,
 	)
 	return err
 }
 
 const deleteLifecycleQuestion = "DELETE FROM lifecycle_question_index\nWHERE occurred_at_unix_ms = ?\n  AND item_id = ?\n  AND task_id = ?\n  AND node_id = ?\n  AND transition_branch_key IS ?\n  AND scope_id = ?\n  AND prompt_id = ?;"
 
-type DeleteLifecycleQuestionParams = LifecycleQuestionRecord
+type DeleteLifecycleQuestionParams struct {
+	OccurredAtUnixMs    int64
+	ItemID              string
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	ScopeID             string
+	PromptID            string
+}
 
 func (q *Queries) DeleteLifecycleQuestion(ctx context.Context, arg DeleteLifecycleQuestionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteLifecycleQuestion,
@@ -100,7 +118,7 @@ func (q *Queries) AnchorLifecycleQuestionIndex(ctx context.Context) (bool, error
 	return anchored, err
 }
 
-const listLifecycleQuestions = "SELECT\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id\nFROM lifecycle_question_index\nWHERE ? = 0\n   OR occurred_at_unix_ms < ?\n   OR (occurred_at_unix_ms = ? AND item_id < ?)\nORDER BY occurred_at_unix_ms DESC, item_id DESC\nLIMIT ?;"
+const listLifecycleQuestions = "SELECT\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id,\n    prompt_kind,\n    question,\n    suggestions_json,\n    recommended_option_index,\n    approval_decisions_json\nFROM lifecycle_question_index\nWHERE ? = 0\n   OR occurred_at_unix_ms < ?\n   OR (occurred_at_unix_ms = ? AND item_id < ?)\nORDER BY occurred_at_unix_ms DESC, item_id DESC\nLIMIT ?;"
 
 type ListLifecycleQuestionsParams struct {
 	CursorActive           int64
@@ -134,6 +152,48 @@ func (q *Queries) ListLifecycleQuestions(ctx context.Context, arg ListLifecycleQ
 			&item.TransitionBranchKey,
 			&item.ScopeID,
 			&item.PromptID,
+			&item.PromptKind,
+			&item.Question,
+			&item.SuggestionsJSON,
+			&item.RecommendedOptionIndex,
+			&item.ApprovalDecisionsJSON,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLifecycleQuestionsForTask = "SELECT\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id,\n    prompt_kind,\n    question,\n    suggestions_json,\n    recommended_option_index,\n    approval_decisions_json\nFROM lifecycle_question_index\nWHERE task_id = ?\nORDER BY occurred_at_unix_ms DESC, item_id DESC;"
+
+type ListLifecycleQuestionsForTaskRow = LifecycleQuestionRecord
+
+func (q *Queries) ListLifecycleQuestionsForTask(ctx context.Context, taskID string) ([]ListLifecycleQuestionsForTaskRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLifecycleQuestionsForTask, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLifecycleQuestionsForTaskRow
+	for rows.Next() {
+		var item ListLifecycleQuestionsForTaskRow
+		if err := rows.Scan(
+			&item.OccurredAtUnixMs,
+			&item.ItemID,
+			&item.TaskID,
+			&item.NodeID,
+			&item.TransitionBranchKey,
+			&item.ScopeID,
+			&item.PromptID,
+			&item.PromptKind,
+			&item.Question,
+			&item.SuggestionsJSON,
+			&item.RecommendedOptionIndex,
+			&item.ApprovalDecisionsJSON,
 		); err != nil {
 			return nil, err
 		}

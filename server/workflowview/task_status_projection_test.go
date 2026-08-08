@@ -507,11 +507,12 @@ func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskBoundedLifecyc
 	if s.queryCalls != nil {
 		*s.queryCalls++
 	}
-	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, s.observation, operation)
+	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, s.observation, nil, operation)
 }
 
 type workflowViewTestLifecycleReader struct {
 	observation workflowexecution.WorkflowTaskExecutionObservation
+	questions   []workflowstore.LifecyclePendingQuestion
 }
 
 func (r workflowViewTestLifecycleReader) ObserveSelected(
@@ -545,13 +546,12 @@ func (r workflowViewTestLifecycleReader) PendingQuestions(
 	cursor workflowstore.LifecycleQuestionCursor,
 	limit int,
 ) ([]workflowstore.LifecyclePendingQuestion, error) {
-	questions := lifecyclePendingQuestions(r.observation, nil)
 	type indexedQuestion struct {
 		question workflowstore.LifecyclePendingQuestion
 		itemID   string
 	}
-	indexed := make([]indexedQuestion, 0, len(questions))
-	for _, question := range questions {
+	indexed := make([]indexedQuestion, 0, len(r.questions))
+	for _, question := range r.questions {
 		itemID, err := workflowstore.LifecycleQuestionItemID(question.SessionID, question.Prompt.ID)
 		if err != nil {
 			return nil, err
@@ -583,10 +583,24 @@ func (r workflowViewTestLifecycleReader) PendingQuestions(
 	return out, nil
 }
 
+func (r workflowViewTestLifecycleReader) PendingQuestionsForTask(
+	_ context.Context,
+	taskID workflow.TaskID,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	out := make([]workflowstore.LifecyclePendingQuestion, 0)
+	for _, question := range r.questions {
+		if question.TaskID == taskID {
+			out = append(out, question)
+		}
+	}
+	return out, nil
+}
+
 func captureWorkflowViewTestBoundedLifecycle(
 	ctx context.Context,
 	store *workflowstore.Store,
 	observation workflowexecution.WorkflowTaskExecutionObservation,
+	questions []workflowstore.LifecyclePendingQuestion,
 	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
 ) error {
 	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
@@ -601,7 +615,10 @@ func captureWorkflowViewTestBoundedLifecycle(
 		store,
 		observation,
 		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
-			return operation(token, queries, workflowViewTestLifecycleReader{observation: observation})
+			return operation(token, queries, workflowViewTestLifecycleReader{
+				observation: observation,
+				questions:   questions,
+			})
 		},
 	)
 }

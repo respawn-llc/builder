@@ -788,7 +788,14 @@ func (p *currentNodeControllerLifecyclePublication) PublishExactPromptPending(
 			if executions[index].ScopeID != scopeID {
 				continue
 			}
-			executions[index].PendingPrompts = append(executions[index].PendingPrompts, prompt)
+			executions[index].PendingPrompts = append(
+				executions[index].PendingPrompts,
+				workflowstore.LifecyclePendingPromptReference{
+					ID:        prompt.ID,
+					Kind:      prompt.Kind,
+					CreatedAt: prompt.CreatedAt,
+				},
+			)
 			p.exact[taskID] = executions
 			return nil
 		}

@@ -60,13 +60,14 @@ func generateLifecycleGo(source []byte, packageName string) ([]byte, error) {
 		return nil, err
 	}
 	expected := map[string]string{
-		"DeferForeignKeys":             ":exec",
-		"CreateLifecycleQuestionIndex": ":exec",
-		"ClearLifecycleQuestionIndex":  ":exec",
-		"InsertLifecycleQuestion":      ":exec",
-		"DeleteLifecycleQuestion":      ":execrows",
-		"AnchorLifecycleQuestionIndex": ":one",
-		"ListLifecycleQuestions":       ":many",
+		"DeferForeignKeys":              ":exec",
+		"CreateLifecycleQuestionIndex":  ":exec",
+		"ClearLifecycleQuestionIndex":   ":exec",
+		"InsertLifecycleQuestion":       ":exec",
+		"DeleteLifecycleQuestion":       ":execrows",
+		"AnchorLifecycleQuestionIndex":  ":one",
+		"ListLifecycleQuestions":        ":many",
+		"ListLifecycleQuestionsForTask": ":many",
 	}
 	if len(queries) != len(expected) {
 		return nil, fmt.Errorf("expected %d lifecycle queries, got %d", len(expected), len(queries))
@@ -123,10 +124,12 @@ func generateLifecycleGo(source []byte, packageName string) ([]byte, error) {
 
 	deleteQuery := byName["DeleteLifecycleQuestion"]
 	writeQueryConstant(&out, deleteQuery)
-	fmt.Fprintf(&out, "type DeleteLifecycleQuestionParams = LifecycleQuestionRecord\n\n")
+	fmt.Fprintf(&out, "type DeleteLifecycleQuestionParams struct {\n")
+	writeLifecycleQuestionIdentityFields(&out)
+	fmt.Fprintf(&out, "}\n\n")
 	fmt.Fprintf(&out, "func (q *Queries) DeleteLifecycleQuestion(ctx context.Context, arg DeleteLifecycleQuestionParams) (int64, error) {\n")
 	fmt.Fprintf(&out, "\tresult, err := q.db.ExecContext(ctx, deleteLifecycleQuestion,\n")
-	writeLifecycleQuestionArguments(&out, "\t\t", "arg")
+	writeLifecycleQuestionIdentityArguments(&out, "\t\t", "arg")
 	fmt.Fprintf(&out, "\t)\n")
 	fmt.Fprintf(&out, "\tif err != nil { return 0, err }\n")
 	fmt.Fprintf(&out, "\trows, err := result.RowsAffected()\n")
@@ -159,6 +162,21 @@ func generateLifecycleGo(source []byte, packageName string) ([]byte, error) {
 	fmt.Fprintf(&out, "\tif err := rows.Err(); err != nil { return nil, err }\n")
 	fmt.Fprintf(&out, "\treturn items, nil\n}\n")
 
+	listForTask := byName["ListLifecycleQuestionsForTask"]
+	writeQueryConstant(&out, listForTask)
+	fmt.Fprintf(&out, "type ListLifecycleQuestionsForTaskRow = LifecycleQuestionRecord\n\n")
+	fmt.Fprintf(&out, "func (q *Queries) ListLifecycleQuestionsForTask(ctx context.Context, taskID string) ([]ListLifecycleQuestionsForTaskRow, error) {\n")
+	fmt.Fprintf(&out, "\trows, err := q.db.QueryContext(ctx, listLifecycleQuestionsForTask, taskID)\n")
+	fmt.Fprintf(&out, "\tif err != nil { return nil, err }\n\tdefer rows.Close()\n")
+	fmt.Fprintf(&out, "\tvar items []ListLifecycleQuestionsForTaskRow\n")
+	fmt.Fprintf(&out, "\tfor rows.Next() {\n\t\tvar item ListLifecycleQuestionsForTaskRow\n")
+	fmt.Fprintf(&out, "\t\tif err := rows.Scan(\n")
+	writeLifecycleQuestionScanTargets(&out, "\t\t\t", "item")
+	fmt.Fprintf(&out, "\t\t); err != nil { return nil, err }\n")
+	fmt.Fprintf(&out, "\t\titems = append(items, item)\n\t}\n")
+	fmt.Fprintf(&out, "\tif err := rows.Err(); err != nil { return nil, err }\n")
+	fmt.Fprintf(&out, "\treturn items, nil\n}\n")
+
 	formatted, err := format.Source(out.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("format generated source: %w", err)
@@ -178,6 +196,15 @@ func writeQueryConstant(out *bytes.Buffer, query lifecycleQuery) {
 }
 
 func writeLifecycleQuestionFields(out *bytes.Buffer) {
+	writeLifecycleQuestionIdentityFields(out)
+	fmt.Fprintf(out, "\tPromptKind int64\n")
+	fmt.Fprintf(out, "\tQuestion string\n")
+	fmt.Fprintf(out, "\tSuggestionsJSON string\n")
+	fmt.Fprintf(out, "\tRecommendedOptionIndex sql.NullInt64\n")
+	fmt.Fprintf(out, "\tApprovalDecisionsJSON string\n")
+}
+
+func writeLifecycleQuestionIdentityFields(out *bytes.Buffer) {
 	fmt.Fprintf(out, "\tOccurredAtUnixMs int64\n")
 	fmt.Fprintf(out, "\tItemID string\n")
 	fmt.Fprintf(out, "\tTaskID string\n")
@@ -188,6 +215,19 @@ func writeLifecycleQuestionFields(out *bytes.Buffer) {
 }
 
 func writeLifecycleQuestionArguments(out *bytes.Buffer, indent string, variable string) {
+	writeLifecycleQuestionIdentityArguments(out, indent, variable)
+	for _, field := range []string{
+		"PromptKind",
+		"Question",
+		"SuggestionsJSON",
+		"RecommendedOptionIndex",
+		"ApprovalDecisionsJSON",
+	} {
+		fmt.Fprintf(out, "%s%s.%s,\n", indent, variable, field)
+	}
+}
+
+func writeLifecycleQuestionIdentityArguments(out *bytes.Buffer, indent string, variable string) {
 	for _, field := range []string{
 		"OccurredAtUnixMs",
 		"ItemID",
@@ -210,6 +250,11 @@ func writeLifecycleQuestionScanTargets(out *bytes.Buffer, indent string, variabl
 		"TransitionBranchKey",
 		"ScopeID",
 		"PromptID",
+		"PromptKind",
+		"Question",
+		"SuggestionsJSON",
+		"RecommendedOptionIndex",
+		"ApprovalDecisionsJSON",
 	} {
 		fmt.Fprintf(out, "%s&%s.%s,\n", indent, variable, field)
 	}

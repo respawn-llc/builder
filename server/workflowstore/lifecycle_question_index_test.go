@@ -3,6 +3,7 @@ package workflowstore
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -25,8 +26,8 @@ func TestLifecycleQuestionIndexPagesOrderedImmutableDiskSnapshots(t *testing.T) 
 			}
 		}
 	})
-	taskID, key, entry := lifecycleQuestionIndexFixture(t)
-	if err := index.replaceTaskQuestions(ctx, taskID, lifecycleTaskEntry{}, entry); err != nil {
+	taskID, key, entry, payloads := lifecycleQuestionIndexFixture(t)
+	if err := index.replaceTaskQuestions(ctx, taskID, lifecycleTaskEntry{}, entry, payloads); err != nil {
 		t.Fatalf("replaceTaskQuestions: %v", err)
 	}
 	root := lifecycleRoot{taskID: entry}
@@ -40,6 +41,21 @@ func TestLifecycleQuestionIndexPagesOrderedImmutableDiskSnapshots(t *testing.T) 
 	}
 	if len(first) != 2 || first[0].Prompt.ID != "newer-b" || first[1].Prompt.ID != "newer-a" {
 		t.Fatalf("first Question page = %+v", first)
+	}
+	if first[0].Prompt.Question != "newer b" ||
+		len(first[0].Prompt.ApprovalDecisions) != 2 ||
+		first[1].Prompt.Question != "newer a" ||
+		len(first[1].Prompt.Suggestions) != 2 ||
+		first[1].Prompt.RecommendedOptionIndex == nil ||
+		*first[1].Prompt.RecommendedOptionIndex != 1 {
+		t.Fatalf("paged Question payloads = %+v, want complete disk projection", first)
+	}
+	taskQuestions, err := lifecycleQuestionsForTask(ctx, prior, root, taskID)
+	if err != nil {
+		t.Fatalf("lifecycleQuestionsForTask: %v", err)
+	}
+	if len(taskQuestions) != 3 {
+		t.Fatalf("Task Question projection size = %d, want 3", len(taskQuestions))
 	}
 	if _, err := lifecycleQuestionPage(ctx, prior, lifecycleRoot{}, LifecycleQuestionCursor{}, 1); err == nil {
 		t.Fatal("Question index accepted a missing canonical Exact prompt")
@@ -64,7 +80,7 @@ func TestLifecycleQuestionIndexPagesOrderedImmutableDiskSnapshots(t *testing.T) 
 	nextExact := cloneLifecycleExactExecution(nextEntry.exact[key])
 	nextExact.PendingPrompts = nextExact.PendingPrompts[:2]
 	nextEntry.exact[key] = nextExact
-	if err := index.replaceTaskQuestions(ctx, taskID, entry, nextEntry); err != nil {
+	if err := index.replaceTaskQuestions(ctx, taskID, entry, nextEntry, nil); err != nil {
 		t.Fatalf("replace next Questions: %v", err)
 	}
 	oldPage, err := lifecycleQuestionPage(ctx, prior, root, LifecycleQuestionCursor{}, 3)
@@ -101,6 +117,56 @@ func TestLifecycleQuestionIndexPagesOrderedImmutableDiskSnapshots(t *testing.T) 
 	}
 }
 
+func TestLifecyclePendingPromptReferenceContainsNoQuestionPayload(t *testing.T) {
+	typ := reflect.TypeOf(LifecyclePendingPromptReference{})
+	want := map[string]reflect.Type{
+		"ID":        reflect.TypeOf(""),
+		"Kind":      reflect.TypeOf(LifecyclePendingPromptKind(0)),
+		"CreatedAt": reflect.TypeOf(time.Time{}),
+	}
+	if typ.NumField() != len(want) {
+		t.Fatalf("LifecyclePendingPromptReference fields = %d, want %d", typ.NumField(), len(want))
+	}
+	for name, fieldType := range want {
+		field, exists := typ.FieldByName(name)
+		if !exists || field.Type != fieldType {
+			t.Fatalf("LifecyclePendingPromptReference.%s = %+v, want %v", name, field, fieldType)
+		}
+	}
+}
+
+func TestLifecycleQuestionIndexInsertFailureLeavesCanonicalRootUnchanged(t *testing.T) {
+	ctx := context.Background()
+	index, err := openLifecycleQuestionIndex(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("openLifecycleQuestionIndex: %v", err)
+	}
+	t.Cleanup(func() { _ = index.close() })
+	taskID, key, entry, payloads := lifecycleQuestionIndexFixture(t)
+	exact := cloneLifecycleExactExecution(entry.exact[key])
+	prompt := payloads[lifecycleQuestionPayloadKey{
+		scopeID:  exact.ScopeID,
+		promptID: exact.PendingPrompts[0].ID,
+	}]
+	exact.PendingPrompts = nil
+	entry.exact[key] = exact
+	publication := &LifecyclePublication{
+		store:         &Store{},
+		root:          lifecycleRoot{taskID: entry},
+		questionIndex: index,
+	}
+	if err := index.db.Close(); err != nil {
+		t.Fatalf("close lifecycle Question index database: %v", err)
+	}
+	if err := publication.PublishExactPromptPending(ctx, exact.ScopeID, prompt); err == nil {
+		t.Fatal("prompt publication succeeded after Question projection failure")
+	}
+	published := publication.root[taskID].exact[key]
+	if len(published.PendingPrompts) != 0 {
+		t.Fatalf("canonical Exact root changed after Question projection failure: %+v", published.PendingPrompts)
+	}
+}
+
 func TestLifecycleQuestionIndexFailureLeavesCanonicalRootUnchanged(t *testing.T) {
 	ctx := context.Background()
 	index, err := openLifecycleQuestionIndex(ctx, t.TempDir())
@@ -108,7 +174,7 @@ func TestLifecycleQuestionIndexFailureLeavesCanonicalRootUnchanged(t *testing.T)
 		t.Fatalf("openLifecycleQuestionIndex: %v", err)
 	}
 	t.Cleanup(func() { _ = index.close() })
-	taskID, key, entry := lifecycleQuestionIndexFixture(t)
+	taskID, key, entry, _ := lifecycleQuestionIndexFixture(t)
 	publication := &LifecyclePublication{
 		store:         &Store{},
 		root:          lifecycleRoot{taskID: entry},
@@ -128,7 +194,12 @@ func TestLifecycleQuestionIndexFailureLeavesCanonicalRootUnchanged(t *testing.T)
 
 func lifecycleQuestionIndexFixture(
 	t *testing.T,
-) (workflow.TaskID, workflow.CurrentNodeReferenceKey, lifecycleTaskEntry) {
+) (
+	workflow.TaskID,
+	workflow.CurrentNodeReferenceKey,
+	lifecycleTaskEntry,
+	map[lifecycleQuestionPayloadKey]LifecyclePendingPrompt,
+) {
 	t.Helper()
 	taskID := workflow.TaskID("task-questions")
 	reference, err := workflow.NewCurrentNodeReference(taskID, "node-agent", nil)
@@ -139,21 +210,46 @@ func lifecycleQuestionIndexFixture(
 	if err != nil {
 		t.Fatalf("CurrentNodeReference.Key: %v", err)
 	}
+	scopeID := runtimeids.NewExecutionScopeID()
+	recommended := 1
+	prompts := []LifecyclePendingPrompt{
+		{
+			ID:                     "newer-a",
+			Kind:                   LifecyclePendingPromptQuestion,
+			CreatedAt:              time.UnixMilli(2_000),
+			Question:               "newer a",
+			Suggestions:            []string{"yes", "no"},
+			RecommendedOptionIndex: &recommended,
+		},
+		{
+			ID:        "newer-b",
+			Kind:      LifecyclePendingPromptSessionApproval,
+			CreatedAt: time.UnixMilli(2_000),
+			Question:  "newer b",
+			ApprovalDecisions: []LifecycleApprovalDecision{
+				LifecycleApprovalAllowOnce,
+				LifecycleApprovalDeny,
+			},
+		},
+		{ID: "older", Kind: LifecyclePendingPromptQuestion, CreatedAt: time.UnixMilli(1_000), Question: "older"},
+	}
+	references := make([]LifecyclePendingPromptReference, 0, len(prompts))
+	payloads := make(map[lifecycleQuestionPayloadKey]LifecyclePendingPrompt, len(prompts))
+	for _, prompt := range prompts {
+		references = append(references, lifecyclePendingPromptReference(prompt))
+		payloads[lifecycleQuestionPayloadKey{scopeID: scopeID, promptID: prompt.ID}] = prompt
+	}
 	entry := lifecycleTaskEntry{
 		runs: map[workflow.CurrentNodeReferenceKey]workflow.CurrentNodeReference{key: reference},
 		exact: map[workflow.CurrentNodeReferenceKey]LifecycleExactExecution{
 			key: {
-				CurrentNode: reference,
-				ScopeID:     runtimeids.NewExecutionScopeID(),
-				Agent:       &LifecycleAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
-				Phase:       LifecycleExactExecutionRunning,
-				PendingPrompts: []LifecyclePendingPrompt{
-					{ID: "newer-a", Kind: LifecyclePendingPromptQuestion, CreatedAt: time.UnixMilli(2_000), Question: "newer a"},
-					{ID: "newer-b", Kind: LifecyclePendingPromptSessionApproval, CreatedAt: time.UnixMilli(2_000), Question: "newer b"},
-					{ID: "older", Kind: LifecyclePendingPromptQuestion, CreatedAt: time.UnixMilli(1_000), Question: "older"},
-				},
+				CurrentNode:    reference,
+				ScopeID:        scopeID,
+				Agent:          &LifecycleAgentExecutionTarget{SessionID: runtimeids.NewSessionID()},
+				Phase:          LifecycleExactExecutionRunning,
+				PendingPrompts: references,
 			},
 		},
 	}
-	return taskID, key, entry
+	return taskID, key, entry, payloads
 }

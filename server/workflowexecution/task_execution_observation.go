@@ -32,14 +32,18 @@ type WorkflowTaskLifecycleReader interface {
 		workflowstore.LifecycleQuestionCursor,
 		int,
 	) ([]workflowstore.LifecyclePendingQuestion, error)
+	PendingQuestionsForTask(
+		context.Context,
+		workflow.TaskID,
+	) ([]workflowstore.LifecyclePendingQuestion, error)
 }
 
 type workflowTaskLifecycleReader struct {
 	capture workflowstore.LifecycleBoundedReadCapture
 }
 
-// ObserveWorkflowTaskExecutions captures the global published lifecycle and,
-// when taskIDs are supplied, derives their quiescence from that same root.
+// ObserveWorkflowTaskExecutions captures either the selected Tasks or the
+// global published lifecycle when no Task IDs are supplied.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
 	var observation WorkflowTaskExecutionObservation
 	err := c.CaptureWorkflowTaskExecutions(
@@ -118,6 +122,13 @@ func (r workflowTaskLifecycleReader) PendingQuestions(
 	return r.capture.PendingQuestions(ctx, cursor, limit)
 }
 
+func (r workflowTaskLifecycleReader) PendingQuestionsForTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	return r.capture.PendingQuestionsForTask(ctx, taskID)
+}
+
 func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,
@@ -149,17 +160,15 @@ func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 			err = closeErr
 		}
 	}()
-	lifecycleTaskIDs := capture.TaskIDs()
-	quiescenceTaskIDs := make([]workflow.TaskID, 0, len(selected)+len(lifecycleTaskIDs))
-	for taskID := range selected {
-		quiescenceTaskIDs = append(quiescenceTaskIDs, taskID)
+	lifecycleTaskIDs := append([]workflow.TaskID(nil), taskIDs...)
+	if len(lifecycleTaskIDs) == 0 {
+		lifecycleTaskIDs = capture.TaskIDs()
 	}
-	quiescenceTaskIDs = append(quiescenceTaskIDs, lifecycleTaskIDs...)
 	observation, err := workflowTaskExecutionObservationFromCapture(
 		ctx,
 		capture,
 		lifecycleTaskIDs,
-		quiescenceTaskIDs,
+		lifecycleTaskIDs,
 	)
 	if err != nil {
 		return err

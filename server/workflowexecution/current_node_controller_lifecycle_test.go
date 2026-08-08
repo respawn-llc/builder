@@ -331,6 +331,47 @@ func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) 
 	}
 }
 
+func TestObserveWorkflowTaskExecutionsRestrictsLifecycleToSelectedTasks(t *testing.T) {
+	selected := currentNodeReferenceForControllerTest(t, "task-selected-read", "node-selected")
+	unrelated := currentNodeReferenceForControllerTest(t, "task-unrelated-read", "node-unrelated")
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: selected},
+			{Reference: unrelated},
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{
+		authority: authority,
+		publication: &currentNodeControllerLifecyclePublication{
+			store: store,
+			root: map[workflow.TaskID][]workflow.CurrentNodeReference{
+				selected.TaskID:  {selected},
+				unrelated.TaskID: {unrelated},
+			},
+			exact: map[workflow.TaskID][]workflowstore.LifecycleExactExecution{},
+		},
+	}
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{selected.TaskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	if len(observation.Lifecycle) != 1 {
+		t.Fatalf("selected lifecycle size = %d, want 1: %+v", len(observation.Lifecycle), observation.Lifecycle)
+	}
+	if _, exists := observation.Lifecycle[selected.TaskID]; !exists {
+		t.Fatalf("selected lifecycle omitted Task %q: %+v", selected.TaskID, observation.Lifecycle)
+	}
+	if _, exists := observation.Lifecycle[unrelated.TaskID]; exists {
+		t.Fatalf("selected lifecycle retained unrelated Task %q", unrelated.TaskID)
+	}
+	if len(observation.Quiescence) != 1 {
+		t.Fatalf("selected quiescence size = %d, want 1: %+v", len(observation.Quiescence), observation.Quiescence)
+	}
+}
+
 func TestObserveWorkflowTaskExecutionsIncludesPinnedQueuedLifecycleRoot(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-observe-queued-root", "node-agent")
 	store := &currentNodeControllerStore{

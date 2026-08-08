@@ -624,7 +624,7 @@ func TestLifecyclePublicationDoesNotWaitForPinnedCaptureDownstreamQueryWork(t *t
 	requireLifecycleCapturePair(t, capture, reference, true)
 }
 
-func TestLifecycleCaptureKeepsCompletePendingPromptAfterSuccessorPublication(t *testing.T) {
+func TestLifecycleCaptureKeepsQuestionPayloadOnlyInPagedProjectionAfterSuccessorPublication(t *testing.T) {
 	ctx, publication, reference, _ := lifecyclePublicationCaptureFixture(t, true)
 	scopeID := runtimeids.NewExecutionScopeID()
 	sessionID := runtimeids.NewSessionID()
@@ -673,10 +673,28 @@ func TestLifecycleCaptureKeepsCompletePendingPromptAfterSuccessorPublication(t *
 		captured[0].Agent == nil ||
 		captured[0].Agent.SessionID != sessionID ||
 		len(captured[0].PendingPrompts) != 1 ||
-		captured[0].PendingPrompts[0].ID != prompt.ID ||
-		captured[0].PendingPrompts[0].Question != prompt.Question ||
-		len(captured[0].PendingPrompts[0].ApprovalDecisions) != 2 {
-		t.Fatalf("old capture Exact execution = %+v, want complete prior prompt", captured)
+		captured[0].PendingPrompts[0].ID != prompt.ID {
+		t.Fatalf("old capture Exact execution = %+v, want prior prompt lifecycle fact", captured)
+	}
+	rootPrompt := captured[0].PendingPrompts[0]
+	if rootPrompt.Kind != prompt.Kind || !rootPrompt.CreatedAt.Equal(prompt.CreatedAt) {
+		t.Fatalf("immutable root prompt lifecycle fact = %+v, want %d at %s", rootPrompt, prompt.Kind, prompt.CreatedAt)
+	}
+	questionCapture, ok := capture.(LifecycleBoundedReadCapture)
+	if !ok {
+		t.Fatalf("capture type %T does not expose bounded Question reads", capture)
+	}
+	questions, err := questionCapture.PendingQuestions(ctx, LifecycleQuestionCursor{}, 2)
+	if err != nil {
+		t.Fatalf("PendingQuestions: %v", err)
+	}
+	if len(questions) != 1 ||
+		questions[0].Prompt.ID != prompt.ID ||
+		questions[0].Prompt.Question != prompt.Question ||
+		questions[0].Prompt.RecommendedOptionIndex == nil ||
+		*questions[0].Prompt.RecommendedOptionIndex != recommended ||
+		len(questions[0].Prompt.ApprovalDecisions) != 2 {
+		t.Fatalf("old paged Question projection = %+v, want complete prior payload", questions)
 	}
 	next, err := publication.Capture(ctx)
 	if err != nil {

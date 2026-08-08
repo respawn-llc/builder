@@ -118,9 +118,10 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 	}
 	taskID := strings.TrimSpace(req.TaskID)
 	var items []serverapi.WorkflowAttentionItem
-	err := a.status.WithSnapshot(ctx, []workflow.TaskID{workflow.TaskID(taskID)}, func(
-		observation TaskStatusObservation,
+	err := a.status.WithBoundedLifecycle(ctx, func(
+		_ string,
 		durableSnapshot *TaskStatusDurableSnapshot,
+		reader workflowexecution.WorkflowTaskLifecycleReader,
 	) error {
 		snapshot := *a
 		snapshot.queries = durableSnapshot.queries
@@ -132,11 +133,11 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 		if err != nil {
 			return err
 		}
-		live, err := snapshot.liveQuestionCandidates(
-			ctx,
-			lifecyclePendingQuestions(observation.Live, &taskID),
-			&task,
-		)
+		questions, err := reader.PendingQuestionsForTask(ctx, workflow.TaskID(taskID))
+		if err != nil {
+			return err
+		}
+		live, err := snapshot.liveQuestionCandidates(ctx, questions, &task)
 		if err != nil {
 			return err
 		}
@@ -312,32 +313,6 @@ func currentNodeReferenceFromAttentionCandidate(row sqlitegen.ListWorkflowDurabl
 		return workflow.CurrentNodeReference{}, fmt.Errorf("interrupted attention candidate %q has invalid current node: %w", row.ID, err)
 	}
 	return reference, nil
-}
-
-func lifecyclePendingQuestions(
-	observation workflowexecution.WorkflowTaskExecutionObservation,
-	taskFilter *string,
-) []workflowstore.LifecyclePendingQuestion {
-	out := make([]workflowstore.LifecyclePendingQuestion, 0)
-	for taskID, lifecycle := range observation.Lifecycle {
-		if taskFilter != nil && string(taskID) != *taskFilter {
-			continue
-		}
-		for _, execution := range lifecycle.ExactExecutions {
-			if execution.Agent == nil {
-				continue
-			}
-			for _, prompt := range execution.PendingPrompts {
-				out = append(out, workflowstore.LifecyclePendingQuestion{
-					TaskID:      taskID,
-					CurrentNode: execution.CurrentNode,
-					SessionID:   execution.Agent.SessionID,
-					Prompt:      prompt,
-				})
-			}
-		}
-	}
-	return out
 }
 
 func (a *Attention) liveQuestionCandidates(

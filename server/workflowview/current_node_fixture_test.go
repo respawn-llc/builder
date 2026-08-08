@@ -138,16 +138,10 @@ func (s currentNodeViewStatusObservationSource) ObserveWorkflowTaskExecutions(ta
 							if promptReference.Kind == sessionruntime.PendingPromptKindSessionApproval {
 								kind = workflowstore.LifecyclePendingPromptSessionApproval
 							}
-							exact.PendingPrompts = append(exact.PendingPrompts, workflowstore.LifecyclePendingPrompt{
-								ID:                     prompt.ID,
-								Kind:                   kind,
-								CreatedAt:              prompt.CreatedAt,
-								Question:               prompt.Question,
-								Suggestions:            append([]string(nil), prompt.Suggestions...),
-								RecommendedOptionIndex: prompt.RecommendedOptionIndex,
-								ApprovalDecisions: lifecycleApprovalDecisionsForTest(
-									prompt.ApprovalDecisions,
-								),
+							exact.PendingPrompts = append(exact.PendingPrompts, workflowstore.LifecyclePendingPromptReference{
+								ID:        prompt.ID,
+								Kind:      kind,
+								CreatedAt: prompt.CreatedAt,
 							})
 						}
 					}
@@ -225,7 +219,51 @@ func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskBoundedLifecy
 	if err != nil {
 		return err
 	}
-	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, observation, operation)
+	return captureWorkflowViewTestBoundedLifecycle(
+		ctx,
+		s.store,
+		observation,
+		currentNodeViewPendingQuestionsForTest(observation, s.prompts),
+		operation,
+	)
+}
+
+func currentNodeViewPendingQuestionsForTest(
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+	prompts currentNodeViewPrompts,
+) []workflowstore.LifecyclePendingQuestion {
+	out := make([]workflowstore.LifecyclePendingQuestion, 0)
+	for taskID, lifecycle := range observation.Lifecycle {
+		for _, exact := range lifecycle.ExactExecutions {
+			if exact.Agent == nil {
+				continue
+			}
+			for _, reference := range exact.PendingPrompts {
+				for _, prompt := range prompts.bySession[exact.Agent.SessionID.String()] {
+					if prompt.ID != reference.ID {
+						continue
+					}
+					out = append(out, workflowstore.LifecyclePendingQuestion{
+						TaskID:      taskID,
+						CurrentNode: exact.CurrentNode,
+						SessionID:   exact.Agent.SessionID,
+						Prompt: workflowstore.LifecyclePendingPrompt{
+							ID:                     prompt.ID,
+							Kind:                   reference.Kind,
+							CreatedAt:              prompt.CreatedAt,
+							Question:               prompt.Question,
+							Suggestions:            append([]string(nil), prompt.Suggestions...),
+							RecommendedOptionIndex: prompt.RecommendedOptionIndex,
+							ApprovalDecisions: lifecycleApprovalDecisionsForTest(
+								prompt.ApprovalDecisions,
+							),
+						},
+					})
+				}
+			}
+		}
+	}
+	return out
 }
 
 func captureWorkflowViewTestObservation(

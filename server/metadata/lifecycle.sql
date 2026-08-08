@@ -13,6 +13,14 @@ CREATE TABLE IF NOT EXISTS lifecycle_question_index (
     ),
     scope_id TEXT NOT NULL CHECK (scope_id <> '' AND scope_id = trim(scope_id)),
     prompt_id TEXT NOT NULL CHECK (prompt_id <> '' AND prompt_id = trim(prompt_id)),
+    prompt_kind INTEGER NOT NULL CHECK (prompt_kind IN (1, 2)),
+    question TEXT NOT NULL,
+    suggestions_json TEXT NOT NULL CHECK (json_valid(suggestions_json) AND json_type(suggestions_json) = 'array'),
+    recommended_option_index INTEGER,
+    approval_decisions_json TEXT NOT NULL CHECK (
+        json_valid(approval_decisions_json)
+        AND json_type(approval_decisions_json) = 'array'
+    ),
     PRIMARY KEY (occurred_at_unix_ms DESC, item_id DESC)
 );
 
@@ -27,8 +35,13 @@ INSERT INTO lifecycle_question_index (
     node_id,
     transition_branch_key,
     scope_id,
-    prompt_id
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+    prompt_id,
+    prompt_kind,
+    question,
+    suggestions_json,
+    recommended_option_index,
+    approval_decisions_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: DeleteLifecycleQuestion :execrows
 DELETE FROM lifecycle_question_index
@@ -54,10 +67,33 @@ SELECT
     node_id,
     transition_branch_key,
     scope_id,
-    prompt_id
+    prompt_id,
+    prompt_kind,
+    question,
+    suggestions_json,
+    recommended_option_index,
+    approval_decisions_json
 FROM lifecycle_question_index
 WHERE ? = 0
    OR occurred_at_unix_ms < ?
    OR (occurred_at_unix_ms = ? AND item_id < ?)
 ORDER BY occurred_at_unix_ms DESC, item_id DESC
 LIMIT ?;
+
+-- name: ListLifecycleQuestionsForTask :many
+SELECT
+    occurred_at_unix_ms,
+    item_id,
+    task_id,
+    node_id,
+    transition_branch_key,
+    scope_id,
+    prompt_id,
+    prompt_kind,
+    question,
+    suggestions_json,
+    recommended_option_index,
+    approval_decisions_json
+FROM lifecycle_question_index
+WHERE task_id = ?
+ORDER BY occurred_at_unix_ms DESC, item_id DESC;

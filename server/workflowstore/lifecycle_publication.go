@@ -220,6 +220,12 @@ type LifecyclePendingPrompt struct {
 	ApprovalDecisions      []LifecycleApprovalDecision
 }
 
+type LifecyclePendingPromptReference struct {
+	ID        string
+	Kind      LifecyclePendingPromptKind
+	CreatedAt time.Time
+}
+
 type LifecycleApprovalDecision string
 
 const (
@@ -228,10 +234,9 @@ const (
 	LifecycleApprovalDeny         LifecycleApprovalDecision = "deny"
 )
 
-// LifecycleExactExecution is the complete immutable observation of one
-// published Exact Execution Scope. Authority remains the mutation and
-// Interrupt owner; lifecycle reads use this published value without joining
-// against Authority after capture.
+// LifecycleExactExecution is the immutable lifecycle observation of one
+// published Exact Execution Scope. Pending prompt payloads live only in the
+// paged Question projection.
 type LifecycleExactExecution struct {
 	ProjectID      string
 	WorkflowID     runtimeids.WorkflowID
@@ -240,7 +245,7 @@ type LifecycleExactExecution struct {
 	Agent          *LifecycleAgentExecutionTarget
 	Script         *LifecycleScriptExecutionTarget
 	Phase          LifecycleExactExecutionPhase
-	PendingPrompts []LifecyclePendingPrompt
+	PendingPrompts []LifecyclePendingPromptReference
 }
 
 // LifecycleExactRegistrationActivation commits only the staged execution
@@ -278,38 +283,63 @@ func validateLifecycleExactExecution(exact LifecycleExactExecution) error {
 		return errors.New("published Exact execution phase is invalid")
 	}
 	for index, prompt := range exact.PendingPrompts {
-		if strings.TrimSpace(prompt.ID) == "" {
-			return errors.New("published Exact execution pending prompt id is required")
+		if err := validateLifecyclePendingPromptReference(prompt); err != nil {
+			return err
 		}
 		if index != 0 && exact.PendingPrompts[index-1].ID >= prompt.ID {
 			return errors.New("published Exact execution pending prompts are not sorted and unique")
 		}
-		switch prompt.Kind {
-		case LifecyclePendingPromptQuestion:
-			if len(prompt.ApprovalDecisions) != 0 {
-				return errors.New("published Exact Question prompt has Approval decisions")
-			}
-		case LifecyclePendingPromptSessionApproval:
-			if len(prompt.ApprovalDecisions) == 0 {
-				return errors.New("published Exact Session Approval prompt has no decisions")
-			}
-			for _, decision := range prompt.ApprovalDecisions {
-				switch decision {
-				case LifecycleApprovalAllowOnce,
-					LifecycleApprovalAllowSession,
-					LifecycleApprovalDeny:
-				default:
-					return errors.New("published Exact Session Approval prompt has an invalid decision")
-				}
-			}
-		default:
-			return errors.New("published Exact execution pending prompt kind is invalid")
+	}
+	return nil
+}
+
+func validateLifecyclePendingPromptReference(prompt LifecyclePendingPromptReference) error {
+	if strings.TrimSpace(prompt.ID) == "" || strings.TrimSpace(prompt.ID) != prompt.ID {
+		return errors.New("published Exact execution pending prompt id is invalid")
+	}
+	switch prompt.Kind {
+	case LifecyclePendingPromptQuestion, LifecyclePendingPromptSessionApproval:
+	default:
+		return errors.New("published Exact execution pending prompt kind is invalid")
+	}
+	if prompt.CreatedAt.IsZero() {
+		return errors.New("published Exact execution pending prompt occurrence time is required")
+	}
+	return nil
+}
+
+func validateLifecyclePendingPrompt(prompt LifecyclePendingPrompt) error {
+	if err := validateLifecyclePendingPromptReference(lifecyclePendingPromptReference(prompt)); err != nil {
+		return err
+	}
+	switch prompt.Kind {
+	case LifecyclePendingPromptQuestion:
+		if len(prompt.ApprovalDecisions) != 0 {
+			return errors.New("published Exact Question prompt has Approval decisions")
 		}
-		if prompt.CreatedAt.IsZero() {
-			return errors.New("published Exact execution pending prompt occurrence time is required")
+	case LifecyclePendingPromptSessionApproval:
+		if len(prompt.ApprovalDecisions) == 0 {
+			return errors.New("published Exact Session Approval prompt has no decisions")
+		}
+		for _, decision := range prompt.ApprovalDecisions {
+			switch decision {
+			case LifecycleApprovalAllowOnce,
+				LifecycleApprovalAllowSession,
+				LifecycleApprovalDeny:
+			default:
+				return errors.New("published Exact Session Approval prompt has an invalid decision")
+			}
 		}
 	}
 	return nil
+}
+
+func lifecyclePendingPromptReference(prompt LifecyclePendingPrompt) LifecyclePendingPromptReference {
+	return LifecyclePendingPromptReference{
+		ID:        prompt.ID,
+		Kind:      prompt.Kind,
+		CreatedAt: prompt.CreatedAt,
+	}
 }
 
 func cloneLifecycleExactExecution(exact LifecycleExactExecution) LifecycleExactExecution {
@@ -322,10 +352,7 @@ func cloneLifecycleExactExecution(exact LifecycleExactExecution) LifecycleExactE
 		script := *exact.Script
 		cloned.Script = &script
 	}
-	cloned.PendingPrompts = make([]LifecyclePendingPrompt, len(exact.PendingPrompts))
-	for index, prompt := range exact.PendingPrompts {
-		cloned.PendingPrompts[index] = cloneLifecyclePendingPrompt(prompt)
-	}
+	cloned.PendingPrompts = append([]LifecyclePendingPromptReference(nil), exact.PendingPrompts...)
 	return cloned
 }
 
@@ -734,6 +761,9 @@ func (p *LifecyclePublication) PublishExactRegistration(
 	exact LifecycleExactExecution,
 	activation LifecycleExactRegistrationActivation,
 ) error {
+	if len(exact.PendingPrompts) != 0 {
+		return errors.New("Exact registration pending prompts must use typed prompt publication")
+	}
 	if err := validateLifecycleExactExecution(exact); err != nil {
 		return err
 	}
@@ -785,16 +815,16 @@ func (p *LifecyclePublication) PublishExactPromptPending(
 	if scopeID.IsZero() {
 		return errors.New("published Exact prompt scope id is required")
 	}
-	if strings.TrimSpace(prompt.ID) == "" || prompt.CreatedAt.IsZero() {
-		return errors.New("published Exact prompt identity and occurrence time are required")
+	if err := validateLifecyclePendingPrompt(prompt); err != nil {
+		return err
 	}
-	return p.patchExact(ctx, scopeID, func(exact *LifecycleExactExecution) error {
+	return p.patchExact(ctx, scopeID, &prompt, func(exact *LifecycleExactExecution) error {
 		for _, current := range exact.PendingPrompts {
 			if current.ID == prompt.ID {
 				return fmt.Errorf("published Exact prompt %q is already pending", prompt.ID)
 			}
 		}
-		exact.PendingPrompts = append(exact.PendingPrompts, prompt)
+		exact.PendingPrompts = append(exact.PendingPrompts, lifecyclePendingPromptReference(prompt))
 		sort.Slice(exact.PendingPrompts, func(i, j int) bool {
 			return exact.PendingPrompts[i].ID < exact.PendingPrompts[j].ID
 		})
@@ -811,7 +841,7 @@ func (p *LifecyclePublication) PublishExactPromptResolved(
 	if scopeID.IsZero() || promptID == "" {
 		return errors.New("resolved Exact prompt scope and prompt id are required")
 	}
-	return p.patchExact(ctx, scopeID, func(exact *LifecycleExactExecution) error {
+	return p.patchExact(ctx, scopeID, nil, func(exact *LifecycleExactExecution) error {
 		for index, prompt := range exact.PendingPrompts {
 			if prompt.ID != promptID {
 				continue
@@ -833,7 +863,7 @@ func (p *LifecyclePublication) PublishExactFinalizing(
 	if scopeID.IsZero() {
 		return errors.New("finalizing Exact execution scope id is required")
 	}
-	return p.patchExact(ctx, scopeID, func(exact *LifecycleExactExecution) error {
+	return p.patchExact(ctx, scopeID, nil, func(exact *LifecycleExactExecution) error {
 		if exact.Phase != LifecycleExactExecutionRunning {
 			return fmt.Errorf("Exact execution scope %s is not running", scopeID)
 		}
@@ -845,6 +875,7 @@ func (p *LifecyclePublication) PublishExactFinalizing(
 func (p *LifecyclePublication) patchExact(
 	ctx context.Context,
 	scopeID runtimeids.ExecutionScopeID,
+	insertedPrompt *LifecyclePendingPrompt,
 	patch func(*LifecycleExactExecution) error,
 ) error {
 	if p == nil || p.store == nil {
@@ -873,7 +904,19 @@ func (p *LifecyclePublication) patchExact(
 			}
 			before := cloneLifecycleTaskEntry(entry)
 			entry.exact[key] = cloned
-			if err := p.questionIndex.replaceTaskQuestions(ctx, taskID, before, entry); err != nil {
+			var insertedPayloads map[lifecycleQuestionPayloadKey]LifecyclePendingPrompt
+			if insertedPrompt != nil {
+				insertedPayloads = map[lifecycleQuestionPayloadKey]LifecyclePendingPrompt{
+					{scopeID: scopeID, promptID: insertedPrompt.ID}: cloneLifecyclePendingPrompt(*insertedPrompt),
+				}
+			}
+			if err := p.questionIndex.replaceTaskQuestions(
+				ctx,
+				taskID,
+				before,
+				entry,
+				insertedPayloads,
+			); err != nil {
 				return err
 			}
 			candidate[taskID] = entry
@@ -1293,6 +1336,7 @@ type LifecycleBoundedReadCapture interface {
 	QueuedCurrentNodes(workflow.TaskID) []workflow.CurrentNodeReference
 	ExactExecutions(workflow.TaskID) []LifecycleExactExecution
 	PendingQuestions(context.Context, LifecycleQuestionCursor, int) ([]LifecyclePendingQuestion, error)
+	PendingQuestionsForTask(context.Context, workflow.TaskID) ([]LifecyclePendingQuestion, error)
 }
 
 // LifecycleCapture pins one immutable runtime root and its matching durable
@@ -1540,6 +1584,18 @@ func (c *lifecycleCapture) PendingQuestions(
 		return nil, errors.New("lifecycle capture is closed")
 	}
 	return lifecycleQuestionPage(ctx, c.questionSnapshot, c.root, cursor, limit)
+}
+
+func (c *lifecycleCapture) PendingQuestionsForTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) ([]LifecyclePendingQuestion, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, errors.New("lifecycle capture is closed")
+	}
+	return lifecycleQuestionsForTask(ctx, c.questionSnapshot, c.root, taskID)
 }
 
 func (c *lifecycleCapture) stateToken() (string, error) {
