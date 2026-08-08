@@ -18,8 +18,8 @@ import (
 	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/setcomparison"
 )
 
 type Service struct {
@@ -401,7 +401,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			if err != nil {
 				return err
 			}
-			if !setcomparison.Equal(rawTaskIDs, currentTaskIDs) {
+			if !runtimeids.EqualSets(rawTaskIDs, currentTaskIDs) {
 				return errors.New("Project Task set changed during deletion")
 			}
 			blockers, err = s.workflowExecution.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{

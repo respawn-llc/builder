@@ -38,14 +38,6 @@ func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 	if !ok {
 		t.Fatalf("question execution target = %T, want agent", execution.target)
 	}
-	defer func() {
-		if err := fixture.authority.SubmitPromptResponse(agentTarget.sessionID, tools.AskQuestionResponse{
-			RequestID: request.ID,
-			Answer:    "Yes",
-		}, nil); err != nil {
-			t.Fatalf("SubmitPromptResponse: %v", err)
-		}
-	}()
 
 	detail, err := surfaces.detail.GetTask(fixture.ctx, string(started.task.ID))
 	if err != nil {
@@ -177,19 +169,6 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 					Question: "Proceed?",
 				}
 				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, &request)
-				t.Cleanup(func() {
-					agentTarget, ok := execution.target.(taskStatusAgentTarget)
-					if !ok {
-						t.Errorf("question execution target = %T, want agent", execution.target)
-						return
-					}
-					if err := surfaces.fixture.authority.SubmitPromptResponse(agentTarget.sessionID, tools.AskQuestionResponse{
-						RequestID: request.ID,
-						Answer:    "Yes",
-					}, nil); err != nil {
-						t.Errorf("SubmitPromptResponse: %v", err)
-					}
-				})
 				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
 			},
 		},

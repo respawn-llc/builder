@@ -135,8 +135,12 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 					_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
 					return err
 				}
-				<-config.executionRelease
-				return nil
+				select {
+				case <-config.executionRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
 			},
 		})
 		if err != nil {
@@ -343,6 +347,7 @@ func startControllerBackedTaskStatusExecution(
 		t.Fatal("timed out waiting for Controller-admitted execution")
 	}
 	t.Cleanup(func() {
+		handle.RequestStop()
 		close(admissionRelease)
 		close(release)
 		if err := handle.Stop(context.Background()); err != nil {
@@ -358,13 +363,19 @@ func startControllerBackedTaskStatusExecution(
 			return false
 		}
 		executions := observation.Executions[task.task.ID].Executions
+		lifecycle, exists := observation.Lifecycle[task.task.ID]
 		if options.queued {
-			lifecycle, exists := observation.Lifecycle[task.task.ID]
 			return exists &&
 				len(executions) == 0 &&
 				len(lifecycle.QueuedCurrentNodes) == 1 &&
 				lifecycle.QueuedCurrentNodes[0].Equal(task.currentNode) &&
 				len(lifecycle.ExactExecutions) == 0
+		}
+		if !exists ||
+			len(lifecycle.ExactExecutions) != 1 ||
+			!lifecycle.ExactExecutions[0].CurrentNode.Equal(task.currentNode) ||
+			lifecycle.ExactExecutions[0].ScopeID != handle.Scope().ID() {
+			return false
 		}
 		if len(executions) != 1 {
 			return false

@@ -1,8 +1,8 @@
-package setcomparison
+package runtimeids
 
-// Equal reports whether both slices contain the same unique values.
+// EqualSets reports whether both slices contain the same unique IDs.
 // Duplicate values are invalid set inputs and compare unequal.
-func Equal[T comparable](left []T, right []T) bool {
+func EqualSets[T ~string](left []T, right []T) bool {
 	if len(left) != len(right) {
 		return false
 	}

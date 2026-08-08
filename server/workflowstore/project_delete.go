@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -199,7 +199,7 @@ func (s *Store) prepareProjectDeletion(
 	if err != nil {
 		return nil, nil, rollbackAndRestore(fmt.Errorf("list project sessions for commit: %w", err))
 	}
-	if !metadata.SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
+	if !runtimeids.EqualSets(preparedSessionIDs, commitSessionIDs) {
 		return nil, nil, rollbackAndRestore(ErrProjectDeletePreparationInvalidated)
 	}
 	rawTaskIDs, err := q.ListProjectTaskIDs(ctx, projectID)

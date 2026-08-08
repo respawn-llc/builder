@@ -21,7 +21,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/setcomparison"
 	"core/shared/textutil"
 )
 
@@ -600,7 +599,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 			if err != nil {
 				return err
 			}
-			if !setcomparison.Equal(taskIDs, currentTaskIDs) {
+			if !runtimeids.EqualSets(taskIDs, currentTaskIDs) {
 				return errors.New("workflow Task set changed during deletion")
 			}
 			response, err = s.deleteWorkflow(ctx, req)
