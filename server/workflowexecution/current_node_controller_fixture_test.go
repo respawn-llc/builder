@@ -763,21 +763,6 @@ func (p *currentNodeControllerLifecyclePublication) PublishExactRegistration(
 	return nil
 }
 
-func (p *currentNodeControllerLifecyclePublication) ExactExecutionPublished(
-	scopeID runtimeids.ExecutionScopeID,
-) bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	for _, executions := range p.exact {
-		for _, exact := range executions {
-			if exact.ScopeID == scopeID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (p *currentNodeControllerLifecyclePublication) PublishExactPromptPending(
 	_ context.Context,
 	scopeID runtimeids.ExecutionScopeID,
@@ -1682,12 +1667,23 @@ type controlledScriptRunner struct {
 	handles     chan sessionruntime.ExecutionHandle
 }
 
-func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func currentNodeRunningPublicationForControllerTest(
+	controller workflowruntime.Controller,
+) sessionruntime.WorkflowRunningPublication {
+	publication, ok := controller.(sessionruntime.WorkflowRunningPublication)
+	if !ok {
+		panic("test Current Node controller has no running publication")
+	}
+	return publication
+}
+
+func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	close(r.entered)
 	<-r.startRunner
 	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  r.command,
+		Workflow:           &lease,
+		Command:            r.command,
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 	})
 	if err != nil {
 		return err
@@ -1832,7 +1828,8 @@ func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
 	switch {
 	case reference.Equal(r.running):
 		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
+			Workflow:           &lease,
+			RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 			Command: sessionruntime.ScriptCommand{
 				Path: r.shellPath,
 				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
@@ -1841,8 +1838,9 @@ func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
 		return err
 	case reference.Equal(r.finalizing):
 		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
-			Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "exit 0"}},
+			Workflow:           &lease,
+			Command:            sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "exit 0"}},
+			RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 			Finalize: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.ScriptResult, runErr error) error {
 				if runErr != nil {
 					r.finalizerCompletion <- runErr
@@ -1876,7 +1874,8 @@ func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
 			r.successorStarted <- struct{}{}
 		})
 		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
+			Workflow:           &lease,
+			RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 			Command: sessionruntime.ScriptCommand{
 				Path: r.shellPath,
 				Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
@@ -1892,10 +1891,11 @@ func (r *runningAndQueuedGateRunner) StartCurrentNode(
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
+	controller workflowruntime.Controller,
 ) error {
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+		Workflow:           &lease,
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 		Command: sessionruntime.ScriptCommand{
 			Path: r.shellPath,
 			Args: []string{"-c", "while :; do sleep 1; done"},
@@ -1923,7 +1923,7 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
+	controller workflowruntime.Controller,
 ) error {
 	if reference.Equal(r.blocked) {
 		r.blockedOnce.Do(func() {
@@ -1933,7 +1933,8 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 		return errors.New("first branch setup failed")
 	}
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+		Workflow:           &lease,
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 		Command: sessionruntime.ScriptCommand{
 			Path: r.shellPath,
 			Args: []string{"-c", "while :; do sleep 1; done"},
@@ -1945,12 +1946,13 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 	return err
 }
 
-func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	r.entered <- reference
 	<-r.release
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "while :; do sleep 1; done"}},
+		Workflow:           &lease,
+		Command:            sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "while :; do sleep 1; done"}},
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 	})
 	return err
 }
@@ -1958,8 +1960,9 @@ func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context,
 func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	if reference.Equal(r.source) {
 		handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-			Workflow: &lease,
-			Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", `printf '{"transition_id":"next"}'`}},
+			Workflow:           &lease,
+			Command:            sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", `printf '{"transition_id":"next"}'`}},
+			RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 			Finalize: func(ctx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
 				if runErr != nil {
 					return runErr
@@ -1977,8 +1980,9 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 		return err
 	}
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "while :; do sleep 1; done"}},
+		Workflow:           &lease,
+		Command:            sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "while :; do sleep 1; done"}},
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 	})
 	if err == nil {
 		r.started <- reference
@@ -1986,10 +1990,11 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 	return err
 }
 
-func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  r.command,
+		Workflow:           &lease,
+		Command:            r.command,
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 	})
 	if err == nil {
 		r.started <- reference

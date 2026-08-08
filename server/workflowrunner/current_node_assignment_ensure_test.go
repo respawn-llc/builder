@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"core/internal/testharness/workflowtest"
 	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -100,6 +101,115 @@ func TestEnsureCurrentNodeAssignmentReusesMatchingAgentAssignmentAfterStartupRec
 	}
 	if after := currentNodeWorkflowAssignmentCount(t, f, currentNode.Reference); after != before {
 		t.Fatalf("matching assignment ensure appended assignment: before=%d after=%d", before, after)
+	}
+}
+
+func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(t)
+	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeContinueSession)
+	task := f.createTask(t, workflowID)
+	lockCurrentNodeAssignmentExecutionTarget(t, f, task.ID)
+	source := f.publishTaskStart(t, task.ID).Mutation.Created[0]
+
+	sourceEnsure, err := f.starter.EnsureCurrentNodeAssignment(
+		context.Background(),
+		source.Reference,
+		workflowruntime.TaskPromptDeliveryAssignment,
+	)
+	if err != nil {
+		t.Fatalf("ensure source assignment: %v", err)
+	}
+	if receipt, waitErr := sourceEnsure.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("source assignment ensure = %+v, error = %v", receipt, waitErr)
+	}
+	sourceContext, err := f.store.ResolveCurrentNodeStartContext(context.Background(), source.Reference)
+	if err != nil {
+		t.Fatalf("resolve source context: %v", err)
+	}
+	if sourceContext.CurrentNode.SessionID == nil {
+		t.Fatal("source Current Node has no retained Session")
+	}
+	sessionID := *sourceContext.CurrentNode.SessionID
+
+	completed, err := workflowtest.CompleteCurrentNode(
+		f.store,
+		context.Background(),
+		workflowstore.CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "next",
+		},
+	)
+	if err != nil {
+		t.Fatalf("complete source: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("completion created = %+v, want one successor", completed.Mutation.Created)
+	}
+	successor := completed.Mutation.Created[0]
+	if successor.SessionID == nil || *successor.SessionID != sessionID {
+		t.Fatalf("successor Session = %v, want retained %s", successor.SessionID, sessionID)
+	}
+
+	if err := f.store.InterruptCurrentNode(
+		context.Background(),
+		successor.Reference,
+		"workflow_startup_recovery",
+		workflow.NewCurrentNodeInterruptionDetail("workflow_startup_recovery", nil),
+	); err != nil {
+		t.Fatalf("interrupt successor after simulated crash: %v", err)
+	}
+	publication, err := workflowstore.NewLifecyclePublication(f.store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	t.Cleanup(func() { _ = publication.Close() })
+	delta, err := workflowstore.NewQueuedTaskLifecycleDelta(
+		task.ID,
+		[]workflow.CurrentNodeReference{successor.Reference},
+	)
+	if err != nil {
+		t.Fatalf("NewQueuedTaskLifecycleDelta: %v", err)
+	}
+	if _, err := publication.PublishResume(context.Background(), delta); err != nil {
+		t.Fatalf("PublishResume: %v", err)
+	}
+
+	before := currentNodeWorkflowAssignmentCount(t, f, successor.Reference)
+	first, err := f.starter.EnsureCurrentNodeAssignment(
+		context.Background(),
+		successor.Reference,
+		workflowruntime.TaskPromptDeliveryResume,
+	)
+	if err != nil {
+		t.Fatalf("first successor Resume ensure: %v", err)
+	}
+	if receipt, waitErr := first.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("first successor Resume ensure = %+v, error = %v", receipt, waitErr)
+	}
+	afterFirst := currentNodeWorkflowAssignmentCount(t, f, successor.Reference)
+	if afterFirst != before+1 {
+		t.Fatalf("successor assignment count after first Resume = %d, want %d", afterFirst, before+1)
+	}
+	second, err := f.starter.EnsureCurrentNodeAssignment(
+		context.Background(),
+		successor.Reference,
+		workflowruntime.TaskPromptDeliveryResume,
+	)
+	if err != nil {
+		t.Fatalf("second successor Resume ensure: %v", err)
+	}
+	if receipt, waitErr := second.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("second successor Resume ensure = %+v, error = %v", receipt, waitErr)
+	}
+	if afterSecond := currentNodeWorkflowAssignmentCount(t, f, successor.Reference); afterSecond != afterFirst {
+		t.Fatalf("second Resume duplicated assignment: first=%d second=%d", afterFirst, afterSecond)
+	}
+	if err := f.store.ValidateCurrentNodeSessionBinding(
+		context.Background(),
+		sessionID,
+		successor.Reference,
+	); err != nil {
+		t.Fatalf("validate successor Session binding after repeated Resume: %v", err)
 	}
 }
 

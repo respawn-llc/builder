@@ -609,16 +609,11 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 type workflowViewRunningPublicationStub struct{}
 
 func (workflowViewRunningPublicationStub) PublishWorkflowRunning(
-	context.Context,
-	sessionruntime.TaskExecution,
+	_ context.Context,
+	_ sessionruntime.TaskExecution,
+	activation sessionruntime.WorkflowRunningActivation,
 ) error {
-	return nil
-}
-
-func (workflowViewRunningPublicationStub) WorkflowRunningPublished(
-	runtimeids.ExecutionScopeID,
-) bool {
-	return true
+	return activation.Commit(func(sessionruntime.ExecutionScope) error { return nil })
 }
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {

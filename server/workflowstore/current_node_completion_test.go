@@ -666,6 +666,30 @@ func TestCompleteCurrentNodeContinueSessionUsesImmediateSourceSession(t *testing
 		*completed.Mutation.Created[0].SessionID != fixture.sessionID {
 		t.Fatalf("continue-session target = %+v, want source session %q", completed.Mutation.Created, fixture.sessionID)
 	}
+	target := completed.Mutation.Created[0]
+	if err := fixture.store.ValidateCurrentNodeSessionBinding(
+		fixture.ctx,
+		fixture.sessionID,
+		target.Reference,
+	); err != nil {
+		t.Fatalf("validate successor Session binding immediately after completion: %v", err)
+	}
+	var associationCount int
+	if err := fixture.store.db.QueryRowContext(
+		fixture.ctx,
+		`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		fixture.sessionID.String(),
+		string(target.Reference.NodeID),
+	).Scan(&associationCount); err != nil {
+		t.Fatalf("count successor Session associations: %v", err)
+	}
+	if associationCount != 1 {
+		t.Fatalf("successor Session associations = %d, want 1", associationCount)
+	}
 }
 
 func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(t *testing.T) {

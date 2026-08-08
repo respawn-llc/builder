@@ -81,6 +81,8 @@ const (
 	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
 )
 
+var errCurrentNodeRunningActivationInterrupted = errors.New("current node running activation was interrupted")
+
 type currentNodeAdmissionPolicy uint8
 
 const (
@@ -437,6 +439,9 @@ retryAdmission:
 		}
 	}
 	if err := handle.PublishRunning(ctx, c); err != nil {
+		if errors.Is(err, errCurrentNodeRunningActivationInterrupted) {
+			return nil
+		}
 		return currentNodeAdmissionError{
 			cause:    errors.Join(err, run.exactPublication.await(ctx)),
 			admitted: true,
@@ -457,25 +462,21 @@ retryAdmission:
 func (c *CurrentNodeController) PublishCurrentNodeRunningExecution(
 	ctx context.Context,
 	running sessionruntime.TaskExecution,
+	activation sessionruntime.WorkflowRunningActivation,
 ) error {
 	exact, err := lifecycleExactExecutionFromRunning(running)
 	if err != nil {
 		return err
 	}
-	return c.PublishCurrentNodeExactExecution(ctx, exact)
+	return c.PublishCurrentNodeExactExecution(ctx, exact, activation)
 }
 
 func (c *CurrentNodeController) PublishWorkflowRunning(
 	ctx context.Context,
 	running sessionruntime.TaskExecution,
+	activation sessionruntime.WorkflowRunningActivation,
 ) error {
-	return c.PublishCurrentNodeRunningExecution(ctx, running)
-}
-
-func (c *CurrentNodeController) WorkflowRunningPublished(
-	scopeID runtimeids.ExecutionScopeID,
-) bool {
-	return c != nil && c.publication.ExactExecutionPublished(scopeID)
+	return c.PublishCurrentNodeRunningExecution(ctx, running, activation)
 }
 
 func lifecycleExactExecutionFromRunning(
@@ -523,27 +524,19 @@ func lifecycleExactExecutionFromRunning(
 func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 	ctx context.Context,
 	exact workflowstore.LifecycleExactExecution,
+	activation sessionruntime.WorkflowRunningActivation,
 ) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
+	}
+	if activation == nil {
+		return errors.New("workflow running activation is required")
 	}
 	key, err := exact.CurrentNode.Key()
 	if err != nil {
 		return err
 	}
 	return c.lifecycle.Run(ctx, exact.CurrentNode.TaskID, func(ctx context.Context) error {
-		handle, live := c.authority.ExecutionByScope(exact.ScopeID)
-		if !live {
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		scopeRef, workflowScope := handle.Scope().Workflow()
-		if !workflowScope ||
-			scopeRef.ProjectID != exact.ProjectID ||
-			scopeRef.WorkflowID != exact.WorkflowID ||
-			!scopeRef.CurrentNode.Equal(exact.CurrentNode) {
-			return errors.New("Authority Exact Scope does not match its lifecycle publication")
-		}
-
 		c.mu.Lock()
 		run, exists := c.runs.get(key)
 		_, gated := c.gates[key]
@@ -559,23 +552,7 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 			c.mu.Unlock()
 			return err
 		}
-		var activationFailure error
-		var activationResult currentNodeAgentActivationResult
-		if run.agentActivation != nil {
-			resource, ok := handle.Scope().Resource()
-			if !ok || exact.Agent == nil || resource.SessionID() != exact.Agent.SessionID {
-				activationFailure = errors.New("Agent Run Exact Scope has no matching Session resource")
-			} else {
-				if run.retainedSessionID != nil && *run.retainedSessionID != resource.SessionID() {
-					c.mu.Unlock()
-					return errors.New("Agent Exact Scope belongs to a different retained Session")
-				}
-				activationResult = currentNodeAgentActivationResult{
-					resource: resource,
-					scopeID:  exact.ScopeID,
-				}
-			}
-		} else if exact.Script == nil {
+		if run.agentActivation == nil && exact.Script == nil {
 			c.mu.Unlock()
 			return errors.New("Script Exact Scope has no Script target")
 		}
@@ -587,8 +564,100 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 		c.exactScopes[exact.ScopeID] = key
 		c.mu.Unlock()
 
-		if err := c.publication.PublishExactRegistration(ctx, exact); err != nil {
+		activationErr := activation.Commit(func(scope sessionruntime.ExecutionScope) error {
+			scopeRef, workflowScope := scope.Workflow()
+			if scope.ID() != exact.ScopeID ||
+				!workflowScope ||
+				scopeRef.ProjectID != exact.ProjectID ||
+				scopeRef.WorkflowID != exact.WorkflowID ||
+				!scopeRef.CurrentNode.Equal(exact.CurrentNode) {
+				return errors.New("Authority Exact Scope does not match its lifecycle publication")
+			}
+			var agentActivationFailure error
+			var agentActivationResult currentNodeAgentActivationResult
+			if run.agentActivation != nil {
+				resource, ok := scope.Resource()
+				if !ok || exact.Agent == nil || resource.SessionID() != exact.Agent.SessionID {
+					agentActivationFailure = errors.New("Agent Run Exact Scope has no matching Session resource")
+				} else {
+					if run.retainedSessionID != nil && *run.retainedSessionID != resource.SessionID() {
+						return errors.New("Agent Exact Scope belongs to a different retained Session")
+					}
+					agentActivationResult = currentNodeAgentActivationResult{
+						resource: resource,
+						scopeID:  exact.ScopeID,
+					}
+				}
+			}
 			c.mu.Lock()
+			current, currentExists := c.runs.get(key)
+			indexedKey, indexed := c.exactScopes[exact.ScopeID]
+			_, gated := c.gates[key]
+			if !currentExists ||
+				current != run ||
+				!indexed ||
+				indexedKey != key ||
+				!gated ||
+				current.disposition != currentNodeRunDispositionPublishing ||
+				current.executionLease == nil ||
+				current.executionLease.ScopeID() != exact.ScopeID {
+				c.mu.Unlock()
+				return sessionruntime.ErrExecutionNoLongerLive
+			}
+			if _, stopping := c.stopping[exact.ScopeID]; stopping {
+				c.mu.Unlock()
+				return sessionruntime.ErrExecutionNoLongerLive
+			}
+			c.mu.Unlock()
+
+			if err := c.publication.PublishExactRegistration(ctx, exact); err != nil {
+				return err
+			}
+
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			publishedRun, publishedExists := c.runs.get(key)
+			_, publishedGate := c.gates[key]
+			indexedKey, publishedExact := c.exactScopes[exact.ScopeID]
+			if !publishedExists ||
+				publishedRun != run ||
+				!publishedGate ||
+				!publishedExact ||
+				indexedKey != key ||
+				publishedRun.disposition != currentNodeRunDispositionPublishing ||
+				publishedRun.executionLease == nil ||
+				publishedRun.executionLease.ScopeID() != exact.ScopeID {
+				panic(fmt.Sprintf(
+					"published Exact registration lost Current Node Run ownership: current_node=%v scope=%s",
+					exact.CurrentNode,
+					exact.ScopeID,
+				))
+			}
+			delete(c.gates, key)
+			c.transitionAgentCapacityLocked(
+				run.agentCapacityLease,
+				currentNodeAgentCapacityGate,
+				currentNodeAgentCapacityLive,
+			)
+			run.phase = currentNodeRunRunning
+			if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
+				panic(fmt.Sprintf("publish Exact registration Run transition: %v", err))
+			}
+			if run.agentActivation != nil {
+				if agentActivationFailure != nil {
+					run.agentActivation.resolve(currentNodeAgentActivationResult{}, agentActivationFailure)
+				} else {
+					retained := agentActivationResult.resource.SessionID()
+					run.retainedSessionID = &retained
+					run.agentActivation.resolve(agentActivationResult, nil)
+				}
+			}
+			run.exactPublication.resolve(nil)
+			return nil
+		})
+		if activationErr != nil {
+			c.mu.Lock()
+			interruptionOwned := false
 			if indexedKey, indexed := c.exactScopes[exact.ScopeID]; indexed && indexedKey == key {
 				delete(c.exactScopes, exact.ScopeID)
 			}
@@ -602,6 +671,8 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 					current.phase = currentNodeRunGated
 				case currentNodeRunDispositionStopped:
 					current.phase = currentNodeRunGated
+					interruptionOwned = current.stop != nil &&
+						current.stop.reason == currentNodeRunStopInterrupted
 				default:
 					c.mu.Unlock()
 					panic(fmt.Sprintf(
@@ -611,54 +682,15 @@ func (c *CurrentNodeController) PublishCurrentNodeExactExecution(
 				}
 			}
 			c.mu.Unlock()
-			return err
-		}
-
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		publishedRun, publishedExists := c.runs.get(key)
-		_, publishedGate := c.gates[key]
-		indexedKey, publishedExact := c.exactScopes[exact.ScopeID]
-		if !publishedExists ||
-			publishedRun != run ||
-			!publishedGate ||
-			!publishedExact ||
-			indexedKey != key ||
-			publishedRun.executionLease == nil ||
-			publishedRun.executionLease.ScopeID() != exact.ScopeID {
-			panic(fmt.Sprintf(
-				"published Exact registration lost Current Node Run ownership: current_node=%v scope=%s",
-				exact.CurrentNode,
-				exact.ScopeID,
-			))
-		}
-		delete(c.gates, key)
-		c.transitionAgentCapacityLocked(
-			run.agentCapacityLease,
-			currentNodeAgentCapacityGate,
-			currentNodeAgentCapacityLive,
-		)
-		run.phase = currentNodeRunRunning
-		if run.disposition == currentNodeRunDispositionPublishing {
-			if err := run.transitionDisposition(currentNodeRunDispositionRunning, nil); err != nil {
-				panic(fmt.Sprintf("publish Exact registration Run transition: %v", err))
+			if interruptionOwned {
+				return errors.Join(
+					errCurrentNodeRunningActivationInterrupted,
+					sessionruntime.ErrExecutionNoLongerLive,
+					activationErr,
+				)
 			}
-		} else if run.disposition != currentNodeRunDispositionStopped {
-			panic(fmt.Sprintf(
-				"published Exact registration has Current Node Run disposition %d",
-				run.disposition,
-			))
+			return activationErr
 		}
-		if run.agentActivation != nil {
-			if activationFailure != nil {
-				run.agentActivation.resolve(currentNodeAgentActivationResult{}, activationFailure)
-			} else {
-				retained := activationResult.resource.SessionID()
-				run.retainedSessionID = &retained
-				run.agentActivation.resolve(activationResult, nil)
-			}
-		}
-		run.exactPublication.resolve(nil)
 		return nil
 	})
 }

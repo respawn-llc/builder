@@ -26,8 +26,34 @@ type ExecutionHandle interface {
 }
 
 type WorkflowRunningPublication interface {
-	PublishWorkflowRunning(context.Context, TaskExecution) error
-	WorkflowRunningPublished(runtimeids.ExecutionScopeID) bool
+	PublishWorkflowRunning(context.Context, TaskExecution, WorkflowRunningActivation) error
+}
+
+type WorkflowRunningActivation interface {
+	Commit(func(ExecutionScope) error) error
+}
+
+type WorkflowRunningPublicationError struct {
+	cause     error
+	activated bool
+}
+
+func (e *WorkflowRunningPublicationError) Error() string {
+	if e == nil || e.cause == nil {
+		return "workflow running publication failed"
+	}
+	return e.cause.Error()
+}
+
+func (e *WorkflowRunningPublicationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *WorkflowRunningPublicationError) Activated() bool {
+	return e != nil && e.activated
 }
 
 type ExecutionResult struct {
@@ -144,6 +170,77 @@ type executionHandle struct {
 	execution *execution
 }
 
+type workflowRunningActivationState uint8
+
+const (
+	workflowRunningActivationPrepared workflowRunningActivationState = iota + 1
+	workflowRunningActivationCommitting
+	workflowRunningActivationCommitted
+	workflowRunningActivationFailed
+)
+
+type workflowRunningActivation struct {
+	mu        sync.Mutex
+	execution *execution
+	state     workflowRunningActivationState
+}
+
+func (a *workflowRunningActivation) Commit(commit func(ExecutionScope) error) error {
+	if a == nil || a.execution == nil {
+		return errors.New("workflow running activation is required")
+	}
+	if commit == nil {
+		return errors.New("workflow running activation commit is required")
+	}
+	a.mu.Lock()
+	if a.state != workflowRunningActivationPrepared {
+		state := a.state
+		a.mu.Unlock()
+		return fmt.Errorf("workflow running activation cannot commit from state %d", state)
+	}
+	a.state = workflowRunningActivationCommitting
+	a.mu.Unlock()
+
+	execution := a.execution
+	authority := execution.authority
+	authority.mu.Lock()
+	var err error
+	switch {
+	case authority.byScope[execution.scope.ID()] != execution:
+		err = ErrExecutionNoLongerLive
+	case execution.phase != executionPhasePublishing &&
+		!(execution.phase == executionPhaseRunning && execution.runningPublish == nil):
+		err = fmt.Errorf(
+			"workflow execution scope %s cannot activate from phase %d",
+			execution.scope.ID(),
+			execution.phase,
+		)
+	case context.Cause(execution.ctx) != nil:
+		err = context.Cause(execution.ctx)
+	default:
+		err = commit(execution.scope)
+		if err == nil && execution.phase == executionPhasePublishing {
+			execution.phase = executionPhaseRunning
+		}
+	}
+	authority.mu.Unlock()
+
+	a.mu.Lock()
+	if err == nil {
+		a.state = workflowRunningActivationCommitted
+	} else {
+		a.state = workflowRunningActivationFailed
+	}
+	a.mu.Unlock()
+	return err
+}
+
+func (a *workflowRunningActivation) committed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.state == workflowRunningActivationCommitted
+}
+
 func (h executionHandle) Scope() ExecutionScope {
 	if h.execution == nil {
 		panic("execution handle is uninitialized")
@@ -177,7 +274,20 @@ func (h executionHandle) PublishRunning(
 		return startErr
 	}
 	h.execution.publishOnce.Do(func() {
-		h.execution.publishErr = publication.PublishWorkflowRunning(ctx, start)
+		activation := &workflowRunningActivation{
+			execution: h.execution,
+			state:     workflowRunningActivationPrepared,
+		}
+		publishErr := publication.PublishWorkflowRunning(ctx, start, activation)
+		if publishErr != nil {
+			h.execution.publishErr = &WorkflowRunningPublicationError{
+				cause:     publishErr,
+				activated: activation.committed(),
+			}
+		}
+		if h.execution.publishErr == nil && !activation.committed() {
+			h.execution.publishErr = errors.New("running execution publication returned without Authority activation")
+		}
 		close(h.execution.publishDone)
 	})
 	select {
@@ -311,22 +421,7 @@ func (e *execution) publishConfiguredRunning() error {
 	if e.runningPublish == nil {
 		return nil
 	}
-	if err := (executionHandle{execution: e}).PublishRunning(e.ctx, e.runningPublish); err != nil {
-		return err
-	}
-	e.authority.mu.Lock()
-	if e.authority.byScope[e.scope.ID()] == e && e.phase == executionPhasePublishing {
-		e.phase = executionPhaseRunning
-	}
-	e.authority.mu.Unlock()
-	return nil
-}
-
-func (e *execution) workflowRunningPublished() bool {
-	if e.runningPublish == nil {
-		return true
-	}
-	return e.runningPublish.WorkflowRunningPublished(e.scope.ID())
+	return (executionHandle{execution: e}).PublishRunning(e.ctx, e.runningPublish)
 }
 
 func (e *execution) confirmDisposition() {

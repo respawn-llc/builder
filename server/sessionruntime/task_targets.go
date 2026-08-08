@@ -120,11 +120,7 @@ func (a *Authority) CurrentWorkflowTaskExecutionState(taskID workflow.TaskID) (W
 		case executionPhaseQueued:
 			state.Queued++
 		case executionPhasePublishing:
-			if execution.workflowRunningPublished() {
-				state.Running++
-			} else {
-				state.Queued++
-			}
+			state.Queued++
 		case executionPhaseRunning:
 			pending, err := execution.prompts.pendingReferences()
 			if err != nil {
@@ -277,8 +273,7 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 	target := TaskExecution{
 		Ref:     ref,
 		ScopeID: execution.scope.ID(),
-		Queued: execution.phase == executionPhaseQueued ||
-			(execution.phase == executionPhasePublishing && !execution.workflowRunningPublished()),
+		Queued:  execution.phase == executionPhaseQueued || execution.phase == executionPhasePublishing,
 	}
 	pendingPrompts, err := execution.prompts.pendingReferences()
 	if err != nil {

@@ -665,7 +665,7 @@ func (r *retainedSessionAgentRunner) StartCurrentNode(
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
+	controller workflowruntime.Controller,
 ) error {
 	r.mu.Lock()
 	r.count++
@@ -682,12 +682,13 @@ func (r *retainedSessionAgentRunner) StartCurrentNode(
 		}
 	}
 	_, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: r.descriptor,
-		Runtime:    &r.plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner:     run,
-		Finalize:   r.finalize,
+		Descriptor:         r.descriptor,
+		Runtime:            &r.plan,
+		Workflow:           &lease,
+		Resource:           sessionruntime.OpenAgentResource{},
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
+		Runner:             run,
+		Finalize:           r.finalize,
 	})
 	return err
 }

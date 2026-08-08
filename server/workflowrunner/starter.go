@@ -438,14 +438,16 @@ func (s *Starter) finalizeCurrentNodeAgent(
 	scopeID runtimeids.ExecutionScopeID,
 	runErr error,
 ) error {
+	var publicationErr *sessionruntime.WorkflowRunningPublicationError
+	if errors.As(runErr, &publicationErr) && !publicationErr.Activated() {
+		failureCtx := ctx
+		if context.Cause(ctx) != nil {
+			failureCtx = context.WithoutCancel(ctx)
+		}
+		return s.failCurrentNodeScope(failureCtx, controller, scopeID, ReasonRuntimeFailed, runErr)
+	}
 	if cause := context.Cause(ctx); cause != nil {
 		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
-	}
-	if runErr != nil {
-		if publication, ok := controller.(sessionruntime.WorkflowRunningPublication); ok &&
-			!publication.WorkflowRunningPublished(scopeID) {
-			return s.failCurrentNodeScope(ctx, controller, scopeID, ReasonRuntimeFailed, runErr)
-		}
 	}
 	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
 		if context.Cause(ctx) != nil {

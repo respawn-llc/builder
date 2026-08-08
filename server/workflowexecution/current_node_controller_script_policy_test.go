@@ -275,13 +275,14 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	if reference.Equal(r.failed) {
 		return errors.New("script start failed")
 	}
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command:  r.command,
+		Workflow:           &lease,
+		Command:            r.command,
+		RunningPublication: currentNodeRunningPublicationForControllerTest(controller),
 	})
 	if err == nil {
 		r.started <- reference
@@ -303,7 +304,7 @@ func (r *finalizingBeforeLiveRunner) StartCurrentNode(
 	_ workflowruntime.TaskPromptDelivery,
 	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
-	_ workflowruntime.Controller,
+	controller workflowruntime.Controller,
 ) error {
 	command := sessionruntime.ScriptCommand{
 		Path: r.shellPath,

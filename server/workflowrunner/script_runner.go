@@ -78,6 +78,20 @@ func (s *Starter) finalizeCurrentNodeScript(
 	result sessionruntime.ScriptResult,
 	runErr error,
 ) error {
+	var publicationErr *sessionruntime.WorkflowRunningPublicationError
+	if errors.As(runErr, &publicationErr) && !publicationErr.Activated() {
+		failureCtx := ctx
+		if context.Cause(ctx) != nil {
+			failureCtx = context.WithoutCancel(ctx)
+		}
+		return s.failCurrentNodeScope(
+			failureCtx,
+			controller,
+			scopeID,
+			ReasonScriptExecutionFailed,
+			runErr,
+		)
+	}
 	if context.Cause(ctx) != nil {
 		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
 	}

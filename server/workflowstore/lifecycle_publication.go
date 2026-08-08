@@ -775,25 +775,6 @@ func (p *LifecyclePublication) PublishExactRegistration(
 	return nil
 }
 
-func (p *LifecyclePublication) ExactExecutionPublished(scopeID runtimeids.ExecutionScopeID) bool {
-	if p == nil || scopeID.IsZero() {
-		return false
-	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.closed {
-		return false
-	}
-	for _, entry := range p.root {
-		for _, exact := range entry.exact {
-			if exact.ScopeID == scopeID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (p *LifecyclePublication) PublishExactPromptPending(
 	ctx context.Context,
 	scopeID runtimeids.ExecutionScopeID,

@@ -88,7 +88,6 @@ type LifecyclePublication interface {
 		context.Context,
 		workflowstore.LifecycleExactExecution,
 	) error
-	ExactExecutionPublished(runtimeids.ExecutionScopeID) bool
 	PublishExactPromptPending(
 		context.Context,
 		runtimeids.ExecutionScopeID,

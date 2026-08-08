@@ -64,20 +64,10 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	for _, execution := range executions {
 		switch execution.phase {
 		case executionPhaseRunning:
-			if !execution.workflowRunningPublished() {
-				continue
-			}
 			selection.Interruptible = append(selection.Interruptible, executionHandle{execution: execution})
 		case executionPhaseQueued, executionPhasePublishing:
-			if execution.phase == executionPhasePublishing && execution.workflowRunningPublished() {
-				selection.Interruptible = append(selection.Interruptible, executionHandle{execution: execution})
-				break
-			}
 			selection.Queued = append(selection.Queued, executionHandle{execution: execution})
 		case executionPhaseFinalizing:
-			if !execution.workflowRunningPublished() {
-				continue
-			}
 			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
 		default:
 			panic(fmt.Sprintf("workflow execution scope %s has invalid phase", execution.scope.ID()))
@@ -182,19 +172,15 @@ func (a *Authority) WithWorkflowInterruptSelection(
 				selection.Queued = append(selection.Queued, handle)
 			}
 		case executionPhasePublishing:
-			if execution.workflowRunningPublished() {
-				if !execution.prompts.hasPending() {
-					selection.Interruptible = append(selection.Interruptible, handle)
-				}
-			} else if sessionID == nil {
+			if sessionID == nil {
 				selection.Queued = append(selection.Queued, handle)
 			}
 		case executionPhaseRunning:
-			if execution.workflowRunningPublished() && !execution.prompts.hasPending() {
+			if !execution.prompts.hasPending() {
 				selection.Interruptible = append(selection.Interruptible, handle)
 			}
 		case executionPhaseFinalizing:
-			if execution.workflowRunningPublished() && !execution.prompts.hasPending() {
+			if !execution.prompts.hasPending() {
 				selection.Interruptible = append(selection.Interruptible, handle)
 				selection.Finalizing = append(selection.Finalizing, handle)
 			}
