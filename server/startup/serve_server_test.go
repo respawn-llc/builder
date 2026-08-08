@@ -283,7 +283,7 @@ func TestStartWithOptionsRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 	if detail.Task.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
 		!detail.Task.Actions.CanResume ||
 		detail.Task.Actions.CanInterrupt ||
-		len(detail.Task.LiveSessionIDs) != 0 ||
+		len(detail.Task.LiveSessions) != 0 ||
 		len(detail.Task.CurrentScripts) != 0 {
 		t.Fatalf(
 			"task after restart reconciliation = %+v, want stopped resumable state without live activation",

@@ -56,6 +56,12 @@ describe("Markdown adapters", () => {
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
+  it("preserves a single source newline as a visible line break", () => {
+    render(<StaticMarkdown value={"first line\nsecond line"} />);
+
+    expect(screen.getByText("", { selector: "br" })).toBeInTheDocument();
+  });
+
   it("renders streaming output through the public adapter boundary", async () => {
     const view = render(<StreamingMarkdown value="stream" />);
 

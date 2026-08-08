@@ -2,11 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import {
-  errorMessage,
-  type TaskDependencyDirection,
-  type TaskDetail,
-} from "@/api";
+import { errorMessage, type TaskDependencyDirection, type TaskDetail } from "@/api";
 import type {
   SidebarPageNavigator,
   SidebarMode,
@@ -21,9 +17,12 @@ import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,
 } from "./TaskDetailDescriptionPresentation";
+import { TaskDeleteProvider } from "./TaskDeleteButton";
 import { TaskDetailList } from "./TaskDetailList";
+import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
+import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import { TaskResumeProvider } from "./TaskResumeButton";
+import { TaskInitiatingActionProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -45,9 +44,11 @@ export function TaskDetailContent({
   comments,
   detail,
   initialFocus,
+  onDeleteDismiss,
   onMutated,
   navigator,
   retainedState,
+  sidebarDestination,
   sidebarMode,
   openSidebar,
 }: Readonly<{
@@ -56,10 +57,12 @@ export function TaskDetailContent({
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
+  onDeleteDismiss: TaskDetailDeleteDismissal;
   onMutated?: (() => void) | undefined;
   navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
+  sidebarDestination?: Extract<SidebarDestination, { kind: "taskDetail" }> | undefined;
   sidebarMode?: SidebarMode | undefined;
 }>) {
   const { t } = useTranslation();
@@ -82,10 +85,16 @@ export function TaskDetailContent({
     base: restored?.base ?? serverDraft,
     draft: restored?.draft ?? serverDraft,
   }));
-  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(restored?.editingComment ?? null);
+  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(
+    restored?.editingComment ?? null,
+  );
   const [newCommentBody, setNewCommentBody] = useState(restored?.newCommentBody ?? "");
-  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(restored?.descriptionPresentation ?? initialDescriptionPresentationState);
-  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(restored?.selectedTab ?? "comments");
+  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
+    restored?.descriptionPresentation ?? initialDescriptionPresentationState,
+  );
+  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(
+    restored?.selectedTab ?? "comments",
+  );
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
@@ -160,65 +169,86 @@ export function TaskDetailContent({
   }
 
   return (
-    <TaskResumeProvider key={detail.id} onApplied={mutations.refresh} taskID={detail.id}>
-      <TaskDetailList
-      activity={activity}
-      attention={attention}
-      comments={comments}
-      detail={detail}
-      disabled={connection.phase !== "connected"}
-      draft={draft}
-      descriptionPresentation={descriptionPresentation}
-      editingComment={editingComment}
-      initialFocus={restored === undefined ? initialFocus : undefined}
-      mutations={mutations}
-      newCommentBody={newCommentBody}
-      relationshipNavigationAvailable={relationshipNavigationAvailable}
-      onDraftChange={(nextDraft) => {
-        setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
-      }}
-      onDescriptionPresentationChange={setDescriptionPresentation}
-      onAddDependency={(direction) => {
-        openRelatedTaskCreation({ detail, direction, navigator, openSidebar });
-      }}
-      onRemoveDependency={(pair) => {
-        mutations.removeDependency.mutate(pair);
-      }}
-      onSelectDependencyTask={(taskID) => {
-        if (navigator !== undefined) {
-          navigator.push(dependencyDestination(taskID, sidebarMode, onMutated));
+    <TaskInitiatingActionProvider
+      key={detail.id}
+      onApplied={mutations.refresh}
+      onViewDependencies={(taskID) => {
+        if (navigator !== undefined && sidebarDestination !== undefined) {
+          navigator.replace(
+            taskDetailSidebarDestination(sidebarDestination, taskID, { kind: "dependencies" }),
+          );
           return;
         }
-        void navigation.replaceTask(taskID);
+        openSidebar?.({
+          kind: "taskDetail",
+          initialFocus: { kind: "dependencies" },
+          taskID,
+        });
       }}
-      onNewCommentBodyChange={setNewCommentBody}
-      onEditingCommentChange={setEditingComment}
-      onQuestionSelectionChange={(askID, selection) => {
-        setQuestionSelections((previous) => new Map(previous).set(askID, selection));
-      }}
-      onScrollElementChange={setScrollElement}
-      onSaveDraft={saveDraft}
-      pixelOffsetRequest={pixelOffsetRequest}
-      questionSelections={questionSelections}
-      selectedTab={selectedTab}
-      setTab={setSelectedTab}
-      updateError={update.error}
-        updatePending={update.isPending}
-      />
-    </TaskResumeProvider>
+      taskID={detail.id}
+    >
+      <TaskDeleteProvider onDismiss={onDeleteDismiss} taskID={detail.id}>
+        <TaskDetailList
+          activity={activity}
+          attention={attention}
+          comments={comments}
+          detail={detail}
+          disabled={connection.phase !== "connected"}
+          draft={draft}
+          descriptionPresentation={descriptionPresentation}
+          editingComment={editingComment}
+          initialFocus={restored === undefined ? initialFocus : undefined}
+          mutations={mutations}
+          newCommentBody={newCommentBody}
+          relationshipNavigationAvailable={relationshipNavigationAvailable}
+          onDraftChange={(nextDraft) => {
+            setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+          }}
+          onDescriptionPresentationChange={setDescriptionPresentation}
+          onAddDependency={(direction) => {
+            openRelatedTaskCreation({ detail, direction, navigator, openSidebar });
+          }}
+          onRemoveDependency={(pair) => {
+            mutations.removeDependency.mutate(pair);
+          }}
+          onSelectDependencyTask={(taskID) => {
+            if (navigator !== undefined) {
+              navigator.push(
+                sidebarDestination === undefined
+                  ? dependencyDestination(taskID, sidebarMode)
+                  : taskDetailSidebarDestination(sidebarDestination, taskID),
+              );
+              return;
+            }
+            void navigation.replaceTask(taskID);
+          }}
+          onNewCommentBodyChange={setNewCommentBody}
+          onEditingCommentChange={setEditingComment}
+          onQuestionSelectionChange={(askID, selection) => {
+            setQuestionSelections((previous) => new Map(previous).set(askID, selection));
+          }}
+          onScrollElementChange={setScrollElement}
+          onSaveDraft={saveDraft}
+          pixelOffsetRequest={pixelOffsetRequest}
+          questionSelections={questionSelections}
+          selectedTab={selectedTab}
+          setTab={setSelectedTab}
+          updateError={update.error}
+          updatePending={update.isPending}
+        />
+      </TaskDeleteProvider>
+    </TaskInitiatingActionProvider>
   );
 }
 
 function dependencyDestination(
   taskID: string,
   mode: SidebarMode | undefined,
-  onMutated: (() => void) | undefined,
 ): Extract<SidebarDestination, { kind: "taskDetail" }> {
   return {
     kind: "taskDetail",
     taskID,
     ...(mode === undefined ? {} : { mode }),
-    ...(onMutated === undefined ? {} : { onMutated }),
   };
 }
 

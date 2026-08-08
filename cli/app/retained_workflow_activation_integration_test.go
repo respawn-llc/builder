@@ -83,8 +83,8 @@ func TestBoardResumeThenInteractiveActivationAttachesRepeatedOwnersToOneResource
 	if err != nil {
 		t.Fatalf("GetWorkflowTask after repeated activation: %v", err)
 	}
-	if len(detail.Task.LiveSessionIDs) != 1 || detail.Task.LiveSessionIDs[0] != fixture.sessionID.String() {
-		t.Fatalf("live Sessions after repeated activation = %v, want one retained Session", detail.Task.LiveSessionIDs)
+	if len(detail.Task.LiveSessions) != 1 || detail.Task.LiveSessions[0].SessionID != fixture.sessionID.String() {
+		t.Fatalf("live Sessions after repeated activation = %v, want one retained Session", detail.Task.LiveSessions)
 	}
 	if detail.Task.Actions.CanResume || !detail.Task.Actions.CanInterrupt {
 		t.Fatalf("Task actions after Board Resume and interactive adoption = %+v", detail.Task.Actions)
@@ -119,8 +119,8 @@ func TestInteractiveRetainedWorkflowSessionInterruptPublishesResumableState(t *t
 	if !detail.Task.Actions.CanResume || detail.Task.Actions.CanInterrupt {
 		t.Fatalf("Task actions after runtime Interrupt = %+v, want resumable and not interruptible", detail.Task.Actions)
 	}
-	if len(detail.Task.LiveSessionIDs) != 0 {
-		t.Fatalf("live Sessions after runtime Interrupt = %v, want none", detail.Task.LiveSessionIDs)
+	if len(detail.Task.LiveSessions) != 0 {
+		t.Fatalf("live Sessions after runtime Interrupt = %v, want none", detail.Task.LiveSessions)
 	}
 }
 

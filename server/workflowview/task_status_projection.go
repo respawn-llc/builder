@@ -54,8 +54,6 @@ type TaskStatusProjectionResult struct {
 	LiveExecutions               []sessionruntime.TaskExecution
 	PendingTransitionApprovalIDs []string
 	Actions                      serverapi.WorkflowTaskActions
-	LiveSessionIDs               []string
-	CurrentScripts               []serverapi.WorkflowTaskCurrentScript
 	AttentionCount               int
 }
 
@@ -438,10 +436,6 @@ func (p *TaskStatusProjection) Project(
 			Definition:     definition,
 			CanDelete:      quiescent,
 		})
-		liveSessionIDs, currentScripts, err := taskStatusLiveTargets(taskID, liveExecutions)
-		if err != nil {
-			return nil, err
-		}
 		results[taskID] = TaskStatusProjectionResult{
 			Task:                         task,
 			Definition:                   definition,
@@ -451,48 +445,10 @@ func (p *TaskStatusProjection) Project(
 			LiveExecutions:               liveExecutions,
 			PendingTransitionApprovalIDs: pendingApprovalIDs,
 			Actions:                      facts.Actions,
-			LiveSessionIDs:               liveSessionIDs,
-			CurrentScripts:               currentScripts,
 			AttentionCount:               taskStatusAttentionCount(currentNodes, liveExecutions, len(pendingApprovalIDs)),
 		}
 	}
 	return results, nil
-}
-
-func taskStatusLiveTargets(taskID workflow.TaskID, executions []sessionruntime.TaskExecution) ([]string, []serverapi.WorkflowTaskCurrentScript, error) {
-	sessionIDs := make([]string, 0, len(executions))
-	scripts := make([]serverapi.WorkflowTaskCurrentScript, 0, len(executions))
-	for _, execution := range executions {
-		switch {
-		case execution.Agent != nil:
-			sessionIDs = append(sessionIDs, execution.Agent.SessionID.String())
-		case execution.Script != nil:
-			if strings.TrimSpace(execution.Script.Path) == "" {
-				return nil, nil, fmt.Errorf("task %q live Script execution has a blank target path", taskID)
-			}
-			scripts = append(scripts, serverapi.WorkflowTaskCurrentScript{
-				CurrentNode: workflowCurrentNodeReference(execution.Ref.CurrentNode),
-				Path:        execution.Script.Path,
-			})
-		default:
-			return nil, nil, fmt.Errorf("task %q live workflow execution has no target", taskID)
-		}
-	}
-	sort.Strings(sessionIDs)
-	sort.Slice(scripts, func(i, j int) bool {
-		if scripts[i].CurrentNode.NodeID != scripts[j].CurrentNode.NodeID {
-			return scripts[i].CurrentNode.NodeID < scripts[j].CurrentNode.NodeID
-		}
-		return optionalStringValue(scripts[i].CurrentNode.TransitionBranchKey) < optionalStringValue(scripts[j].CurrentNode.TransitionBranchKey)
-	})
-	return sessionIDs, scripts, nil
-}
-
-func optionalStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func taskStatusAttentionCount(currentNodes []workflow.CurrentNode, executions []sessionruntime.TaskExecution, pendingApprovalCount int) int {
