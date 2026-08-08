@@ -134,6 +134,42 @@ func TestAskQuestionToolSkipsPreparedBatchWhenBrokerReturnsBeforeHandler(t *test
 	}
 }
 
+func TestAskQuestionToolDeclineKeepsPreparedSuccessorsPending(t *testing.T) {
+	broker := NewAskQuestionBroker()
+	broker.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
+		return nil, context.Canceled
+	})
+	tool := NewAskQuestionTool(broker, func() bool { return true })
+	var skipped []AskQuestionBatchMetadata
+
+	result, err := tool.Call(context.Background(), Call{
+		ID:    "ask-1",
+		Name:  toolspec.ToolAskQuestion,
+		Input: mustAskQuestionInput(t, "one?"),
+		AskQuestionBatch: &AskQuestionBatchMetadata{
+			Origin:              AskQuestionOriginModelTool,
+			RunID:               "run-1",
+			StepID:              "step-1",
+			PromptID:            "ask-1",
+			BatchPromptIDs:      []string{"ask-1", "ask-2"},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 2,
+		},
+		OnAskQuestionBatchSkipped: func(batch AskQuestionBatchMetadata) {
+			skipped = append(skipped, batch)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call returned unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want declined error result", result)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("decline marked prepared successors skipped: %+v", skipped)
+	}
+}
+
 func TestSubmitApprovalResponse(t *testing.T) {
 	b := NewAskQuestionBroker()
 	ctx := context.Background()

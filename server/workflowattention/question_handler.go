@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -74,7 +73,7 @@ func HandleTaskQuestion(ctx context.Context, awaiter QuestionAwaiter, attention 
 	resolution, askErr := awaiter.AwaitPromptResolution(ctx, req.Context.SessionID, askReq)
 	if attention != nil {
 		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
-		if ShouldSkipRemainingTaskQuestions(askErr, ctx.Err()) {
+		if askquestion.ShouldSkipRemainingQuestionBatch(askErr, context.Cause(ctx)) {
 			MarkTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ID)
 		}
 	}
@@ -112,10 +111,6 @@ func PrepareSkippedTaskQuestionBatch(attention QuestionAttentionRegistry, contex
 	err := attention.PrepareTaskQuestionBatch(batch, context.SessionID, target, "", occurredAt)
 	MarkTaskQuestionBatchSkipped(attention, batch, "")
 	return err
-}
-
-func ShouldSkipRemainingTaskQuestions(askErr error, ctxErr error) bool {
-	return ctxErr != nil || errors.Is(askErr, context.Canceled) || errors.Is(askErr, io.EOF)
 }
 
 func MarkTaskQuestionBatchSkipped(attention QuestionAttentionRegistry, batch askquestion.AskQuestionBatchMetadata, materializedAskID string) {

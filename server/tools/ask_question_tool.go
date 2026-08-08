@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -380,7 +381,9 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 	}
 	resolution, err := t.broker.Ask(ctx, req)
 	if err != nil {
-		notifyAskQuestionBatchSkipped(c)
+		if ShouldSkipRemainingQuestionBatch(err, context.Cause(ctx)) {
+			notifyAskQuestionBatchSkipped(c)
+		}
 		return ErrorResult(c, err.Error()), nil
 	}
 	summary, summaryErr := buildResolutionToolOutputSummary(resolution)
@@ -399,6 +402,14 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 		CallID: c.ID, Name: c.Name, Output: body,
 		CondensedText: textutil.OptionalExactString(condensed),
 	}, nil
+}
+
+// ShouldSkipRemainingQuestionBatch reports whether prepared ask_question
+// successors can no longer materialize. A declined prompt returns
+// context.Canceled while its execution context remains live, so it does not
+// skip those successors.
+func ShouldSkipRemainingQuestionBatch(askErr error, executionErr error) bool {
+	return executionErr != nil || errors.Is(askErr, io.EOF)
 }
 
 func notifyAskQuestionBatchSkipped(c Call) {
