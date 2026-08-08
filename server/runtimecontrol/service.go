@@ -655,6 +655,9 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	targetQueuedMessage := false
 	var cancelResult runtimeops.CancellationResult
 	var observedRuntime *runtimeids.SessionResourceRef
+	var observedRun *clientui.RuntimeActiveStep
+	var activitySnapshot runtimeactivity.ResponseSnapshot
+	var activityErr error
 	if req.TargetOperationRef != nil {
 		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
 		var err error
@@ -663,7 +666,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			return serverapi.RuntimeInterruptResponse{}, err
 		}
 		defer cancelResult.CancelOperationAttempt()
-		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
 		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
 			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 		}
@@ -675,6 +677,15 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	) error {
 		observed := resource
 		observedRuntime = &observed
+		if s.activity == nil {
+			activityErr = errors.New("runtime activity resolver is unavailable")
+		} else {
+			activitySnapshot, activityErr = s.activity.RuntimeReadModelSnapshot(ctx, sessionID, pendingRefs)
+		}
+		if activityErr == nil && activitySnapshot.Activity.ActiveStep != nil {
+			observed := *activitySnapshot.Activity.ActiveStep
+			observedRun = &observed
+		}
 		for _, ref := range pendingRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
@@ -695,6 +706,12 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
+	if req.TargetOperationRef != nil {
+		interruptActive = !targetQueuedMessage &&
+			cancelResult.InterruptActive &&
+			activityErr == nil &&
+			activitySnapshot.Activity.ActiveForControl()
+	}
 	if interruptActive {
 		workflowHandled := false
 		if s.workflowInterrupt != nil {
@@ -707,9 +724,10 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return serverapi.RuntimeInterruptResponse{}, err
 			}
 		}
-		if !workflowHandled && observedRuntime != nil {
+		if !workflowHandled && observedRuntime != nil && observedRun != nil {
 			err = s.authority.WithRuntime(ctx, *observedRuntime, func(_ context.Context, engine *runtime.Engine) error {
-				return engine.Interrupt()
+				_, err := engine.InterruptObservedRun(observedRun.RunID, observedRun.StepID)
+				return err
 			})
 			if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 				return serverapi.RuntimeInterruptResponse{}, err
@@ -717,14 +735,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		}
 	}
 	return s.runtimeInterruptResponse(sessionID, pendingRefs)
-}
-
-func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
-	if s == nil || s.activity == nil {
-		return false
-	}
-	snapshot, err := s.activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
-	return err == nil && snapshot.Activity.ActiveForControl()
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {

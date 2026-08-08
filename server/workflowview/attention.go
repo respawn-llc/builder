@@ -186,7 +186,7 @@ func (a *Attention) durableCandidateRows(ctx context.Context, cursor attentionPa
 	return a.queries.ListWorkflowDurableAttentionCandidates(ctx, sqlitegen.ListWorkflowDurableAttentionCandidatesParams{
 		SelectedTaskID:         task,
 		PageLimit:              int64(limit),
-		CursorActive:           boolInt64(cursor.hasValue),
+		CursorActive:           metadata.SQLiteBoolInt64(cursor.hasValue),
 		CursorOccurredAtUnixMs: cursor.occurredAtUnixMs,
 		CursorItemID:           cursor.itemID,
 	})

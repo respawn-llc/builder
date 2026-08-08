@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -459,7 +460,7 @@ func lifecycleQuestionPage(
 		return nil, errors.New("lifecycle Question cursor is invalid")
 	}
 	rows, err := snapshot.queries.ListLifecycleQuestions(ctx, sqlitelifecyclegen.ListLifecycleQuestionsParams{
-		CursorActive:           boolInt64(cursor.HasValue),
+		CursorActive:           metadata.SQLiteBoolInt64(cursor.HasValue),
 		CursorOccurredAtUnixMs: cursor.OccurredAtUnixMs,
 		CursorItemID:           cursor.ItemID,
 		LimitRows:              int64(limit),
@@ -527,11 +528,4 @@ func cloneLifecyclePendingPrompt(prompt LifecyclePendingPrompt) LifecyclePending
 		cloned.RecommendedOptionIndex = &value
 	}
 	return cloned
-}
-
-func boolInt64(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
 }

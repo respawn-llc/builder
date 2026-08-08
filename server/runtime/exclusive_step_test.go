@@ -113,6 +113,10 @@ func (s *stubExclusiveStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunS
 	return nil, nil
 }
 
+func (s *stubExclusiveStepLifecycle) InterruptMatching(string, string, func(*RunSnapshot)) (*RunSnapshot, error) {
+	return nil, nil
+}
+
 func (s *stubExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

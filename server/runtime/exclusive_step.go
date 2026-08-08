@@ -242,6 +242,25 @@ func (s *defaultExclusiveStepLifecycle) Interrupt() error {
 }
 
 func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
+	return s.interruptMatching("", "", beforeCancel)
+}
+
+func (s *defaultExclusiveStepLifecycle) InterruptMatching(
+	runID string,
+	stepID string,
+	beforeCancel func(*RunSnapshot),
+) (*RunSnapshot, error) {
+	if runID == "" || stepID == "" {
+		return nil, errors.New("observed run and step identities are required")
+	}
+	return s.interruptMatching(runID, stepID, beforeCancel)
+}
+
+func (s *defaultExclusiveStepLifecycle) interruptMatching(
+	runID string,
+	stepID string,
+	beforeCancel func(*RunSnapshot),
+) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
 	suspended := s.suspended
@@ -254,6 +273,10 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		return nil, nil
 	}
 	snapshot := cloneRunSnapshot(s.snapshotLocked())
+	if runID != "" && (snapshot == nil || snapshot.RunID != runID || snapshot.StepID != stepID) {
+		s.mu.Unlock()
+		return nil, nil
+	}
 	if beforeCancel != nil {
 		beforeCancel(cloneRunSnapshot(snapshot))
 	}

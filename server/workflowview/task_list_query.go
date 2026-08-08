@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -117,11 +118,11 @@ func (l *TaskList) queryRows(
 		ProjectID:            req.projectID,
 		WorkflowID:           workflowFilter,
 		VisibleColumnsJson:   visibleColumnsJSON,
-		ColumnFilterSet:      boolInt64(columnFilterSet),
+		ColumnFilterSet:      metadata.SQLiteBoolInt64(columnFilterSet),
 		ColumnKeysJson:       columnKeysJSON,
-		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
+		StatusFilterSet:      metadata.SQLiteBoolInt64(len(req.statusKinds) > 0),
 		StatusKindsJson:      string(statusKindsJSON),
-		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
+		AttentionFilterSet:   metadata.SQLiteBoolInt64(len(req.attentionKinds) > 0),
 		AttentionKindsJson:   string(attentionKindsJSON),
 		LabelFilterKind:      labelFilterArgs.kind,
 		LabelFilterMode:      labelFilterArgs.mode,
@@ -293,11 +294,4 @@ func workflowTaskListVisibleColumnsJSON(columns []serverapi.WorkflowBoardColumn)
 		return "", err
 	}
 	return string(raw), nil
-}
-
-func boolInt64(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
 }

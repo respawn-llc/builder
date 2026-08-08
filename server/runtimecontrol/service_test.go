@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,28 @@ type runtimeControlPromptHistoryStore struct {
 	recordInserted []bool
 	recordErr      error
 	recordCtxErr   error
+}
+
+type runtimeControlEngineActivityResolver struct {
+	engine *runtime.Engine
+}
+
+func (r runtimeControlEngineActivityResolver) RuntimeReadModelSnapshot(
+	_ context.Context,
+	sessionID string,
+	_ []clientui.RuntimeOperationRef,
+) (runtimeactivity.ResponseSnapshot, error) {
+	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{
+		Registry: runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
+		Active:   runtimeactivity.ActiveStepFromProvider(r.engine),
+	})
+	if err != nil {
+		return runtimeactivity.ResponseSnapshot{}, err
+	}
+	return runtimeactivity.ResponseSnapshot{
+		Version:  runtimeactivity.NextReadModelVersion(sessionID),
+		Activity: activity,
+	}, nil
 }
 
 func newRuntimeControlPromptHistoryStore(sessionID string) *runtimeControlPromptHistoryStore {
@@ -252,6 +275,65 @@ type cancelObservingRuntimeControlClient struct {
 	release     chan struct{}
 	ctxCanceled chan struct{}
 	cancelOnce  sync.Once
+}
+
+type successorTurnRuntimeControlClient struct {
+	mu             sync.Mutex
+	calls          int
+	firstStarted   chan struct{}
+	firstRelease   chan struct{}
+	secondStarted  chan struct{}
+	secondRelease  chan struct{}
+	secondCanceled chan struct{}
+	cancelOnce     sync.Once
+}
+
+func newSuccessorTurnRuntimeControlClient() *successorTurnRuntimeControlClient {
+	return &successorTurnRuntimeControlClient{
+		firstStarted:   make(chan struct{}),
+		firstRelease:   make(chan struct{}),
+		secondStarted:  make(chan struct{}),
+		secondRelease:  make(chan struct{}),
+		secondCanceled: make(chan struct{}),
+	}
+}
+
+func (c *successorTurnRuntimeControlClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	switch call {
+	case 1:
+		close(c.firstStarted)
+		select {
+		case <-c.firstRelease:
+		case <-ctx.Done():
+			return llm.Response{}, context.Cause(ctx)
+		}
+	case 2:
+		close(c.secondStarted)
+		select {
+		case <-c.secondRelease:
+		case <-ctx.Done():
+			c.cancelOnce.Do(func() { close(c.secondCanceled) })
+			return llm.Response{}, context.Cause(ctx)
+		}
+	default:
+		return llm.Response{}, errors.New("unexpected successor-turn model request")
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("done"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *successorTurnRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{}, nil
 }
 
 func newCancelObservingRuntimeControlClient() *cancelObservingRuntimeControlClient {
@@ -520,6 +602,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	}
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
 	service := NewService(authority).
+		WithRuntimeActivityResolver(runtimeControlEngineActivityResolver{engine: engine}).
 		WithPromptHistoryStore(history).
 		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 	return store, engine, service
@@ -2613,6 +2696,67 @@ func TestServiceOrdinaryInterruptStaysBoundToObservedRuntimeGeneration(t *testin
 		}
 	case <-time.After(time.Second):
 		t.Fatal("replacement runtime turn did not finish")
+	}
+}
+
+func TestServiceOrdinaryInterruptStaysBoundToObservedTurn(t *testing.T) {
+	client := newSuccessorTurnRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "observed workflow turn")
+		firstDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("observed turn did not reach the model request")
+	}
+
+	secondDone := make(chan error, 1)
+	service.WithWorkflowSessionInterruptor(&runtimeControlWorkflowSessionInterruptor{
+		hook: func(context.Context, runtimeids.SessionID) error {
+			close(client.firstRelease)
+			select {
+			case err := <-firstDone:
+				if err != nil {
+					return fmt.Errorf("finish observed turn: %w", err)
+				}
+			case <-time.After(time.Second):
+				return errors.New("observed turn did not finish")
+			}
+			go func() {
+				_, err := engine.SubmitUserMessage(context.Background(), "successor ordinary turn")
+				secondDone <- err
+			}()
+			select {
+			case <-client.secondStarted:
+				return nil
+			case <-time.After(time.Second):
+				return errors.New("successor turn did not start")
+			}
+		},
+	})
+
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-observed-turn",
+		SessionID:       store.Meta().SessionID,
+	}); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-client.secondCanceled:
+		t.Fatal("ordinary Interrupt canceled a successor turn on the observed runtime generation")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.secondRelease)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("successor turn: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successor turn did not finish")
 	}
 }
 
