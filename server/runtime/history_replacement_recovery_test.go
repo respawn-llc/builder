@@ -113,7 +113,7 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 		}
 		engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{
 			Model:         "gpt-5",
-			RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+			RuntimeEvents: runtimecommand.NewQueue(context.Background()),
 		})
 		if err != nil {
 			t.Fatalf("restore legacy reviewer rollback: %v", err)

@@ -301,7 +301,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 	reopened, err := New(reopenedStore, mustMaterializeTestEventLog(t, reopenedStore), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		ContextWindowTokens: 400_000,
-		RuntimeEvents:       runtimecommand.NewQueue(t.Context()),
+		RuntimeEvents:       runtimecommand.NewQueue(context.Background()),
 	})
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)

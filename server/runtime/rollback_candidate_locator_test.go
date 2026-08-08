@@ -195,7 +195,7 @@ func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *test
 
 	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:         "gpt-5",
-		RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+		RuntimeEvents: runtimecommand.NewQueue(context.Background()),
 	})
 	if engine != nil || !errors.Is(err, rollbacktarget.ErrInvalidCandidateLocator) {
 		t.Fatalf("runtime restore result = engine:%+v error:%v", engine, err)

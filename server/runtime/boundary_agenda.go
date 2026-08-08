@@ -23,3 +23,12 @@ func (a *boundaryAgenda) close() bool {
 	a.closed = true
 	return true
 }
+
+func (a *boundaryAgenda) isClosed() bool {
+	if a == nil {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.closed
+}

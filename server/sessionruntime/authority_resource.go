@@ -413,7 +413,7 @@ func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.E
 	settle := func() error {
 		var engineErr error
 		if engine != nil {
-			engineErr = engine.CloseRuntimeState()
+			engineErr = engine.ApplyRuntimeCloseUnderAdmission()
 		}
 		r.mu.Lock()
 		r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))

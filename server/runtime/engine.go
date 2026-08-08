@@ -458,7 +458,6 @@ func (e *Engine) Close() error {
 		return interruptErr
 	}
 	e.lifecycleClosed = true
-	e.closed.Store(true)
 	e.failPendingWorkflowAssignments(ErrEngineClosed)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
@@ -466,7 +465,8 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
-	runtimeStateErr := e.CloseRuntimeState()
+	runtimeStateErr := e.closeRuntimeState()
+	e.closed.Store(true)
 	if e.runtimeEvents != nil {
 		e.runtimeEvents.Close()
 	}
@@ -481,11 +481,34 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	e.failPendingWorkflowAssignments(ErrEngineClosed)
 }
 
-func (e *Engine) CloseRuntimeState() error {
+func (e *Engine) closeRuntimeState() error {
+	if e == nil || e.boundaryAgenda == nil || e.boundaryAgenda.isClosed() {
+		return nil
+	}
+	if e.runtimeEvents == nil {
+		return e.applyRuntimeClose(runtimeEventAdmission{engine: e})
+	}
+	_, err := submitRuntimeEventWithContext(
+		context.Background(),
+		context.Background(),
+		e,
+		struct{}{},
+		func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
+			return struct{}{}, e.applyRuntimeClose(admission)
+		},
+	)
+	return err
+}
+
+func (e *Engine) ApplyRuntimeCloseUnderAdmission() error {
+	return e.applyRuntimeClose(runtimeEventAdmission{engine: e})
+}
+
+func (e *Engine) applyRuntimeClose(admission runtimeEventAdmission) error {
 	if e == nil || e.boundaryAgenda == nil || !e.boundaryAgenda.close() {
 		return nil
 	}
-	return e.applySteeringBatch("runtime_close", steerLiveToolAbortIntent("canceled"))
+	return admission.applySteering("runtime_close", steerLiveToolAbortIntent("canceled"))
 }
 
 func (e *Engine) ensureLifecycle() {

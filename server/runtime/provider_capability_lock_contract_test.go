@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestNewUsesPersistedProviderContractWhenLiveCapabilitiesUnavailable(t *test
 		tools.NewRegistry(),
 		Config{
 			Model:         "gpt-5.3-codex",
-			RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+			RuntimeEvents: runtimecommand.NewQueue(context.Background()),
 		},
 	)
 	if err != nil {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 
 	"core/server/runtimecommand"
@@ -26,15 +27,35 @@ func submitRuntimeEvent[Payload, Result any](
 	if engine.closed.Load() {
 		return zero, ErrEngineClosed
 	}
+	engine.ensureLifecycle()
+	return submitRuntimeEventWithContext(
+		engine.lifecycleCtx,
+		engine.lifecycleCtx,
+		engine,
+		payload,
+		handle,
+	)
+}
+
+func submitRuntimeEventWithContext[Payload, Result any](
+	admissionContext context.Context,
+	waitContext context.Context,
+	engine *Engine,
+	payload Payload,
+	handle func(runtimeEventAdmission, Payload) (Result, error),
+) (Result, error) {
+	var zero Result
+	if engine == nil {
+		return zero, errors.New("runtime engine is required")
+	}
 	admission := runtimeEventAdmission{engine: engine}
 	// A persisted steering Engine has no Active Session Runtime generation. Its
 	// caller already owns dormant Session admission.
 	if engine.runtimeEvents == nil {
 		return handle(admission, payload)
 	}
-	engine.ensureLifecycle()
 	deferred, err := runtimecommand.Submit(
-		engine.lifecycleCtx,
+		admissionContext,
 		engine.runtimeEvents,
 		payload,
 		func(
@@ -50,6 +71,6 @@ func submitRuntimeEvent[Payload, Result any](
 	if err != nil {
 		return zero, runtimeSteeringError(err)
 	}
-	result, err := deferred.Await(engine.lifecycleCtx)
+	result, err := deferred.Await(waitContext)
 	return result, runtimeSteeringError(err)
 }

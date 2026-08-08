@@ -28,16 +28,44 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 			Debug: true,
 		})
 		result := mismatchedDeletionCompletion(t, engine)
-		_, _ = engine.steerWithCommitReceipt("delete-step", steerToolCompletionIntent(result))
+		defer func() {
+			recovered := recover()
+			failure, ok := recovered.(toolCompletionPresentationPanic)
+			if !ok {
+				t.Fatalf("panic = %#v, want typed tool completion presentation panic", recovered)
+			}
+			if failure.CallID != result.CallID ||
+				failure.ToolName != result.Name ||
+				failure.Mismatch == nil ||
+				failure.Mismatch.Kind != patchformat.WholeFileDeletionFactMismatchUnexpectedOperation {
+				t.Fatalf("typed panic context = %+v", failure)
+			}
+
+			window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+			if err != nil {
+				t.Fatalf("read bounded mismatch records: %v", err)
+			}
+			for _, record := range window.Records {
+				switch mustSessionEventPayload(record).(type) {
+				case session.ToolCompletionRecord, session.LocalEntryRecord:
+					t.Fatalf("debug mismatch persisted a completion or fallback entry: %+v", record)
+				}
+			}
+			if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
+				t.Fatal("debug mismatch removed the live tool before persistence")
+			}
+		}()
+		_ = (runtimeEventAdmission{engine: engine}).applySteering(
+			"delete-step",
+			steerToolCompletionIntent(result),
+		)
 		return
 	}
 
 	command := exec.Command(os.Args[0], "-test.run=^TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug$")
 	command.Env = append(os.Environ(), childProcess+"=1")
-	if output, err := command.CombinedOutput(); err == nil {
-		t.Fatalf("debug mismatch child returned without panicking: %s", output)
-	} else if _, ok := err.(*exec.ExitError); !ok {
-		t.Fatalf("run debug mismatch child: %v", err)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("debug mismatch child invariant check failed: %v\n%s", err, output)
 	}
 }
 

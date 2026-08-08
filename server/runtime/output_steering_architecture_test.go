@@ -111,8 +111,7 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		"appendQueuedUserMessageFlush": {"applySteeringItem": true},
 		"applySteeringItem":            {"applySteeringBatch": true},
 		"applySteeringBatch": {
-			"applySteering":     true,
-			"CloseRuntimeState": true,
+			"applySteering": true,
 		},
 	}
 	rejectedIdentifiers := map[string]bool{
