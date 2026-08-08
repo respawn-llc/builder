@@ -150,6 +150,57 @@ func TestWorkflowTaskStartConflictAlreadyStartedRoundTripsRPCData(t *testing.T) 
 	}
 }
 
+func TestWorkflowTaskMovePreparationErrorRoundTripsTargetFailureWithOnlyPreviousWorktree(t *testing.T) {
+	previous := testRetainedPreviousWorktree()
+	source, err := NewWorkflowTaskMovePreparationError(
+		WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureTargetPreparation,
+				Preparation: &WorktreeSetupPreparationFailure{},
+			},
+			Diagnostic:               "replacement creation failed",
+			RetainedPreviousWorktree: previous,
+		},
+		nil,
+		errors.New("replacement creation failed"),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskMovePreparationError: %v", err)
+	}
+	decoded := DecodeWorkflowTaskMovePreparationError(source.RPCErrorData(), source.Error())
+	var preparation *WorkflowTaskMovePreparationError
+	if !errors.As(decoded, &preparation) ||
+		preparation.Failure.Cause.Kind != WorktreeSetupFailureTargetPreparation ||
+		preparation.Failure.RetainedWorktree != nil ||
+		preparation.Failure.RetainedPreviousWorktree == nil ||
+		preparation.Failure.RetainedPreviousWorktree.Worktree.Registered == nil {
+		t.Fatalf("decoded preparation error = %+v (%v)", preparation, decoded)
+	}
+	if source.RPCErrorCode() != protocol.ErrCodeWorkflowTaskMovePreparation {
+		t.Fatalf("RPC error code = %d", source.RPCErrorCode())
+	}
+}
+
+func TestWorkflowTaskMovePreparationErrorRequiresSetupScriptForScriptFailure(t *testing.T) {
+	_, err := NewWorkflowTaskMovePreparationError(
+		WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureOperational,
+				Operational: &WorktreeSetupOperationalFailure{},
+			},
+			Diagnostic:       "setup failed",
+			RetainedWorktree: testRegisteredWorktreeTopology(),
+		},
+		nil,
+		errors.New("setup failed"),
+	)
+	if err == nil {
+		t.Fatal("script failure without setup script validated")
+	}
+}
+
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{

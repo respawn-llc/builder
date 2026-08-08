@@ -317,6 +317,41 @@ describe("task initiating action controller", () => {
     expect(result.current.running).toBe(false);
   });
 
+  it("preserves a previous Worktree when replacement target preparation fails before a primary root exists", async () => {
+    const execute = vi.fn(async (): Promise<TaskInitiatingActionResult> => {
+      throw targetPreparationFailure("replacement creation failed", "/repo/previous");
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = moveTaskInitiatingAction({
+      taskID: "task-1",
+      targetNodeID: "node-2",
+      transitionKey: undefined,
+      values: {},
+      commentary: "",
+      proceedDespiteDependencies: false,
+    });
+
+    await act(async () => {
+      expect(await result.current.run(action)).toBe("setup_recovery");
+    });
+    expect(result.current.pending).toMatchObject({
+      kind: "setup_recovery",
+      failure: {
+        kind: "target_preparation",
+        diagnostic: "replacement creation failed",
+        scriptPath: null,
+        retainedWorktree: null,
+        retainedPreviousWorktree: { root: "/repo/previous" },
+      },
+    });
+  });
+
   it("retains an explicit Move target through setup recovery and replaces only that intent", async () => {
     const selections: (WorkflowExecutionTargetSelection | undefined)[] = [];
     let callCount = 0;
@@ -400,21 +435,44 @@ describe("task initiating action controller", () => {
 
 function setupFailure(diagnostic: string, root: string, previousRoot?: string): RpcError {
   return new RpcError({
-    code: -32039,
+    code: -32061,
     method: "workflow.task.move",
-    message: "display-only setup error",
+    message: "display-only preparation error",
     data: {
-      type: "worktree_setup_retained",
-      worktree: registeredWorktreeWire(root, "worktree-current"),
-      script_path: "/repo/setup.sh",
-      diagnostic,
-      ...(previousRoot === undefined
-        ? {}
-        : {
-            retained_previous_worktree: {
-              worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
-            },
-          }),
+      type: "workflow_task_move_preparation",
+      failure: {
+        retry_readiness: "retry_ready",
+        cause: { kind: "operational", operational: {} },
+        diagnostic,
+        retained_worktree: registeredWorktreeWire(root, "worktree-current"),
+        ...(previousRoot === undefined
+          ? {}
+          : {
+              retained_previous_worktree: {
+                worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
+              },
+            }),
+      },
+      setup_script_path: "/repo/setup.sh",
+    },
+  });
+}
+
+function targetPreparationFailure(diagnostic: string, previousRoot: string): RpcError {
+  return new RpcError({
+    code: -32061,
+    method: "workflow.task.move",
+    message: "display-only preparation error",
+    data: {
+      type: "workflow_task_move_preparation",
+      failure: {
+        retry_readiness: "retry_ready",
+        cause: { kind: "target_preparation", target_preparation: {} },
+        diagnostic,
+        retained_previous_worktree: {
+          worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
+        },
+      },
     },
   });
 }

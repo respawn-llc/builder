@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "@/test-support/api";
+import { FakeRpcTransport, registeredWorktreeWire } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
 
@@ -214,6 +214,7 @@ describe("worktree setup API", () => {
             process_exit: { exit_code: 7, stdout: "", stderr: null },
           },
           diagnostic: "setup exited",
+          retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
         },
       },
     });
@@ -240,7 +241,7 @@ describe("worktree setup API", () => {
       },
     });
 
-    expect(events).toEqual([
+    expect(events).toMatchObject([
       {
         setupOperationID,
         phase: "not_required",
@@ -282,7 +283,12 @@ describe("worktree setup API", () => {
           retryReadiness: "retry_ready",
           cause: { kind: "process_exit", exitCode: 7, stdout: "", stderr: null },
           diagnostic: "setup exited",
-          retainedWorktree: null,
+          retainedWorktree: {
+            registered: {
+              git: { canonicalRoot: "/worktree" },
+              kent: { worktreeID: "worktree-current", canonicalRoot: "/worktree" },
+            },
+          },
           retainedPreviousWorktree: null,
         },
       },

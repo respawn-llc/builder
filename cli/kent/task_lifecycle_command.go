@@ -816,14 +816,14 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			ProceedDespiteDependencies: *ignoreDependencies,
 		})
 		if err != nil {
-			var setupErr *serverapi.WorktreeSetupRetainedError
-			if errors.As(err, &setupErr) {
-				presentation, projectionErr := taskMoveSetupFailurePresentation(
+			var preparationErr *serverapi.WorkflowTaskMovePreparationError
+			if errors.As(err, &preparationErr) {
+				presentation, projectionErr := taskMovePreparationFailurePresentation(
 					taskLifecycleCommandContext{
 						TaskRef: positionals[0],
 						Move:    &moveRecoveryCommand,
 					},
-					setupErr,
+					preparationErr,
 				)
 				if projectionErr != nil {
 					fmt.Fprintln(stderr, projectionErr)

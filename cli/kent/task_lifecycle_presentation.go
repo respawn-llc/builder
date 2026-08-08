@@ -167,17 +167,30 @@ func taskLifecycleSetupPresentation(
 	if event.Phase != serverapi.WorktreeSetupPhaseFailed || event.Failed == nil {
 		return taskLifecyclePresentation{}, errors.New("setup recovery presentation requires a failed setup event")
 	}
-	failed := event.Failed
+	var setupScriptPath *string
+	if terminal.LastStarted != nil {
+		scriptPath := terminal.LastStarted.ScriptPath
+		setupScriptPath = &scriptPath
+	}
+	return taskLifecyclePreparationFailurePresentation(operation, command, *event.Failed, setupScriptPath)
+}
+
+func taskLifecyclePreparationFailurePresentation(
+	operation taskLifecycleOperation,
+	command taskLifecycleCommandContext,
+	failed serverapi.WorktreeSetupFailed,
+	setupScriptPath *string,
+) (taskLifecyclePresentation, error) {
+	if err := failed.Validate(); err != nil {
+		return taskLifecyclePresentation{}, fmt.Errorf("invalid Worktree Setup failure: %w", err)
+	}
 	presentation := taskLifecyclePresentation{
 		Kind:       taskLifecyclePresentationSetupRecovery,
 		Operation:  operation,
 		TaskRef:    command.TaskRef,
 		Diagnostic: failed.Diagnostic,
 	}
-	if terminal.LastStarted != nil {
-		scriptPath := terminal.LastStarted.ScriptPath
-		presentation.SetupScriptPath = &scriptPath
-	}
+	presentation.SetupScriptPath = setupScriptPath
 	var err error
 	presentation.RetainedWorktree, err = taskLifecycleWorktreeFromTopology(failed.RetainedWorktree)
 	if err != nil {
@@ -340,46 +353,22 @@ func retainedWorktreeInspectionActions(retained *taskLifecycleWorktree) []taskLi
 	}
 }
 
-func taskMoveSetupFailurePresentation(
+func taskMovePreparationFailurePresentation(
 	command taskLifecycleCommandContext,
-	setupErr *serverapi.WorktreeSetupRetainedError,
+	preparationErr *serverapi.WorkflowTaskMovePreparationError,
 ) (taskLifecyclePresentation, error) {
-	if setupErr == nil {
-		return taskLifecyclePresentation{}, errors.New("Move retained setup error is required")
+	if preparationErr == nil {
+		return taskLifecyclePresentation{}, errors.New("Move preparation error is required")
 	}
-	if err := setupErr.Validate(); err != nil {
-		return taskLifecyclePresentation{}, fmt.Errorf("invalid Move retained setup error: %w", err)
+	if err := preparationErr.Validate(); err != nil {
+		return taskLifecyclePresentation{}, fmt.Errorf("invalid Move preparation error: %w", err)
 	}
-	if command.Move == nil {
-		return taskLifecyclePresentation{}, errors.New("Move setup recovery requires original command context")
-	}
-	retained, err := taskLifecycleWorktreeFromTopology(&setupErr.Worktree)
-	if err != nil {
-		return taskLifecyclePresentation{}, err
-	}
-	presentation := taskLifecyclePresentation{
-		Kind:             taskLifecyclePresentationSetupRecovery,
-		Operation:        taskLifecycleOperationMove,
-		TaskRef:          command.TaskRef,
-		Diagnostic:       setupErr.Diagnostic,
-		RetainedWorktree: retained,
-		Actions:          taskMoveRecoveryActions(*command.Move),
-	}
-	scriptPath := setupErr.ScriptPath
-	presentation.SetupScriptPath = &scriptPath
-	if setupErr.RetainedPreviousWorktree != nil {
-		presentation.RetainedPreviousWorktree, err = taskLifecycleWorktreeFromTopology(
-			&setupErr.RetainedPreviousWorktree.Worktree,
-		)
-		if err != nil {
-			return taskLifecyclePresentation{}, err
-		}
-	}
-	presentation.Actions = append(
-		presentation.Actions,
-		retainedWorktreeInspectionActions(presentation.RetainedPreviousWorktree)...,
+	return taskLifecyclePreparationFailurePresentation(
+		taskLifecycleOperationMove,
+		command,
+		preparationErr.Failure,
+		preparationErr.SetupScriptPath,
 	)
-	return presentation, nil
 }
 
 func optionalTaskLifecycleString(value string, provided bool) *string {

@@ -3,6 +3,10 @@ import { z } from "zod";
 import type { JsonValue } from "./json";
 import { labelIDSchema } from "./schemas/workflowLabels";
 import { workflowLabelMaxIDs } from "./workflowLabelContract";
+import {
+  worktreeSetupFailureWireSchema,
+  type WorktreeSetupFailure,
+} from "./worktreeSetupFailure";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 import {
   registeredWorktreeTopologySchema,
@@ -101,6 +105,80 @@ export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupR
     scriptPath: parsed.data.script_path,
     diagnostic: parsed.data.diagnostic,
     retainedPreviousWorktree: parsed.data.retained_previous_worktree ?? null,
+  });
+}
+
+export class WorkflowTaskMovePreparationError extends RpcError {
+  readonly failure: WorktreeSetupFailure;
+  readonly setupScriptPath: string | null;
+
+  constructor(
+    rpcError: RpcError,
+    facts: Readonly<{
+      failure: WorktreeSetupFailure;
+      setupScriptPath: string | null;
+    }>,
+  ) {
+    super({
+      code: rpcError.code,
+      message: rpcError.message,
+      method: rpcError.method,
+      data: rpcError.data,
+    });
+    this.name = "WorkflowTaskMovePreparationError";
+    this.failure = facts.failure;
+    this.setupScriptPath = facts.setupScriptPath;
+  }
+}
+
+const workflowTaskMovePreparationErrorDataSchema = z
+  .object({
+    type: z.literal("workflow_task_move_preparation"),
+    failure: worktreeSetupFailureWireSchema,
+    setup_script_path: z.string().refine((value) => value.trim().length > 0).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.failure.retryReadiness !== "retry_ready") {
+      context.addIssue({
+        code: "custom",
+        message: "Move preparation recovery requires retry-ready failure.",
+        path: ["failure", "retry_readiness"],
+      });
+    }
+    if (value.failure.cause.kind === "target_preparation" && value.setup_script_path !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Target-preparation failure cannot include a setup script.",
+        path: ["setup_script_path"],
+      });
+    }
+    if (value.failure.cause.kind !== "target_preparation" && value.setup_script_path === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Setup-script failure requires its script path.",
+        path: ["setup_script_path"],
+      });
+    }
+  });
+
+export function decodeWorkflowTaskMovePreparationError(
+  error: unknown,
+): WorkflowTaskMovePreparationError | null {
+  if (
+    !(error instanceof RpcError) ||
+    error.code !== rpcErrorCodes.workflowTaskMovePreparation ||
+    error.method !== "workflow.task.move"
+  ) {
+    return null;
+  }
+  const parsed = workflowTaskMovePreparationErrorDataSchema.safeParse(error.data);
+  if (!parsed.success) {
+    return null;
+  }
+  return new WorkflowTaskMovePreparationError(error, {
+    failure: parsed.data.failure,
+    setupScriptPath: parsed.data.setup_script_path ?? null,
   });
 }
 

@@ -627,6 +627,18 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 						Root:       "/repo/retained",
 					},
 				},
+				SetupResult: &worktree.WorktreeSetupResult{
+					Failed: &serverapi.WorktreeSetupFailed{
+						RetryReadiness: serverapi.WorktreeSetupRetryReady,
+						Cause: serverapi.WorktreeSetupFailureCause{
+							Kind:        serverapi.WorktreeSetupFailureOperational,
+							Operational: &serverapi.WorktreeSetupOperationalFailure{},
+						},
+						Diagnostic:       setupErr.Diagnostic,
+						RetainedWorktree: &setupErr.Worktree,
+					},
+				},
+				RetainedPreviousWorktree: previous,
 			}, setupErr
 		},
 	}
@@ -640,11 +652,13 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	var retainedError *serverapi.WorktreeSetupRetainedError
-	if !errors.As(err, &retainedError) ||
+	var preparationError *serverapi.WorkflowTaskMovePreparationError
+	if !errors.As(err, &preparationError) ||
 		!errors.Is(err, setupCause) ||
-		retainedError.ScriptPath != "/repo/setup.sh" ||
-		retainedError.RetainedPreviousWorktree != previous {
+		preparationError.SetupScriptPath == nil ||
+		*preparationError.SetupScriptPath != "/repo/setup.sh" ||
+		preparationError.Failure.RetainedWorktree == nil ||
+		preparationError.Failure.RetainedPreviousWorktree != previous {
 		t.Fatalf("MoveWorkflowTask = %+v, %v; want setup failure", response, err)
 	}
 	after, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
@@ -663,6 +677,61 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 	}
 	if len(execution.interruptTaskIDs) != 0 {
 		t.Fatalf("interruptions after failed setup = %v, want none", execution.interruptTaskIDs)
+	}
+}
+
+func TestServiceManualMoveTargetPreparationFailureCarriesRetainedPreviousWorktree(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
+	creationErr := errors.New("replacement creation failed")
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("d", 40)
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+				},
+				RetainedPreviousWorktree: previous,
+			}, creationErr
+		},
+	}
+	execution := newManualMoveExecutionStub(service)
+	service.currentNodeExecution = execution
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	var preparationError *serverapi.WorkflowTaskMovePreparationError
+	if !errors.As(err, &preparationError) ||
+		!errors.Is(err, creationErr) ||
+		preparationError.SetupScriptPath != nil ||
+		preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		preparationError.Failure.RetainedWorktree != nil ||
+		preparationError.Failure.RetainedPreviousWorktree != previous {
+		t.Fatalf("MoveWorkflowTask = %+v, %v; want target-preparation failure with previous Worktree", response, err)
+	}
+	if len(execution.interruptTaskIDs) != 0 {
+		t.Fatalf("interruptions after failed target preparation = %v, want none", execution.interruptTaskIDs)
 	}
 }
 

@@ -52,10 +52,8 @@ type Service struct {
 }
 
 type initiatingActionTargetDecision struct {
-	candidate                *workflowstore.ExecutionTargetCandidate
-	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
-	setupResult              *worktree.WorktreeSetupResult
+	prepared          *preparedInitiatingActionTarget
+	selectionRequired *serverapi.WorkflowExecutionTargetSelectionRequirement
 }
 
 type initiatingActionTargetPreflight struct {
@@ -84,6 +82,7 @@ type initiatingActionResult[T any] struct {
 	applied                  *T
 	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	preparationFailure       *serverapi.WorkflowTaskMovePreparationError
 }
 
 type preparedInitiatingActionTarget struct {
@@ -1032,37 +1031,43 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 				&req.SetupOperationID,
 				target,
 			)
-			if decision.candidate == nil {
+			if decision.prepared == nil || decision.prepared.candidate == nil {
 				if preparationErr == nil {
 					preparationErr = errors.New("Task Start target preparation produced no lock candidate")
+				}
+				var setupResult *worktree.WorktreeSetupResult
+				var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+				if decision.prepared != nil {
+					setupResult = decision.prepared.setupResult
+					retainedPreviousWorktree = decision.prepared.retainedPreviousWorktree
 				}
 				preparationErr = taskPreparationError(
 					req.SetupOperationID,
 					target,
-					decision.setupResult,
-					decision.retainedPreviousWorktree,
+					setupResult,
+					retainedPreviousWorktree,
 					preparationErr,
 				)
-				observation.record(decision.setupResult, decision.retainedPreviousWorktree, preparationErr)
+				observation.record(setupResult, retainedPreviousWorktree, preparationErr)
 				return preparationErr
 			}
-			observation.record(decision.setupResult, decision.retainedPreviousWorktree, nil)
+			observation.record(decision.prepared.setupResult, decision.prepared.retainedPreviousWorktree, nil)
 			return nil
 		},
 		Commit: func(commitCtx context.Context) error {
 			lockErr := s.store.LockTaskExecutionTarget(
 				commitCtx,
 				workflow.TaskID(req.TaskID),
-				decision.candidate,
+				decision.prepared.candidate,
 			)
 			lockErr = taskPreparationError(
 				req.SetupOperationID,
 				target,
-				decision.setupResult,
-				decision.retainedPreviousWorktree,
+				decision.prepared.setupResult,
+				decision.prepared.retainedPreviousWorktree,
 				lockErr,
 			)
-			observation.record(decision.setupResult, decision.retainedPreviousWorktree, lockErr)
+			observation.record(decision.prepared.setupResult, decision.prepared.retainedPreviousWorktree, lockErr)
 			return lockErr
 		},
 	}
@@ -1095,13 +1100,22 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
+			if targetDecision.prepared != nil {
+				preparationFailure, preparationFailureErr := movePreparationError(*targetDecision.prepared, err)
+				if preparationFailureErr != nil {
+					return initiatingActionResult[T]{}, errors.Join(err, preparationFailureErr)
+				}
+				return initiatingActionResult[T]{preparationFailure: preparationFailure}, err
+			}
 			return initiatingActionResult[T]{}, err
 		}
 		if targetDecision.selectionRequired != nil {
 			return initiatingActionResult[T]{selectionRequired: targetDecision.selectionRequired}, nil
 		}
-		candidate = targetDecision.candidate
-		retainedPreviousWorktree = targetDecision.retainedPreviousWorktree
+		if targetDecision.prepared != nil {
+			candidate = targetDecision.prepared.candidate
+			retainedPreviousWorktree = targetDecision.prepared.retainedPreviousWorktree
+		}
 	}
 	if req.afterTargetResolution != nil {
 		if err := req.afterTargetResolution(); err != nil {
@@ -1182,10 +1196,25 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	}
 	prepared, err := s.materializeInitiatingActionTarget(ctx, taskID, setupOperationID, preflight, snapshot)
 	return initiatingActionTargetDecision{
-		candidate:                prepared.candidate,
-		retainedPreviousWorktree: prepared.retainedPreviousWorktree,
-		setupResult:              prepared.setupResult,
+		prepared: &prepared,
 	}, err
+}
+
+func movePreparationError(
+	prepared preparedInitiatingActionTarget,
+	cause error,
+) (*serverapi.WorkflowTaskMovePreparationError, error) {
+	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedPreviousWorktree, cause)
+	var setupScriptPath *string
+	if failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation {
+		var retained *serverapi.WorktreeSetupRetainedError
+		if !errors.As(cause, &retained) {
+			return nil, errors.New("setup-script Move preparation failure requires retained setup error facts")
+		}
+		scriptPath := retained.ScriptPath
+		setupScriptPath = &scriptPath
+	}
+	return serverapi.NewWorkflowTaskMovePreparationError(*failed, setupScriptPath, cause)
 }
 
 func (s *Service) resolveInitiatingActionTarget(
@@ -1793,6 +1822,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		}, nil
 	}
 	if err != nil && coordinated.applied == nil {
+		if coordinated.preparationFailure != nil {
+			return serverapi.WorkflowTaskMoveResponse{}, coordinated.preparationFailure
+		}
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if coordinated.selectionRequired != nil {

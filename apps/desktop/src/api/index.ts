@@ -45,6 +45,7 @@ export {
   TaskSearchError,
   decodeTaskSearchError,
   decodeWorktreeSetupRetainedError,
+  decodeWorkflowTaskMovePreparationError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
   isProjectMissingError,
@@ -54,6 +55,7 @@ export {
   TransportError,
   errorMessage,
   WorktreeSetupRetainedError,
+  WorkflowTaskMovePreparationError,
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";

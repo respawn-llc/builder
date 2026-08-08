@@ -68,6 +68,7 @@ const (
 	ErrCodeWorktreeCreate                    = -32058
 	ErrCodePromptCommands                    = -32059
 	ErrCodeWorkflowTaskStartConflict         = -32060
+	ErrCodeWorkflowTaskMovePreparation       = -32061
 )
 
 type Request struct {

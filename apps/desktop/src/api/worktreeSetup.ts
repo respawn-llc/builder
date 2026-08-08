@@ -3,26 +3,18 @@ import { z } from "zod";
 import { ContractError } from "./errors";
 import { setupOperationIDSchema, type SetupOperationID } from "./setupOperationID";
 import {
-  registeredWorktreeTopologySchema,
+  worktreeSetupFailureWireSchema,
+  type WorktreeSetupFailure,
+} from "./worktreeSetupFailure";
+import {
   retainedPreviousWorktreeSchema,
-  type RegisteredWorktreeTopology,
   type RetainedPreviousWorktree,
 } from "./worktreeTopology";
 import type { RpcEventHandler } from "./transport";
 
 export type WorktreeSetupPhase = "started" | "completed" | "not_required" | "failed";
 
-export type WorktreeSetupFailureCause =
-  | Readonly<{ kind: "process_exit"; exitCode: number; stdout: string | null; stderr: string | null }>
-  | Readonly<{ kind: "timeout"; stdout: string | null; stderr: string | null }>
-  | Readonly<{
-      kind:
-        | "target_preparation"
-        | "interruption_persistence"
-        | "canceled"
-        | "controller_shutdown"
-        | "operational";
-    }>;
+export type { WorktreeSetupFailure, WorktreeSetupFailureCause } from "./worktreeSetupFailure";
 
 export type WorktreeSetupEvent =
   | Readonly<{
@@ -46,13 +38,7 @@ export type WorktreeSetupEvent =
   | Readonly<{
       setupOperationID: SetupOperationID;
       phase: "failed";
-      failed: Readonly<{
-        retryReadiness: "retry_ready" | "non_retryable";
-        cause: WorktreeSetupFailureCause;
-        diagnostic: string;
-        retainedWorktree: RegisteredWorktreeTopology | null;
-        retainedPreviousWorktree: RetainedPreviousWorktree | null;
-      }>;
+      failed: WorktreeSetupFailure;
     }>;
 
 export type WorktreeSetupEventHandler = Readonly<{
@@ -61,67 +47,6 @@ export type WorktreeSetupEventHandler = Readonly<{
   onComplete(code: number, message: string): void;
   onError(error: Error): void;
 }>;
-
-const processExitCauseSchema = z
-  .object({
-    kind: z.literal("process_exit"),
-    process_exit: z
-      .object({
-        exit_code: z
-          .number()
-          .int()
-          .refine((value) => value !== 0),
-        stdout: z.string().nullable().optional(),
-        stderr: z.string().nullable().optional(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform((value): WorktreeSetupFailureCause => ({
-    kind: value.kind,
-    exitCode: value.process_exit.exit_code,
-    stdout: value.process_exit.stdout ?? null,
-    stderr: value.process_exit.stderr ?? null,
-  }));
-
-const timeoutCauseSchema = z
-  .object({
-    kind: z.literal("timeout"),
-    timeout: z
-      .object({
-        stdout: z.string().nullable().optional(),
-        stderr: z.string().nullable().optional(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform((value): WorktreeSetupFailureCause => ({
-    kind: value.kind,
-    stdout: value.timeout.stdout ?? null,
-    stderr: value.timeout.stderr ?? null,
-  }));
-
-const markerCauseSchema = (
-  kind:
-    "target_preparation" | "interruption_persistence" | "canceled" | "controller_shutdown" | "operational",
-) =>
-  z
-    .object({
-      kind: z.literal(kind),
-      [kind]: z.object({}).strict(),
-    })
-    .strict()
-    .transform((): WorktreeSetupFailureCause => ({ kind }));
-
-const failureCauseSchema = z.discriminatedUnion("kind", [
-  processExitCauseSchema,
-  timeoutCauseSchema,
-  markerCauseSchema("target_preparation"),
-  markerCauseSchema("interruption_persistence"),
-  markerCauseSchema("canceled"),
-  markerCauseSchema("controller_shutdown"),
-  markerCauseSchema("operational"),
-]);
 
 const setupEventWireSchema = z.discriminatedUnion("phase", [
   z
@@ -188,47 +113,13 @@ const setupEventWireSchema = z.discriminatedUnion("phase", [
     .object({
       setup_operation_id: setupOperationIDSchema,
       phase: z.literal("failed"),
-      failed: z
-        .object({
-          retry_readiness: z.enum(["retry_ready", "non_retryable"]),
-          cause: failureCauseSchema,
-          diagnostic: z.string().trim().min(1),
-          retained_worktree: registeredWorktreeTopologySchema.nullable().optional(),
-          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
-        })
-        .strict(),
+      failed: worktreeSetupFailureWireSchema,
     })
     .strict()
-    .superRefine((value, context) => {
-      const retryable =
-        value.failed.cause.kind === "process_exit" ||
-        value.failed.cause.kind === "timeout" ||
-        value.failed.cause.kind === "target_preparation";
-      const nonRetryable =
-        value.failed.cause.kind === "interruption_persistence" ||
-        value.failed.cause.kind === "canceled" ||
-        value.failed.cause.kind === "controller_shutdown";
-      if (
-        (retryable && value.failed.retry_readiness !== "retry_ready") ||
-        (nonRetryable && value.failed.retry_readiness !== "non_retryable")
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: "Failure retry readiness does not match its typed cause.",
-          path: ["failed", "retry_readiness"],
-        });
-      }
-    })
     .transform((value): WorktreeSetupEvent => ({
       setupOperationID: value.setup_operation_id,
       phase: value.phase,
-      failed: {
-        retryReadiness: value.failed.retry_readiness,
-        cause: value.failed.cause,
-        diagnostic: value.failed.diagnostic,
-        retainedWorktree: value.failed.retained_worktree ?? null,
-        retainedPreviousWorktree: value.failed.retained_previous_worktree ?? null,
-      },
+      failed: value.failed,
     })),
 ]);
 

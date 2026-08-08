@@ -1,5 +1,6 @@
 import {
   decodeWorktreeSetupRetainedError,
+  decodeWorkflowTaskMovePreparationError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
   isProjectMissingError,
@@ -8,6 +9,7 @@ import {
   WorkflowLabelError,
   WorkflowTaskDependencyError,
   WorktreeSetupRetainedError,
+  WorkflowTaskMovePreparationError,
 } from "./errors";
 import { registeredWorktreeWire } from "@/test-support/api";
 import { rpcErrorCodes } from "./rpcErrorCodes";
@@ -122,6 +124,62 @@ describe("worktree setup retained RPC errors", () => {
             worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
             script_path: "/repo/setup.sh",
             diagnostic: "setup failed",
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("Workflow Task Move preparation RPC errors", () => {
+  it("decodes target preparation with only a retained previous Worktree", () => {
+    const decoded = decodeWorkflowTaskMovePreparationError(
+      new RpcError({
+        code: -32061,
+        method: "workflow.task.move",
+        message: "human text is not the contract",
+        data: {
+          type: "workflow_task_move_preparation",
+          failure: {
+            retry_readiness: "retry_ready",
+            cause: { kind: "target_preparation", target_preparation: {} },
+            diagnostic: "replacement creation failed",
+            retained_previous_worktree: {
+              worktree: registeredWorktreeWire("/repo/previous", "worktree-previous"),
+            },
+          },
+        },
+      }),
+    );
+    expect(decoded).toBeInstanceOf(WorkflowTaskMovePreparationError);
+    expect(decoded).toMatchObject({
+      setupScriptPath: null,
+      failure: {
+        cause: { kind: "target_preparation" },
+        diagnostic: "replacement creation failed",
+        retainedWorktree: null,
+        retainedPreviousWorktree: {
+          worktree: { registered: { kent: { canonicalRoot: "/repo/previous" } } },
+        },
+      },
+    });
+  });
+
+  it("rejects setup-script failure without its script path", () => {
+    expect(
+      decodeWorkflowTaskMovePreparationError(
+        new RpcError({
+          code: -32061,
+          method: "workflow.task.move",
+          message: "setup failed",
+          data: {
+            type: "workflow_task_move_preparation",
+            failure: {
+              retry_readiness: "retry_ready",
+              cause: { kind: "operational", operational: {} },
+              diagnostic: "setup failed",
+              retained_worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
+            },
           },
         }),
       ),

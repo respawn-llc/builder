@@ -5,7 +5,7 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { decodeWorktreeSetupRetainedError } from "@/api";
+import { decodeWorkflowTaskMovePreparationError } from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,
@@ -131,8 +131,8 @@ export function useTaskInitiatingActionController({
             setPending((current) => (current?.kind === "setup_recovery" ? null : current));
             throw error;
           }
-          const setupFailure = decodeWorktreeSetupRetainedError(error);
-          if (setupFailure === null) {
+          const preparationError = decodeWorkflowTaskMovePreparationError(error);
+          if (preparationError === null) {
             setPending((current) => (current?.kind === "setup_recovery" ? null : current));
             throw error;
           }
@@ -140,17 +140,25 @@ export function useTaskInitiatingActionController({
             kind: "setup_recovery",
             action,
             failure: {
-              kind: "setup_script",
-              diagnostic: setupFailure.diagnostic,
-              scriptPath: setupFailure.scriptPath,
-              retainedWorktree: {
-                root: setupFailure.worktree.registered.kent.canonicalRoot,
-              },
-              retainedPreviousWorktree:
-                setupFailure.retainedPreviousWorktree === null
+              kind:
+                preparationError.failure.cause.kind === "target_preparation"
+                  ? "target_preparation"
+                  : "setup_script",
+              diagnostic: preparationError.failure.diagnostic,
+              scriptPath: preparationError.setupScriptPath,
+              retainedWorktree:
+                preparationError.failure.retainedWorktree === null
                   ? null
                   : {
-                      root: setupFailure.retainedPreviousWorktree.worktree.registered.kent.canonicalRoot,
+                      root: preparationError.failure.retainedWorktree.registered.kent.canonicalRoot,
+                    },
+              retainedPreviousWorktree:
+                preparationError.failure.retainedPreviousWorktree === null
+                  ? null
+                  : {
+                      root:
+                        preparationError.failure.retainedPreviousWorktree.worktree.registered.kent
+                          .canonicalRoot,
                     },
             },
             targetIntent:
