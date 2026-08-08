@@ -14,6 +14,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecommand"
 	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -427,6 +428,9 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	}
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
+	}
+	if cfg.RuntimeEvents == nil {
+		cfg.RuntimeEvents = runtimecommand.NewQueue(context.Background())
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
