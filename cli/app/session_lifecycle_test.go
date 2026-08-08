@@ -18,6 +18,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -59,7 +60,13 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			_, _, _, err := runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
-				WorkspaceRoot:       plan.ExecutionTarget.EffectiveWorkdir,
+				FilesystemContext: tools.FilesystemContext{
+					Access: tools.FileAccessScope{
+						WorkingDirectory:    tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
+						ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
+						ProjectWorkspace:    tools.ProjectWorkspaceScope{ProjectID: "project-1"},
+					},
+				},
 				OwnerSessionID:      plan.SessionID,
 				Enabled:             []toolspec.ID{toolspec.ToolPatch},
 				MinimumExecToBgTime: 15 * time.Second,
@@ -167,10 +174,11 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		}
 	})
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: metadataStore,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        metadataStore,
+		ProjectWorkspaceBoundary: metadataStore,
 	}).WithRuntimeAuthority(authority)
 	server := &testEmbeddedServer{
 		cfg:               cfg,
@@ -984,6 +992,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)

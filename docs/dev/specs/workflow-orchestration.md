@@ -552,9 +552,11 @@
 - Selection-required results distinguish two reasons: the Workflow requires selection, or the configured target is unavailable. Every selection flow offers all four concrete modes.
 - Failure to resolve an explicitly selected custom ref is a validation failure. During Task Start that failure occurs asynchronously after placement; it does not recursively request selection or fall back to another target. A later Resume may select another concrete target while the Task remains unlocked.
 - A Task locks target-selection provenance when preparation establishes the first Execution Root. Later Nodes and retries reuse the locked mode and managed requested/resolved facts despite Workflow edits or Git ref movement.
-- A Task with a legacy managed worktree and usable recorded `HEAD` continues to use that worktree. Kent identifies its observed commit as legacy provenance and does not present it as a known original branch point.
-- A legacy Task without a managed worktree remains unlocked and uses its Workflow's source-`HEAD` policy.
+- A Task with historical managed-worktree facts but no locked execution-target provenance does not infer an execution root from its recorded `HEAD`; it remains readable but requires an explicit target selection before execution.
+- An unlocked Task follows its configured Workflow execution-target policy. Kent does not use historical managed-worktree facts as a source-`HEAD` fallback.
 - Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
+- Every Kent-managed Worktree root must remain inside the server-configured Worktree base namespace and outside its source Workspace. An explicit managed Worktree root that violates either condition is rejected before Worktree creation.
+- A persisted managed Worktree root outside the server-configured namespace causes Session activation and Worktree restoration to fail. Kent does not migrate that root automatically.
 - Managed worktree setup failure during Task Start leaves placement applied and interrupts the placed Current Node. For other initiating actions it leaves the action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when an operation creates or recreates a worktree root. A later retry does not rerun setup for an existing compatible root.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.

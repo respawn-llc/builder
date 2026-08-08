@@ -193,16 +193,24 @@ func captureSessionRequest(
 	if forceProviderContract {
 		providerCapabilitiesOverride = &caps
 	}
+	projectWorkspaceBoundary, err := md.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve session project workspace boundary: %w", err)
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(workingDirectory, workingDirectory, projectWorkspaceBoundary)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("prepare filesystem context: %w", err)
+	}
 	headless := meta.HeadlessActive || workflowPrompt != nil
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
 		eventLog,
 		activeSettings,
 		activeToolIDs,
-		workingDirectory,
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
+			FilesystemContext:                   filesystemContext,
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},
 			Headless:                            headless,

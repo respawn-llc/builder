@@ -46,14 +46,25 @@ func sessionLaunchStringPtr(value string) *string {
 
 func newSessionLaunchTestService(cfg config.App, containerDir string) *Service {
 	return NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      serviceTestPersistence.Options(),
-		PersistedSessions: serviceTestPersistence,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             serviceTestPersistence.Options(),
+		PersistedSessions:        serviceTestPersistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: cfg.WorkspaceRoot},
 	}).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    serviceTestPersistence.Options(),
 	}))
+}
+
+type sessionLaunchBoundaryResolver struct{ root string }
+
+func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{ProjectID: "test-project", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
+}
+
+func (r sessionLaunchBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
+	return nil, nil
 }
 
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
@@ -99,10 +110,11 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 		t.Fatalf("record metadata prompt history: %v", err)
 	}
 	service := NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
 	}).WithPromptHistoryReader(meta).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    meta.AuthoritativeSessionStoreOptions(),
@@ -243,9 +255,10 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 	}
 	reloads := 0
 	service := NewService(launch.Planner{
-		Config:       snapshot,
-		ContainerDir: t.TempDir(),
-		StoreOptions: serviceTestPersistence.Options(),
+		Config:                   snapshot,
+		ContainerDir:             t.TempDir(),
+		StoreOptions:             serviceTestPersistence.Options(),
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: snapshot.WorkspaceRoot},
 		ReloadConfig: func() (config.App, error) {
 			reloads++
 			if reloads != 1 {
@@ -400,10 +413,11 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		},
 	}
 	service := NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
 	})
 	worker := "worker"
 	workflowCallerID := workflowCaller.Meta().SessionID

@@ -504,6 +504,11 @@ func (s *Service) restoreUnboundLockedTaskWorktree(task sqlitegen.TaskRecord, wo
 }
 
 func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sqlitegen.TaskRecord, workspace taskSourceWorkspace, record metadata.WorktreeRecord, identity ManagedWorktreeIdentity) (TaskWorktreeMaterialization, error) {
+	validatedRoot, err := s.managedRoots.validatePersistedRoot(record.CanonicalRoot, workspace.RootPath)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseInvalidRoot, Err: err}
+	}
+	record.CanonicalRoot = validatedRoot
 	revision, err := s.git.ResolveHEAD(ctx, record.CanonicalRoot)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
@@ -605,6 +610,17 @@ func (s *Service) registeredWorktreeRoot(ctx context.Context, workspaceRoot stri
 	return false, nil
 }
 
+func (s *Service) validateManagedRootForCreation(ctx context.Context, root string, kind managedRootKind, exemptRoot *string) error {
+	existingRoots, err := s.metadata.ListManagedWorktreeRoots(ctx)
+	if err == nil {
+		err = s.managedRoots.validateNoManagedRootOverlap(root, existingRoots, exemptRoot)
+	}
+	if err != nil && kind == managedRootKindAutomatic {
+		err = errors.Join(err, removeEmptyManagedRootAfterAddFailure(root))
+	}
+	return err
+}
+
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
 	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
 	if err != nil {
@@ -627,10 +643,17 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		if requestedRoot == "" {
 			return TaskWorktreeMaterialization{}, errors.New("requested managed worktree root is required")
 		}
-		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(requestedRoot)
+		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(requestedRoot, req.Workspace.RootPath)
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
+	}
+	var exemptRoot *string
+	if req.ExistingRecord != nil {
+		exemptRoot = &req.ExistingRecord.CanonicalRoot
+	}
+	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, exemptRoot); err != nil {
+		return TaskWorktreeMaterialization{}, err
 	}
 	cleanup := failedCreateCleanup{
 		workspaceID:   req.Workspace.WorkspaceID,
@@ -974,21 +997,14 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 		}
 		return taskSourceWorkspace{WorkspaceID: workspace.ID, RootPath: workspace.CanonicalRootPath}, nil
 	}
-	workspaces, err := s.metadata.ListProjectWorkspaces(ctx, projectID)
+	workspace, err := s.metadata.ResolveProjectSourceWorkspace(ctx, projectID)
 	if err != nil {
 		return taskSourceWorkspace{}, err
 	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary && strings.TrimSpace(workspace.RootPath) != "" {
-			return taskSourceWorkspace{WorkspaceID: workspace.WorkspaceID, RootPath: workspace.RootPath}, nil
-		}
+	if strings.TrimSpace(workspace.CanonicalRootPath) == "" {
+		return taskSourceWorkspace{}, fmt.Errorf("task source workspace %q has no root path", workspace.ID)
 	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.RootPath) != "" {
-			return taskSourceWorkspace{WorkspaceID: workspace.WorkspaceID, RootPath: workspace.RootPath}, nil
-		}
-	}
-	return taskSourceWorkspace{}, fmt.Errorf("project %q has no workspace for task worktree", strings.TrimSpace(projectID))
+	return taskSourceWorkspace{WorkspaceID: workspace.ID, RootPath: workspace.CanonicalRootPath}, nil
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
@@ -1135,10 +1151,13 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 		rootKind = managedRootKindAutomatic
 	} else {
-		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath)
+		worktreeRoot, err = s.managedRoots.resolveExplicitRoot(req.RootPath, workspaceCtx.workspaceRoot)
 		if err != nil {
 			return serverapi.WorktreeCreateResponse{}, err
 		}
+	}
+	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, nil); err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
 	}
 	createdBranch, err := s.addManagedWorktree(ctx, workspaceCtx.workspaceRoot, worktreeRoot, createSpec, rootKind)
 	if err != nil {

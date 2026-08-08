@@ -269,11 +269,12 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		return cached
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:            projectCtx.config,
-		ContainerDir:      projectCtx.projectSession,
-		StoreOptions:      s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: s.safeBundles().Persistence.metadataStore,
-		ExecutionTargets:  s.safeBundles().Persistence.metadataStore,
+		Config:                   projectCtx.config,
+		ContainerDir:             projectCtx.projectSession,
+		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        s.safeBundles().Persistence.metadataStore,
+		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
+		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
 		ReloadConfig: func() (config.App, error) {
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
@@ -296,10 +297,11 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:    s.sessionLaunchServiceForProjectContext(projectCtx),
-		FastModeState:    s.safeBundles().Runtime.fastModeState,
-		PromptHistory:    s.safeBundles().Persistence.metadataStore,
-		RuntimeAuthority: s.safeBundles().Runtime.runtimeAuthority,
+		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
+		FastModeState:          s.safeBundles().Runtime.fastModeState,
+		PromptHistory:          s.safeBundles().Persistence.metadataStore,
+		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
+		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client

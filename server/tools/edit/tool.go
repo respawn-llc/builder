@@ -23,9 +23,7 @@ const (
 )
 
 type Tool struct {
-	workspaceRoot                string
-	workspaceRootReal            string
-	workspaceRootInfo            os.FileInfo
+	fileAccessScope              tools.FileAccessScope
 	workspaceOnly                bool
 	allowOutsideWorkspace        bool
 	outsideWorkspaceApprover     tools.FSGuardApprover
@@ -54,11 +52,20 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 	if err != nil {
 		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("stat workspace root: %w", err))
 	}
-	t := &Tool{workspaceRoot: abs, workspaceRootReal: real, workspaceRootInfo: rootInfo, workspaceOnly: workspaceOnly}
+	t := &Tool{
+		fileAccessScope: tools.FileAccessScope{
+			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+		},
+		workspaceOnly: workspaceOnly,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)
 		}
+	}
+	if err := tools.ValidateFileAccessScope(t.fileAccessScope); err != nil {
+		return nil, fmt.Errorf("validate file access scope: %w", err)
 	}
 	return t, nil
 }
@@ -72,7 +79,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
-	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(in.Path, resolved.real) {
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved.real) {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
 	}
 	unlock := tools.LockFSGuardPaths([]string{resolved.real})
@@ -92,6 +99,9 @@ func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput)
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+	}
+	if err := t.validateManagedWorktreeMutation(path); err != nil {
+		return err
 	}
 	info, statErr := os.Stat(path.real)
 	if statErr == nil && info.IsDir() {
@@ -138,7 +148,9 @@ func (t *Tool) apply(ctx context.Context, path resolvedPath, in tools.EditInput)
 	if len(next) > maxEditableBytes {
 		return failf("maximum editable text file size is 100 MiB.")
 	}
-	if err := writeAtomicallyIfUnchanged(path.real, next, info); err != nil {
+	if err := writeAtomicallyIfUnchanged(path.real, next, info, func() error {
+		return t.validateManagedWorktreeMutation(path)
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -191,8 +203,24 @@ func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statE
 	if statErr == nil {
 		before = info
 	}
-	if err := writeAtomicallyIfUnchanged(path.real, next, before); err != nil {
+	if err := writeAtomicallyIfUnchanged(path.real, next, before, func() error {
+		return t.validateManagedWorktreeMutation(path)
+	}); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (t *Tool) validateManagedWorktreeMutation(path resolvedPath) error {
+	if t.managedWorktreePathContext == nil {
+		return nil
+	}
+	real, err := resolveRealTarget(path.cleaned)
+	if err != nil {
+		return err
+	}
+	if t.managedWorktreePathContext.IsForeignManagedWorktreePath(real) {
+		return errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	return nil
 }
@@ -257,7 +285,12 @@ func hasMixedLineEndings(text string) bool {
 	return styles > 1
 }
 
-func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) error {
+func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo, beforeMutation func() error) error {
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
+	}
 	if before != nil {
 		current, err := os.Stat(path)
 		if err != nil {
@@ -273,6 +306,11 @@ func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) er
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return failf("create parent dir for %s: %v", path, err)
+	}
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
 	}
 	mode := os.FileMode(0o644)
 	if before != nil {
@@ -298,6 +336,11 @@ func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo) er
 	}
 	if err := tmp.Close(); err != nil {
 		return failf("stage write failed: %v", err)
+	}
+	if beforeMutation != nil {
+		if err := beforeMutation(); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return failf("commit write %s: %v", path, err)
@@ -327,7 +370,7 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 	}
 	candidate := requested
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.workspaceRoot, candidate)
+		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
 	}
 	cleaned := filepath.Clean(candidate)
 	approved := map[string]bool{}
@@ -362,11 +405,11 @@ func (t *Tool) isUserSymlink(cleaned string, real string) bool {
 	if cleaned == real {
 		return false
 	}
-	rel, err := filepath.Rel(t.workspaceRoot, cleaned)
+	rel, err := filepath.Rel(t.fileAccessScope.WorkingDirectory.LexicalPath, cleaned)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return true
 	}
-	expected := filepath.Clean(filepath.Join(t.workspaceRootReal, rel))
+	expected := filepath.Clean(filepath.Join(t.fileAccessScope.WorkingDirectory.RealPath, rel))
 	return expected != real
 }
 
@@ -380,9 +423,7 @@ func resolveRealTarget(cleaned string) (string, error) {
 
 func (t *Tool) outsideGuard() tools.FSGuard {
 	return tools.NewFSGuard(tools.FSGuardConfig{
-		WorkspaceRoot:         t.workspaceRoot,
-		WorkspaceRootReal:     t.workspaceRootReal,
-		WorkspaceRootInfo:     t.workspaceRootInfo,
+		Scope:                 t.fileAccessScope,
 		WorkspaceOnly:         t.workspaceOnly,
 		AllowOutsideWorkspace: t.allowOutsideWorkspace,
 		Approver:              t.outsideWorkspaceApprover,

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/metadata"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -76,10 +78,18 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	settings.ProviderOverride = "openai"
 	settings.Model = "gpt-5"
 	settings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
+	filesystemContext, err := runtimewire.NewFilesystemContext(
+		workspaceRoot,
+		workspaceRoot,
+		metadata.ProjectWorkspaceBoundary{ProjectID: "exact-scope-test"},
+	)
+	if err != nil {
+		t.Fatalf("new filesystem context: %v", err)
+	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: settings,
-		Workdir:  workspaceRoot,
-		Client:   exactScopeTaskWakeClient{},
+		Settings:          settings,
+		FilesystemContext: filesystemContext,
+		Client:            exactScopeTaskWakeClient{},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

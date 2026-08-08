@@ -1,20 +1,12 @@
 package patch
 
-import (
-	"os"
-
-	"core/server/tools"
-)
+import "core/server/tools"
 
 type OutsideWorkspaceErrorLabels = tools.FSGuardErrorLabels
 type OutsideWorkspaceFailureFactory = tools.FSGuardFailureFactory
 type OutsideWorkspaceGuard = tools.FSGuard
 
-func NewOutsideWorkspaceGuard(workspaceRoot string, workspaceRootReal string, workspaceRootInfo os.FileInfo, workspaceOnly bool, allowOutsideWorkspace bool, approver OutsideWorkspaceApprover, sessionAllowed func() bool, setSessionAllowed func(bool), rejectionInstruction string, errorLabels OutsideWorkspaceErrorLabels, failures OutsideWorkspaceFailureFactory, temporaryPathAllowed func(string) bool, onApproved func(OutsideWorkspaceRequest, string)) OutsideWorkspaceGuard {
-	return NewOutsideWorkspaceGuardWithPolicy(workspaceRoot, workspaceRootReal, workspaceRootInfo, workspaceOnly, allowOutsideWorkspace, approver, sessionAllowed, setSessionAllowed, rejectionInstruction, errorLabels, failures, temporaryPathAllowed, onApproved, tools.PathDenyPolicy{})
-}
-
-func NewOutsideWorkspaceGuardWithPolicy(workspaceRoot string, workspaceRootReal string, workspaceRootInfo os.FileInfo, workspaceOnly bool, allowOutsideWorkspace bool, approver OutsideWorkspaceApprover, sessionAllowed func() bool, setSessionAllowed func(bool), rejectionInstruction string, errorLabels OutsideWorkspaceErrorLabels, failures OutsideWorkspaceFailureFactory, temporaryPathAllowed func(string) bool, onApproved func(OutsideWorkspaceRequest, string), pathDenyPolicy tools.PathDenyPolicy) OutsideWorkspaceGuard {
+func NewOutsideWorkspaceGuardWithScope(scope tools.FileAccessScope, workspaceOnly bool, allowOutsideWorkspace bool, approver OutsideWorkspaceApprover, sessionAllowed func() bool, setSessionAllowed func(bool), rejectionInstruction string, errorLabels OutsideWorkspaceErrorLabels, failures OutsideWorkspaceFailureFactory, temporaryPathAllowed func(string) bool, onApproved func(OutsideWorkspaceRequest, string), pathDenyPolicy tools.PathDenyPolicy) OutsideWorkspaceGuard {
 	if failures.NoPermission == nil {
 		failures.NoPermission = noPermissionFailure
 	}
@@ -25,9 +17,7 @@ func NewOutsideWorkspaceGuardWithPolicy(workspaceRoot string, workspaceRootReal 
 		failures.DefaultUserDenied = userDeniedFailure
 	}
 	return tools.NewFSGuard(tools.FSGuardConfig{
-		WorkspaceRoot:         workspaceRoot,
-		WorkspaceRootReal:     workspaceRootReal,
-		WorkspaceRootInfo:     workspaceRootInfo,
+		Scope:                 scope,
 		WorkspaceOnly:         workspaceOnly,
 		AllowOutsideWorkspace: allowOutsideWorkspace,
 		Approver:              tools.FSGuardApprover(approver),
