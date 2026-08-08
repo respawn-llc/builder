@@ -379,6 +379,37 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 	return e.diagnostics
 }
 
+type preparedMessageProjection struct {
+	message  llm.Message
+	record   session.MessageRecord
+	mutation tokenUsageMutation
+}
+
+func (e *Engine) prepareMessageProjection(stepID string, msg llm.Message) (preparedMessageProjection, error) {
+	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+	msg, err := normalizePersistedMessageWorktreeContext(msg)
+	if err != nil {
+		return preparedMessageProjection{}, err
+	}
+	if err := e.transcriptRuntimeState().ValidateMessage(stepID, msg); err != nil {
+		return preparedMessageProjection{}, fmt.Errorf("validate message projection: %w", err)
+	}
+	record, err := sessionMessageRecordFromLLM(msg)
+	if err != nil {
+		return preparedMessageProjection{}, fmt.Errorf("adapt message record: %w", err)
+	}
+	return preparedMessageProjection{message: msg, record: record, mutation: tokenUsageMutationForMessage(msg)}, nil
+}
+
+func (e *Engine) applyPreparedMessageProjection(stepID string, prepared preparedMessageProjection, provenance *TranscriptCommittedRowProvenance) error {
+	if prepared.mutation == tokenUsageMutationSignificant {
+		e.markCurrentRequestShapeDirtyForSignificantMutation()
+	} else {
+		e.markCurrentRequestShapeDirty()
+	}
+	return e.transcriptRuntimeState().AppendMessage(stepID, prepared.message, provenance)
+}
+
 func (e *Engine) appendMessageRaw(
 	stepID string,
 	msg llm.Message,
@@ -386,23 +417,16 @@ func (e *Engine) appendMessageRaw(
 	persist bool,
 	provenanceDestination **TranscriptCommittedRowProvenance,
 ) (session.CommitReceipt, error) {
-	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	var err error
-	msg, err = normalizePersistedMessageWorktreeContext(msg)
+	prepared, err := e.prepareMessageProjection(stepID, msg)
 	if err != nil {
 		return session.CommitReceipt{}, err
-	}
-	// Reject conflicting provider identity before durable append so one malformed
-	// response cannot poison the session or crash the server projection.
-	if err := e.transcriptRuntimeState().ValidateMessage(stepID, msg); err != nil {
-		return session.CommitReceipt{}, fmt.Errorf("validate message projection: %w", err)
 	}
 	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	receipt := session.CommitReceipt{}
 	var appendErr error
 	var provenance *TranscriptCommittedRowProvenance
 	if persist {
-		appended, err := e.appendPersistedMessageEvent(stepID, msg)
+		appended, err := e.appendPreparedMessageEvent(stepID, prepared)
 		receipt = appended.CommitReceipt
 		appendErr = err
 		if !receipt.Committed {
@@ -414,12 +438,7 @@ func (e *Engine) appendMessageRaw(
 		}
 		provenance = &value
 	}
-	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-	} else {
-		e.markCurrentRequestShapeDirty()
-	}
-	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg, provenance); projectionErr != nil {
+	if projectionErr := e.applyPreparedMessageProjection(stepID, prepared, provenance); projectionErr != nil {
 		return receipt, errors.Join(appendErr, fmt.Errorf("append message projection: %w", projectionErr))
 	}
 	if provenanceDestination != nil {
@@ -428,31 +447,27 @@ func (e *Engine) appendMessageRaw(
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone &&
 		currentCommittedCount > previousCommittedCount &&
-		e.shouldEmitCommittedMessageEvent(msg) {
+		e.shouldEmitCommittedMessageEvent(prepared.message) {
 		e.emitRaw(Event{
 			Kind:                       EventConversationUpdated,
 			StepID:                     stepID,
 			CommittedTranscriptChanged: true,
-			Message:                    msg,
+			Message:                    prepared.message,
 			CommittedProvenance:        cloneTranscriptCommittedRowProvenance(provenance),
 		})
 	}
 	return receipt, appendErr
 }
 
-func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventRecordAppendResult, error) {
-	record, err := sessionMessageRecordFromLLM(msg)
-	if err != nil {
-		return session.EventRecordAppendResult{}, fmt.Errorf("adapt message record: %w", err)
-	}
-	if !isRollbackCandidateMessage(msg) {
-		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+func (e *Engine) appendPreparedMessageEvent(stepID string, prepared preparedMessageProjection) (session.EventRecordAppendResult, error) {
+	if !isRollbackCandidateMessage(prepared.message) {
+		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), prepared.record)
 		return session.EventRecordAppendResult{
 			Record:        appended,
 			CommitReceipt: receipt,
 		}, appendErr
 	}
-	appended, err := e.eventLog.AppendRecordWithEndByteCursor(textutil.OptionalExactString(stepID), record)
+	appended, err := e.eventLog.AppendRecordWithEndByteCursor(textutil.OptionalExactString(stepID), prepared.record)
 	if appended.Committed {
 		if appended.EndByteCursor == nil {
 			panic(fmt.Sprintf(
@@ -507,40 +522,38 @@ func (e *Engine) shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 }
 
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
-	msg := normalizeMessageForTranscript(message, e.transcriptWorkingDir())
-	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+	prepared, err := e.prepareMessageProjection(stepID, message)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	if prepared.message.Content == nil || strings.TrimSpace(*prepared.message.Content) == "" {
 		return session.CommitReceipt{}, nil
 	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
 	normalizedIDs := queuedUserMessageStatusItemIDs(normalizedItems)
-	appended, appendErr := e.appendPersistedMessageEvent(stepID, msg)
+	appended, appendErr := e.appendPreparedMessageEvent(stepID, prepared)
 	if !appended.Committed {
 		return appended.CommitReceipt, appendErr
-	}
-	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-	} else {
-		e.markCurrentRequestShapeDirty()
 	}
 	provenance, provenanceErr := transcriptProvenanceFromRecord(appended.Record)
 	if provenanceErr != nil {
 		return appended.CommitReceipt, errors.Join(appendErr, provenanceErr)
 	}
-	if projectionErr := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); projectionErr != nil {
+	if projectionErr := e.applyPreparedMessageProjection(stepID, prepared, &provenance); projectionErr != nil {
 		return appended.CommitReceipt, errors.Join(appendErr, fmt.Errorf("append queued message projection: %w", projectionErr))
 	}
 	event := Event{
 		Kind:                       EventConversationUpdated,
 		StepID:                     stepID,
 		CommittedTranscriptChanged: true,
-		Message:                    msg,
+		Message:                    prepared.message,
 		CommittedProvenance:        &provenance,
 	}
-	if msg.Role == llm.RoleUser {
+	if prepared.message.Role == llm.RoleUser {
 		event = Event{
 			Kind:                         EventUserMessageFlushed,
 			StepID:                       stepID,
-			UserMessage:                  *msg.Content,
+			UserMessage:                  *prepared.message.Content,
 			UserMessageBatch:             append([]string(nil), batch...),
 			UserMessageBatchQueueItemIDs: normalizedIDs,
 			UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),

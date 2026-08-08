@@ -362,7 +362,7 @@ func cloneResultGroupUnit(unit resultGroupUnit) resultGroupUnit {
 type resultGroupPreparedUnit struct {
 	completion        preparedFinalizedToolCompletion
 	completionStart   int
-	output            llm.Message
+	output            preparedMessageProjection
 	outputRecordIndex int
 }
 
@@ -547,29 +547,17 @@ func (e *Engine) prepareResultGroupProjection(
 			Name:        textutil.Value(string(completion.completion.Result.Name)),
 			MessageType: llm.ToolOutputMessageType(slot.call.OutputKind == session.ToolOutputKindCustom),
 		}
-		output = normalizeMessageForTranscript(output, e.transcriptWorkingDir())
-		output, err = normalizePersistedMessageWorktreeContext(output)
+		preparedOutput, err := e.prepareMessageProjection(stepID, output)
 		if err != nil {
-			return resultGroupProjectionPlan{}, err
-		}
-		if err := e.transcriptRuntimeState().ValidateMessage(stepID, output); err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"validate result group output projection %q: %w",
+				"prepare result group output %q: %w",
 				slot.call.CallID,
 				err,
 			)
 		}
-		outputRecord, err := resultGroupMessageRecord(output)
-		if err != nil {
-			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"adapt result group output %q: %w",
-				slot.call.CallID,
-				err,
-			)
-		}
-		prepared.output = output
+		prepared.output = preparedOutput
 		prepared.outputRecordIndex = len(plan.payloads)
-		plan.payloads = append(plan.payloads, outputRecord)
+		plan.payloads = append(plan.payloads, preparedOutput.record)
 		plan.units = append(plan.units, prepared)
 	}
 	return plan, nil
@@ -624,12 +612,7 @@ func (e *Engine) applyResultGroupProjection(
 			return err
 		}
 		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.completion.Result.CallID)
-		if mutation := tokenUsageMutationForMessage(unit.output); mutation == tokenUsageMutationSignificant {
-			e.markCurrentRequestShapeDirtyForSignificantMutation()
-		} else {
-			e.markCurrentRequestShapeDirty()
-		}
-		if err := e.appendResultGroupOutputProjection(
+		if err := e.applyPreparedMessageProjection(
 			stepID,
 			unit.output,
 			&outputProvenance,
