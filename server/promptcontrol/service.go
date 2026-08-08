@@ -3,17 +3,26 @@ package promptcontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"core/server/requestmemo"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 type PendingPromptResponder interface {
 	AcceptPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) (PromptResponseAcceptance, error)
+	ResolvePromptBatch(
+		context.Context,
+		runtimeids.SessionID,
+		runtimeids.StepID,
+		[]sessionruntime.PromptAnswerCommand,
+	) ([]sessionruntime.PromptAnswerResult, error)
 }
 
 type PromptResponseAcceptance interface {
@@ -116,6 +125,77 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 		return struct{}{}, err
 	})
 	return err
+}
+
+func (s *PromptControlService) AnswerPromptBatch(
+	ctx context.Context,
+	req serverapi.PromptAnswerBatchRequest,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.PromptAnswerBatchResponse{}, err
+	}
+	if s == nil || s.prompts == nil {
+		return serverapi.PromptAnswerBatchResponse{}, errors.New("prompt responder is required")
+	}
+	commands := make([]sessionruntime.PromptAnswerCommand, 0, len(req.Entries))
+	for _, entry := range req.Entries {
+		command := sessionruntime.PromptAnswerCommand{PromptID: entry.PromptID}
+		switch {
+		case entry.QuestionAnswer != nil:
+			command.Disposition = sessionruntime.PromptAnswerDispositionAnswered
+			command.Response = askquestion.AskQuestionResponse{
+				RequestID:            string(entry.PromptID),
+				SelectedOptionNumber: textutil.Pointer(entry.QuestionAnswer.SelectedOptionNumber),
+			}
+			if entry.QuestionAnswer.Freeform != nil {
+				command.Response.FreeformAnswer = *entry.QuestionAnswer.Freeform
+			}
+		case entry.ApprovalAnswer != nil:
+			command.Disposition = sessionruntime.PromptAnswerDispositionAnswered
+			commentary := ""
+			if entry.ApprovalAnswer.Commentary != nil {
+				commentary = *entry.ApprovalAnswer.Commentary
+			}
+			command.Response = askquestion.AskQuestionResponse{
+				RequestID: string(entry.PromptID),
+				Approval: &askquestion.AskQuestionApprovalPayload{
+					Decision:   askquestion.AskQuestionApprovalDecision(entry.ApprovalAnswer.Decision),
+					Commentary: commentary,
+				},
+			}
+		case entry.Declined != nil:
+			command.Disposition = sessionruntime.PromptAnswerDispositionDeclined
+		default:
+			panic("validated prompt answer batch entry has no disposition")
+		}
+		commands = append(commands, command)
+	}
+	results, err := s.prompts.ResolvePromptBatch(ctx, req.SessionID, req.StepID, commands)
+	if err != nil {
+		return serverapi.PromptAnswerBatchResponse{}, err
+	}
+	response := serverapi.PromptAnswerBatchResponse{
+		Results: make([]serverapi.PromptAnswerBatchResult, 0, len(results)),
+	}
+	for _, result := range results {
+		outcome := serverapi.PromptAnswerBatchOutcome("")
+		switch result.Outcome {
+		case sessionruntime.PromptAnswerOutcomeResolved:
+			outcome = serverapi.PromptAnswerBatchOutcomeResolved
+		case sessionruntime.PromptAnswerOutcomeSkipped:
+			outcome = serverapi.PromptAnswerBatchOutcomeSkipped
+		default:
+			return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf("prompt batch responder returned invalid outcome %q", result.Outcome)
+		}
+		response.Results = append(response.Results, serverapi.PromptAnswerBatchResult{
+			PromptID: result.PromptID,
+			Outcome:  outcome,
+		})
+	}
+	if err := serverapi.ValidatePromptAnswerBatchResponse(req, response); err != nil {
+		return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf("validate prompt answer batch response: %w", err)
+	}
+	return response, nil
 }
 
 func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bool {

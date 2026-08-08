@@ -501,19 +501,17 @@ func (s *executionPromptStore) submit(
 			serverapi.ErrPromptNotFound,
 		)
 	}
-	if submitErr == nil {
-		if err := tools.ValidateAskQuestionResponse(entry.snapshot.Request, resp); err != nil {
-			s.mu.Unlock()
-			return PromptResponseAcceptance{}, err
-		}
+	if err := validatePromptResponse(entry, resp, submitErr); err != nil {
+		s.mu.Unlock()
+		return PromptResponseAcceptance{}, err
 	}
 	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
 	if err != nil {
-		delete(s.pending, requestID)
+		if !s.removePromptEntryLocked(requestID, entry) {
+			panic(fmt.Sprintf("pending prompt %q changed while locked", requestID))
+		}
 		s.mu.Unlock()
-		<-entry.publicationDone
-		publicationErr := s.publishResolved(entry.snapshot)
-		entry.response <- executionPromptResult{err: err}
+		publicationErr := s.deliverPromptResolution(entry, tools.AskQuestionResponse{}, err)
 		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
 	}
 	acceptance := PromptResponseAcceptance{}
@@ -525,11 +523,11 @@ func (s *executionPromptStore) submit(
 		acceptance.observation = observation
 		s.registerPromptSuccessorObservationLocked(observation)
 	}
-	delete(s.pending, requestID)
+	if !s.removePromptEntryLocked(requestID, entry) {
+		panic(fmt.Sprintf("pending prompt %q changed while locked", requestID))
+	}
 	s.mu.Unlock()
-	<-entry.publicationDone
-	publicationErr := s.publishResolved(entry.snapshot)
-	entry.response <- executionPromptResult{response: resp, err: submitErr}
+	publicationErr := s.deliverPromptResolution(entry, resp, submitErr)
 	return acceptance, publicationErr
 }
 
@@ -552,9 +550,6 @@ func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) (
 	}
 	if strings.TrimSpace(batch.StepID) == "" || batch.StepID != req.StepID {
 		return invalid(fmt.Sprintf("step id %q does not match request step id %q", batch.StepID, req.StepID))
-	}
-	if strings.TrimSpace(batch.BatchID) == "" || strings.TrimSpace(batch.BatchID) != batch.BatchID {
-		return invalid("batch id is blank or not normalized")
 	}
 	if batch.PromptID != req.ID {
 		return invalid(fmt.Sprintf("metadata prompt id %q does not match request id", batch.PromptID))

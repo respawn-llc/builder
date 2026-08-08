@@ -54,15 +54,15 @@ func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Conte
 			return nil, err
 		}
 		taskBatches := taskQuestionBatchSnapshotGroups(items)
-		processedTaskBatches := map[string]struct{}{}
+		processedTaskSteps := map[string]struct{}{}
 		for _, item := range items {
 			if item.Request.QuestionBatch != nil && item.Request.AttentionTarget != nil && item.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
-				batchID := questionBatchUUID(*item.Request.QuestionBatch)
-				if _, ok := processedTaskBatches[batchID]; ok {
+				stepID := questionBatchStepID(*item.Request.QuestionBatch)
+				if _, ok := processedTaskSteps[stepID]; ok {
 					continue
 				}
-				processedTaskBatches[batchID] = struct{}{}
-				if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[batchID]); err != nil {
+				processedTaskSteps[stepID] = struct{}{}
+				if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[stepID]); err != nil {
 					_ = sub.Close()
 					return nil, err
 				}
@@ -98,8 +98,8 @@ func taskQuestionBatchSnapshotGroups(items []PendingPromptSnapshot) map[string][
 		if req.QuestionBatch == nil || req.AttentionTarget == nil || req.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask {
 			continue
 		}
-		batchID := questionBatchUUID(*req.QuestionBatch)
-		groups[batchID] = append(groups[batchID], item)
+		stepID := questionBatchStepID(*req.QuestionBatch)
+		groups[stepID] = append(groups[stepID], item)
 	}
 	return groups
 }
@@ -121,7 +121,7 @@ func (r *RuntimeRegistry) enqueueTaskQuestionBatchSnapshot(sub serverapi.Attenti
 		materializedAskIDs = append(materializedAskIDs, item.Request.ID)
 	}
 	return r.questionBatches.EnqueueSnapshot(subscription, attentionnotify.QuestionBatch{
-		ID:             questionBatchUUID(*req.QuestionBatch),
+		StepID:         questionBatchStepID(*req.QuestionBatch),
 		Route:          attentionScopeForRequest(sessionID, req),
 		Target:         *req.AttentionTarget,
 		Preview:        strings.TrimSpace(req.Question),
@@ -136,12 +136,12 @@ func (r *RuntimeRegistry) publishAttentionPending(sessionID string, snapshot Pen
 	}
 	req := snapshot.Request
 	if req.QuestionBatch != nil && req.AttentionTarget != nil && req.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
-		batchID := questionBatchUUID(*req.QuestionBatch)
+		stepID := questionBatchStepID(*req.QuestionBatch)
 		if err := r.PrepareTaskQuestionBatch(*req.QuestionBatch, sessionID, req.AttentionTarget, strings.TrimSpace(req.Question), snapshot.CreatedAt); err != nil {
 			logAttentionNotificationOperationFailure("prepare task question batch", sessionID, req.ID, err)
 			return
 		}
-		if err := r.questionBatches.MarkMaterialized(batchID, req.ID); err != nil {
+		if err := r.questionBatches.MarkMaterialized(stepID, req.ID); err != nil {
 			logAttentionNotificationOperationFailure("materialize task question batch", sessionID, req.ID, err)
 		}
 		return
@@ -193,7 +193,7 @@ func (r *RuntimeRegistry) PrepareTaskQuestionBatch(batch askquestion.AskQuestion
 		return nil
 	}
 	if target == nil || target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
-		return fmt.Errorf("task question batch %q cannot be prepared without task-detail target", batch.BatchID)
+		return fmt.Errorf("task question batch Step %q cannot be prepared without task-detail target", batch.StepID)
 	}
 	if r.questionBatches == nil {
 		r.questionBatches = attentionnotify.NewQuestionBatchTracker(r.attentionBroker)
@@ -202,7 +202,7 @@ func (r *RuntimeRegistry) PrepareTaskQuestionBatch(batch askquestion.AskQuestion
 		occurredAt = time.Now().UTC()
 	}
 	return r.questionBatches.Prepare(attentionnotify.QuestionBatch{
-		ID:             questionBatchUUID(batch),
+		StepID:         questionBatchStepID(batch),
 		Route:          attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: target.TaskID, SessionID: sessionID},
 		Target:         *target,
 		Preview:        strings.TrimSpace(preview),
@@ -215,7 +215,7 @@ func (r *RuntimeRegistry) MarkTaskQuestionCleared(batch askquestion.AskQuestionB
 	if r == nil || r.questionBatches == nil {
 		return
 	}
-	if err := r.questionBatches.MarkDurablyCleared(questionBatchUUID(batch), askID); err != nil {
+	if err := r.questionBatches.MarkDurablyCleared(questionBatchStepID(batch), askID); err != nil {
 		logAttentionNotificationOperationFailure("mark task question cleared", "", askID, err)
 	}
 }
@@ -224,7 +224,7 @@ func (r *RuntimeRegistry) MarkTaskQuestionSkipped(batch askquestion.AskQuestionB
 	if r == nil || r.questionBatches == nil {
 		return
 	}
-	if err := r.questionBatches.MarkSkipped(questionBatchUUID(batch), batch.PromptID); err != nil {
+	if err := r.questionBatches.MarkSkipped(questionBatchStepID(batch), batch.PromptID); err != nil {
 		logAttentionNotificationOperationFailure("mark task question skipped", "", batch.PromptID, err)
 	}
 }
@@ -290,6 +290,6 @@ func promptNotificationKind(req askquestion.AskQuestionRequest) clientui.Attenti
 	return clientui.AttentionNotificationKindQuestion
 }
 
-func questionBatchUUID(batch askquestion.AskQuestionBatchMetadata) string {
-	return strings.TrimSpace(batch.BatchID)
+func questionBatchStepID(batch askquestion.AskQuestionBatchMetadata) string {
+	return strings.TrimSpace(batch.StepID)
 }

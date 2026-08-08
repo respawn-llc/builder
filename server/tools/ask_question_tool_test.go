@@ -100,7 +100,6 @@ func TestAskQuestionToolSkipsPreparedBatchWhenBrokerReturnsBeforeHandler(t *test
 			Origin:              AskQuestionOriginModelTool,
 			RunID:               "run-1",
 			StepID:              "step-1",
-			BatchID:             "batch-1",
 			PromptID:            "ask-2",
 			BatchPromptIDs:      []string{"ask-1", "ask-2"},
 			CandidateOrdinal:    1,
@@ -445,7 +444,6 @@ func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
 		Origin:              AskQuestionOriginModelTool,
 		RunID:               "run-1",
 		StepID:              "step-1",
-		BatchID:             "batch-1",
 		PromptID:            "ask-1",
 		BatchPromptIDs:      []string{"ask-1", "ask-2"},
 		CandidateOrdinal:    0,
@@ -462,7 +460,7 @@ func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	if got.QuestionBatch == nil || got.QuestionBatch.BatchID != "batch-1" || got.QuestionBatch.PreparedPromptCount != 2 {
+	if got.QuestionBatch == nil || got.QuestionBatch.StepID != "step-1" || got.QuestionBatch.PreparedPromptCount != 2 {
 		t.Fatalf("broker metadata = %+v", got)
 	}
 	if got.Origin != AskQuestionOriginModelTool || got.RunID != "run-1" || got.StepID != "step-1" || got.ToolCallID != "ask-1" {
@@ -476,7 +474,6 @@ func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testi
 		Origin:              AskQuestionOriginModelTool,
 		RunID:               "run-1",
 		StepID:              "step-1",
-		BatchID:             "batch-1",
 		PromptID:            "ask-1",
 		BatchPromptIDs:      []string{"ask-1"},
 		CandidateOrdinal:    0,
@@ -500,7 +497,7 @@ func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testi
 	if !res.IsError {
 		t.Fatalf("result = %+v, want error result", res)
 	}
-	if skipped == nil || skipped.BatchID != "batch-1" || skipped.PromptID != "ask-1" {
+	if skipped == nil || skipped.StepID != "step-1" || skipped.PromptID != "ask-1" {
 		t.Fatalf("skipped metadata = %+v", skipped)
 	}
 }

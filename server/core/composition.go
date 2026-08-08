@@ -575,6 +575,15 @@ func (r authorityPromptResponder) AcceptPromptResponse(
 	return r.authority.AcceptPromptResponse(id, response, submitErr)
 }
 
+func (r authorityPromptResponder) ResolvePromptBatch(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	commands []sessionruntime.PromptAnswerCommand,
+) ([]sessionruntime.PromptAnswerResult, error) {
+	return r.authority.ResolvePromptBatch(ctx, sessionID, stepID, commands)
+}
+
 type authorityStepLifecycle struct {
 	registry *registry.RuntimeRegistry
 }

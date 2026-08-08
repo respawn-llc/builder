@@ -38,10 +38,16 @@ func TestPrepareExecutorToolCallsAssignsQuestionBatchOutsideWorkflow(t *testing.
 		if call.askQuestionBatch == nil {
 			t.Fatalf("prepared call %d has no question batch", index)
 		}
+		if call.askQuestionBatch.StepID != "step-1" {
+			t.Fatalf("prepared call %d step identity = %q, want step-1", index, call.askQuestionBatch.StepID)
+		}
 		if call.askQuestionBatch.CandidateOrdinal != index ||
 			call.askQuestionBatch.PreparedPromptCount != 2 ||
 			len(call.askQuestionBatch.BatchPromptIDs) != 2 {
 			t.Fatalf("prepared call %d batch = %+v", index, call.askQuestionBatch)
+		}
+		if call.askQuestionBatch.BatchPromptIDs[index] != call.call.ID {
+			t.Fatalf("prepared call %d prompt order = %v", index, call.askQuestionBatch.BatchPromptIDs)
 		}
 	}
 }

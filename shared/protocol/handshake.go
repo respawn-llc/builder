@@ -161,6 +161,7 @@ const (
 	MethodProcessInlineOutput                           = "process.inlineOutput"
 	MethodAskListPending                                = "ask.listPendingBySession"
 	MethodAskAnswer                                     = "ask.answer"
+	MethodPromptAnswerBatch                             = "prompt.answerBatch"
 	MethodApprovalListPending                           = "approval.listPendingBySession"
 	MethodApprovalAnswer                                = "approval.answer"
 	MethodAttentionNotificationSubscribe                = "attention.notification.subscribe"
