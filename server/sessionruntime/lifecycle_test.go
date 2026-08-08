@@ -290,6 +290,81 @@ func TestRuntimeAbortRetiresCurrentOpenAndReplaceResourceGenerations(t *testing.
 	}
 }
 
+func TestRuntimeAbortRetiresResourceWhileLifecycleRetentionIsPinned(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		current bool
+	}{
+		{name: "current resource", current: true},
+		{name: "opened execution resource"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			lifecycle := &authorityAutoReleaseLifecycle{}
+			authority := NewAuthority(AuthorityOptions{
+				PersistenceRoot:   fixture.config.PersistenceRoot,
+				StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+				ResourceLifecycle: lifecycle,
+			})
+			t.Cleanup(func() {
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			cause := errors.New("retained runtime durability failure")
+			abort := &lifecycleRuntimeAbort{committed: true, cause: cause}
+			var failedResource *agentResource
+			var runErr error
+			if test.current {
+				openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+				authority.mu.Lock()
+				failedResource = authority.resources[sessionID]
+				authority.mu.Unlock()
+				runErr = authority.RunCurrentAgentExecution(
+					context.Background(),
+					mustOpenSessionDescriptor(t, sessionID),
+					func(context.Context, *runtime.Engine) error {
+						return abort
+					},
+				)
+			} else {
+				handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+					Descriptor: mustOpenSessionDescriptor(t, sessionID),
+					Runtime:    &plan,
+					Resource:   OpenAgentResource{},
+					Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+						return abort
+					},
+				})
+				if err != nil {
+					t.Fatalf("start retained aborting execution: %v", err)
+				}
+				failedResource = handle.(executionHandle).execution.resource
+				_, runErr = handle.Wait(context.Background())
+			}
+			failedRef := failedResource.ref
+			if runErr != abort {
+				t.Fatalf("retained runtime abort error = %v, want exact abort %p", runErr, abort)
+			}
+			if state := failedResource.descriptor().State; state != AgentResourceClosed {
+				t.Fatalf("retained runtime abort state = %v, want closed", state)
+			}
+			authority.mu.Lock()
+			admitted := authority.resources[sessionID]
+			authority.mu.Unlock()
+			if admitted == failedResource {
+				t.Fatal("retained runtime abort resource remained admitted")
+			}
+			reopened := openLifecycleRuntime(t, authority, sessionID, "owner-b", &plan)
+			if reopened.Resource() == failedRef {
+				t.Fatal("retained runtime abort reused the failed resource generation")
+			}
+		})
+	}
+}
+
 func TestQuestionBarrierDurabilityAbortClosesLifecycleAndRetiresCurrentGeneration(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

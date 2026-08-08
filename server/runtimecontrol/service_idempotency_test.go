@@ -451,8 +451,12 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	if engine.HasQueuedUserWork() {
 		t.Fatal("committed queued flush retained retry ownership")
 	}
-	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+1 {
-		t.Fatalf("projected transcript entries = %d, want %d", got, entriesBeforeSubmit+1)
+	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+2 {
+		t.Fatalf(
+			"projected transcript entries = %d, want queued input and one diagnostic after %d",
+			got,
+			entriesBeforeSubmit,
+		)
 	}
 	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {

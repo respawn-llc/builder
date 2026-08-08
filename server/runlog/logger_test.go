@@ -58,6 +58,19 @@ func (failingWriteCloser) Close() error {
 	return nil
 }
 
+type countingWriteCloser struct {
+	writes int
+}
+
+func (w *countingWriteCloser) WriteString(string) (int, error) {
+	w.writes++
+	return 1, nil
+}
+
+func (*countingWriteCloser) Close() error {
+	return nil
+}
+
 func TestRunLoggerReportsWriteFailureOnce(t *testing.T) {
 	var diagnostics []RunLoggerDiagnostic
 	logger := &RunLogger{
@@ -80,8 +93,10 @@ func TestRunLoggerReportsWriteFailureOnce(t *testing.T) {
 	}
 }
 
-func TestDurabilityObserverAggregatesTypedSessionAndFlushObservations(t *testing.T) {
+func TestDurabilityObserverStreamsTypedSessionAndFlushObservations(t *testing.T) {
 	observer := NewDurabilityObserver()
+	writer := &countingWriteCloser{}
+	observer.Attach(&RunLogger{fp: writer})
 	observer.ObserveEventLogAppend(session.EventLogAppendObservation{
 		RecordCount: 3,
 		Latency:     4 * time.Millisecond,
@@ -99,24 +114,8 @@ func TestDurabilityObserverAggregatesTypedSessionAndFlushObservations(t *testing
 		Succeeded:   true,
 	})
 
-	snapshot := observer.Snapshot()
-	if snapshot.AppendTransactions != 1 || snapshot.PhysicalSyncs != 1 {
-		t.Fatalf("durability counts = %+v, want one append and one sync", snapshot)
-	}
-	if len(snapshot.AppendRecordCounts) != 1 || snapshot.AppendRecordCounts[0] != 3 {
-		t.Fatalf("append record counts = %v, want [3]", snapshot.AppendRecordCounts)
-	}
-	if len(snapshot.AppendLatencies) != 1 || snapshot.AppendLatencies[0] != 4*time.Millisecond {
-		t.Fatalf("append latencies = %v, want [4ms]", snapshot.AppendLatencies)
-	}
-	if len(snapshot.SyncLatencies) != 1 || snapshot.SyncLatencies[0] != 2*time.Millisecond {
-		t.Fatalf("sync latencies = %v, want [2ms]", snapshot.SyncLatencies)
-	}
-	if len(snapshot.Flushes) != 1 {
-		t.Fatalf("flush observations = %d, want 1", len(snapshot.Flushes))
-	}
-	if snapshot.Flushes[0].Reason != runtime.ResultGroupFlushStepBoundary {
-		t.Fatalf("flush reason = %v, want step boundary", snapshot.Flushes[0].Reason)
+	if writer.writes != 3 {
+		t.Fatalf("durability log writes = %d, want one per observation", writer.writes)
 	}
 }
 
@@ -154,9 +153,5 @@ func TestDurabilityLoggerFailureDoesNotAlterAppendReceipt(t *testing.T) {
 	}
 	if !receipt.Committed {
 		t.Fatal("append receipt is uncommitted after durability logger failure")
-	}
-	snapshot := observer.Snapshot()
-	if snapshot.AppendTransactions != 1 || snapshot.PhysicalSyncs != 1 {
-		t.Fatalf("durability snapshot = %+v, want one committed append and sync", snapshot)
 	}
 }

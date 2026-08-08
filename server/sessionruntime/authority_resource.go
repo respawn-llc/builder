@@ -611,7 +611,6 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 	}
 	if resource.state != AgentResourceReady ||
 		resource.current != nil ||
-		resource.pins != 0 ||
 		resource.callbacks != 0 ||
 		resource.steps != 0 {
 		descriptor := resource.descriptorLocked()

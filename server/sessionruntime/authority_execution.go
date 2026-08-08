@@ -193,7 +193,7 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 			e.resource.requestRetirementIfOwnerless()
 		}
 		closeErr = e.resource.releasePin()
-		if abort && !e.closeResource {
+		if abort {
 			closeErr = errors.Join(
 				closeErr,
 				authority.retireRuntimeAbortResource(context.Background(), e.resource),

@@ -66,7 +66,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return llm.Message{}, receipt, consumedQueueItemIDs, err
 			}
 		}
-		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
 			if onActive != nil {
 				onActive()
 			}
@@ -94,9 +94,8 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				receipt = flushReceipt
 			})
 			assistant = msg
-			e.persistRunErrorFeedback(runErr)
 			return runErr
-		})
+		}))
 		e.finishRunErrorFeedback(err)
 		if receipt.Committed || !errors.Is(err, ErrAgentBusy) {
 			return assistant, receipt, consumedQueueItemIDs, err

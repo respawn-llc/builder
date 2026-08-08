@@ -765,6 +765,56 @@ func TestQueuedProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
 	assertRunFailureDiagnosticPrecedesTerminal(t, engine, *events)
 }
 
+func TestQueuedFlushFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
+	t.Parallel()
+	flushErr := errors.New("queued user injection flush failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	if err := engine.ensureMetaContextForRequest(
+		context.Background(),
+		"queued-flush-failure",
+	); err != nil {
+		t.Fatalf("prepare queued submission context: %v", err)
+	}
+	engine.QueueUserMessage("queued input")
+	gate.FailNext(flushErr)
+
+	_, receipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(
+		context.Background(),
+		nil,
+	)
+	if !receipt.Committed || !errors.Is(err, flushErr) {
+		t.Fatalf(
+			"queued flush failure receipt=%+v error=%v, want committed failure",
+			receipt,
+			err,
+		)
+	}
+	diagnostics := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics++
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf(
+			"queued flush failure diagnostics = %d, want one durable entry",
+			diagnostics,
+		)
+	}
+}
+
 func TestGoalProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T) {
 	t.Parallel()
 	engine, events := newProviderFailureOrderingEngine(t, Config{

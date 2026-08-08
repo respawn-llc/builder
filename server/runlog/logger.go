@@ -36,20 +36,10 @@ type RunLoggerDiagnostic struct {
 	Err     error
 }
 
-type DurabilitySnapshot struct {
-	AppendTransactions int
-	PhysicalSyncs      int
-	AppendRecordCounts []int
-	AppendLatencies    []time.Duration
-	SyncLatencies      []time.Duration
-	Flushes            []runtime.ResultGroupFlushObservation
-}
-
 type DurabilityObserver struct {
-	mu       sync.Mutex
-	logger   *RunLogger
-	pending  []string
-	snapshot DurabilitySnapshot
+	mu      sync.Mutex
+	logger  *RunLogger
+	pending []string
 }
 
 func NewDurabilityObserver() *DurabilityObserver {
@@ -70,20 +60,6 @@ func (o *DurabilityObserver) Attach(logger *RunLogger) {
 	}
 }
 
-func (o *DurabilityObserver) Snapshot() DurabilitySnapshot {
-	if o == nil {
-		return DurabilitySnapshot{}
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	result := o.snapshot
-	result.AppendRecordCounts = append([]int(nil), result.AppendRecordCounts...)
-	result.AppendLatencies = append([]time.Duration(nil), result.AppendLatencies...)
-	result.SyncLatencies = append([]time.Duration(nil), result.SyncLatencies...)
-	result.Flushes = append([]runtime.ResultGroupFlushObservation(nil), result.Flushes...)
-	return result
-}
-
 func (o *DurabilityObserver) ObserveEventLogAppend(observation session.EventLogAppendObservation) {
 	if o == nil {
 		return
@@ -95,9 +71,6 @@ func (o *DurabilityObserver) ObserveEventLogAppend(observation session.EventLogA
 		observation.Succeeded,
 	)
 	o.mu.Lock()
-	o.snapshot.AppendTransactions++
-	o.snapshot.AppendRecordCounts = append(o.snapshot.AppendRecordCounts, observation.RecordCount)
-	o.snapshot.AppendLatencies = append(o.snapshot.AppendLatencies, observation.Latency)
 	logger := o.recordLineLocked(line)
 	o.mu.Unlock()
 	if logger != nil {
@@ -115,8 +88,6 @@ func (o *DurabilityObserver) ObserveEventLogSync(observation session.EventLogSyn
 		observation.Succeeded,
 	)
 	o.mu.Lock()
-	o.snapshot.PhysicalSyncs++
-	o.snapshot.SyncLatencies = append(o.snapshot.SyncLatencies, observation.Latency)
 	logger := o.recordLineLocked(line)
 	o.mu.Unlock()
 	if logger != nil {
@@ -137,7 +108,6 @@ func (o *DurabilityObserver) ObserveResultGroupFlush(observation runtime.ResultG
 		observation.Succeeded,
 	)
 	o.mu.Lock()
-	o.snapshot.Flushes = append(o.snapshot.Flushes, observation)
 	logger := o.recordLineLocked(line)
 	o.mu.Unlock()
 	if logger != nil {
