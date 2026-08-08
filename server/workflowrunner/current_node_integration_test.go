@@ -2013,12 +2013,12 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 		return len(nodes) == 1 && !nodes[0].Reference.Equal(scriptSource)
 	})
 
-	releaseSuccessor.Do(func() { close(successorResponseRelease) })
 	f.waitForPath(t, laterScriptMarker)
-	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
-	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+	releaseSuccessor.Do(func() { close(successorResponseRelease) })
+	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
 }
