@@ -11,6 +11,7 @@ import (
 	"core/shared/serverapi"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,6 +208,124 @@ func TestCreateWorktreePreservesExplicitRoot(t *testing.T) {
 		if canonicalErr != nil || got != canonical {
 			t.Fatalf("explicit root = %q, want %q", got, root)
 		}
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootThroughBaseSymlinkBeforeGit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(env.baseDir, "link")); err != nil {
+		t.Fatalf("symlink base child: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-symlink-escape",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join("link", "new"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-symlink-escape",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a relative root that escaped through a base symlink")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed explicit symlink creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-source-overlap",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(env.workspaceRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-source-overlap",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed overlapping explicit creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	existingRoot := filepath.Join(env.baseDir, "existing-root")
+	if _, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "existing-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         existingRoot,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/existing-managed-root",
+	}); err != nil {
+		t.Fatalf("CreateWorktree existing root: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(existingRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root nested in an existing managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed nested creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootNestedInManagedWorktreeFromOtherProject(t *testing.T) {
+	env := newServiceTestEnv(t)
+	otherWorkspaceRoot := filepath.Join(env.baseDir, "other-workspace")
+	if err := os.MkdirAll(otherWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other workspace: %v", err)
+	}
+	otherBinding, err := env.store.CreateProjectForWorkspace(env.ctx, otherWorkspaceRoot, "Other")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	otherManagedRoot := filepath.Join(env.baseDir, "other-managed-root")
+	if err := os.MkdirAll(otherManagedRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other managed root: %v", err)
+	}
+	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
+		ID:            uuid.NewString(),
+		WorkspaceID:   otherBinding.WorkspaceID,
+		CanonicalRoot: otherManagedRoot,
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-other-project-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(otherManagedRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-other-project-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a root nested in another project's managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed cross-project nested creation changed Worktree count from %d to %d", before, after)
 	}
 }
 
@@ -601,7 +720,8 @@ func TestResolveWorktreeCreateTargetClassifiesBranchDetachedRefAndNewBranch(t *t
 func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), "missing-base")
 	service := &Service{managedRoots: newManagedRootAllocator(baseDir, nil)}
-	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit")
+	sourceRoot := t.TempDir()
+	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit", sourceRoot)
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
 	}
@@ -609,7 +729,7 @@ func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T)
 	if err != nil {
 		t.Fatalf("canonical base: %v", err)
 	}
-	want, err := config.CanonicalWorkspaceRoot(filepath.Join(canonicalBase, "nested/explicit"))
+	want, err := config.ResolveExistingAncestorRealPath(filepath.Join(canonicalBase, "nested/explicit"))
 	if err != nil {
 		t.Fatalf("canonical expected root: %v", err)
 	}

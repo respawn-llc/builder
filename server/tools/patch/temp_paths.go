@@ -83,6 +83,10 @@ func existingPathAliases(path string) []string {
 		abs = resolvedAbs
 	}
 	cleaned := filepath.Clean(abs)
+	info, err := os.Stat(cleaned)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
 	aliases := []string{cleaned}
 	if real, err := filepath.EvalSymlinks(cleaned); err == nil {
 		real = filepath.Clean(real)

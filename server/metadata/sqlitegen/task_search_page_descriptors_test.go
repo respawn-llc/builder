@@ -110,6 +110,37 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 	}
 }
 
+func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	createTaskSearchPageDescriptorFixture(t, db)
+	matcher, err := tasksearchtext.NewLiteralMatcher("tas-1", tasksearchtext.LiteralCaseInsensitive)
+	if err != nil {
+		t.Fatalf("create Short ID matcher: %v", err)
+	}
+	params := taskSearchPageDescriptorParams(
+		"literal",
+		matcher.CandidateExpression(),
+		"tas-1",
+		int64(tasksearchtext.LiteralCaseSensitive),
+	)
+	rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors Short ID: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0].TaskID != "task-1" ||
+		rows[0].DocumentID != 100 ||
+		rows[0].SourceKind != "short_id" {
+		t.Fatalf("Short ID descriptors = %+v, want indexed task-1 Short ID", rows)
+	}
+	requireTaskSearchDescriptorProgramFiltersFTSFirst(
+		t,
+		db,
+		queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
+	)
+}
+
 func TestListTaskSearchPageDescriptorsSkipsDirectlyToLargeOffset(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
@@ -208,6 +239,82 @@ func TestListTaskSearchPageDescriptorsFiltersCanonicalDocumentsBeforeTaskWinnerS
 		db,
 		queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
 	)
+}
+
+func TestListTaskSearchPageDescriptorsRanksAndPaginatesShortIDMatches(t *testing.T) {
+	db := openSQLiteFixture(t, ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	createTaskSearchShortIDRankingFixture(t, db)
+	matcher, err := tasksearchtext.NewLiteralMatcher("345", tasksearchtext.LiteralCaseInsensitive)
+	if err != nil {
+		t.Fatalf("create numeric Short ID matcher: %v", err)
+	}
+	params := taskSearchPageDescriptorParams(
+		"literal",
+		matcher.CandidateExpression(),
+		"345",
+		int64(tasksearchtext.LiteralCaseInsensitive),
+	)
+	rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors numeric Short ID: %v", err)
+	}
+	want := []struct {
+		taskID      string
+		sourceKind  string
+		ordinal     int64
+		sourceCount int64
+		totalCount  int64
+	}{
+		{taskID: "task-exact", sourceKind: "short_id", ordinal: 1, sourceCount: 1, totalCount: 5},
+		{taskID: "task-other-exact", sourceKind: "short_id", ordinal: 1, sourceCount: 1, totalCount: 1},
+		{taskID: "task-partial", sourceKind: "short_id", ordinal: 1, sourceCount: 1, totalCount: 1},
+		{taskID: "task-text", sourceKind: "title", ordinal: 1, sourceCount: 1, totalCount: 1},
+		{taskID: "task-exact", sourceKind: "title", ordinal: 2, sourceCount: 1, totalCount: 5},
+		{taskID: "task-exact", sourceKind: "body", ordinal: 3, sourceCount: 1, totalCount: 5},
+		{taskID: "task-exact", sourceKind: "body", ordinal: 4, sourceCount: 2, totalCount: 5},
+		{taskID: "task-exact", sourceKind: "comment", ordinal: 5, sourceCount: 1, totalCount: 5},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("numeric Short ID descriptors = %+v, want %d rows", rows, len(want))
+	}
+	for index, expected := range want {
+		got := rows[index]
+		if got.TaskID != expected.taskID ||
+			got.SourceKind != expected.sourceKind ||
+			got.Ordinal != expected.ordinal ||
+			got.SourceOrdinal != expected.sourceCount ||
+			got.TotalHitCount != expected.totalCount {
+			t.Fatalf("numeric Short ID descriptor %d = %+v, want %+v", index, got, expected)
+		}
+	}
+
+	params.ProjectIdsJson = sql.NullString{String: `["project-1"]`, Valid: true}
+	params.StatusKindsJson = sql.NullString{String: `["backlog"]`, Valid: true}
+	scoped, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors scoped numeric Short ID: %v", err)
+	}
+	for _, row := range scoped {
+		if row.ProjectID != "project-1" || row.StatusKind != "backlog" || row.TaskID == "task-partial" {
+			t.Fatalf("scoped numeric Short ID descriptor = %+v", row)
+		}
+	}
+
+	params.ProjectIdsJson = sql.NullString{}
+	params.StatusKindsJson = sql.NullString{}
+	params.LimitRows = 1
+	params.OffsetRows = 4
+	continuation, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
+	if err != nil {
+		t.Fatalf("ListTaskSearchPageDescriptors numeric continuation: %v", err)
+	}
+	if len(continuation) != 1 ||
+		continuation[0].TaskID != "task-exact" ||
+		continuation[0].SourceKind != "title" ||
+		continuation[0].Ordinal != 2 {
+		t.Fatalf("numeric Short ID continuation = %+v, want task-exact title ordinal 2", continuation)
+	}
 }
 
 func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNewestCommentsAndOffsets(t *testing.T) {
@@ -414,6 +521,56 @@ func TestListTaskSearchPageDescriptorsKeepsSelectiveStatusPageWorkNearLinear(t *
 	}
 }
 
+func TestListTaskSearchPageDescriptorsKeepsSelectiveShortIDPageWorkBounded(t *testing.T) {
+	type measurement struct {
+		taskCount int
+		cacheHits int
+	}
+	measurements := make([]measurement, 0, 2)
+	for _, taskCount := range []int{128, 4096} {
+		t.Run(fmt.Sprintf("%d_tasks", taskCount), func(t *testing.T) {
+			db := openSQLiteFixture(t, ":memory:")
+			t.Cleanup(func() { _ = db.Close() })
+			db.SetMaxOpenConns(1)
+			createTaskSearchHighCardinalityFixture(t, db, taskCount)
+			matcher, err := tasksearchtext.NewLiteralMatcher("target", tasksearchtext.LiteralCaseInsensitive)
+			if err != nil {
+				t.Fatalf("create selective Short ID matcher: %v", err)
+			}
+			params := taskSearchPageDescriptorParams(
+				"literal",
+				matcher.CandidateExpression(),
+				"target",
+				int64(tasksearchtext.LiteralCaseSensitive),
+			)
+			params.IncludeComments = 0
+			params.LimitRows = 1
+			rows, cacheHits := executeTaskSearchDescriptorPageWithCacheMeasurement(t, db, params)
+			if len(rows) != 1 ||
+				rows[0].TaskID != "task-0000" ||
+				rows[0].SourceKind != "short_id" ||
+				rows[0].Ordinal != 1 ||
+				rows[0].TotalHitCount != 1 {
+				t.Fatalf("selective Short ID page = %+v, want one indexed Task descriptor", rows)
+			}
+			if cacheHits <= 0 {
+				t.Fatal("SQLite cache-hit instrumentation observed no Short ID page work")
+			}
+			measurements = append(measurements, measurement{taskCount: taskCount, cacheHits: cacheHits})
+		})
+	}
+	small, large := measurements[0], measurements[1]
+	if large.cacheHits > small.cacheHits*3+1024 {
+		t.Fatalf(
+			"Short ID descriptor work grew with unrelated Task count: %d tasks=%d cache hits, %d tasks=%d cache hits",
+			small.taskCount,
+			small.cacheHits,
+			large.taskCount,
+			large.cacheHits,
+		)
+	}
+}
+
 func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery string, caseMode int64) ListTaskSearchPageDescriptorsParams {
 	return ListTaskSearchPageDescriptorsParams{
 		Mode:                mode,
@@ -427,6 +584,7 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		OffsetRows:          0,
 		LimitRows:           100,
 		LiveTaskStatesJson:  "[]",
+		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	}
 }
 
@@ -443,6 +601,7 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.OffsetRows,
 		params.LimitRows,
 		params.LiveTaskStatesJson,
+		params.ShortIDCaseMode,
 	}
 }
 
@@ -456,6 +615,7 @@ CREATE TABLE projects (
 CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    task_seq INTEGER NOT NULL,
     short_id TEXT NOT NULL,
     workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
@@ -481,6 +641,7 @@ CREATE TABLE task_search_documents (
 );
 CREATE TABLE task_search_content (
     document_id INTEGER PRIMARY KEY,
+    short_id TEXT,
     title TEXT,
     body TEXT,
     comment TEXT
@@ -491,10 +652,14 @@ CREATE VIRTUAL TABLE task_search_fts USING fts5(
     comment,
     tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
 );
+CREATE VIRTUAL TABLE task_search_short_id_fts USING fts5(
+    short_id,
+    tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
+);
 
 INSERT INTO projects (id, project_key) VALUES ('project-1', 'TAS');
-INSERT INTO task_records (id, project_id, short_id, workflow_id, title)
-VALUES ('task-1', 'project-1', 'TAS-1', X'550E8400E29B41D4A716446655440001', 'needle title');
+INSERT INTO task_records (id, project_id, task_seq, short_id, workflow_id, title)
+VALUES ('task-1', 'project-1', 1, 'TAS-1', X'550E8400E29B41D4A716446655440001', 'needle title');
 INSERT INTO workflow_task_status_records (
     task_id,
     is_done,
@@ -506,17 +671,21 @@ INSERT INTO workflow_task_status_records (
 INSERT INTO task_comments (id, task_id, created_at_unix_ms)
 VALUES ('comment-1', 'task-1', 1);
 INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind) VALUES
+    (100, 'task-1', NULL, 'short_id'),
     (1, 'task-1', NULL, 'title'),
     (2, 'task-1', NULL, 'body'),
     (3, NULL, 'comment-1', 'comment');
-INSERT INTO task_search_content (document_id, title, body, comment) VALUES
-    (1, 'needle title', NULL, NULL),
-    (2, NULL, 'needle body needle', NULL),
-    (3, NULL, NULL, 'needle comment');
+INSERT INTO task_search_content (document_id, short_id, title, body, comment) VALUES
+    (100, 'TAS-1', NULL, NULL, NULL),
+    (1, NULL, 'needle title', NULL, NULL),
+    (2, NULL, NULL, 'needle body needle', NULL),
+    (3, NULL, NULL, NULL, 'needle comment');
 INSERT INTO task_search_fts (rowid, title, body, comment) VALUES
     (1, 'needle title', NULL, NULL),
     (2, NULL, 'needle body needle', NULL),
-    (3, NULL, NULL, 'needle comment');`); err != nil {
+    (3, NULL, NULL, 'needle comment');
+INSERT INTO task_search_short_id_fts (rowid, short_id)
+VALUES (100, 'TAS-1');`); err != nil {
 		t.Fatalf("create task-search descriptor fixture: %v", err)
 	}
 }
@@ -531,6 +700,7 @@ CREATE TABLE projects (
 CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    task_seq INTEGER NOT NULL,
     short_id TEXT NOT NULL,
     workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
@@ -556,6 +726,7 @@ CREATE TABLE task_search_documents (
 );
 CREATE TABLE task_search_content (
     document_id INTEGER PRIMARY KEY,
+    short_id TEXT,
     title TEXT,
     body TEXT,
     comment TEXT
@@ -566,18 +737,22 @@ CREATE VIRTUAL TABLE task_search_fts USING fts5(
     comment,
     tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
 );
+CREATE VIRTUAL TABLE task_search_short_id_fts USING fts5(
+    short_id,
+    tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
+);
 
 INSERT INTO projects (id, project_key) VALUES
     ('project-a', 'AAA'),
     ('project-b', 'BBB'),
     ('project-c', 'CCC');
-INSERT INTO task_records (id, project_id, short_id, workflow_id, title) VALUES
-    ('task-a', 'project-a', 'AAA-1', X'550E8400E29B41D4A716446655440001', 'Task A'),
-    ('task-b', 'project-a', 'AAA-2', X'550E8400E29B41D4A716446655440001', 'Task B'),
-    ('task-c', 'project-b', 'BBB-1', X'550E8400E29B41D4A716446655440001', 'Task C'),
-    ('task-strong', 'project-c', 'CCC-1', X'550E8400E29B41D4A716446655440001', 'Strong Task'),
-    ('task-body', 'project-c', 'CCC-2', X'550E8400E29B41D4A716446655440001', 'Body Task'),
-    ('task-false-positive', 'project-c', 'CCC-3', X'550E8400E29B41D4A716446655440001', 'False Positive Task');
+INSERT INTO task_records (id, project_id, task_seq, short_id, workflow_id, title) VALUES
+    ('task-a', 'project-a', 1, 'AAA-1', X'550E8400E29B41D4A716446655440001', 'Task A'),
+    ('task-b', 'project-a', 2, 'AAA-2', X'550E8400E29B41D4A716446655440001', 'Task B'),
+    ('task-c', 'project-b', 1, 'BBB-1', X'550E8400E29B41D4A716446655440001', 'Task C'),
+    ('task-strong', 'project-c', 1, 'CCC-1', X'550E8400E29B41D4A716446655440001', 'Strong Task'),
+    ('task-body', 'project-c', 2, 'CCC-2', X'550E8400E29B41D4A716446655440001', 'Body Task'),
+    ('task-false-positive', 'project-c', 3, 'CCC-3', X'550E8400E29B41D4A716446655440001', 'False Positive Task');
 INSERT INTO workflow_task_status_records (
     task_id,
     is_done,
@@ -596,6 +771,12 @@ INSERT INTO task_comments (id, task_id, created_at_unix_ms) VALUES
     ('comment-old', 'task-a', 1),
     ('comment-new', 'task-a', 2);
 INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind) VALUES
+    (101, 'task-a', NULL, 'short_id'),
+    (102, 'task-b', NULL, 'short_id'),
+    (103, 'task-c', NULL, 'short_id'),
+    (104, 'task-strong', NULL, 'short_id'),
+    (105, 'task-body', NULL, 'short_id'),
+    (106, 'task-false-positive', NULL, 'short_id'),
     (1, 'task-a', NULL, 'body'),
     (2, NULL, 'comment-old', 'comment'),
     (3, NULL, 'comment-new', 'comment'),
@@ -606,17 +787,23 @@ INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind
     (8, 'task-body', NULL, 'title'),
     (9, 'task-body', NULL, 'body'),
     (10, 'task-false-positive', NULL, 'title');
-INSERT INTO task_search_content (document_id, title, body, comment) VALUES
-    (1, NULL, 'needle', NULL),
-    (2, NULL, NULL, 'needle'),
-    (3, NULL, NULL, 'needle'),
-    (4, NULL, 'needle', NULL),
-    (5, NULL, 'needle', NULL),
-    (6, 'foo', NULL, NULL),
-    (7, NULL, 'foo', NULL),
-    (8, 'FOO', NULL, NULL),
-    (9, NULL, 'foo', NULL),
-    (10, 'FOO', NULL, NULL);
+INSERT INTO task_search_content (document_id, short_id, title, body, comment) VALUES
+    (101, 'AAA-1', NULL, NULL, NULL),
+    (102, 'AAA-2', NULL, NULL, NULL),
+    (103, 'BBB-1', NULL, NULL, NULL),
+    (104, 'CCC-1', NULL, NULL, NULL),
+    (105, 'CCC-2', NULL, NULL, NULL),
+    (106, 'CCC-3', NULL, NULL, NULL),
+    (1, NULL, NULL, 'needle', NULL),
+    (2, NULL, NULL, NULL, 'needle'),
+    (3, NULL, NULL, NULL, 'needle'),
+    (4, NULL, NULL, 'needle', NULL),
+    (5, NULL, NULL, 'needle', NULL),
+    (6, NULL, 'foo', NULL, NULL),
+    (7, NULL, NULL, 'foo', NULL),
+    (8, NULL, 'FOO', NULL, NULL),
+    (9, NULL, NULL, 'foo', NULL),
+    (10, NULL, 'FOO', NULL, NULL);
 INSERT INTO task_search_fts (rowid, title, body, comment) VALUES
     (1, NULL, 'needle', NULL),
     (2, NULL, NULL, 'needle'),
@@ -627,8 +814,71 @@ INSERT INTO task_search_fts (rowid, title, body, comment) VALUES
     (7, NULL, 'foo', NULL),
     (8, 'FOO', NULL, NULL),
     (9, NULL, 'foo', NULL),
-    (10, 'FOO', NULL, NULL);`); err != nil {
+    (10, 'FOO', NULL, NULL);
+INSERT INTO task_search_short_id_fts (rowid, short_id) VALUES
+    (101, 'AAA-1'),
+    (102, 'AAA-2'),
+    (103, 'BBB-1'),
+    (104, 'CCC-1'),
+    (105, 'CCC-2'),
+    (106, 'CCC-3');`); err != nil {
 		t.Fatalf("create task-search descriptor filtering fixture: %v", err)
+	}
+}
+
+func createTaskSearchShortIDRankingFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
+	createTaskSearchPageDescriptorFixture(t, db)
+	if _, err := db.Exec(`
+INSERT INTO projects (id, project_key) VALUES ('project-2', 'OTH');
+INSERT INTO task_records (id, project_id, task_seq, short_id, workflow_id, title) VALUES
+    ('task-exact', 'project-1', 345, 'TAS-345', X'550E8400E29B41D4A716446655440001', '345 title'),
+    ('task-partial', 'project-1', 1345, 'TAS-1345', X'550E8400E29B41D4A716446655440001', 'Partial Task'),
+    ('task-text', 'project-1', 999, 'TAS-999', X'550E8400E29B41D4A716446655440001', '345 text Task'),
+    ('task-other-exact', 'project-2', 345, 'OTH-345', X'550E8400E29B41D4A716446655440001', 'Other Task');
+INSERT INTO workflow_task_status_records (
+    task_id,
+    is_done,
+    kind,
+    node_ids_json,
+    primary_status_rank,
+    attention_types_json
+) VALUES
+    ('task-exact', 0, 'backlog', '[]', 7, '[]'),
+    ('task-partial', 1, 'done', '[]', 1, '[]'),
+    ('task-text', 0, 'backlog', '[]', 7, '[]'),
+    ('task-other-exact', 0, 'backlog', '[]', 7, '[]');
+INSERT INTO task_comments (id, task_id, created_at_unix_ms)
+VALUES ('comment-exact', 'task-exact', 1);
+INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind) VALUES
+    (201, 'task-exact', NULL, 'short_id'),
+    (202, 'task-exact', NULL, 'title'),
+    (203, 'task-exact', NULL, 'body'),
+    (204, NULL, 'comment-exact', 'comment'),
+    (211, 'task-partial', NULL, 'short_id'),
+    (221, 'task-text', NULL, 'short_id'),
+    (222, 'task-text', NULL, 'title'),
+    (231, 'task-other-exact', NULL, 'short_id');
+INSERT INTO task_search_content (document_id, short_id, title, body, comment) VALUES
+    (201, 'TAS-345', NULL, NULL, NULL),
+    (202, NULL, '345 title', NULL, NULL),
+    (203, NULL, NULL, '345 body 345', NULL),
+    (204, NULL, NULL, NULL, '345 comment'),
+    (211, 'TAS-1345', NULL, NULL, NULL),
+    (221, 'TAS-999', NULL, NULL, NULL),
+    (222, NULL, '345 text Task', NULL, NULL),
+    (231, 'OTH-345', NULL, NULL, NULL);
+INSERT INTO task_search_fts (rowid, title, body, comment) VALUES
+    (202, '345 title', NULL, NULL),
+    (203, NULL, '345 body 345', NULL),
+    (204, NULL, NULL, '345 comment'),
+    (222, '345 text Task', NULL, NULL);
+INSERT INTO task_search_short_id_fts (rowid, short_id) VALUES
+    (201, 'TAS-345'),
+    (211, 'TAS-1345'),
+    (221, 'TAS-999'),
+    (231, 'OTH-345');`); err != nil {
+		t.Fatalf("create Short ID ranking fixture: %v", err)
 	}
 }
 
@@ -642,6 +892,7 @@ CREATE TABLE projects (
 CREATE TABLE task_records (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    task_seq INTEGER NOT NULL,
     short_id TEXT NOT NULL,
     workflow_id BLOB NOT NULL,
     title TEXT NOT NULL
@@ -667,6 +918,7 @@ CREATE TABLE task_search_documents (
 );
 CREATE TABLE task_search_content (
     document_id INTEGER PRIMARY KEY,
+    short_id TEXT,
     title TEXT,
     body TEXT,
     comment TEXT
@@ -675,6 +927,10 @@ CREATE VIRTUAL TABLE task_search_fts USING fts5(
     title,
     body,
     comment,
+    tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
+);
+CREATE VIRTUAL TABLE task_search_short_id_fts USING fts5(
+    short_id,
     tokenize = 'trigram case_sensitive 0 remove_diacritics 1'
 );
 INSERT INTO projects (id, project_key) VALUES ('project-1', 'HIG');`); err != nil {
@@ -686,8 +942,8 @@ INSERT INTO projects (id, project_key) VALUES ('project-1', 'HIG');`); err != ni
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
 	insertTask, err := tx.PrepareContext(t.Context(), `
-INSERT INTO task_records (id, project_id, short_id, workflow_id, title)
-VALUES (?, 'project-1', ?, X'550E8400E29B41D4A716446655440001', ?)`)
+INSERT INTO task_records (id, project_id, task_seq, short_id, workflow_id, title)
+VALUES (?, 'project-1', ?, ?, X'550E8400E29B41D4A716446655440001', ?)`)
 	if err != nil {
 		t.Fatalf("prepare high-cardinality Task insertion: %v", err)
 	}
@@ -726,10 +982,34 @@ VALUES (?, NULL, 'needle', NULL)`)
 		t.Fatalf("prepare high-cardinality FTS insertion: %v", err)
 	}
 	defer insertFTS.Close()
+	insertShortIDDocument, err := tx.PrepareContext(t.Context(), `
+INSERT INTO task_search_documents (document_id, task_id, comment_id, source_kind)
+VALUES (?, ?, NULL, 'short_id')`)
+	if err != nil {
+		t.Fatalf("prepare high-cardinality Short ID document insertion: %v", err)
+	}
+	defer insertShortIDDocument.Close()
+	insertShortIDContent, err := tx.PrepareContext(t.Context(), `
+INSERT INTO task_search_content (document_id, short_id, title, body, comment)
+VALUES (?, ?, NULL, NULL, NULL)`)
+	if err != nil {
+		t.Fatalf("prepare high-cardinality Short ID content insertion: %v", err)
+	}
+	defer insertShortIDContent.Close()
+	insertShortIDFTS, err := tx.PrepareContext(t.Context(), `
+INSERT INTO task_search_short_id_fts (rowid, short_id)
+VALUES (?, ?)`)
+	if err != nil {
+		t.Fatalf("prepare high-cardinality Short ID FTS insertion: %v", err)
+	}
+	defer insertShortIDFTS.Close()
 	for index := range taskCount {
 		taskID := fmt.Sprintf("task-%04d", index)
 		shortID := fmt.Sprintf("HIG-%d", index+1)
-		if _, err := insertTask.ExecContext(t.Context(), taskID, shortID, taskID); err != nil {
+		if index == 0 {
+			shortID = "HIG-TARGET-999"
+		}
+		if _, err := insertTask.ExecContext(t.Context(), taskID, index+1, shortID, taskID); err != nil {
 			t.Fatalf("insert high-cardinality Task %d: %v", index, err)
 		}
 		isDone, status := 0, "backlog"
@@ -752,6 +1032,16 @@ VALUES (?, NULL, 'needle', NULL)`)
 		}
 		if _, err := insertFTS.ExecContext(t.Context(), documentID); err != nil {
 			t.Fatalf("insert high-cardinality Task FTS document %d: %v", index, err)
+		}
+		shortIDDocumentID := taskCount + index + 1
+		if _, err := insertShortIDDocument.ExecContext(t.Context(), shortIDDocumentID, taskID); err != nil {
+			t.Fatalf("insert high-cardinality Short ID document %d: %v", index, err)
+		}
+		if _, err := insertShortIDContent.ExecContext(t.Context(), shortIDDocumentID, shortID); err != nil {
+			t.Fatalf("insert high-cardinality Short ID content %d: %v", index, err)
+		}
+		if _, err := insertShortIDFTS.ExecContext(t.Context(), shortIDDocumentID, shortID); err != nil {
+			t.Fatalf("insert high-cardinality Short ID FTS document %d: %v", index, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

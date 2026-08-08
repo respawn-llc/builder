@@ -12,9 +12,11 @@ INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at
 VALUES ('comment-mutation', 'task-mutation', 'comment create otter', 'user', 'operator', ?, ?)`, now, now); err != nil {
 		t.Fatalf("insert task comment: %v", err)
 	}
+	assertTaskSearchShortIDSearchable(t, store.db, "knt-1", "task-mutation")
 	assertTaskSearchSourceSearchable(t, store.db, "create title koala", "title", "task-mutation")
 	assertTaskSearchSourceSearchable(t, store.db, "create body llama", "body", "task-mutation")
 	assertTaskSearchSourceSearchable(t, store.db, "create otter", "comment", "comment-mutation")
+	assertTaskSearchInvariants(t, store.db)
 
 	if _, err := store.db.Exec(`UPDATE tasks SET title = 'task update title mongoose', body = 'task update body narwhal' WHERE id = 'task-mutation'`); err != nil {
 		t.Fatalf("update task sources: %v", err)
@@ -33,9 +35,11 @@ VALUES ('comment-mutation', 'task-mutation', 'comment create otter', 'user', 'op
 		t.Fatalf("delete Comment: %v", err)
 	}
 	assertTaskSearchSourceNotSearchable(t, store.db, "update puffin")
+	assertTaskSearchInvariants(t, store.db)
 	if _, err := store.db.Exec(`DELETE FROM tasks WHERE id = 'task-mutation'`); err != nil {
 		t.Fatalf("delete Task: %v", err)
 	}
+	assertTaskSearchShortIDNotSearchable(t, store.db, "knt-1")
 	for _, query := range []string{"update title mongoose", "update body narwhal"} {
 		assertTaskSearchSourceNotSearchable(t, store.db, query)
 	}
@@ -56,6 +60,7 @@ VALUES ('comment-1', 'task-1', 'comment', 'user', 'operator', ?, ?)`, now, now);
 		`INSERT INTO task_search_documents (source_kind, task_id, comment_id) VALUES ('title', 'task-1', 'comment-1')`,
 		`INSERT INTO task_search_documents (source_kind, task_id) VALUES ('comment', 'task-1')`,
 		`INSERT INTO task_search_documents (source_kind, comment_id) VALUES ('body', 'comment-1')`,
+		`INSERT INTO task_search_documents (source_kind, task_id) VALUES ('short_id', 'task-1')`,
 		`INSERT INTO task_search_documents (source_kind, task_id) VALUES ('title', 'task-1')`,
 		`INSERT INTO task_search_documents (source_kind, task_id) VALUES ('body', 'task-1')`,
 		`INSERT INTO task_search_documents (source_kind, comment_id) VALUES ('comment', 'comment-1')`,
@@ -94,6 +99,54 @@ VALUES ('comment-mapping-failure', 'task-stable', 'mapping failure comment', 'us
 	}
 	assertTaskSearchCommentAbsent(t, store.db, "comment-mapping-failure")
 	assertTaskSearchInvariants(t, store.db)
+}
+
+func TestTaskSearchShortIDFTSFailuresRollBackTaskMutations(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	now := int64(1)
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	insertTaskSearchTestTask(t, store.db, "task-short-id-stable", 1, "KNT-1", "stable title", "stable body", now)
+
+	t.Run("Task create", func(t *testing.T) {
+		tx, err := store.db.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("begin Task create transaction: %v", err)
+		}
+		if _, err := tx.Exec(`DROP TABLE task_search_short_id_fts`); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("drop Short ID FTS table: %v", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO tasks (
+    id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body,
+    created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES ('task-short-id-create-failure', 'link-1', 1, 2, 'KNT-2', 'title', 'body', ?, ?, '{}')`, now, now); err == nil {
+			_ = tx.Rollback()
+			t.Fatal("Task create succeeded despite missing Short ID FTS")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("roll back failed Task create: %v", err)
+		}
+		assertTaskSearchTaskAbsent(t, store.db, "task-short-id-create-failure")
+	})
+
+	t.Run("Task delete", func(t *testing.T) {
+		tx, err := store.db.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("begin Task delete transaction: %v", err)
+		}
+		if _, err := tx.Exec(`DROP TABLE task_search_short_id_fts`); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("drop Short ID FTS table: %v", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM tasks WHERE id = 'task-short-id-stable'`); err == nil {
+			_ = tx.Rollback()
+			t.Fatal("Task delete succeeded despite missing Short ID FTS")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("roll back failed Task delete: %v", err)
+		}
+		assertTaskSearchShortIDSearchable(t, store.db, "knt-1", "task-short-id-stable")
+	})
 }
 
 func TestTaskSearchFTSFailuresRollBackCanonicalMutations(t *testing.T) {

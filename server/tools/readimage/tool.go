@@ -39,9 +39,7 @@ var supportedImageMIMEs = map[string]struct{}{
 }
 
 type Tool struct {
-	workspaceRoot             string
-	workspaceRootReal         string
-	workspaceRootInfo         os.FileInfo
+	fileAccessScope           tools.FileAccessScope
 	workspaceOnly             bool
 	allowOutsideWorkspace     bool
 	outsideWorkspaceApprover  patchtool.OutsideWorkspaceApprover
@@ -79,6 +77,12 @@ func WithOutsideWorkspaceAuditLogger(logger OutsideWorkspaceAuditLogger) Option 
 	}
 }
 
+func WithFileAccessScope(scope tools.FileAccessScope) Option {
+	return func(t *Tool) {
+		t.fileAccessScope = scope.Clone()
+	}
+}
+
 type input struct {
 	Path string `json:"path"`
 	Raw  bool   `json:"raw,omitempty"`
@@ -110,7 +114,14 @@ func New(workspaceRoot string, supported bool, opts ...Option) (*Tool, error) {
 		}
 		return nil, fmt.Errorf("stat workspace root: %w", err)
 	}
-	t := &Tool{workspaceRoot: rootAbs, workspaceRootReal: rootReal, workspaceRootInfo: rootInfo, workspaceOnly: true, supported: supported}
+	t := &Tool{
+		fileAccessScope: tools.FileAccessScope{
+			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: rootAbs, RealPath: rootReal, Info: rootInfo},
+			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: rootAbs, RealPath: rootReal, Info: rootInfo},
+		},
+		workspaceOnly: true,
+		supported:     supported,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)
@@ -191,7 +202,7 @@ func (t *Tool) resolvePath(ctx context.Context, path string, approvedOutside map
 
 	candidate := path
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.workspaceRoot, candidate)
+		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
 	}
 	candidate = filepath.Clean(candidate)
 	abs, err := filepath.Abs(candidate)
@@ -204,10 +215,8 @@ func (t *Tool) resolvePath(ctx context.Context, path string, approvedOutside map
 	}
 	real = filepath.Clean(real)
 
-	guard := patchtool.NewOutsideWorkspaceGuard(
-		t.workspaceRoot,
-		t.workspaceRootReal,
-		t.workspaceRootInfo,
+	guard := patchtool.NewOutsideWorkspaceGuardWithScope(
+		t.fileAccessScope,
 		t.workspaceOnly,
 		t.allowOutsideWorkspace,
 		t.outsideWorkspaceApprover,
@@ -235,6 +244,7 @@ func (t *Tool) resolvePath(ctx context.Context, path string, approvedOutside map
 		func(req patchtool.OutsideWorkspaceRequest, reason string) {
 			t.logOutsideWorkspaceApproval(req, reason)
 		},
+		tools.PathDenyPolicy{},
 	)
 	return guard.Allow(ctx, path, real, approvedOutside)
 }

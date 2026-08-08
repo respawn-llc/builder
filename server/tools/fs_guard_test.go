@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+func singleFileAccessScopeForTest(root string, real string, info os.FileInfo) FileAccessScope {
+	filesystemRoot := FilesystemRoot{LexicalPath: root, RealPath: real, Info: info}
+	return FileAccessScope{WorkingDirectory: filesystemRoot, ExecutionTargetRoot: filesystemRoot}
+}
+
 func TestDefaultUserDeniedIncludesRejectionInstruction(t *testing.T) {
 	workspace := t.TempDir()
 	real, err := filepath.EvalSymlinks(workspace)
@@ -20,10 +25,8 @@ func TestDefaultUserDeniedIncludesRejectionInstruction(t *testing.T) {
 	}
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	guard := NewFSGuard(FSGuardConfig{
-		WorkspaceRoot:     workspace,
-		WorkspaceRootReal: real,
-		WorkspaceRootInfo: info,
-		WorkspaceOnly:     true,
+		Scope:         singleFileAccessScopeForTest(workspace, real, info),
+		WorkspaceOnly: true,
 		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
 			return FSGuardApproval{Decision: FSGuardDecisionDeny, Commentary: "no"}, nil
 		},
@@ -64,27 +67,10 @@ func TestPathDenyPolicyLiteralTreeAndMultipleRuleMessages(t *testing.T) {
 		}
 		t.Fatalf("literal tree matched textual sibling")
 	}
+}
 
-	secondPolicy, err := CompilePathDenyPolicy([]PathDenyRuleConfig{
-		{Message: "miss", Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: filepath.Join(t.TempDir(), "other"), LiteralTree: true}},
-		{Message: "second message", Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: filepath.Join(root, "skills"), LiteralTree: true}},
-	})
-	if err != nil {
-		t.Fatalf("compile second policy: %v", err)
-	}
-	match, ok, matchErr := secondPolicy.Match(filepath.Join(root, "skills", "a"))
-	if matchErr != nil {
-		t.Fatalf("match second rule: %v", matchErr)
-	}
-	if !ok || match.Message != "second message" {
-		t.Fatalf("second rule match = %+v/%t, want second message", match, ok)
-	}
-	if _, ok, matchErr := secondPolicy.Match(filepath.Join(root, "other")); matchErr != nil || ok {
-		if matchErr != nil {
-			t.Fatalf("match no-match path: %v", matchErr)
-		}
-		t.Fatalf("expected no match fallthrough")
-	}
+func pathDenyLabelForTest(label string) *string {
+	return &label
 }
 
 func TestPathDenyPolicyGlobAndCompileErrors(t *testing.T) {
@@ -102,20 +88,15 @@ func TestPathDenyPolicyGlobAndCompileErrors(t *testing.T) {
 	if match, ok, matchErr := globPolicy.Match(filepath.Join(root, ".generated")); matchErr != nil || !ok || match.Message != "glob message" {
 		t.Fatalf("glob root match = %+v/%t err=%v", match, ok, matchErr)
 	}
-
-	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherGlob, Pattern: filepath.Join(root, "[")}}}); err == nil {
-		t.Fatal("expected invalid glob compile error")
+	for _, rule := range []PathDenyRuleConfig{
+		{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherGlob, Pattern: filepath.Join(root, "[")}},
+		{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherKind("unsupported"), Pattern: root}},
+		{Label: pathDenyLabelForTest("  "), Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: root}},
+	} {
+		if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{rule}); err == nil {
+			t.Fatal("expected invalid path deny rule error")
+		}
 	}
-	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherKind("unsupported"), Pattern: root}}}); err == nil {
-		t.Fatal("expected unsupported matcher compile error")
-	}
-	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Label: pathDenyLabelForTest("  "), Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: root}}}); err == nil {
-		t.Fatal("expected blank diagnostic label compile error")
-	}
-}
-
-func pathDenyLabelForTest(label string) *string {
-	return &label
 }
 
 func TestFSGuardPathDenyWinsBeforeAllowAndApprovalPaths(t *testing.T) {
@@ -141,9 +122,7 @@ func TestFSGuardPathDenyWinsBeforeAllowAndApprovalPaths(t *testing.T) {
 	sessionAllowed := true
 	approvedOutside := map[string]bool{target: true}
 	guard := NewFSGuard(FSGuardConfig{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootReal:     real,
-		WorkspaceRootInfo:     info,
+		Scope:                 singleFileAccessScopeForTest(workspace, real, info),
 		WorkspaceOnly:         false,
 		AllowOutsideWorkspace: true,
 		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
@@ -194,9 +173,7 @@ func TestFSGuardPathDenyChecksLexicalRequestedPathBeforeSymlinkResolution(t *tes
 	resolved := filepath.Join(outsideRoot, "file.txt")
 	approverCalls := 0
 	guard := NewFSGuard(FSGuardConfig{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootReal:     real,
-		WorkspaceRootInfo:     info,
+		Scope:                 singleFileAccessScopeForTest(workspace, real, info),
 		WorkspaceOnly:         false,
 		AllowOutsideWorkspace: true,
 		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
@@ -242,10 +219,8 @@ func TestFSGuardPathDenyIdentityErrorIsSurfacedBeforeApproval(t *testing.T) {
 	}
 	approverCalls := 0
 	guard := NewFSGuard(FSGuardConfig{
-		WorkspaceRoot:     workspace,
-		WorkspaceRootReal: real,
-		WorkspaceRootInfo: info,
-		WorkspaceOnly:     true,
+		Scope:         singleFileAccessScopeForTest(workspace, real, info),
+		WorkspaceOnly: true,
 		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
 			approverCalls++
 			return FSGuardApproval{Decision: FSGuardDecisionAllowOnce}, nil

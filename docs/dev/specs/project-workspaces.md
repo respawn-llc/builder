@@ -9,6 +9,9 @@
 - Detaching a workspace removes only the selected Project-workspace relationship.
 - Attaching, detaching, and changing the default workspace never delete or move files.
 - Detaching never deletes or migrates Tasks, Sessions, worktrees, retained Workflow state, or artifacts.
+- Project Workspace collections contain at most the 500 most recently attached Workspaces.
+- Older Workspaces remain attached and remain selectable by exact Project-scoped path or Workspace ID when omitted from a Project Workspace collection.
+- The global collection limit bounds memory and response growth for Project consumers, including unpaginated Project overview reads.
 
 ## Detach Safety
 

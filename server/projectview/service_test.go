@@ -14,8 +14,10 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -505,6 +507,40 @@ func TestMetadataServicePaginatesProjectWorkspacesForGUI(t *testing.T) {
 	if page2.NextPageToken != "" {
 		t.Fatalf("page2 next token = %q, want empty", page2.NextPageToken)
 	}
+}
+
+func TestMetadataServiceStopsWorkspacePaginationAtCollectionLimit(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	for index := 1; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		attachProjectViewWorkspace(t, store, binding.ProjectID)
+	}
+	svc := newProjectViewMetadataService(t, store, "")
+
+	pageToken := ""
+	for page := 0; page < metadata.ProjectWorkspaceCollectionLimit/100; page++ {
+		response, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
+			ProjectID: binding.ProjectID,
+			PageSize:  100,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			t.Fatalf("ListProjectWorkspaces page %d: %v", page, err)
+		}
+		if len(response.Workspaces) != 100 {
+			t.Fatalf("page %d workspace count = %d, want 100", page, len(response.Workspaces))
+		}
+		if page == metadata.ProjectWorkspaceCollectionLimit/100-1 {
+			if response.NextPageToken != "" {
+				t.Fatalf("terminal page next token = %q, want empty", response.NextPageToken)
+			}
+			return
+		}
+		if response.NextPageToken == "" {
+			t.Fatalf("page %d next token empty before collection limit", page)
+		}
+		pageToken = response.NextPageToken
+	}
+	t.Fatal("workspace pagination did not reach a terminal page")
 }
 
 func TestMetadataServiceUpdatesProjectNameForEditPage(t *testing.T) {
@@ -1412,8 +1448,14 @@ func newProjectViewRuntimeAuthority(
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  sessionStore.Meta().WorkspaceRoot,
-		Client:   projectViewTestLLMClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
+			if contextErr != nil {
+				t.Fatalf("NewFilesystemContext: %v", contextErr)
+			}
+			return context
+		}(),
+		Client: projectViewTestLLMClient{},
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

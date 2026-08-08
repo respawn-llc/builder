@@ -441,6 +441,24 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 	return row, nil
 }
 
+func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
+	if s == nil || s.queries == nil {
+		return sqlitegen.Workspace{}, errors.New("metadata store is required")
+	}
+	workspaceID, err := ResolveProjectSourceWorkspaceID(ctx, s.queries, projectID)
+	if err != nil {
+		return sqlitegen.Workspace{}, err
+	}
+	workspace, err := s.GetWorkspaceByID(ctx, workspaceID)
+	if err != nil {
+		return sqlitegen.Workspace{}, err
+	}
+	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(projectID) {
+		return sqlitegen.Workspace{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
+	}
+	return workspace, nil
+}
+
 func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceID string) ([]WorktreeRecord, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
@@ -454,6 +472,25 @@ func (s *Store) ListWorktreeRecordsByWorkspaceID(ctx context.Context, workspaceI
 		out = append(out, worktreeRecordFromParts(row.ID, row.WorkspaceID, row.CanonicalRootPath, row.IsMain != 0, row.Managed != 0, row.CreatedBranch != 0, row.OriginSessionID, row.GitMetadataJson, row.CreationBaseCommitOid, row.CreatedAtUnixMs, row.UpdatedAtUnixMs))
 	}
 	return out, nil
+}
+
+func (s *Store) ListManagedWorktreeRoots(ctx context.Context) ([]string, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	rows, err := s.queries.ListManagedWorktreeRoots(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list managed worktree roots: %w", err)
+	}
+	roots := make([]string, 0, len(rows))
+	for _, row := range rows {
+		root := strings.TrimSpace(row)
+		if root == "" {
+			return nil, errors.New("managed worktree root is required")
+		}
+		roots = append(roots, root)
+	}
+	return roots, nil
 }
 
 func (s *Store) GetWorktreeRecordByID(ctx context.Context, worktreeID string) (WorktreeRecord, error) {
@@ -1842,7 +1879,10 @@ func (s *Store) ListProjectWorkspaces(ctx context.Context, projectID string) ([]
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	rows, err := s.queries.ListProjectWorkspaces(ctx, strings.TrimSpace(projectID))
+	rows, err := s.queries.ListProjectWorkspaces(ctx, sqlitegen.ListProjectWorkspacesParams{
+		ProjectID:                strings.TrimSpace(projectID),
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list project workspaces: %w", err)
 	}
@@ -1864,9 +1904,10 @@ func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string,
 		return nil, errors.New("offset must be non-negative")
 	}
 	rows, err := s.queries.ListProjectWorkspacesPage(ctx, sqlitegen.ListProjectWorkspacesPageParams{
-		ProjectID:  strings.TrimSpace(projectID),
-		LimitRows:  int64(pageSize),
-		OffsetRows: int64(offset),
+		ProjectID:                strings.TrimSpace(projectID),
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+		LimitRows:                int64(pageSize),
+		OffsetRows:               int64(offset),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list project workspaces page: %w", err)
@@ -2100,6 +2141,77 @@ func (s *Store) ResolveSessionNavigationBinding(ctx context.Context, sessionID s
 		return serverapi.SessionNavigationBinding{}, err
 	}
 	return binding, nil
+}
+
+func (s *Store) ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sessionID string) (ProjectWorkspaceBoundary, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return ProjectWorkspaceBoundary{}, err
+	}
+	projectID := strings.TrimSpace(row.ProjectID)
+	if projectID == "" {
+		return ProjectWorkspaceBoundary{}, errors.New("session project id is required")
+	}
+	return s.ResolveProjectWorkspaceBoundary(ctx, projectID)
+}
+
+func (s *Store) ResolveProjectWorkspaceBoundary(ctx context.Context, projectID string) (ProjectWorkspaceBoundary, error) {
+	if s == nil || s.queries == nil {
+		return ProjectWorkspaceBoundary{}, errors.New("metadata store is required")
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return ProjectWorkspaceBoundary{}, errors.New("project id is required")
+	}
+	workspaces, err := s.queries.ListProjectWorkspaceBoundary(ctx, sqlitegen.ListProjectWorkspaceBoundaryParams{
+		ProjectID:                projectID,
+		WorkspaceCollectionLimit: int64(ProjectWorkspaceCollectionLimit),
+	})
+	if err != nil {
+		return ProjectWorkspaceBoundary{}, err
+	}
+	boundary := ProjectWorkspaceBoundary{
+		ProjectID:  projectID,
+		Workspaces: make([]ProjectWorkspace, 0, len(workspaces)),
+	}
+	for _, workspace := range workspaces {
+		root := strings.TrimSpace(workspace.RootPath)
+		if root == "" {
+			return ProjectWorkspaceBoundary{}, fmt.Errorf("project workspace %q has empty root path", workspace.ID)
+		}
+		workspaceID := strings.TrimSpace(workspace.ID)
+		if workspaceID == "" {
+			return ProjectWorkspaceBoundary{}, fmt.Errorf("project workspace %q has empty workspace id", root)
+		}
+		boundary.Workspaces = append(boundary.Workspaces, ProjectWorkspace{
+			WorkspaceID:       &workspaceID,
+			CanonicalRoot:     root,
+			AttachmentOrdinal: len(boundary.Workspaces),
+		})
+	}
+	if err := boundary.Validate(); err != nil {
+		return ProjectWorkspaceBoundary{}, err
+	}
+	return boundary, nil
+}
+
+func (s *Store) ProjectWorkspaceAttached(ctx context.Context, projectID string, root string) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return false, errors.New("project id is required")
+	}
+	selector, err := serverapi.NewProjectWorkspaceSelectorForRoot(root)
+	if err != nil {
+		return false, err
+	}
+	_, err = s.ResolveProjectWorkspaceSelector(ctx, projectID, selector)
+	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) (bool, error) {

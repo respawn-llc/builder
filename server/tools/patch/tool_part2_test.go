@@ -265,6 +265,20 @@ func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
 	assertAlias("/var/tmp", "/private/var/tmp")
 }
 
+func TestExistingPathAliasesIgnoreMissingOrNonDirectoryRoots(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if aliases := existingPathAliases(missing); len(aliases) != 0 {
+		t.Fatalf("missing path aliases = %v, want none", aliases)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a root"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if aliases := existingPathAliases(file); len(aliases) != 0 {
+		t.Fatalf("file path aliases = %v, want none", aliases)
+	}
+}
+
 func findCaseVariantExistingAlias(path string) (string, bool) {
 	canonical := filepath.Clean(path)
 	canonicalInfo, err := os.Stat(canonical)
