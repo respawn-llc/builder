@@ -35,10 +35,20 @@ func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktr
 	if persisted.Branch == nil {
 		return "", false, nil
 	}
-	if live != nil && (live.Detached || live.Branch == nil || live.Branch.Ref() != persisted.Branch.Ref()) {
+	if live != nil && !sameWorktreeBranchTopology(persisted, *live) {
 		return "", false, nil
 	}
 	return persisted.Branch.Name(), true, nil
+}
+
+func sameWorktreeBranchTopology(left GitWorktree, right GitWorktree) bool {
+	if left.Detached != right.Detached {
+		return false
+	}
+	if left.Branch == nil || right.Branch == nil {
+		return left.Branch == nil && right.Branch == nil
+	}
+	return left.Branch.Ref() == right.Branch.Ref()
 }
 
 func worktreeNamedBranch(worktree GitWorktree) (string, bool) {

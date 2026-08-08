@@ -599,26 +599,19 @@ func (s *Service) releaseProvisionalTaskWorktree(
 	workspace taskSourceWorkspace,
 	record metadata.WorktreeRecord,
 ) (*serverapi.RetainedPreviousWorktree, error) {
-	identity, err := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{
-		SourceWorkspaceRoot:  workspace.RootPath,
-		ExpectedWorktreeRoot: record.CanonicalRoot,
-	})
+	recorded, err := worktreeGitMetadataFromRecord(record)
 	if err != nil {
 		return nil, err
 	}
-	branchName, ok := identity.NamedBranch()
-	if !ok {
-		return nil, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
-	}
-	revision, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(ctx, record.CanonicalRoot, record.CreationBaseCommitOID)
+	live, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(
+		ctx,
+		workspace.RootPath,
+		record.CanonicalRoot,
+		record.CreationBaseCommitOID,
+		recorded,
+	)
 	if err != nil {
 		return nil, err
-	}
-	live := GitWorktree{
-		Root:     record.CanonicalRoot,
-		HeadOID:  revision.CommitOID,
-		Branch:   identity.branch,
-		Detached: false,
 	}
 	topology := registeredTopologyEntry(syncedWorktree{record: record, git: live})
 	if !safelyRecreatable {
@@ -626,6 +619,10 @@ func (s *Service) releaseProvisionalTaskWorktree(
 			return nil, err
 		}
 		return &serverapi.RetainedPreviousWorktree{Worktree: topology}, nil
+	}
+	branchName, named := worktreeNamedBranch(live)
+	if record.CreatedBranch && !named {
+		return nil, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
 	}
 	if err := s.git.Remove(ctx, workspace.RootPath, record.CanonicalRoot, false); err != nil {
 		return nil, err
@@ -1881,6 +1878,7 @@ type preparedSetupAttempt struct {
 	timeoutSeconds        int
 	retained              *serverapi.WorktreeTopologyEntry
 	creationBaseCommitOID *string
+	recordedCheckout      *GitWorktree
 }
 
 func (s *Service) taskSetupAttemptObserver(setupOperationID *serverapi.WorktreeSetupOperationID) (setupAttemptObserver, error) {
@@ -1967,7 +1965,16 @@ func (s *Service) recreateSetupAttemptIfClean(
 	if recreate == nil {
 		return attempt, nil
 	}
-	_, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(ctx, attempt.payload.WorktreeRoot, attempt.creationBaseCommitOID)
+	if attempt.recordedCheckout == nil {
+		return nil, errors.New("setup recreation requires recorded checkout topology")
+	}
+	_, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(
+		ctx,
+		attempt.payload.SourceWorkspaceRoot,
+		attempt.payload.WorktreeRoot,
+		attempt.creationBaseCommitOID,
+		*attempt.recordedCheckout,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2009,6 +2016,10 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 	if err != nil {
 		return nil, err
 	}
+	recordedCheckout, err := setupRecreationCheckout(req.RetainedWorktree)
+	if err != nil {
+		return nil, err
+	}
 	payload := setupScriptPayload{
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
@@ -2030,30 +2041,62 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 		timeoutSeconds:        settings.SetupTimeoutSeconds,
 		retained:              req.RetainedWorktree,
 		creationBaseCommitOID: req.CreationBaseCommitOID,
+		recordedCheckout:      recordedCheckout,
 	}, nil
+}
+
+func setupRecreationCheckout(retained *serverapi.WorktreeTopologyEntry) (*GitWorktree, error) {
+	if retained == nil {
+		return nil, nil
+	}
+	if retained.Variant != serverapi.WorktreeTopologyVariantRegistered || retained.Registered == nil {
+		return nil, errors.New("setup retained worktree must be registered")
+	}
+	checkout, err := gitWorktreeFromFacts(retained.Registered.Git)
+	if err != nil {
+		return nil, err
+	}
+	return &checkout, nil
 }
 
 func (s *Service) inspectSafeWorktreeRecreation(
 	ctx context.Context,
+	sourceWorkspaceRoot string,
 	root string,
 	creationBaseCommitOID *string,
-) (GitRevision, bool, error) {
+	recordedCheckout GitWorktree,
+) (GitWorktree, bool, error) {
+	identity, err := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{
+		SourceWorkspaceRoot:  sourceWorkspaceRoot,
+		ExpectedWorktreeRoot: root,
+	})
+	if err != nil {
+		return GitWorktree{}, false, err
+	}
 	revision, err := s.git.ResolveHEAD(ctx, root)
 	if err != nil {
-		return GitRevision{}, false, err
+		return GitWorktree{}, false, err
+	}
+	live := GitWorktree{
+		Root:     root,
+		HeadOID:  revision.CommitOID,
+		Branch:   identity.branch,
+		Detached: identity.branch == nil,
 	}
 	creationBase, err := normalizeOptionalCommitOID(creationBaseCommitOID)
 	if err != nil {
-		return GitRevision{}, false, err
+		return GitWorktree{}, false, err
 	}
-	if creationBase == nil || revision.CommitOID != *creationBase {
-		return revision, false, nil
+	if creationBase == nil ||
+		revision.CommitOID != *creationBase ||
+		!sameWorktreeBranchTopology(recordedCheckout, live) {
+		return live, false, nil
 	}
 	dirtyState, err := s.git.ProbeRecreationDirtyState(ctx, root)
 	if err != nil {
-		return GitRevision{}, false, err
+		return GitWorktree{}, false, err
 	}
-	return revision, dirtyState.Kind == clientui.WorktreeDirtyStateClean, nil
+	return live, dirtyState.Kind == clientui.WorktreeDirtyStateClean, nil
 }
 
 func (s *Service) executeSetupAttempt(ctx context.Context, attempt preparedSetupAttempt, observer setupAttemptObserver) error {
