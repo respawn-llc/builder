@@ -269,7 +269,7 @@ func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
 	}
-	s.engine.surfaceRunError(fatal)
+	s.engine.SetStreamingError(runtimeAbortFeedbackMessage(fatal))
 	s.engine.closeAdmissionAfterRuntimeAbort()
 	return terminalErr
 }

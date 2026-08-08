@@ -649,9 +649,8 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
-	if fatal, ok := resultGroupFatalFromError(err); ok {
-		e.SetStreamingError(runtimeAbortFeedbackMessage(fatal))
-		return
+	if _, ok := resultGroupFatalFromError(err); ok {
+		err = removeErrorBranches(err, func(candidate error) bool { _, matches := candidate.(*resultGroupFatal); return matches })
 	}
 	message := e.persistRunErrorFeedback(err)
 	if message == "" {

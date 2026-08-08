@@ -262,7 +262,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) error {
 	}()
 	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
 		e.surfaceRunError(err)
-		return err
+		return &persistedRunCallbackError{cause: err}
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)

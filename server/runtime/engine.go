@@ -499,7 +499,7 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 		defer func() {
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
-				e.surfaceRunError(e.cfg.LifecycleTaskFinished(taskErr))
+				e.surfaceRunError(errors.Join(removePersistedRunCallbackErrors(taskErr), e.cfg.LifecycleTaskFinished(taskErr)))
 			}
 		}()
 		taskErr = task(ctx)

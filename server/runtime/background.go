@@ -28,18 +28,6 @@ type queuedBackgroundNotice struct {
 	intent    steeringIntent
 }
 
-type persistedBackgroundCallbackError struct {
-	cause error
-}
-
-func (e *persistedBackgroundCallbackError) Error() string {
-	return e.cause.Error()
-}
-
-func (e *persistedBackgroundCallbackError) Unwrap() error {
-	return e.cause
-}
-
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
 	e.ensureOrchestrationCollaborators()
 	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
@@ -282,7 +270,10 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 
 func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) error {
 	_, err := b.runQueuedNotices(ctx)
-	return err
+	if _, fatal := resultGroupFatalFromError(err); fatal {
+		return err
+	}
+	return nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
@@ -290,7 +281,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}
-	var persistedCallbackErr *persistedBackgroundCallbackError
+	var persistedCallbackErr *persistedRunCallbackError
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
 		runErr := func() error {
 			if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
@@ -316,7 +307,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		if b.engine.persistRunErrorFeedback(runErr) == "" {
 			return runErr
 		}
-		persistedCallbackErr = &persistedBackgroundCallbackError{
+		persistedCallbackErr = &persistedRunCallbackError{
 			cause: runErr,
 		}
 		return persistedCallbackErr
@@ -352,7 +343,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 
 func removePersistedBackgroundCallbackError(
 	err error,
-	persisted *persistedBackgroundCallbackError,
+	persisted *persistedRunCallbackError,
 ) error {
 	if persisted == nil {
 		return err

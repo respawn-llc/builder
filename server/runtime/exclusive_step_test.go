@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -786,6 +788,60 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 	}
 	if snapshot := eng.ChatSnapshot(); snapshot.StreamingError == "" {
 		t.Fatal("runtime abort did not publish transient streaming failure")
+	}
+}
+
+func TestLifecycleTaskSurfacesOnlyUnpersistedTerminalBranches(t *testing.T) {
+	persistedErr := errors.New("persisted callback failure")
+	ancillaryErr := errors.New("step-ended publication failed")
+	fatal := &resultGroupFatal{
+		Committed: false,
+		Cause:     errors.New("result group persistence failed"),
+	}
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			LifecycleTaskFinished: func(taskErr error) error {
+				if !errors.Is(taskErr, fatal) || !errors.Is(taskErr, ancillaryErr) {
+					return fmt.Errorf("lifecycle callback lost terminal branches: %w", taskErr)
+				}
+				return nil
+			},
+		},
+	)
+	if eng.persistRunErrorFeedback(persistedErr) == "" {
+		t.Fatal("initial callback failure produced no durable feedback")
+	}
+	if !eng.launchLifecycleTask(func(context.Context) error {
+		return errors.Join(
+			&persistedRunCallbackError{cause: persistedErr},
+			fatal,
+			ancillaryErr,
+		)
+	}) {
+		t.Fatal("lifecycle task was not launched")
+	}
+	waitEngineLifecycleTasks(t, eng)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		feedback := 0
+		for _, entry := range eng.ChatSnapshot().Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				feedback++
+			}
+		}
+		if feedback == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("durable lifecycle feedback entries = %d, want original and ancillary once", feedback)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
