@@ -511,9 +511,31 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 			if err := e.applySteeringItem(stepID, item); err != nil {
 				return err
 			}
+			if item.historyReplace == nil {
+				e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+					workflowPostCompletionActivityForSteeringItem(item),
+				)
+			}
 		}
 	}
 	return nil
+}
+
+func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPostCompletionActivity {
+	if item.message != nil {
+		return workflowPostCompletionMessageActivity(item.message.message)
+	}
+	if item.assistantCommit != nil ||
+		item.committedAssistant != nil ||
+		item.completedResponseResolution != nil ||
+		item.goalNoticeAndStatus != nil ||
+		item.reviewerFeedback != nil ||
+		item.reviewerError != nil ||
+		item.toolCompletion != nil ||
+		item.queuedFlush != nil {
+		return workflowPostCompletionDurableActivity
+	}
+	return workflowPostCompletionNoActivity
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -903,6 +925,8 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		&projectedStart,
 		replacement.projectedEntries,
 	)
+	replacementMode := session.CompactionMode(replacement.payload.Mode)
+	modeErr := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,
@@ -910,6 +934,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		replacement.projectedEntries,
 	)
 	emitErr = errors.Join(
+		modeErr,
 		emitErr,
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	)

@@ -95,37 +95,38 @@ func normalizeCacheWarningMode(mode config.CacheWarningMode) (config.CacheWarnin
 }
 
 type Config struct {
-	Model                         string
-	Debug                         bool
-	Temperature                   float64
-	MaxTokens                     int
-	ThinkingLevel                 string
-	ModelCapabilities             session.LockedModelCapabilities
-	FastModeEnabled               bool
-	FastModeState                 *FastModeState
-	WebSearchMode                 string
-	PromptFacingSnapshotReloader  PromptFacingSnapshotReloader
-	ProviderCapabilitiesOverride  *llm.ProviderCapabilities
-	EnabledTools                  []toolspec.ID
-	SkillPolicy                   config.SkillPolicy
-	SubagentCatalogSettings       config.Settings
-	SystemPromptFiles             []config.SystemPromptFile
-	AutoCompactTokenLimit         int
-	PreSubmitCompactionLeadTokens int
-	ContextWindowTokens           int
-	EffectiveContextWindowPercent int
-	LocalCompactionCarryoverLimit int
-	CompactionMode                string
-	CacheWarningMode              config.CacheWarningMode
-	AutoCompactionEnabled         *bool
-	QuestionsEnabled              *bool
-	Reviewer                      ReviewerConfig
-	HeadlessMode                  bool
-	ToolPreambles                 bool
-	CurrentNodeExecution          *workflowruntime.CurrentNodeExecutionConfig
-	WorkflowPrompt                *workflowruntime.PromptContract
-	AskQuestionBatchSkipped       func(tools.AskQuestionBatchMetadata)
-	TranscriptWorkingDir          string
+	Model                           string
+	Debug                           bool
+	Temperature                     float64
+	MaxTokens                       int
+	ThinkingLevel                   string
+	ModelCapabilities               session.LockedModelCapabilities
+	FastModeEnabled                 bool
+	FastModeState                   *FastModeState
+	WebSearchMode                   string
+	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
+	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
+	EnabledTools                    []toolspec.ID
+	SkillPolicy                     config.SkillPolicy
+	SubagentCatalogSettings         config.Settings
+	SystemPromptFiles               []config.SystemPromptFile
+	AutoCompactTokenLimit           int
+	WorkflowPreCompactionTokenLimit int
+	PreSubmitCompactionLeadTokens   int
+	ContextWindowTokens             int
+	EffectiveContextWindowPercent   int
+	LocalCompactionCarryoverLimit   int
+	CompactionMode                  string
+	CacheWarningMode                config.CacheWarningMode
+	AutoCompactionEnabled           *bool
+	QuestionsEnabled                *bool
+	Reviewer                        ReviewerConfig
+	HeadlessMode                    bool
+	ToolPreambles                   bool
+	CurrentNodeExecution            *workflowruntime.CurrentNodeExecutionConfig
+	WorkflowPrompt                  *workflowruntime.PromptContract
+	AskQuestionBatchSkipped         func(tools.AskQuestionBatchMetadata)
+	TranscriptWorkingDir            string
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (global AGENTS.md, system prompt file, skills, generated
 	// assets). Empty falls back to ~/.kent so default-root behavior is preserved.

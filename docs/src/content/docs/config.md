@@ -66,6 +66,7 @@ postprocessing_mode = "all" # shell output token optimizations by Kent: none | b
 completion_mode = "auto"
 concurrency = 5 # Agent Node scheduling capacity; Script Nodes do not use it
 max_invalid_completion_attempts = 5
+pre_compaction_tokens = 247380 # defaults to 70% of context_compaction_threshold_tokens
 use_required_tool_calls = true
 subagents = false # TOML-only; workflow agents cannot launch custom roles unless enabled
 
@@ -158,6 +159,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `workflow.completion_mode` | string | `auto` | `KENT_WORKFLOW_COMPLETION_MODE` | Default completion mode for workflow agent nodes that inherit the global default. Allowed: `auto`, `structured_output`, `tool`, `shell_command`, `unstructured_output`. |
 | `workflow.concurrency` | int | `5` | `KENT_WORKFLOW_CONCURRENCY` | Agent Node scheduling capacity. Explicit workflow actions may exceed it. Script Nodes do not use it. Must be `> 0`. |
 | `workflow.max_invalid_completion_attempts` | int | `5` | `KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS` | Number of invalid workflow completion attempts allowed before Kent interrupts the run. Must be `> 0`. |
+| `workflow.pre_compaction_tokens` | int | `70%` of `context_compaction_threshold_tokens`, rounded down |  | Workflow Session pre-compaction threshold. Must be positive and no greater than `context_compaction_threshold_tokens`. File-only; not available in subagent role settings. |
 | `workflow.use_required_tool_calls` | bool | `true` |  | Uses provider-required tool selection for `tool` and `shell_command` workflow completion modes. Set to `false` to use automatic tool selection while preserving Kent's workflow completion validation. |
 | `workflow.subagents` | bool | `false` |  | Allows workflow agents to launch eligible custom roles. |
 

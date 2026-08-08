@@ -50,3 +50,26 @@ func TestCurrentNodeTaskEventPublicationErrorIsReturnedAfterCommit(t *testing.T)
 		t.Fatal("publication error was swallowed")
 	}
 }
+
+func TestCompleteCurrentNodePublishesCompletionEventAfterCommittedMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	publisher := &recordingCurrentNodeEventPublisher{}
+	store.SetWorkflowEventPublisher(publisher)
+
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "completed"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if len(publisher.events) != 1 ||
+		publisher.events[0].PrimaryEntityID != string(task.ID) ||
+		publisher.events[0].Action != serverapi.WorkflowProjectEventActionCompleted {
+		t.Fatalf("completion events = %+v, want one completed task event", publisher.events)
+	}
+}

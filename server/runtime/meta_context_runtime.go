@@ -314,6 +314,10 @@ func roleOrUser(role *llm.Role) llm.Role {
 }
 
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
+	return e.compactionReinjectedMetaMessagesForMode(ctx, compactionModeManual)
+}
+
+func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mode compactionMode) ([]llm.Message, error) {
 	meta := e.store.Meta()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
 	if err != nil {
@@ -323,7 +327,9 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts := baseMetaContextBuildOptions(false)
 	opts.IncludeHeadless = meta.HeadlessActive
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
-	if e.currentNodeExecutionActive() {
+	if mode == compactionModeWorkflowPostCompletion {
+		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
+	} else if e.currentNodeExecutionActive() {
 		delivery := e.currentNodeExecutionSnapshot().delivery
 		if delivery == nil {
 			return nil, errors.New("workflow prompt delivery state is unavailable")
