@@ -123,7 +123,7 @@ func TestListTaskSearchPageDescriptorsPreservesDurableParallelCurrentNodesDuring
 	}
 	token, release, err := RegisterLifecycleTaskStateResolver(func(taskID string) (LifecycleTaskQueryState, error) {
 		if taskID == "task-1" {
-			return LifecycleTaskQueryState{Flags: LifecycleTaskStateOwned | LifecycleTaskStateRunning}, nil
+			return LifecycleTaskQueryState{Present: true, Flags: LifecycleTaskStateOwned | LifecycleTaskStateRunning}, nil
 		}
 		return LifecycleTaskQueryState{}, nil
 	})

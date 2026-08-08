@@ -29,7 +29,8 @@ const (
 )
 
 type LifecycleTaskQueryState struct {
-	Flags int64
+	Present bool
+	Flags   int64
 }
 
 type LifecycleTaskStateResolver func(taskID string) (LifecycleTaskQueryState, error)
@@ -125,6 +126,15 @@ func lifecycleTaskState(_ *sqlitedriver.FunctionContext, arguments []driver.Valu
 	state, err := resolver(taskID)
 	if err != nil {
 		return nil, err
+	}
+	if !state.Present {
+		if state.Flags != 0 {
+			return nil, errors.New("absent lifecycle Task state has flags")
+		}
+		return nil, nil
+	}
+	if state.Flags&LifecycleTaskStateOwned == 0 {
+		return nil, errors.New("present lifecycle Task state is not owned")
 	}
 	return state.Flags, nil
 }

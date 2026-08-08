@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 type AttentionNotificationSubscribeRequest struct{}
@@ -263,7 +264,7 @@ func validateQuestionAttentionPayload(notification clientui.AttentionNotificatio
 		return errors.New("question attention notification workflow-task target focus kind must be question")
 	}
 	if notification.Target.Kind == clientui.AttentionNotificationTargetWorkflowTask &&
-		!sameStringSet(notification.Target.Focus.AskIDs, notification.Question.PreparedAskIDs) {
+		!runtimeids.EqualSets(notification.Target.Focus.AskIDs, notification.Question.PreparedAskIDs) {
 		return errors.New("question attention notification focus ask_ids must match prepared ask ids")
 	}
 	return nil
@@ -359,6 +360,9 @@ func validateQuestionAttentionState(state clientui.AttentionNotificationQuestion
 }
 
 func validateNonEmptyStringList(label string, values []string) error {
+	if !runtimeids.EqualSets(values, values) {
+		return fmt.Errorf("%s must not contain duplicate ids", label)
+	}
 	for _, value := range values {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s must contain only non-empty ids", label)
@@ -378,8 +382,4 @@ func stringListSubset(values []string, allowed []string) bool {
 		}
 	}
 	return true
-}
-
-func sameStringSet(left []string, right []string) bool {
-	return stringListSubset(left, right) && stringListSubset(right, left)
 }

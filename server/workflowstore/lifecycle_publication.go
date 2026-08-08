@@ -1496,7 +1496,7 @@ func lifecycleTaskState(root lifecycleRoot, rawTaskID string) (sqlitegen.Lifecyc
 	if status.WaitingApproval {
 		flags |= sqlitegen.LifecycleTaskStateWaitingApproval
 	}
-	return sqlitegen.LifecycleTaskQueryState{Flags: flags}, nil
+	return sqlitegen.LifecycleTaskQueryState{Present: true, Flags: flags}, nil
 }
 
 func (p *LifecyclePublication) Close() error {

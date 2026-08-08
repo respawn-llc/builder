@@ -1500,11 +1500,11 @@ effective_status AS (
     SELECT
         durable.task_id,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 1) != 0 THEN 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NOT NULL THEN 0
             ELSE durable.is_done
         END AS INTEGER) AS is_done,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 'done'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 8) != 0 THEN 'waiting_question'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 16) != 0
@@ -1515,7 +1515,7 @@ effective_status AS (
             ELSE durable.kind
         END AS kind,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 1
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 8) != 0 THEN 2
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 16) != 0
@@ -1527,7 +1527,7 @@ effective_status AS (
         END AS INTEGER) AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN durable.attention_types_json
             ELSE (
                 SELECT json_group_array(attention_type)
@@ -1702,11 +1702,11 @@ effective_status AS (
     SELECT
         durable.task_id,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) != 0 THEN 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NOT NULL THEN 0
             ELSE durable.is_done
         END AS INTEGER) AS is_done,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 'done'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 'waiting_question'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
@@ -1717,7 +1717,7 @@ effective_status AS (
             ELSE durable.kind
         END AS kind,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 1
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 2
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
@@ -1729,7 +1729,7 @@ effective_status AS (
         END AS INTEGER) AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN durable.attention_types_json
             ELSE (
                 SELECT json_group_array(attention_type)
@@ -4003,11 +4003,11 @@ effective_status AS (
     SELECT
         durable.task_id,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) != 0 THEN 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NOT NULL THEN 0
             ELSE durable.is_done
         END AS INTEGER) AS is_done,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 'done'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 'waiting_question'
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
@@ -4018,7 +4018,7 @@ effective_status AS (
             ELSE durable.kind
         END AS kind,
         CAST(CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN 1
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 2
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
@@ -4030,7 +4030,7 @@ effective_status AS (
         END AS INTEGER) AS primary_status_rank,
         durable.node_ids_json,
         CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
+            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
               AND durable.is_done != 0 THEN durable.attention_types_json
             ELSE (
                 SELECT json_group_array(attention_type)

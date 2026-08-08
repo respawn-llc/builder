@@ -3,11 +3,11 @@
 {{.Indent}}    SELECT
 {{.Indent}}        durable.task_id,
 {{.Indent}}        CAST(CASE
-{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) != 0 THEN 0
+{{.Indent}}            WHEN kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) IS NOT NULL THEN 0
 {{.Indent}}            ELSE durable.is_done
 {{.Indent}}        END AS INTEGER) AS is_done,
 {{.Indent}}        CASE
-{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}            WHEN kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) IS NULL
 {{.Indent}}              AND durable.is_done != 0 THEN 'done'
 {{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 8) != 0 THEN 'waiting_question'
 {{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 16) != 0
@@ -18,7 +18,7 @@
 {{.Indent}}            ELSE durable.kind
 {{.Indent}}        END AS kind,
 {{.Indent}}        CAST(CASE
-{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}            WHEN kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) IS NULL
 {{.Indent}}              AND durable.is_done != 0 THEN 1
 {{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 8) != 0 THEN 2
 {{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 16) != 0
@@ -30,7 +30,7 @@
 {{.Indent}}        END AS INTEGER) AS primary_status_rank,
 {{.Indent}}        durable.node_ids_json,
 {{.Indent}}        CASE
-{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}            WHEN kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) IS NULL
 {{.Indent}}              AND durable.is_done != 0 THEN durable.attention_types_json
 {{.Indent}}            ELSE (
 {{.Indent}}                SELECT json_group_array(attention_type)

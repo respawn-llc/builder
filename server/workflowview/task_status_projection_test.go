@@ -103,7 +103,6 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 	}
 	switch target := config.target.(type) {
 	case taskStatusScriptTarget:
-		lease.Release()
 		handle, err := r.authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
 			Workflow: &lease,
 			Command: sessionruntime.ScriptCommand{
@@ -120,9 +119,6 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 		descriptor, err := session.NewOpenSessionDescriptor(target.sessionID)
 		if err != nil {
 			return err
-		}
-		if !config.queued {
-			lease.Release()
 		}
 		handle, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 			Descriptor:         descriptor,
@@ -696,7 +692,7 @@ func testLifecycleTaskState(
 	if status.WaitingApproval {
 		flags |= sqlitegen.LifecycleTaskStateWaitingApproval
 	}
-	return sqlitegen.LifecycleTaskQueryState{Flags: flags}, nil
+	return sqlitegen.LifecycleTaskQueryState{Present: true, Flags: flags}, nil
 }
 
 func (taskStatusProjectionTestRunner) StartCurrentNode(

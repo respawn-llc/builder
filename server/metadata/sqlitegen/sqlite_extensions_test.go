@@ -1,6 +1,7 @@
 package sqlitegen
 
 import (
+	"database/sql"
 	"testing"
 )
 
@@ -11,9 +12,13 @@ func TestLifecycleTaskStateFunctionResolvesOneTaskWithoutMaterializingTheRoot(t 
 	token, release, err := RegisterLifecycleTaskStateResolver(func(taskID string) (LifecycleTaskQueryState, error) {
 		calls++
 		if taskID != "task-live" {
+			if taskID == "task-invalid" {
+				return LifecycleTaskQueryState{Present: true}, nil
+			}
 			return LifecycleTaskQueryState{}, nil
 		}
 		return LifecycleTaskQueryState{
+			Present: true,
 			Flags: LifecycleTaskStateOwned |
 				LifecycleTaskStateRunning |
 				LifecycleTaskStateWaitingQuestion,
@@ -40,7 +45,7 @@ func TestLifecycleTaskStateFunctionResolvesOneTaskWithoutMaterializingTheRoot(t 
 		t.Fatalf("lifecycle resolver calls = %d, want one exact lookup", calls)
 	}
 
-	var absentFlags int64
+	var absentFlags sql.NullInt64
 	if err := db.QueryRow(
 		`SELECT kent_lifecycle_task_state_v1(?, ?)`,
 		token,
@@ -48,8 +53,15 @@ func TestLifecycleTaskStateFunctionResolvesOneTaskWithoutMaterializingTheRoot(t 
 	).Scan(&absentFlags); err != nil {
 		t.Fatalf("query absent lifecycle Task state: %v", err)
 	}
-	if absentFlags != 0 {
-		t.Fatalf("absent lifecycle Task state flags = %d, want no overlay", absentFlags)
+	if absentFlags.Valid {
+		t.Fatalf("absent lifecycle Task state flags = %d, want null", absentFlags.Int64)
+	}
+	if err := db.QueryRow(
+		`SELECT kent_lifecycle_task_state_v1(?, ?)`,
+		token,
+		"task-invalid",
+	).Scan(&absentFlags); err == nil {
+		t.Fatal("malformed zero-valued lifecycle Task state was accepted")
 	}
 
 	release()
