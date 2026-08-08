@@ -26,7 +26,7 @@ type failure struct {
 	Line       int
 	NearLine   bool
 	Reason     string
-	Commentary string
+	Commentary *string
 }
 
 type failurePayload struct {
@@ -36,7 +36,7 @@ type failurePayload struct {
 	Line       int         `json:"line,omitempty"`
 	NearLine   bool        `json:"near_line,omitempty"`
 	Reason     string      `json:"reason,omitempty"`
-	Commentary string      `json:"commentary,omitempty"`
+	Commentary *string     `json:"commentary,omitempty"`
 }
 
 func (f *failure) Error() string {
@@ -88,8 +88,8 @@ func (f *failure) message() string {
 			message += " for " + path
 		}
 		message += "."
-		if commentary := strings.TrimSpace(f.Commentary); commentary != "" {
-			message += "\nUser said: " + commentary
+		if f.Commentary != nil {
+			message += "\nUser said: " + strings.TrimSpace(*f.Commentary)
 		}
 		return message
 	case failureKindApprovalFailed:
@@ -128,7 +128,7 @@ func noPermissionFailure(path, reason string) error {
 	return &failure{Kind: failureKindNoPermission, Path: path, Reason: reason}
 }
 
-func userDeniedFailure(path, commentary string) error {
+func userDeniedFailure(path string, commentary *string) error {
 	return &failure{Kind: failureKindUserDenied, Path: path, Commentary: commentary}
 }
 
@@ -201,6 +201,9 @@ func errorPayload(err error) failurePayload {
 	payload.Line = f.Line
 	payload.NearLine = f.NearLine
 	payload.Reason = strings.TrimSpace(f.Reason)
-	payload.Commentary = strings.TrimSpace(f.Commentary)
+	if f.Commentary != nil {
+		commentary := strings.TrimSpace(*f.Commentary)
+		payload.Commentary = &commentary
+	}
 	return payload
 }

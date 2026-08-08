@@ -146,12 +146,12 @@ const (
 type taskQuestionAnswerMemoRequest struct {
 	TaskID               string
 	AskID                string
-	ErrorMessage         string
-	Answer               string
+	ErrorMessage         *string
+	Answer               *string
 	SelectedOptionNumber *int
-	FreeformAnswer       string
+	FreeformAnswer       *string
 	ApprovalDecision     clientui.ApprovalDecision
-	ApprovalCommentary   string
+	ApprovalCommentary   *string
 }
 
 type Option func(*Service)
@@ -1920,10 +1920,17 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 	if s == nil || s.currentNodeExecution == nil {
 		return errors.New("current node workflow execution is required")
 	}
-	memoReq := taskQuestionAnswerMemoRequest{TaskID: req.TaskID, AskID: req.AskID, ErrorMessage: req.ErrorMessage, Answer: req.Answer, SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
+	memoReq := taskQuestionAnswerMemoRequest{
+		TaskID:               req.TaskID,
+		AskID:                req.AskID,
+		ErrorMessage:         textutil.OptionalExactString(req.ErrorMessage),
+		Answer:               textutil.OptionalExactString(req.Answer),
+		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
+		FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
+	}
 	if req.Approval != nil {
 		memoReq.ApprovalDecision = req.Approval.Decision
-		memoReq.ApprovalCommentary = req.Approval.Commentary
+		memoReq.ApprovalCommentary = textutil.OptionalExactString(req.Approval.Commentary)
 	}
 	acceptance, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (workflowexecution.WorkflowQuestionAcceptance, error) {
 		return s.acceptWorkflowTaskQuestion(ctx, req)
@@ -1940,21 +1947,19 @@ func (s *Service) acceptWorkflowTaskQuestion(
 ) (workflowexecution.WorkflowQuestionAcceptance, error) {
 	var resolution askquestion.AskQuestionResolution
 	var submitErr error
-	if strings.TrimSpace(req.ErrorMessage) != "" {
-		submitErr = errors.New(req.ErrorMessage)
+	errorMessage := textutil.OptionalExactString(req.ErrorMessage)
+	if errorMessage != nil {
+		submitErr = errors.New(*errorMessage)
 	} else if req.Approval != nil {
-		commentary := req.Approval.Commentary
-		resolution = askquestion.AskQuestionLegacyApproval{
+		resolution = askquestion.AskQuestionApproval{
 			Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
-			Commentary: &commentary,
+			Commentary: textutil.OptionalExactString(req.Approval.Commentary),
 		}
 	} else {
-		answer := req.Answer
-		freeform := req.FreeformAnswer
 		resolution = askquestion.AskQuestionLegacyAnswer{
-			Answer:               &answer,
+			Answer:               textutil.OptionalExactString(req.Answer),
 			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       &freeform,
+			FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
 		}
 	}
 	acceptance, err := s.currentNodeExecution.AcceptWorkflowQuestion(
@@ -1982,12 +1987,12 @@ func (s *Service) acceptWorkflowTaskQuestion(
 func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQuestionAnswerMemoRequest) bool {
 	return a.TaskID == b.TaskID &&
 		a.AskID == b.AskID &&
-		a.ErrorMessage == b.ErrorMessage &&
-		a.Answer == b.Answer &&
+		textutil.EqualOptional(a.ErrorMessage, b.ErrorMessage) &&
+		textutil.EqualOptional(a.Answer, b.Answer) &&
 		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
-		a.FreeformAnswer == b.FreeformAnswer &&
+		textutil.EqualOptional(a.FreeformAnswer, b.FreeformAnswer) &&
 		a.ApprovalDecision == b.ApprovalDecision &&
-		a.ApprovalCommentary == b.ApprovalCommentary
+		textutil.EqualOptional(a.ApprovalCommentary, b.ApprovalCommentary)
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {

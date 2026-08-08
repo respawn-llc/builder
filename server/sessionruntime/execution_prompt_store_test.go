@@ -16,10 +16,8 @@ type promptAwaitTestResult struct {
 }
 
 func testLegacyQuestionResolution(answer string) tools.AskQuestionLegacyAnswer {
-	freeform := ""
 	return tools.AskQuestionLegacyAnswer{
-		Answer:         &answer,
-		FreeformAnswer: &freeform,
+		Answer: &answer,
 	}
 }
 

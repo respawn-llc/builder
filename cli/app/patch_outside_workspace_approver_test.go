@@ -11,6 +11,7 @@ import (
 	"core/server/runtimewire"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/textutil"
 )
 
 const (
@@ -31,6 +32,8 @@ func testOutsideWorkspaceApprovalResolution(
 }
 
 func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
+	approvedCommentary := "approved, but keep it small"
+	deniedCommentary := "no because this is protected"
 	tests := []struct {
 		name       string
 		resolution askquestion.AskQuestionResolution
@@ -39,8 +42,8 @@ func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
 		{name: "allow once", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce}},
 		{name: "allow session", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowSession}},
 		{name: "deny", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}},
-		{name: "allow once with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, "approved, but keep it small"), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce, Commentary: "approved, but keep it small"}},
-		{name: "deny with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, "no because this is protected"), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: "no because this is protected"}},
+		{name: "allow once with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, approvedCommentary), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce, Commentary: &approvedCommentary}},
+		{name: "deny with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, deniedCommentary), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: &deniedCommentary}},
 	}
 
 	for _, tc := range tests {
@@ -49,7 +52,8 @@ func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse approval response: %v", err)
 			}
-			if got != tc.want {
+			if got.Decision != tc.want.Decision ||
+				!textutil.EqualOptional(got.Commentary, tc.want.Commentary) {
 				t.Fatalf("decision mismatch: got %v want %v", got, tc.want)
 			}
 		})
@@ -215,7 +219,7 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 		if result.approval.Decision != patchtool.OutsideWorkspaceDecisionDeny {
 			t.Fatalf("unexpected approval decision: %+v", result.approval)
 		}
-		if result.approval.Commentary != "no" {
+		if result.approval.Commentary == nil || *result.approval.Commentary != "no" {
 			t.Fatalf("unexpected approval commentary: %+v", result.approval)
 		}
 	case <-time.After(2 * time.Second):

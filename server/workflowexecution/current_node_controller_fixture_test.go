@@ -589,10 +589,8 @@ type currentNodePromptResult struct {
 }
 
 func currentNodeLegacyQuestionAnswer(answer string) askquestion.AskQuestionLegacyAnswer {
-	freeform := ""
 	return askquestion.AskQuestionLegacyAnswer{
-		Answer:         &answer,
-		FreeformAnswer: &freeform,
+		Answer: &answer,
 	}
 }
 

@@ -440,11 +440,11 @@ func (t *Tool) outsideGuard() tools.FSGuard {
 			DefaultApprovalFailed: func(path string, reason string) error {
 				return failf("file edit approval failed for %s. %s", path, reason)
 			},
-			DefaultUserDenied: func(path string, commentary string) error {
-				if strings.TrimSpace(commentary) == "" {
+			DefaultUserDenied: func(path string, commentary *string) error {
+				if commentary == nil {
 					return failf("user denied the edit for %s.", path)
 				}
-				return failf("user denied the edit for %s.\nUser said: %s", path, commentary)
+				return failf("user denied the edit for %s.\nUser said: %s", path, strings.TrimSpace(*commentary))
 			},
 		},
 		TemporaryPathAllowed: patchtool.IsPathInTemporaryDir,

@@ -263,12 +263,12 @@ func normalizedRecommendedOptionIndex(index int, suggestionCount int) int {
 	return index
 }
 
-func selectedOptionToolOutputSummary(optionNumber int, freeform string) string {
+func selectedOptionToolOutputSummary(optionNumber int, freeform *string) string {
 	base := fmt.Sprintf("User chose option #%d.", optionNumber)
-	if freeform == "" {
+	if freeform == nil {
 		return base
 	}
-	return base + " They also said: " + freeform
+	return base + " They also said: " + *freeform
 }
 
 func validateApprovalDecision(decision AskQuestionApprovalDecision) error {

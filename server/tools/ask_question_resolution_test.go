@@ -51,3 +51,39 @@ func TestValidateAskQuestionResolutionUsesTypedOptionalText(t *testing.T) {
 		t.Fatal("empty typed Question resolution unexpectedly validated")
 	}
 }
+
+func TestQuestionResolutionFormattingPreservesAbsentOptionalText(t *testing.T) {
+	selected := 1
+	text, err := resolutionQuestionText(AskQuestionAnswer{SelectedOptionNumber: &selected})
+	if err != nil {
+		t.Fatalf("resolutionQuestionText: %v", err)
+	}
+	if text.freeform != nil {
+		t.Fatalf("freeform = %q, want absent", *text.freeform)
+	}
+	summary, err := buildResolutionToolOutputSummary(AskQuestionAnswer{
+		SelectedOptionNumber: &selected,
+	})
+	if err != nil {
+		t.Fatalf("buildResolutionToolOutputSummary: %v", err)
+	}
+	if summary != "User chose option #1." {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
+func TestValidateLegacyQuestionResolutionUsesOptionalSlotPresence(t *testing.T) {
+	selected := 1
+	if err := ValidateAskQuestionResolutionShape(AskQuestionLegacyAnswer{
+		SelectedOptionNumber: &selected,
+	}); err != nil {
+		t.Fatalf("selected-only legacy resolution: %v", err)
+	}
+	blank := ""
+	if err := ValidateAskQuestionResolutionShape(AskQuestionLegacyAnswer{
+		SelectedOptionNumber: &selected,
+		Answer:               &blank,
+	}); err == nil {
+		t.Fatal("present blank legacy answer unexpectedly validated")
+	}
+}

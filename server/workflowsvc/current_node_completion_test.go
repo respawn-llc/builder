@@ -12,6 +12,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -192,6 +193,56 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	answer, ok := execution.questionResolution.(askquestion.AskQuestionLegacyAnswer)
 	if !ok || answer.Answer == nil || *answer.Answer != request.Answer {
 		t.Fatalf("question resolution = %+v, want exact legacy answer", execution.questionResolution)
+	}
+}
+
+func TestAnswerWorkflowTaskApprovalNormalizesAbsentCommentary(t *testing.T) {
+	execution := &currentNodeCompletionExecutionStub{}
+	service := currentNodeCompletionService(execution)
+	request := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "approval-request-1",
+		TaskID:          "task-question",
+		AskID:           "ask-approval",
+		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+			Decision: clientui.ApprovalDecisionAllowOnce,
+		},
+	}
+
+	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
+	}
+	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
+	if !ok {
+		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
+	}
+	if approval.Commentary != nil {
+		t.Fatalf("approval commentary = %q, want absent", *approval.Commentary)
+	}
+}
+
+func TestAnswerWorkflowTaskApprovalPreservesExactCommentary(t *testing.T) {
+	execution := &currentNodeCompletionExecutionStub{}
+	service := currentNodeCompletionService(execution)
+	commentary := "  approved from Task Detail  "
+	request := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "approval-request-exact",
+		TaskID:          "task-question",
+		AskID:           "ask-approval",
+		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: commentary,
+		},
+	}
+
+	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
+	}
+	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
+	if !ok {
+		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
+	}
+	if approval.Commentary == nil || *approval.Commentary != commentary {
+		t.Fatalf("approval commentary = %v, want exact Task Detail commentary", approval.Commentary)
 	}
 }
 

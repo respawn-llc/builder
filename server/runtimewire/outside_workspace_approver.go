@@ -77,11 +77,7 @@ func OutsideWorkspaceApprovalFromResolution(
 	if !ok {
 		return patchtool.OutsideWorkspaceApproval{}, errors.New("missing approval payload")
 	}
-	commentary := ""
-	if answer.Commentary != nil {
-		commentary = strings.TrimSpace(*answer.Commentary)
-	}
-	approval := patchtool.OutsideWorkspaceApproval{Commentary: commentary}
+	approval := patchtool.OutsideWorkspaceApproval{Commentary: answer.Commentary}
 	switch answer.Decision {
 	case askquestion.AskQuestionApprovalDecisionAllowOnce:
 		approval.Decision = patchtool.OutsideWorkspaceDecisionAllowOnce

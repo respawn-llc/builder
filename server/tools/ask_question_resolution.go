@@ -18,8 +18,8 @@ type AskQuestionAnswer struct {
 func (AskQuestionAnswer) askQuestionResolution() {}
 
 // AskQuestionLegacyAnswer preserves both exact temporary single-prompt text
-// slots until KENT-461 deletes that API. Both slots are required so empty
-// values are payload content, never absence sentinels.
+// slots until KENT-461 deletes that API. Nil means the corresponding legacy
+// wire slot was semantically absent.
 type AskQuestionLegacyAnswer struct {
 	Answer               *string
 	SelectedOptionNumber *int
@@ -35,19 +35,6 @@ type AskQuestionApproval struct {
 
 func (AskQuestionApproval) askQuestionResolution() {}
 
-// AskQuestionLegacyApproval preserves the exact commentary slot used by the
-// temporary Task Detail single-prompt operation until KENT-461.
-type AskQuestionLegacyApproval struct {
-	Decision   AskQuestionApprovalDecision
-	Commentary *string
-}
-
-func (AskQuestionLegacyApproval) askQuestionResolution() {}
-
-type AskQuestionDeclined struct{}
-
-func (AskQuestionDeclined) askQuestionResolution() {}
-
 func ValidateAskQuestionResolutionShape(resolution AskQuestionResolution) error {
 	switch answer := resolution.(type) {
 	case AskQuestionAnswer:
@@ -62,15 +49,18 @@ func ValidateAskQuestionResolutionShape(resolution AskQuestionResolution) error 
 		}
 		return nil
 	case AskQuestionLegacyAnswer:
-		if answer.Answer == nil || answer.FreeformAnswer == nil {
-			return errors.New("legacy Question answer requires both exact text slots")
-		}
 		if answer.SelectedOptionNumber != nil && *answer.SelectedOptionNumber <= 0 {
 			return errors.New("selected option number must be positive when present")
 		}
+		if answer.Answer != nil && strings.TrimSpace(*answer.Answer) == "" {
+			return errors.New("legacy answer must be non-blank when present")
+		}
+		if answer.FreeformAnswer != nil && strings.TrimSpace(*answer.FreeformAnswer) == "" {
+			return errors.New("legacy freeform answer must be non-blank when present")
+		}
 		if answer.SelectedOptionNumber == nil &&
-			strings.TrimSpace(*answer.Answer) == "" &&
-			strings.TrimSpace(*answer.FreeformAnswer) == "" {
+			answer.Answer == nil &&
+			answer.FreeformAnswer == nil {
 			return ErrAskQuestionNonApprovalRequiresAnswer
 		}
 		return nil
@@ -79,13 +69,6 @@ func ValidateAskQuestionResolutionShape(resolution AskQuestionResolution) error 
 			return errors.New("approval commentary must be non-blank when present")
 		}
 		return validateApprovalDecision(answer.Decision)
-	case AskQuestionLegacyApproval:
-		if answer.Commentary == nil {
-			return errors.New("legacy Approval answer requires its exact commentary slot")
-		}
-		return validateApprovalDecision(answer.Decision)
-	case AskQuestionDeclined:
-		return nil
 	default:
 		return errors.New("Ask Question resolution variant is invalid")
 	}
@@ -111,13 +94,6 @@ func ValidateAskQuestionResolution(req AskQuestionRequest, resolution AskQuestio
 			return ErrAskQuestionNonApprovalForbidsApproval
 		}
 		return validateOfferedApproval(req, answer.Decision)
-	case AskQuestionLegacyApproval:
-		if !req.Approval {
-			return ErrAskQuestionNonApprovalForbidsApproval
-		}
-		return validateOfferedApproval(req, answer.Decision)
-	case AskQuestionDeclined:
-		return nil
 	default:
 		return errors.New("Ask Question resolution variant is invalid")
 	}
@@ -145,59 +121,76 @@ func validateOfferedApproval(req AskQuestionRequest, decision AskQuestionApprova
 	return fmt.Errorf("approval decision %q was not offered", decision)
 }
 
-func resolutionQuestionText(resolution AskQuestionResolution) (selected *int, freeform string, err error) {
+type questionResolutionText struct {
+	selected *int
+	freeform *string
+}
+
+func resolutionQuestionText(resolution AskQuestionResolution) (questionResolutionText, error) {
 	switch answer := resolution.(type) {
 	case AskQuestionAnswer:
-		if answer.Freeform != nil {
-			freeform = strings.TrimSpace(*answer.Freeform)
-		}
-		return answer.SelectedOptionNumber, freeform, nil
+		return questionResolutionText{
+			selected: answer.SelectedOptionNumber,
+			freeform: normalizedResolutionText(answer.Freeform),
+		}, nil
 	case AskQuestionLegacyAnswer:
-		if answer.Answer == nil || answer.FreeformAnswer == nil {
-			return nil, "", errors.New("legacy Question answer requires both exact text slots")
+		freeform := answer.FreeformAnswer
+		if freeform == nil {
+			freeform = answer.Answer
 		}
-		if freeform = strings.TrimSpace(*answer.FreeformAnswer); freeform == "" {
-			freeform = strings.TrimSpace(*answer.Answer)
-		}
-		return answer.SelectedOptionNumber, freeform, nil
+		return questionResolutionText{
+			selected: answer.SelectedOptionNumber,
+			freeform: normalizedResolutionText(freeform),
+		}, nil
 	default:
-		return nil, "", fmt.Errorf("Question resolution type %T is invalid", resolution)
+		return questionResolutionText{}, fmt.Errorf("Question resolution type %T is invalid", resolution)
 	}
 }
 
+func normalizedResolutionText(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	normalized := strings.TrimSpace(*value)
+	return &normalized
+}
+
 func buildResolutionToolOutputSummary(resolution AskQuestionResolution) (string, error) {
-	selected, freeform, err := resolutionQuestionText(resolution)
+	answer, err := resolutionQuestionText(resolution)
 	if err != nil {
 		return "", err
 	}
-	if selected != nil {
-		return selectedOptionToolOutputSummary(*selected, freeform), nil
+	if answer.selected != nil {
+		return selectedOptionToolOutputSummary(*answer.selected, answer.freeform), nil
 	}
-	if freeform == "" {
+	if answer.freeform == nil {
 		return "", ErrAskQuestionNonApprovalRequiresAnswer
 	}
-	return "User answered: " + freeform, nil
+	return "User answered: " + *answer.freeform, nil
 }
 
 func buildResolutionCondensedToolOutputText(
 	req AskQuestionRequest,
 	resolution AskQuestionResolution,
 ) (string, error) {
-	selected, freeform, err := resolutionQuestionText(resolution)
+	answer, err := resolutionQuestionText(resolution)
 	if err != nil {
 		return "", err
 	}
-	if selected == nil {
-		return freeform, nil
+	if answer.selected == nil {
+		if answer.freeform == nil {
+			return "", nil
+		}
+		return *answer.freeform, nil
 	}
 	suggestions := normalizedSuggestions(req.Suggestions)
-	optionIndex := *selected - 1
+	optionIndex := *answer.selected - 1
 	if optionIndex < 0 || optionIndex >= len(suggestions) {
 		return "", nil
 	}
 	base := suggestions[optionIndex]
-	if freeform == "" {
+	if answer.freeform == nil {
 		return base, nil
 	}
-	return base + "\nUser also said:\n" + freeform, nil
+	return base + "\nUser also said:\n" + *answer.freeform, nil
 }

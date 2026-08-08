@@ -199,6 +199,24 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 	}
 }
 
+func TestServiceAnswerAskPreservesAbsentLegacyTextSlots(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-option-only")
+	req.SelectedOptionNumber = textutil.Value(1)
+
+	if err := service.AnswerAsk(context.Background(), req); err != nil {
+		t.Fatalf("AnswerAsk: %v", err)
+	}
+	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	if answer.Answer != nil || answer.FreeformAnswer != nil {
+		t.Fatalf(
+			"legacy text slots = Answer %v FreeformAnswer %v, want both absent",
+			answer.Answer,
+			answer.FreeformAnswer,
+		)
+	}
+}
+
 func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-option")

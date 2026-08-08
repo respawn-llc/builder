@@ -241,19 +241,18 @@ func validatePromptAnswerCommands(commands []PromptAnswerCommand) error {
 		if err := command.PromptID.Validate(); err != nil {
 			return fmt.Errorf("prompt answer command %d: %w", index, err)
 		}
-		var resolution tools.AskQuestionResolution
 		switch answer := command.Payload.(type) {
 		case PromptQuestionAnswerCommand:
-			resolution = answer.Answer
+			if err := tools.ValidateAskQuestionResolutionShape(answer.Answer); err != nil {
+				return fmt.Errorf("prompt answer command %d: %w", index, err)
+			}
 		case PromptApprovalAnswerCommand:
-			resolution = answer.Answer
+			if err := tools.ValidateAskQuestionResolutionShape(answer.Answer); err != nil {
+				return fmt.Errorf("prompt answer command %d: %w", index, err)
+			}
 		case PromptDeclinedCommand:
-			resolution = tools.AskQuestionDeclined{}
 		default:
 			return fmt.Errorf("prompt answer command %d has an invalid payload variant", index)
-		}
-		if err := tools.ValidateAskQuestionResolutionShape(resolution); err != nil {
-			return fmt.Errorf("prompt answer command %d: %w", index, err)
 		}
 		if _, exists := seen[command.PromptID]; exists {
 			return fmt.Errorf("prompt answer command prompt id %q is duplicated", command.PromptID)
