@@ -73,7 +73,7 @@ var catalogEntries = []CatalogEntry{
 			transcript.ToolPresentationDefault,
 			transcript.ToolCallRenderBehaviorDefault,
 			false,
-			defaultToolCallMeta(toolspec.ToolViewImage),
+			viewImageToolCallMeta(toolspec.ToolViewImage),
 			formatViewImageToolResult,
 		),
 		Schema: mustToolSchema("view_image.json"),
@@ -133,7 +133,7 @@ var catalogEntries = []CatalogEntry{
 		DefaultEnabled: false,
 		Contract: localContract(
 			LocalRuntimeBuilderCompleteNode,
-			RequestExposure{Enabled: true, RequiresWorkflowRun: true},
+			RequestExposure{Enabled: true, RequiresCurrentNodeExecution: true},
 			transcript.ToolPresentationDefault,
 			transcript.ToolCallRenderBehaviorDefault,
 			false,

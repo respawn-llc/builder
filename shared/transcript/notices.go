@@ -4,6 +4,7 @@ import "strings"
 
 const (
 	NoticeReasonCacheWarning        = "cache_warning"
+	NoticeReasonCompaction          = "compaction"
 	NoticeReasonLegacyUntypedNotice = "legacy_untyped_notice"
 	NoticeReasonRuntimeDiagnostic   = "runtime_diagnostic"
 
@@ -21,7 +22,10 @@ func LegacyNoticeReasonForRole(role string) string {
 
 func LegacyNoticeSeverityForRole(role string) string {
 	switch strings.TrimSpace(role) {
-	case NoticeSeverityError, string(EntryRoleReviewerError):
+	case NoticeSeverityError,
+		string(EntryRoleDeveloperErrorFeedback),
+		string(EntryRoleInterruption),
+		string(EntryRoleReviewerError):
 		return NoticeSeverityError
 	case NoticeSeverityWarning, NoticeReasonCacheWarning:
 		return NoticeSeverityWarning

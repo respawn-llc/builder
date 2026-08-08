@@ -8,38 +8,89 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata"
+	"core/server/requestmemo"
 	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowstore"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 type Service struct {
-	metadata  *metadata.Store
-	projectID string
+	metadata          *metadata.Store
+	projectID         string
+	runtimeGuard      runtimeSessionGuard
+	projectMutations  *requestmemo.MutationLaneRegistry[string]
+	mutationPermit    *workflowexecution.MutationPermit
+	workflowExecution interface {
+		EnsureTaskQuiescent(workflow.TaskID) error
+	}
+	workflowStore *workflowstore.Store
+}
+
+// runtimeSessionGuard is an internal composition collaborator. Production
+// composition always installs the authority adapter via WithRuntimeAuthority.
+type runtimeSessionGuard interface {
+	CountBlockingRuntimeActivity(context.Context, []string) (int, error)
+	BlockSessionStarts(context.Context, []string) (func(), error)
+}
+
+type authorityRuntimeSessionGuard struct {
 	authority *sessionruntime.Authority
+}
+
+func (g authorityRuntimeSessionGuard) CountBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
+	if g.authority == nil {
+		return 0, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		active, err := g.authority.HasBlockingRuntimeActivity(ctx, id.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
+	if g.authority == nil {
+		return func() {}, nil
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := g.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
 // resolves outside its project sessions root. Callers and tests match this with
 // errors.Is rather than comparing rendered message text.
 var ErrSessionArtifactEscapesRoot = errors.New("session artifact path escapes project sessions root")
-
-var projectDeleteLocks = keyedProjectDeleteLocks{locks: map[string]*projectDeleteLock{}}
-
-type keyedProjectDeleteLocks struct {
-	mu    sync.Mutex
-	locks map[string]*projectDeleteLock
-}
-
-type projectDeleteLock struct {
-	mu   sync.Mutex
-	refs int
-}
 
 const (
 	defaultProjectHomePageSize = 50
@@ -52,14 +103,34 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 	if metadataStore == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	return &Service{metadata: metadataStore, projectID: strings.TrimSpace(projectID)}, nil
+	return &Service{
+		metadata:         metadataStore,
+		projectID:        strings.TrimSpace(projectID),
+		projectMutations: requestmemo.NewMutationLaneRegistry[string](),
+	}, nil
 }
 
 func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
 	if s == nil {
 		return nil
 	}
-	s.authority = authority
+	if authority == nil {
+		s.runtimeGuard = nil
+	} else {
+		s.runtimeGuard = authorityRuntimeSessionGuard{authority: authority}
+	}
+	return s
+}
+
+func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
+	EnsureTaskQuiescent(workflow.TaskID) error
+}, store *workflowstore.Store) *Service {
+	if s == nil {
+		return nil
+	}
+	s.mutationPermit = permit
+	s.workflowExecution = execution
+	s.workflowStore = store
 	return s
 }
 
@@ -242,6 +313,11 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectUpdateResponse{}, err
+	}
+	defer lease.Release()
 	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
@@ -284,93 +360,6 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	}, nil
 }
 
-func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
-	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if err := s.metadata.SetProjectDefaultWorkspace(ctx, req.ProjectID, req.WorkspaceID); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
-}
-
-func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
-	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	sessionIDs, err := s.metadata.ListWorkspaceSessionIDs(ctx, req.WorkspaceID)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	preflightBlockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if len(preflightBlockers) == 0 {
-		release, err := s.blockSessionStarts(ctx, sessionIDs)
-		if err != nil {
-			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-		}
-		defer release()
-		preflightBlockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil {
-			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-		}
-	}
-	var runtimeBlocker metadata.WorkspaceUnlinkRuntimeBlocker
-	if len(preflightBlockers) == 0 {
-		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
-			release, err := s.blockSessionStarts(ctx, sessionIDs)
-			if err != nil {
-				return nil, nil, err
-			}
-			blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
-			if err != nil {
-				release()
-				return nil, nil, err
-			}
-			return blockers, release, nil
-		}
-	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, preflightBlockers, runtimeBlocker)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	resp := serverapi.ProjectWorkspaceUnlinkResponse{
-		ProjectID:   strings.TrimSpace(req.ProjectID),
-		WorkspaceID: strings.TrimSpace(req.WorkspaceID),
-		Blockers:    blockers,
-		Unlinked:    len(blockers) == 0,
-	}
-	if !resp.Unlinked {
-		return resp, nil
-	}
-	projects, err := s.metadata.ListProjectHomeSummaries(ctx, req.ProjectID, 1, 0)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if len(projects) > 0 {
-		resp.Project = &projects[0]
-	}
-	return resp, nil
-}
-
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
@@ -382,48 +371,45 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	unlock := lockProjectDelete(projectID)
-	defer unlock()
+	lease, err := s.acquireProjectMutationLease(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	defer lease.Release()
+	if s.mutationPermit == nil || s.workflowExecution == nil {
+		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
+	}
 
-	if _, err := s.projectHomeSummary(ctx, projectID); err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
+	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+		return withRuntimeBlockers(ctx, sessionIDs, s.projectActiveSessionBlockers, s.blockSessionStarts)
 	}
-	sessionIDs, err := s.metadata.ListProjectSessionIDs(ctx, projectID)
-	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
-	preflightBlockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
-	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
-	if len(preflightBlockers) == 0 {
-		release, err := s.blockSessionStarts(ctx, sessionIDs)
+	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
+		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
 		if err != nil {
-			return serverapi.ProjectDeleteResponse{}, err
+			return nil, err
 		}
-		defer release()
-		preflightBlockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
-		if err != nil {
-			return serverapi.ProjectDeleteResponse{}, err
-		}
-	}
-	var runtimeBlocker metadata.ProjectDeleteRuntimeBlocker
-	if len(preflightBlockers) == 0 {
-		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-			release, err := s.blockSessionStarts(ctx, sessionIDs)
-			if err != nil {
-				return nil, nil, err
+		for _, taskID := range taskIDs {
+			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
+				return nil, err
 			}
-			blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
-			if err != nil {
-				release()
-				return nil, nil, err
-			}
-			return blockers, release, nil
 		}
+		if s.workflowStore == nil {
+			return nil, errors.New("workflow store is required for project deletion")
+		}
+		return s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
+			ProjectID:      projectID,
+			RuntimeBlocker: runtimeBlocker,
+			Artifacts: projectSessionDeleteArtifacts{
+				persistenceRoot: s.metadata.PersistenceRoot(),
+				projectID:       projectID,
+			},
+		})
 	}
-	blockers, err := s.metadata.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, runtimeBlocker, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
-		return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
+	var blockers []serverapi.ProjectDeleteBlocker
+	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		var runErr error
+		blockers, runErr = deleteProject(ctx)
+		return runErr
 	})
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
@@ -435,22 +421,32 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return func() {}, nil
 	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil || len(ids) == 0 {
-		return func() {}, err
+	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
+}
+
+func withRuntimeBlockers[T any](
+	ctx context.Context,
+	sessionIDs []string,
+	check func(context.Context, []string) ([]T, error),
+	block func(context.Context, []string) (func(), error),
+) ([]T, func(), error) {
+	blockers, err := check(ctx, sessionIDs)
+	if err != nil || len(blockers) > 0 {
+		return blockers, nil, err
 	}
-	release, err := s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	release, err := block(ctx, sessionIDs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func() {
-		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
-		}
-	}, nil
+	blockers, err = check(ctx, sessionIDs)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return blockers, release, nil
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -478,90 +474,223 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.authority == nil {
+	if s == nil || s.runtimeGuard == nil {
 		return 0, nil
 	}
-	if err := context.Cause(ctx); err != nil {
-		return 0, err
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
+}
+
+type projectSessionDeleteArtifacts struct {
+	persistenceRoot string
+	projectID       string
+}
+
+func (a projectSessionDeleteArtifacts) Recover(state workflowstore.ProjectDeleteArtifactRecovery) (bool, error) {
+	sessionsRoot, tombstoneRoot, err := a.paths()
 	if err != nil {
-		return 0, err
+		return false, err
 	}
-	count := 0
-	for _, sessionID := range ids {
-		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID.String())
-		if err != nil {
-			return 0, err
-		}
-		if active {
-			count++
-		}
+	sessionsExists, err := pathExists(sessionsRoot)
+	if err != nil {
+		return false, err
 	}
-	return count, nil
+	tombstoneExists, err := pathExists(tombstoneRoot)
+	if err != nil {
+		return false, err
+	}
+	switch state {
+	case workflowstore.ProjectDeleteArtifactRecoveryProjectPresent:
+		if !tombstoneExists {
+			return false, nil
+		}
+		if sessionsExists {
+			return false, fmt.Errorf("project sessions root and delete tombstone both exist")
+		}
+		if err := os.Rename(tombstoneRoot, sessionsRoot); err != nil {
+			return false, fmt.Errorf("restore project sessions tombstone: %w", err)
+		}
+		return true, nil
+	case workflowstore.ProjectDeleteArtifactRecoveryProjectAbsent:
+		if !tombstoneExists {
+			return false, nil
+		}
+		if sessionsExists {
+			return false, fmt.Errorf("deleted project sessions root and delete tombstone both exist")
+		}
+		if err := os.RemoveAll(tombstoneRoot); err != nil {
+			return false, fmt.Errorf("finalize project sessions tombstone: %w", err)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown project delete artifact recovery state %d", state)
+	}
 }
 
-func lockProjectDelete(projectID string) func() {
-	// Artifact paths are persisted under projects/<projectID>/sessions and are DB-unique.
-	// A per-project lock serializes retries for the same tree without blocking disjoint projects.
-	projectDeleteLocks.mu.Lock()
-	lock := projectDeleteLocks.locks[projectID]
-	if lock == nil {
-		lock = &projectDeleteLock{}
-		projectDeleteLocks.locks[projectID] = lock
+func (a projectSessionDeleteArtifacts) Validate(artifact workflowstore.ProjectSessionArtifact) error {
+	if strings.TrimSpace(artifact.SessionID) == "" {
+		return errors.New("session artifact id is required")
 	}
-	lock.refs++
-	projectDeleteLocks.mu.Unlock()
-
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
-		projectDeleteLocks.mu.Lock()
-		lock.refs--
-		if lock.refs == 0 {
-			delete(projectDeleteLocks.locks, projectID)
-		}
-		projectDeleteLocks.mu.Unlock()
+	sessionsRoot, target, err := a.artifactPath(artifact.ArtifactRelpath)
+	if err != nil {
+		return err
 	}
+	if err := rejectSymlinkComponents(sessionsRoot, target); err != nil {
+		return fmt.Errorf("validate session artifact path %q: %w", artifact.ArtifactRelpath, err)
+	}
+	return nil
 }
 
-func deleteSessionArtifact(persistenceRoot string, projectID string, relpath string, remove bool) error {
+func (a projectSessionDeleteArtifacts) Stage() error {
+	sessionsRoot, tombstoneRoot, err := a.paths()
+	if err != nil {
+		return err
+	}
+	if exists, err := pathExists(tombstoneRoot); err != nil {
+		return err
+	} else if exists {
+		return errors.New("project sessions delete tombstone already exists")
+	}
+	exists, err := pathExists(sessionsRoot)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := os.Rename(sessionsRoot, tombstoneRoot); err != nil {
+		return fmt.Errorf("stage project sessions root: %w", err)
+	}
+	return nil
+}
+
+func (a projectSessionDeleteArtifacts) Restore() error {
+	sessionsRoot, tombstoneRoot, err := a.paths()
+	if err != nil {
+		return err
+	}
+	tombstoneExists, err := pathExists(tombstoneRoot)
+	if err != nil {
+		return err
+	}
+	if !tombstoneExists {
+		return nil
+	}
+	if sessionsExists, err := pathExists(sessionsRoot); err != nil {
+		return err
+	} else if sessionsExists {
+		return errors.New("project sessions root exists while restoring delete tombstone")
+	}
+	if err := os.Rename(tombstoneRoot, sessionsRoot); err != nil {
+		return fmt.Errorf("restore staged project sessions root: %w", err)
+	}
+	return nil
+}
+
+func (a projectSessionDeleteArtifacts) Finalize() error {
+	_, tombstoneRoot, err := a.paths()
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(tombstoneRoot); err != nil {
+		return fmt.Errorf("remove staged project sessions root: %w", err)
+	}
+	return nil
+}
+
+func (a projectSessionDeleteArtifacts) paths() (string, string, error) {
+	root, err := persistenceRootPath(a.persistenceRoot)
+	if err != nil {
+		return "", "", err
+	}
+	projectID := strings.TrimSpace(a.projectID)
+	if projectID == "" || filepath.Base(projectID) != projectID {
+		return "", "", fmt.Errorf("invalid project id %q", a.projectID)
+	}
+	sessionsRoot := filepath.Join(root, "projects", projectID, "sessions")
+	tombstoneRoot := sessionsRoot + ".deleting"
+	if err := rejectSymlinkComponents(root, sessionsRoot); err != nil {
+		return "", "", fmt.Errorf("validate project sessions root: %w", err)
+	}
+	if err := rejectSymlinkComponents(root, tombstoneRoot); err != nil {
+		return "", "", fmt.Errorf("validate project sessions tombstone: %w", err)
+	}
+	return sessionsRoot, tombstoneRoot, nil
+}
+
+func (a projectSessionDeleteArtifacts) artifactPath(relpath string) (string, string, error) {
 	cleanRelpath := filepath.Clean(strings.TrimSpace(relpath))
 	if cleanRelpath == "." || filepath.IsAbs(cleanRelpath) || cleanRelpath == ".." || strings.HasPrefix(cleanRelpath, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("invalid session artifact path %q", relpath)
+		return "", "", fmt.Errorf("invalid session artifact path %q", relpath)
 	}
+	sessionsRoot, _, err := a.paths()
+	if err != nil {
+		return "", "", err
+	}
+	root, err := persistenceRootPath(a.persistenceRoot)
+	if err != nil {
+		return "", "", err
+	}
+	target, err := filepath.Abs(filepath.Join(root, cleanRelpath))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve session artifact path: %w", err)
+	}
+	inside, err := filepath.Rel(sessionsRoot, target)
+	if err != nil {
+		return "", "", fmt.Errorf("validate session artifact path: %w", err)
+	}
+	if inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("session artifact path %q escapes project sessions root: %w", relpath, ErrSessionArtifactEscapesRoot)
+	}
+	return sessionsRoot, target, nil
+}
+
+func persistenceRootPath(persistenceRoot string) (string, error) {
 	root, err := filepath.Abs(filepath.Clean(persistenceRoot))
 	if err != nil {
-		return fmt.Errorf("resolve persistence root: %w", err)
+		return "", fmt.Errorf("resolve persistence root: %w", err)
 	}
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
-		return fmt.Errorf("resolve persistence root symlinks: %w", err)
+		return "", fmt.Errorf("resolve persistence root symlinks: %w", err)
 	}
-	projectRoot := filepath.Join(root, "projects", strings.TrimSpace(projectID), "sessions")
-	target, err := filepath.Abs(filepath.Join(root, cleanRelpath))
-	if err != nil {
-		return fmt.Errorf("resolve session artifact path: %w", err)
-	}
-	resolvedTarget, err := filepath.EvalSymlinks(target)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("resolve session artifact symlinks: %w", err)
-	}
+	return root, nil
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
 	if err == nil {
-		target = resolvedTarget
+		return true, nil
 	}
-	inside, err := filepath.Rel(projectRoot, target)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect project session artifact path %q: %w", path, err)
+}
+
+func rejectSymlinkComponents(root string, target string) error {
+	relative, err := filepath.Rel(root, target)
 	if err != nil {
-		return fmt.Errorf("validate session artifact path: %w", err)
+		return fmt.Errorf("resolve path containment: %w", err)
 	}
-	if inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("session artifact path %q escapes project sessions root: %w", relpath, ErrSessionArtifactEscapesRoot)
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ErrSessionArtifactEscapesRoot
 	}
-	if !remove {
-		return nil
-	}
-	if err := os.RemoveAll(target); err != nil {
-		return fmt.Errorf("delete session artifact %q: %w", relpath, err)
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect path component %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return ErrSessionArtifactEscapesRoot
+		}
 	}
 	return nil
 }
@@ -653,6 +782,11 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 	if err := s.requireProjectID(req.ProjectID); err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
 	}
+	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	defer lease.Release()
 	binding, err := s.metadata.AttachWorkspaceToProject(ctx, req.ProjectID, req.WorkspaceRoot)
 	if err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
@@ -667,7 +801,25 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 	if s == nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
 	}
-	binding, err := s.metadata.RebindWorkspace(ctx, req.OldWorkspaceRoot, req.NewWorkspaceRoot)
+	prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	if err := s.requireProjectID(prepared.ProjectID); err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	lease, err := s.acquireProjectMutationLease(ctx, prepared.ProjectID)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	defer lease.Release()
+	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		req.OldWorkspaceRoot,
+		req.NewWorkspaceRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
 	if err != nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, err
 	}
@@ -706,6 +858,17 @@ func (s *Service) requireProjectID(projectID string) error {
 		return fmt.Errorf("project %q not available", strings.TrimSpace(projectID))
 	}
 	return nil
+}
+
+func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*requestmemo.MutationLaneLease[string], error) {
+	if s == nil || s.projectMutations == nil {
+		return nil, errors.New("project mutation lanes are required")
+	}
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return nil, errors.New("project mutation requires a project id")
+	}
+	return s.projectMutations.Acquire(ctx, trimmedProjectID)
 }
 
 func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {

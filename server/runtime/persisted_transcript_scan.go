@@ -48,11 +48,11 @@ func NewPersistedTranscriptScan(req PersistedTranscriptScanRequest) *PersistedTr
 	}
 }
 
-func (s *PersistedTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
+func (s *PersistedTranscriptScan) ApplyPersistedEvent(record session.EventRecord) error {
 	if s == nil {
 		return nil
 	}
-	return s.scan.ApplyPersistedEvent(evt)
+	return s.scan.ApplyPersistedEvent(record)
 }
 
 func (s *PersistedTranscriptScan) TotalEntries() int {
@@ -106,9 +106,21 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
 	copyEntry.RollbackTargetID = textutil.Pointer(entry.RollbackTargetID)
+	copyEntry.DurationMs = textutil.Pointer(entry.DurationMs)
+	copyEntry.CompactionNumber = textutil.Pointer(entry.CompactionNumber)
 	copyEntry.BackgroundExitCode = textutil.Pointer(entry.BackgroundExitCode)
 	copyEntry.WorktreeContext = session.CloneWorktreeContext(entry.WorktreeContext)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
+	copyEntry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
+	if entry.ReviewerFeedback != nil {
+		feedback := *entry.ReviewerFeedback
+		feedback.Suggestions = append([]string(nil), entry.ReviewerFeedback.Suggestions...)
+		copyEntry.ReviewerFeedback = &feedback
+	}
+	if entry.ReviewerError != nil {
+		reviewerError := *entry.ReviewerError
+		copyEntry.ReviewerError = &reviewerError
+	}
 	return copyEntry
 }
 
@@ -151,8 +163,9 @@ func persistedTranscriptToolCallMeta(call llm.ToolCall) *transcript.ToolCallMeta
 		return meta
 	}
 	input := call.Input
-	if call.Custom && strings.TrimSpace(call.CustomInput) != "" {
-		input = normalizeRuntimeToolInput(call.CustomInput)
+	if call.Custom && call.CustomInput != nil &&
+		strings.TrimSpace(*call.CustomInput) != "" {
+		input = normalizeRuntimeToolInput(*call.CustomInput)
 	}
 	built := tools.BuildCallTranscriptMeta(call.Name, tools.ToolCallContext{
 		DefaultShellPath: currentTranscriptDefaultShellPath(),

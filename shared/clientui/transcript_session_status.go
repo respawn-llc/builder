@@ -16,6 +16,7 @@ type TranscriptSessionStatus struct {
 	FastModeEnabled           bool
 	ThinkingLevel             string
 	CompactionMode            string
+	CompactionCount           int
 	PreviousSessionID         *runtimeids.SessionID
 	ParentAgentSessionID      *runtimeids.SessionID
 	NavigationTargetSessionID *runtimeids.SessionID
@@ -23,10 +24,8 @@ type TranscriptSessionStatus struct {
 }
 
 type TranscriptWorkflowSession struct {
-	Active     bool
-	RunID      string
 	TaskID     string
-	WorkflowID string
+	WorkflowID runtimeids.WorkflowID
 }
 
 func (s TranscriptSessionStatus) Validate() error {
@@ -58,13 +57,10 @@ func (s TranscriptSessionStatus) Validate() error {
 }
 
 func (s TranscriptWorkflowSession) Validate() error {
-	if strings.TrimSpace(s.RunID) == "" {
-		return fmt.Errorf("workflow session run id is required")
-	}
 	if strings.TrimSpace(s.TaskID) == "" {
 		return fmt.Errorf("workflow session task id is required")
 	}
-	if strings.TrimSpace(s.WorkflowID) == "" {
+	if s.WorkflowID.IsZero() {
 		return fmt.Errorf("workflow session workflow id is required")
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -12,6 +13,8 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -20,7 +23,6 @@ const (
 	projectionRunID        = "10000000-0000-4000-8000-000000000002"
 	projectionStepID       = "10000000-0000-4000-8000-000000000003"
 	projectionParentID     = "10000000-0000-4000-8000-000000000006"
-	projectionWorkflowRun  = "10000000-0000-4000-8000-000000000007"
 	projectionWorkflowTask = "10000000-0000-4000-8000-000000000008"
 	projectionWorkflowID   = "10000000-0000-4000-8000-000000000009"
 )
@@ -33,6 +35,16 @@ func (projectionFastClient) Generate(context.Context, llm.Request) (llm.Response
 
 func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
+}
+
+type projectionUnavailableFastClient struct{}
+
+func (projectionUnavailableFastClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("not implemented")
+}
+
+func (projectionUnavailableFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "azure-openai", SupportsResponsesAPI: true}, nil
 }
 
 type projectionBlockingClient struct {
@@ -54,7 +66,7 @@ func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request) 
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	case <-c.release:
-		return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}, nil
+		return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}}, nil
 	}
 }
 
@@ -68,7 +80,7 @@ type projectionPreciseClient struct {
 
 func (c projectionPreciseClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},
 	}, nil
 }
@@ -94,7 +106,11 @@ func newRuntimeViewEngine(t *testing.T, store *session.Store, client llm.Client,
 	if len(cfg) > 0 {
 		engineConfig = cfg[0]
 	}
-	engine, err := runtime.New(store, client, tools.NewRegistry(), engineConfig)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	engine, err := runtime.New(store, eventLog, client, tools.NewRegistry(), engineConfig)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -150,9 +166,40 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 	close(client.release)
 
-	status := StatusFromRuntime(engine)
+	status, err := StatusFromRuntime(engine)
+	if err != nil {
+		t.Fatalf("project runtime status: %v", err)
+	}
 	if status.Goal == nil || !status.Goal.Suspended {
 		t.Fatalf("goal status = %+v, want suspended goal", status.Goal)
+	}
+}
+
+func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T) {
+	eng := newRuntimeViewEngine(
+		t,
+		newRuntimeViewStore(t),
+		projectionUnavailableFastClient{},
+		runtime.Config{
+			Model:          "gpt-5",
+			FastModeState:  runtime.NewFastModeState(true),
+			ThinkingLevel:  "medium",
+			CompactionMode: "auto",
+		},
+	)
+
+	status, err := TranscriptSessionStatusFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("TranscriptSessionStatusFromRuntime: %v", err)
+	}
+	if status.FastModeAvailable {
+		t.Fatal("expected transcript status to report fast mode unavailable")
+	}
+	if status.FastModeEnabled {
+		t.Fatal("expected transcript status to disable unavailable fast mode")
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("transcript session status: %v", err)
 	}
 }
 
@@ -162,7 +209,25 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if err := store.SetName("Session Name"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if _, _, err := store.AppendEvent(projectionStepID, "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("set continuation context: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	finalAnswer := "final answer"
+	finalPhase := session.MessagePhaseFinal
+	stepID := projectionStepID
+	if _, _, err := eventLog.AppendRecord(
+		&stepID,
+		session.MessageRecord{
+			Role:    session.MessageRoleAssistant,
+			Content: &finalAnswer,
+			Phase:   &finalPhase,
+		},
+	); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
@@ -182,6 +247,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
+	if view.Session.AgentRole == nil || *view.Session.AgentRole != role {
+		t.Fatalf("session agent role = %v, want %q", view.Session.AgentRole, role)
+	}
 	if view.Status.ParentAgentSessionID == nil || view.Status.ParentAgentSessionID.String() != parentSessionID ||
 		view.Status.NavigationTargetSessionID == nil || view.Status.NavigationTargetSessionID.String() != parentSessionID ||
 		view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
@@ -198,49 +266,50 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	}
 }
 
+func TestSessionViewFromRuntimeOmitsDefaultAgentRole(t *testing.T) {
+	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionFastClient{})
+
+	view, err := SessionViewFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("project runtime session: %v", err)
+	}
+	if view.AgentRole != nil {
+		t.Fatalf("session agent role = %v, want nil for default agent", view.AgentRole)
+	}
+}
+
 func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.RuntimeMainView {
 	t.Helper()
 	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
 	activity := clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
-	return MainViewFromRuntimeActivity(eng, version, activity)
+	view, err := MainViewFromRuntimeActivity(eng, version, activity)
+	if err != nil {
+		t.Fatalf("project runtime main view: %v", err)
+	}
+	return view
 }
 
 func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
-		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID(projectionWorkflowRun)},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
 			Instructions: workflowruntime.TaskInstructions{
-				TaskID:     projectionWorkflowTask,
-				WorkflowID: projectionWorkflowID,
+				CurrentNode: workflow.CurrentNodeReference{
+					TaskID: workflow.TaskID(projectionWorkflowTask),
+					NodeID: workflow.NodeID("10000000-0000-4000-8000-000000000007"),
+				},
+				WorkflowID: testsetup.WorkflowID(t, "runtimeview-projection"),
 			},
 		},
 	})
 	view := mainViewFromRuntimeForTest(t, eng)
-	if !view.Status.WorkflowActive || view.Status.WorkflowSession == nil {
+	if view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
 	}
-	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
-	}
-}
-
-func TestMainViewFromReopenedWorkflowSessionIncludesDurableWorkflowStatus(t *testing.T) {
-	store := newRuntimeViewStore(t)
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: projectionWorkflowRun, TaskID: projectionWorkflowTask, WorkflowID: projectionWorkflowID}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5"})
-	view := mainViewFromRuntimeForTest(t, eng)
-	if view.Status.WorkflowActive {
-		t.Fatalf("workflow active = true, want false for reopened non-workflow runtime")
-	}
-	if view.Status.WorkflowSession == nil {
-		t.Fatalf("workflow session = nil, status=%+v", view.Status)
-	}
-	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
+	if view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != testsetup.WorkflowID(t, "runtimeview-projection") {
+		t.Fatalf("workflow session = %+v, want task/workflow ids", view.Status.WorkflowSession)
 	}
 }
 
@@ -257,7 +326,10 @@ func TestStatusFromRuntimeUsesFreshPreciseCurrentTokens(t *testing.T) {
 	if _, err := eng.ShouldCompactBeforeUserMessage(context.Background(), "follow-up"); err != nil {
 		t.Fatalf("warm exact count: %v", err)
 	}
-	view := StatusFromRuntime(eng)
+	view, err := StatusFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("project runtime status: %v", err)
+	}
 	if view.ContextUsage.UsedTokens != 180 {
 		t.Fatalf("projected used tokens=%d, want exact 180", view.ContextUsage.UsedTokens)
 	}

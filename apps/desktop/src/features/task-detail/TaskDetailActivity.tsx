@@ -1,11 +1,10 @@
 import { Bot, Save, Trash2, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskComment } from "@/api";
+import type { ActivityItem, TaskComment } from "@/api";
 import { errorMessage } from "@/api";
-import { formatRelativeTime } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
-import { Button, homeListCardMaxWidthClassName, IslandSurface, MarkdownText } from "@/ui";
+import { formatRelativeTime, useStatusController, useTextFieldSubmitShortcut } from "@/app-facade";
+import { Button, homeListCardMaxWidthClassName, IslandSurface, StaticMarkdown } from "@/ui";
 import { cx, fieldIslandInputClassName } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -30,6 +29,7 @@ export function CommentComposer({
   const pending =
     mutations.addComment.isPending || mutations.replaceComment.isPending || mutations.deleteComment.isPending;
   const interactionDisabled = disabled || pending;
+  const canSubmit = !interactionDisabled && commentBody.trim().length > 0;
 
   async function submit(): Promise<void> {
     if (interactionDisabled || commentBody.trim().length === 0) {
@@ -52,6 +52,13 @@ export function CommentComposer({
       });
     }
   }
+  const submitShortcut = useTextFieldSubmitShortcut({
+    action: () => {
+      void submit();
+    },
+    available: canSubmit,
+    kind: "direct",
+  });
 
   return (
     <section className="grid gap-[var(--space-2)]">
@@ -74,15 +81,17 @@ export function CommentComposer({
             }
             onEditingChange({ id: editing.id, body: event.target.value });
           }}
+          onKeyDown={submitShortcut}
           placeholder={editing === null ? `${t("task.addComment")}...` : `${t("task.editComment")}...`}
           value={commentBody}
         />
         <Button
           aria-label={editing === null ? t("task.submitComment") : t("task.saveComment")}
-          className="relative z-10 col-start-1 row-start-1 grid h-9 w-9 place-items-center self-end justify-self-end rounded-full !p-0"
+          className="relative z-10 col-start-1 row-start-1 self-end justify-self-end"
           data-testid="task-comment-save"
-          disabled={interactionDisabled || commentBody.trim().length === 0}
+          disabled={!canSubmit}
           onClick={() => void submit()}
+          size="icon"
           style={{ marginBottom: "var(--space-2)", marginRight: "var(--space-2)" }}
           variant="primary"
         >
@@ -99,21 +108,21 @@ export function CommentRow({
   editing,
   mutations,
   onEdit,
-  openLink,
 }: Readonly<{
   comment: TaskComment;
   disabled: boolean;
   editing: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
   onEdit: (comment: TaskComment) => void;
-  openLink: (url: string) => void;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const pending =
     mutations.addComment.isPending || mutations.replaceComment.isPending || mutations.deleteComment.isPending;
   const interactionDisabled = disabled || pending;
-  const authorLabel = comment.author.trim().length === 0 ? comment.author : comment.author.trim();
+  const authorLabel =
+    comment.authorID ??
+    t(comment.authorKind === "agent" ? "task.commentAuthorAgent" : "task.commentAuthorUser");
 
   async function deleteComment(commentID: string): Promise<void> {
     if (interactionDisabled) {
@@ -138,9 +147,9 @@ export function CommentRow({
       level={1}
     >
       <header className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-[var(--space-2)]">
-        <CommentAuthorIcon author={comment.author} />
+        <CommentAuthorIcon authorKind={comment.authorKind} />
         {editing ? (
-          <AuthorText author={comment.author} />
+          <AuthorText author={authorLabel} />
         ) : (
           <button
             aria-label={t("task.editCommentBy", {
@@ -154,7 +163,7 @@ export function CommentRow({
             }}
             type="button"
           >
-            <AuthorText author={comment.author} />
+            <AuthorText author={authorLabel} />
           </button>
         )}
         <time className="whitespace-nowrap text-sm text-[var(--color-muted)]">
@@ -171,31 +180,22 @@ export function CommentRow({
         </button>
       </header>
       <div className="min-w-0 text-[var(--color-on-island)]">
-        <MarkdownText onOpenLink={openLink} value={comment.body} />
+        <StaticMarkdown value={comment.body} />
       </div>
     </IslandSurface>
   );
 }
 
-function CommentAuthorIcon({ author }: Readonly<{ author: string }>) {
-  return commentAuthorKind(author) === "user" ? (
+function CommentAuthorIcon({ authorKind }: Readonly<{ authorKind: TaskComment["authorKind"] }>) {
+  return authorKind === "user" ? (
     <UserRound aria-hidden="true" size={16} strokeWidth={1.8} />
   ) : (
     <Bot aria-hidden="true" size={16} strokeWidth={1.8} />
   );
 }
 
-function commentAuthorKind(author: string): "agent" | "user" {
-  return author.trim().toLowerCase() === "user" ? "user" : "agent";
-}
-
 function AuthorText({ author }: Readonly<{ author: string }>) {
-  return (
-    <EllipsisText
-      className="font-bold capitalize text-[var(--color-on-island)]"
-      text={author.trim().length === 0 ? author : author.trim()}
-    />
-  );
+  return <EllipsisText className="font-bold text-[var(--color-on-island)]" text={author} />;
 }
 
 function EllipsisText({ className, text }: Readonly<{ className?: string | undefined; text: string }>) {
@@ -206,9 +206,9 @@ function EllipsisText({ className, text }: Readonly<{ className?: string | undef
   );
 }
 
-export function ActivityRow({
-  item,
-}: Readonly<{ item: { id: string; summary: string; occurredAt: number } }>) {
+export function ActivityRow({ item }: Readonly<{ item: ActivityItem }>) {
+  const { t } = useTranslation();
+  const summary = item.type === "comment" ? item.comment.body : t("task.sessionStarted");
   return (
     <IslandSurface
       as="article"
@@ -218,7 +218,7 @@ export function ActivityRow({
       )}
       level={1}
     >
-      <span>{item.summary}</span>
+      <span>{summary}</span>
       <time className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</time>
     </IslandSurface>
   );

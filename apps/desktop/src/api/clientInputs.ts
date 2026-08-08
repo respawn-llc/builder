@@ -4,8 +4,12 @@ import type {
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
+  TaskStatusKind,
   WorkflowValidationMode,
 } from "./models";
+import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
+import type { TaskLabelFilter } from "./workflowLabels";
+import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 
 export type TaskMutationInput = Readonly<{
@@ -14,11 +18,39 @@ export type TaskMutationInput = Readonly<{
   title: string;
   body: string;
   sourceWorkspaceID: string;
+  labelIDs: readonly string[];
+  dependencyIntent?: TaskDependencyCreateIntent | undefined;
+}>;
+
+export type TaskDependencyCreateIntent = Readonly<{
+  relatedTaskID: string;
+  newTaskRole: "blocker" | "blocked";
+}>;
+
+export type TaskListInput = Readonly<{
+  projectID: string;
+  workflowID?: string | undefined;
+  columnKeys?: readonly string[] | undefined;
+  statusKinds?: readonly TaskStatusKind[] | undefined;
+  attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
+  labelFilter: TaskLabelFilter;
+  sort?: readonly WorkflowTaskListSort[] | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
+}>;
+
+export type BoardNodeCardsInput = Readonly<{
+  projectID: string;
+  workflowID: string;
+  nodeID: string;
+  filter: BoardFilter;
+  sort?: BoardNodeCardsSort | undefined;
+  offset?: number | undefined;
 }>;
 
 export type WorkflowListInput = Readonly<{
-  pageSize?: number | undefined;
-  pageToken?: string | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
   query?: string | undefined;
 }>;
 
@@ -87,9 +119,22 @@ export type TaskEditInput = Readonly<{
 export type TaskMoveInput = Readonly<{
   taskID: string;
   targetNodeID: string;
-  outputValues?: Readonly<Record<string, string>>;
-  allowMissingEdge?: boolean;
-  autoApprove?: boolean;
+  transitionKey?: string | undefined;
+  values?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  setupOperationID?: SetupOperationID | undefined;
+  executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
+}>;
+
+export type TaskStartInput = Readonly<{
+  taskID: string;
+  setupOperationID?: SetupOperationID | undefined;
+  executionTarget?: WorkflowExecutionTargetSelection | undefined;
+  proceedDespiteDependencies?: boolean | undefined;
+}>;
+
+export type TaskResumeInput = Readonly<{
+  taskID: string;
   setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
 }>;
@@ -98,7 +143,6 @@ export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
   clientRequestID: string;
   taskID: string;
-  runID: string;
   askID: string;
   selectedOptionNumber: number | null;
   freeformAnswer: string;
@@ -108,7 +152,6 @@ export type ApprovalQuestionAnswerInput = Readonly<{
   kind: "approval";
   clientRequestID: string;
   taskID: string;
-  runID: string;
   askID: string;
   decision: ApprovalDecision;
   commentary: string;

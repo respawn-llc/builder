@@ -8,12 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func lifecycleSessionID(t *testing.T, fixture sessionRuntimeFixture) runtimeids.SessionID {
@@ -70,6 +72,29 @@ type lifecycleReminderQueueObserver struct {
 	once  sync.Once
 }
 
+type lifecycleStepProbe struct {
+	began chan runtime.StepLifecycleSnapshot
+	ended chan runtime.StepLifecycleSnapshot
+}
+
+func (p *lifecycleStepProbe) StepBegan(
+	_ context.Context,
+	_ AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	p.began <- snapshot
+	return nil
+}
+
+func (p *lifecycleStepProbe) StepEnded(
+	_ context.Context,
+	_ AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	p.ended <- snapshot
+	return nil
+}
+
 func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if snapshot.Meta.WorktreeReminder != nil {
 		o.once.Do(o.queue)
@@ -82,7 +107,7 @@ type lifecycleRequestCaptureClient chan llm.Request
 func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
 	*c <- request
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -95,6 +120,65 @@ func (c lifecycleRequestCaptureClient) await(t *testing.T) llm.Request {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for queued user work to reach the model")
 		return llm.Request{}
+	}
+}
+
+func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := &ownerlessRetirementLLMClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	probe := &lifecycleStepProbe{
+		began: make(chan runtime.StepLifecycleSnapshot, 1),
+		ended: make(chan runtime.StepLifecycleSnapshot, 1),
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		StepLifecycle:   probe,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
+			_, err := engine.SubmitUserMessage(ctx, "ownerless step")
+			return err
+		})
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ownerless runtime step")
+	}
+	select {
+	case snapshot := <-probe.began:
+		if snapshot.Transition != runtime.StepLifecycleTransitionBegan {
+			t.Fatalf("began snapshot transition = %q", snapshot.Transition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ownerless runtime step did not publish began lifecycle")
+	}
+
+	close(client.releaseFirst)
+	if err := <-done; err != nil {
+		t.Fatalf("ownerless runtime step: %v", err)
+	}
+	select {
+	case snapshot := <-probe.ended:
+		if snapshot.Transition != runtime.StepLifecycleTransitionEnded {
+			t.Fatalf("ended snapshot transition = %q", snapshot.Transition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ownerless runtime step did not publish ended lifecycle")
 	}
 }
 
@@ -128,8 +212,8 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *te
 	request := client.await(t)
 	for _, item := range request.Items {
 		if item.Type == llm.ResponseItemTypeMessage &&
-			item.Role == llm.RoleDeveloper &&
-			item.MessageType == llm.MessageTypeWorktreeMode &&
+			item.Role != nil && *item.Role == llm.RoleDeveloper &&
+			item.MessageType != nil && *item.MessageType == llm.MessageTypeWorktreeMode &&
 			item.WorktreeContext != nil &&
 			item.WorktreeContext.EffectiveCwd == worktreeRoot {
 			return
@@ -150,6 +234,18 @@ func (o *lifecyclePersistenceObserver) ObservePersistedStore(context.Context, se
 	return nil
 }
 
+type authorityStartBarrierLifecycle struct {
+	*testsetup.StartBarrier
+}
+
+func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, _ AgentResourceRetainer) error {
+	return l.ArriveAndWait(ctx)
+}
+
+func (l *authorityStartBarrierLifecycle) ResourceDraining(context.Context, AgentResourceDescriptor) error {
+	return nil
+}
+
 func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer session.PersistenceObserver, lifecycle AgentResourceLifecycle) *Authority {
 	t.Helper()
 	storeOptions := append(fixture.metadata.AuthoritativeSessionStoreOptions(), session.WithPersistenceObserver(observer))
@@ -164,6 +260,110 @@ func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer
 		}
 	})
 	return authority
+}
+
+func TestAuthorityTryBlockSessionStartsRejectsInFlightStart(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	lifecycle := &authorityStartBarrierLifecycle{
+		StartBarrier: testsetup.NewStartBarrier(),
+	}
+	authority := newLifecycleAuthority(t, fixture, &lifecyclePersistenceObserver{}, lifecycle)
+	t.Cleanup(lifecycle.Unblock)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	started := testsetup.Start(func() (ExecutionHandle, error) {
+		return authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+	})
+	select {
+	case <-lifecycle.Entered():
+	case result := <-started:
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
+	}
+
+	_, err := authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if !errors.Is(err, ErrSessionStartAdmissionBusy) {
+		t.Fatalf("try block session starts while admission is in flight = %v, want ErrSessionStartAdmissionBusy", err)
+	}
+
+	lifecycle.Unblock()
+	result := <-started
+	if result.Err != nil {
+		t.Fatalf("start agent execution: %v", result.Err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := result.Value.Wait(waitCtx); err != nil {
+		t.Fatalf("wait for agent execution: %v", err)
+	}
+}
+
+func TestAuthorityTryBlockSessionStartsLeavesUncontendedBatchMemberUnblocked(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	busySessionID := lifecycleSessionID(t, fixture)
+	uncontendedSessionID := runtimeids.NewSessionID()
+	lifecycle := &authorityStartBarrierLifecycle{
+		StartBarrier: testsetup.NewStartBarrier(),
+	}
+	authority := newLifecycleAuthority(t, fixture, &lifecyclePersistenceObserver{}, lifecycle)
+	t.Cleanup(lifecycle.Unblock)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	started := testsetup.Start(func() (ExecutionHandle, error) {
+		return authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, busySessionID),
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+	})
+	select {
+	case <-lifecycle.Entered():
+	case result := <-started:
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
+	}
+
+	_, err := authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{uncontendedSessionID, busySessionID},
+		SessionStartBlockMaintenance,
+	)
+	if !errors.Is(err, ErrSessionStartAdmissionBusy) {
+		t.Fatalf("try block batch with busy member = %v, want ErrSessionStartAdmissionBusy", err)
+	}
+	uncontendedRelease, err := authority.TryBlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{uncontendedSessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("try block uncontended batch member after rejected batch: %v", err)
+	}
+	if err := uncontendedRelease.Close(context.Background()); err != nil {
+		t.Fatalf("release uncontended session-start block: %v", err)
+	}
+
+	lifecycle.Unblock()
+	result := <-started
+	if result.Err != nil {
+		t.Fatalf("start agent execution: %v", result.Err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := result.Value.Wait(waitCtx); err != nil {
+		t.Fatalf("wait for agent execution: %v", err)
+	}
 }
 
 func TestAuthoritySyncExecutionTargetRecoversOrRetiresAfterPersistenceFailure(t *testing.T) {

@@ -3,16 +3,21 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
+
+const transcriptSubscriptionRetryDelay = 250 * time.Millisecond
 
 type ongoingTranscriptEventKind string
 
 const (
 	ongoingTranscriptEventMessage ongoingTranscriptEventKind = "message"
 	ongoingTranscriptEventLoss    ongoingTranscriptEventKind = "loss"
+	ongoingTranscriptEventFailure ongoingTranscriptEventKind = "failure"
 )
 
 type ongoingTranscriptEvent struct {
@@ -28,8 +33,15 @@ type ongoingTranscriptEventStream struct {
 }
 
 type sessionTranscriptSubscriber func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
+type sessionTranscriptReactivator func(context.Context) error
 
-func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) ongoingTranscriptEventStream {
+func startSessionTranscriptEvents(
+	ctx context.Context,
+	sessionID string,
+	subscribe sessionTranscriptSubscriber,
+	reactivate sessionTranscriptReactivator,
+	observers ...func(clientui.TranscriptMessage),
+) ongoingTranscriptEventStream {
 	out := make(chan ongoingTranscriptEvent, 64)
 	requests := make(chan struct{}, 1)
 	if subscribe == nil {
@@ -39,18 +51,63 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 	pollCtx, cancel := context.WithCancel(ctx)
 	go func() {
 		defer close(out)
+		connectionFailureReported := false
+		reactivationRequired := false
 		for {
-			sub, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe)
+			if reactivationRequired && reactivate != nil {
+				if err := reactivate(pollCtx); err != nil {
+					if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && pollCtx.Err() != nil {
+						return
+					}
+					if runtimeattach.IsRuntimeTimeoutError(err) {
+						if waitForTranscriptSubscriptionRetry(pollCtx) {
+							continue
+						}
+						return
+					}
+					if runtimeattach.IsRuntimeConnectionError(err) {
+						if !connectionFailureReported {
+							emitSessionTranscriptFailure(pollCtx, out, err)
+							connectionFailureReported = true
+						}
+						if waitForTranscriptSubscriptionRetry(pollCtx) {
+							continue
+						}
+						return
+					}
+					emitSessionTranscriptFailure(pollCtx, out, err)
+					return
+				}
+				reactivationRequired = false
+			}
+			sub, err := subscribeSessionTranscript(pollCtx, sessionID, subscribe)
 			if err != nil {
+				if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && pollCtx.Err() != nil {
+					return
+				}
+				if runtimeattach.IsRuntimeConnectionError(err) {
+					reactivationRequired = true
+					if !connectionFailureReported {
+						emitSessionTranscriptFailure(pollCtx, out, err)
+						connectionFailureReported = true
+					}
+					if waitForTranscriptSubscriptionRetry(pollCtx) {
+						continue
+					}
+					return
+				}
+				emitSessionTranscriptFailure(pollCtx, out, err)
 				return
 			}
-			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests)
+			connectionFailureReported = false
+			reopen, stop, lossErr := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests, observers...)
 			if stop {
 				return
 			}
 			if !reopen {
 				return
 			}
+			reactivationRequired = runtimeattach.IsRuntimeConnectionError(lossErr)
 		}
 	}()
 	requestRehydration := func() {
@@ -67,7 +124,13 @@ type transcriptNextResult struct {
 	err     error
 }
 
-func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.TranscriptSubscription, out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
+func pumpSessionTranscriptSubscription(
+	ctx context.Context,
+	sub serverapi.TranscriptSubscription,
+	out chan<- ongoingTranscriptEvent,
+	requests <-chan struct{},
+	observers ...func(clientui.TranscriptMessage),
+) (reopen bool, stop bool, lossErr error) {
 	subClosed := false
 	closeSub := func() {
 		if subClosed {
@@ -87,23 +150,29 @@ func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.Transc
 		select {
 		case <-ctx.Done():
 			cancel()
-			return false, true
+			return false, true, nil
 		case <-requests:
 			cancel()
-			return true, false
+			return true, false, nil
 		case result := <-next:
 			cancel()
 			if result.err != nil {
 				if errors.Is(result.err, context.Canceled) && ctx.Err() != nil {
-					return false, true
+					return false, true, nil
 				}
 				closeSub()
 				emitSessionTranscriptLoss(ctx, out, result.err)
-				return waitForTranscriptRehydrationRequest(ctx, requests)
+				reopen, stop := waitForTranscriptRehydrationRequest(ctx, requests)
+				return reopen, stop, result.err
+			}
+			for _, observe := range observers {
+				if observe != nil {
+					observe(result.message)
+				}
 			}
 			select {
 			case <-ctx.Done():
-				return false, true
+				return false, true, nil
 			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: result.message}:
 			}
 		}
@@ -119,19 +188,18 @@ func waitForTranscriptRehydrationRequest(ctx context.Context, requests <-chan st
 	}
 }
 
-func resubscribeSessionTranscript(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) (serverapi.TranscriptSubscription, error) {
-	for {
-		sub, err := subscribe(ctx, serverapi.TranscriptSubscribeRequest{SessionID: sessionID})
-		if err == nil {
-			return sub, nil
-		}
-		if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
-			return nil, err
-		}
-		emitWait := waitSubscriptionRetry(ctx)
-		if !emitWait {
-			return nil, ctx.Err()
-		}
+func subscribeSessionTranscript(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) (serverapi.TranscriptSubscription, error) {
+	return subscribe(ctx, serverapi.TranscriptSubscribeRequest{SessionID: sessionID})
+}
+
+func waitForTranscriptSubscriptionRetry(ctx context.Context) bool {
+	timer := time.NewTimer(transcriptSubscriptionRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -139,5 +207,12 @@ func emitSessionTranscriptLoss(ctx context.Context, out chan<- ongoingTranscript
 	select {
 	case <-ctx.Done():
 	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss, Err: err}:
+	}
+}
+
+func emitSessionTranscriptFailure(ctx context.Context, out chan<- ongoingTranscriptEvent, err error) {
+	select {
+	case <-ctx.Done():
+	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventFailure, Err: err}:
 	}
 }

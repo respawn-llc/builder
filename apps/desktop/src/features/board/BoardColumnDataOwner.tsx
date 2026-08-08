@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
-import { errorMessage } from "@/api";
-import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
+import { boardFiltersEqual, errorMessage, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useProjectLabelCatalog } from "@/shared/labels";
+import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
+import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useBoardNodeCards } from "./useBoardData";
-import { useObservedInterruptedRuns } from "./useObservedInterruptedRuns";
 
 export type BoardColumnUpdateCause = "hydration" | "pagination" | "domain";
 
@@ -38,29 +39,39 @@ export type BoardColumnDataView = Readonly<{
   onLoadMore: () => void;
   onLoadPrevious: () => void;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+}>;
+
+type BoardColumnDataOwnerBoard = Readonly<{
+  attachedWorkspaceCount: SelectedWorkflowBoard["attachedWorkspaceCount"];
+  defaultWorkspaceID: SelectedWorkflowBoard["defaultWorkspaceID"];
+  projectID: SelectedWorkflowBoard["projectID"];
+  selectedWorkflow: Pick<SelectedWorkflowBoard["selectedWorkflow"], "id">;
 }>;
 
 export function BoardColumnDataOwner({
   board,
   column,
-  onCardsLoadError,
   onDataViewChange,
   onDataViewRelease,
-  onInterruptedRunObserved,
   onReportColumnSnapshot,
 }: Readonly<{
-  board: SelectedWorkflowBoard;
+  board: BoardColumnDataOwnerBoard;
   column: BoardColumn;
-  onCardsLoadError: (error: unknown) => void;
   onDataViewChange: (view: BoardColumnDataView) => void;
   onDataViewRelease: () => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
+  const { logger } = useAppServices();
+  const labelCatalog = useProjectLabelCatalog();
+  const filterGeneration = useBoardFilterGeneration();
+  const stableOnDataViewChange = useStableCallback(onDataViewChange);
+  const stableOnDataViewRelease = useStableCallback(onDataViewRelease);
+  const stableOnReportColumnSnapshot = useStableCallback(onReportColumnSnapshot);
+  const activeFilterGeneration = filterGeneration.snapshot.active;
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
-  const hasHydratedRef = useRef(false);
   const paginationInFlightRef = useRef(false);
   const queryCards = useMemo(
     () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
@@ -76,9 +87,9 @@ export function BoardColumnDataOwner({
   const cardVMs = useMemo(
     () =>
       queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext))
+        .map((card) => toKanbanCardVM(card, workspaceContext, labelCatalog.data ?? null))
         .filter((card) => cardBelongsToColumn(column, card)),
-    [column, queryCards, workspaceContext],
+    [column, labelCatalog.data, queryCards, workspaceContext],
   );
   const {
     error,
@@ -92,22 +103,40 @@ export function BoardColumnDataOwner({
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
+    isPlaceholderData,
     isPending,
     refetch,
   } = cardsQuery;
-  const retryInitial = useCallback(() => {
+  const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
+  const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
+  const replacementDataRetained = cardsQuery.data !== undefined && isPlaceholderData;
+  const retryCards = useCallback(() => {
+    const current = filterGeneration.controller.getSnapshot();
+    if (
+      current.active.generation !== activeFilterGeneration.generation ||
+      current.active.retiring ||
+      current.desiredFilter !== null ||
+      !boardFiltersEqual(current.active.filter, activeFilterGeneration.filter)
+    ) {
+      return;
+    }
     void refetch();
-  }, [refetch]);
+  }, [
+    activeFilterGeneration.filter,
+    activeFilterGeneration.generation,
+    filterGeneration.controller,
+    refetch,
+  ]);
   const loadNewer = useCallback(() => {
-    if (hasPreviousPage && !isFetchingPreviousPage) {
+    if (paginationEnabled && hasPreviousPage && !isFetchingPreviousPage) {
       void fetchPreviousPage();
     }
-  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
+  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage, paginationEnabled]);
   const loadOlder = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
+    if (paginationEnabled && hasNextPage && !isFetchingNextPage) {
       void fetchNextPage();
     }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, paginationEnabled]);
   const initialBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
       cardsQuery.data === undefined
@@ -116,14 +145,14 @@ export function BoardColumnDataOwner({
               state: "error",
               message: errorMessage(error),
               retryLabel: t("app.retry"),
-              onRetry: retryInitial,
+              onRetry: retryCards,
             }
           : {
               state: "loading",
               label: t("states.loading"),
             }
         : undefined,
-    [cardsQuery.data, error, isError, retryInitial, t],
+    [cardsQuery.data, error, isError, retryCards, t],
   );
   const previousBoundary = useMemo(
     () =>
@@ -149,18 +178,31 @@ export function BoardColumnDataOwner({
       }),
     [error, isFetchNextPageError, isFetchingNextPage, loadOlder, t],
   );
+  const replacementBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
+    () =>
+      isError && replacementDataRetained && requestEnabled
+        ? {
+            state: "error",
+            message: t("board.cardsLoadRetryBody"),
+            retryLabel: t("app.retry"),
+            onRetry: retryCards,
+          }
+        : undefined,
+    [isError, replacementDataRetained, requestEnabled, retryCards, t],
+  );
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
       cards: cardVMs,
-      hasNextPage,
-      hasPreviousPage,
+      hasNextPage: paginationEnabled && hasNextPage,
+      hasPreviousPage: paginationEnabled && hasPreviousPage,
       initialBoundary,
-      isFetchingNextPage,
-      isFetchingPreviousPage,
-      nextBoundary,
+      isFetchingNextPage: paginationEnabled && isFetchingNextPage,
+      isFetchingPreviousPage: paginationEnabled && isFetchingPreviousPage,
+      nextBoundary: paginationEnabled ? nextBoundary : undefined,
       onLoadMore: loadOlder,
       onLoadPrevious: loadNewer,
-      previousBoundary,
+      previousBoundary: paginationEnabled ? previousBoundary : undefined,
+      replacementBoundary,
     }),
     [
       cardVMs,
@@ -172,19 +214,36 @@ export function BoardColumnDataOwner({
       loadOlder,
       loadNewer,
       nextBoundary,
+      paginationEnabled,
       previousBoundary,
+      replacementBoundary,
     ],
   );
 
   useLayoutEffect(() => {
-    onDataViewChange(dataView);
-  }, [dataView, onDataViewChange]);
+    stableOnDataViewChange(dataView);
+  }, [dataView, stableOnDataViewChange]);
 
   useEffect(() => {
-    if (isError) {
-      onCardsLoadError(error);
+    if (replacementBoundary?.state !== "error") {
+      return;
     }
-  }, [error, isError, onCardsLoadError]);
+    void logger.append("warn", "Board task-card replacement failed.", {
+      columnID: column.id,
+      error: errorMessage(error),
+      filterGeneration: activeFilterGeneration.generation.toString(),
+      projectID: board.projectID,
+      workflowID: board.selectedWorkflow.id,
+    });
+  }, [
+    activeFilterGeneration.generation,
+    board.projectID,
+    board.selectedWorkflow.id,
+    column.id,
+    error,
+    logger,
+    replacementBoundary,
+  ]);
 
   useEffect(() => {
     if (isFetchingPreviousPage || isFetchingNextPage || isFetchPreviousPageError || isFetchNextPageError) {
@@ -193,13 +252,10 @@ export function BoardColumnDataOwner({
   }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
-    const cause: BoardColumnUpdateCause = !hasHydratedRef.current
-      ? "hydration"
-      : paginationInFlightRef.current
-        ? "pagination"
-        : "domain";
+    const cause: BoardColumnUpdateCause =
+      paginationInFlightRef.current ? "pagination" : isPlaceholderData ? "hydration" : "domain";
     generationRef.current += 1;
-    onReportColumnSnapshot(column.id, {
+    stableOnReportColumnSnapshot(column.id, {
       cause,
       data: {
         cards: cardVMs,
@@ -210,9 +266,6 @@ export function BoardColumnDataOwner({
         taskCount: column.taskCount,
       },
     });
-    if (cardsQuery.data !== undefined) {
-      hasHydratedRef.current = true;
-    }
     if (!isFetchingPreviousPage && !isFetchingNextPage) {
       paginationInFlightRef.current = false;
     }
@@ -221,22 +274,22 @@ export function BoardColumnDataOwner({
     cardsQuery.data,
     column.id,
     column.taskCount,
+    isError,
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
     isPending,
-    onReportColumnSnapshot,
+    isPlaceholderData,
+    stableOnReportColumnSnapshot,
   ]);
 
-  useEffect(
-    () => () => {
-      onDataViewRelease();
-      onReportColumnSnapshot(column.id, { cause: "deactivation" });
-    },
-    [column.id, onDataViewRelease, onReportColumnSnapshot],
-  );
+  useEffect(() => {
+    return () => {
+      stableOnDataViewRelease();
+      stableOnReportColumnSnapshot(column.id, { cause: "deactivation" });
+    };
+  }, [column.id, stableOnDataViewRelease, stableOnReportColumnSnapshot]);
 
-  useObservedInterruptedRuns(cardVMs, onInterruptedRunObserved);
   return null;
 }
 

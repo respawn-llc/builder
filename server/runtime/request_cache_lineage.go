@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -34,13 +35,12 @@ type persistedCacheRequestObserved struct {
 }
 
 type persistedCacheResponseObserved struct {
-	DigestVersion        int                          `json:"digest_version,omitempty"`
-	CacheKey             string                       `json:"cache_key"`
-	Scope                transcript.CacheWarningScope `json:"scope,omitempty"`
-	ChunkCount           int                          `json:"chunk_count"`
-	TerminalHash         string                       `json:"terminal_hash"`
-	HasCachedInputTokens bool                         `json:"has_cached_input_tokens,omitempty"`
-	CachedInputTokens    int                          `json:"cached_input_tokens,omitempty"`
+	DigestVersion     int                          `json:"digest_version,omitempty"`
+	CacheKey          string                       `json:"cache_key"`
+	Scope             transcript.CacheWarningScope `json:"scope,omitempty"`
+	ChunkCount        int                          `json:"chunk_count"`
+	TerminalHash      string                       `json:"terminal_hash"`
+	CachedInputTokens *int                         `json:"cached_input_tokens,omitempty"`
 }
 
 type requestCacheLineage struct {
@@ -107,7 +107,10 @@ func (t *requestCacheTracker) Prepare(req llm.Request) (preparedCacheRequestObse
 		if strings.TrimSpace(string(previous.pendingCause)) != "" {
 			reason = previous.pendingCause
 		}
-		warning := transcript.CacheWarning{Scope: request.Scope, Reason: reason, CacheKey: cacheKey}
+		warning := transcript.CacheWarning{
+			Scope: request.Scope, Reason: reason,
+			CacheKey: textutil.Value(cacheKey),
+		}
 		observation.exactWarning = &warning
 	}
 	return observation, nil
@@ -143,10 +146,10 @@ func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObse
 	if cacheKey == "" {
 		return
 	}
-	hadReuse := response.HasCachedInputTokens && response.CachedInputTokens > 0
+	hadReuse := response.CachedInputTokens != nil && *response.CachedInputTokens > 0
 	cachedInputTokens := 0
-	if response.HasCachedInputTokens && response.CachedInputTokens > 0 {
-		cachedInputTokens = response.CachedInputTokens
+	if hadReuse {
+		cachedInputTokens = *response.CachedInputTokens
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -172,9 +175,11 @@ func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCache
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
-	events := make([]session.EventInput, 0, 1)
-	events = append(events, session.EventInput{Kind: sessionEventCacheRequestObserved, Payload: prepared.request})
-	if _, _, err := e.store.AppendTurnAtomic(stepID, events); err != nil {
+	record, err := sessionCacheRequestRecordFromRuntime(prepared.request)
+	if err != nil {
+		return fmt.Errorf("adapt cache request record: %w", err)
+	}
+	if _, _, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record); err != nil {
 		return err
 	}
 	return nil
@@ -192,34 +197,49 @@ func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCach
 		return nil
 	}
 	response := persistedCacheResponseObserved{
-		DigestVersion:        prepared.request.DigestVersion,
-		CacheKey:             prepared.request.CacheKey,
-		Scope:                prepared.request.Scope,
-		ChunkCount:           prepared.request.ChunkCount,
-		TerminalHash:         prepared.request.TerminalHash,
-		HasCachedInputTokens: usage.HasCachedInputTokens,
-		CachedInputTokens:    usage.CachedInputTokens,
+		DigestVersion:     prepared.request.DigestVersion,
+		CacheKey:          prepared.request.CacheKey,
+		Scope:             prepared.request.Scope,
+		ChunkCount:        prepared.request.ChunkCount,
+		TerminalHash:      prepared.request.TerminalHash,
+		CachedInputTokens: textutil.Pointer(usage.CachedInputTokens),
 	}
-	events := make([]session.EventInput, 0, 3)
+	records := make([]session.EventRecordPayload, 0, 2)
 	var warning *transcript.CacheWarning
 	if prepared.exactWarning != nil && e.cfg.CacheWarningMode != config.CacheWarningModeOff {
 		lostInputTokens := lostCachedInputTokens(prepared, usage)
 		if lostInputTokens > 0 {
 			warning = prepared.exactWarning
-			warning.LostInputTokens = lostInputTokens
-			events = append(events, session.EventInput{Kind: sessionEventCacheWarning, Payload: warning})
+			warning.LostInputTokens = textutil.Value(lostInputTokens)
+			record, recordErr := sessionCacheWarningRecordFromRuntime(*warning)
+			if recordErr != nil {
+				return fmt.Errorf("adapt cache warning record: %w", recordErr)
+			}
+			records = append(records, record)
 		}
 	} else if shouldWarnOnCacheReuseDrop(e.cfg.CacheWarningMode, prepared, usage) {
 		lostInputTokens := lostCachedInputTokens(prepared, usage)
 		if lostInputTokens > 0 {
-			warning = &transcript.CacheWarning{Scope: prepared.request.Scope, Reason: transcript.CacheWarningReasonReuseDropped, CacheKey: prepared.request.CacheKey, LostInputTokens: lostInputTokens}
-			events = append(events, session.EventInput{Kind: sessionEventCacheWarning, Payload: warning})
+			warning = &transcript.CacheWarning{
+				Scope: prepared.request.Scope, Reason: transcript.CacheWarningReasonReuseDropped,
+				CacheKey:        textutil.Value(prepared.request.CacheKey),
+				LostInputTokens: textutil.Value(lostInputTokens),
+			}
+			record, recordErr := sessionCacheWarningRecordFromRuntime(*warning)
+			if recordErr != nil {
+				return fmt.Errorf("adapt cache warning record: %w", recordErr)
+			}
+			records = append(records, record)
 		}
 	}
-	events = append(events, session.EventInput{Kind: sessionEventCacheResponseObserved, Payload: response})
-	_, err := e.steerWithCommitReceipt(
+	responseRecord, err := sessionCacheResponseRecordFromRuntime(response)
+	if err != nil {
+		return fmt.Errorf("adapt cache response record: %w", err)
+	}
+	records = append(records, responseRecord)
+	_, err = e.steerWithCommitReceipt(
 		stepID,
-		steerCacheObservationIntent(events, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
+		steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
 	)
 	return err
 }
@@ -231,7 +251,7 @@ func shouldWarnOnCacheReuseDrop(mode config.CacheWarningMode, prepared preparedC
 	if prepared.exactWarning != nil || !prepared.hasPreviousResponse || !prepared.previousHadReuse {
 		return false
 	}
-	return usage.HasCachedInputTokens && usage.CachedInputTokens <= 0
+	return usage.CachedInputTokens != nil && *usage.CachedInputTokens <= 0
 }
 
 func lostCachedInputTokens(prepared preparedCacheRequestObservation, usage llm.Usage) int {
@@ -240,32 +260,13 @@ func lostCachedInputTokens(prepared preparedCacheRequestObservation, usage llm.U
 		previous = 0
 	}
 	current := 0
-	if usage.HasCachedInputTokens && usage.CachedInputTokens > 0 {
-		current = usage.CachedInputTokens
+	if usage.CachedInputTokens != nil && *usage.CachedInputTokens > 0 {
+		current = *usage.CachedInputTokens
 	}
 	if previous <= current {
 		return 0
 	}
 	return previous - current
-}
-
-func (e *Engine) restorePromptCacheRequest(payload []byte) error {
-	var request persistedCacheRequestObserved
-	if err := json.Unmarshal(payload, &request); err != nil {
-		return fmt.Errorf("decode %s event: %w", sessionEventCacheRequestObserved, err)
-	}
-	return nil
-}
-
-func (e *Engine) restorePromptCacheResponse(payload []byte) error {
-	var response persistedCacheResponseObserved
-	if err := json.Unmarshal(payload, &response); err != nil {
-		return fmt.Errorf("decode %s event: %w", sessionEventCacheResponseObserved, err)
-	}
-	if e.modelRequests().RequestCache() != nil {
-		e.modelRequests().RequestCache().RecordResponse(response)
-	}
-	return nil
 }
 
 func copyCacheWarning(in *transcript.CacheWarning) *transcript.CacheWarning {
@@ -359,20 +360,20 @@ type promptCacheStructuredOutput struct {
 
 type promptCacheItem struct {
 	Type             llm.ResponseItemType `json:"type,omitempty"`
-	Role             llm.Role             `json:"role,omitempty"`
-	MessageType      llm.MessageType      `json:"message_type,omitempty"`
-	SourcePath       string               `json:"source_path,omitempty"`
-	Phase            llm.MessagePhase     `json:"phase,omitempty"`
-	ID               string               `json:"id,omitempty"`
-	Name             string               `json:"name,omitempty"`
-	CallID           string               `json:"call_id,omitempty"`
-	Content          string               `json:"content,omitempty"`
-	CompactContent   string               `json:"compact_content,omitempty"`
+	Role             *llm.Role            `json:"role,omitempty"`
+	MessageType      *llm.MessageType     `json:"message_type,omitempty"`
+	SourcePath       *string              `json:"source_path,omitempty"`
+	Phase            *llm.MessagePhase    `json:"phase,omitempty"`
+	ID               *string              `json:"id,omitempty"`
+	Name             *string              `json:"name,omitempty"`
+	CallID           *string              `json:"call_id,omitempty"`
+	Content          *string              `json:"content,omitempty"`
+	CompactContent   *string              `json:"compact_content,omitempty"`
 	ToolPresentation string               `json:"tool_presentation,omitempty"`
 	Arguments        string               `json:"arguments,omitempty"`
 	Output           string               `json:"output,omitempty"`
 	ReasoningSummary []llm.ReasoningEntry `json:"reasoning_summary,omitempty"`
-	EncryptedContent string               `json:"encrypted_content,omitempty"`
+	EncryptedContent *string              `json:"encrypted_content,omitempty"`
 	Raw              string               `json:"raw,omitempty"`
 }
 
@@ -394,20 +395,20 @@ func promptCacheTools(tools []llm.Tool) []promptCacheTool {
 func promptCacheItemFromResponse(item llm.ResponseItem) promptCacheItem {
 	return promptCacheItem{
 		Type:             item.Type,
-		Role:             item.Role,
-		MessageType:      item.MessageType,
-		SourcePath:       item.SourcePath,
-		Phase:            item.Phase,
-		ID:               item.ID,
-		Name:             item.Name,
-		CallID:           item.CallID,
-		Content:          item.Content,
-		CompactContent:   item.CompactContent,
+		Role:             textutil.Pointer(item.Role),
+		MessageType:      textutil.Pointer(item.MessageType),
+		SourcePath:       textutil.Pointer(item.SourcePath),
+		Phase:            textutil.Pointer(item.Phase),
+		ID:               textutil.Pointer(item.ID),
+		Name:             textutil.Pointer(item.Name),
+		CallID:           textutil.Pointer(item.CallID),
+		Content:          textutil.Pointer(item.Content),
+		CompactContent:   textutil.Pointer(item.CompactContent),
 		ToolPresentation: compactJSONRaw(item.ToolPresentation),
 		Arguments:        compactJSONRaw(item.Arguments),
 		Output:           compactJSONRaw(item.Output),
 		ReasoningSummary: append([]llm.ReasoningEntry(nil), item.ReasoningSummary...),
-		EncryptedContent: item.EncryptedContent,
+		EncryptedContent: textutil.Pointer(item.EncryptedContent),
 		Raw:              compactJSONRaw(item.Raw),
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"core/server/sessionview"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -79,14 +80,12 @@ func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageSessionIdentity,
-		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
-			SessionID:             sessionID,
-			ConversationFreshness: clientui.ConversationFreshnessEstablished,
-			ExecutionTarget:       &entered,
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptSessionIdentity{
+		SessionID:             sessionID,
+		ConversationFreshness: clientui.ConversationFreshnessEstablished,
+		ExecutionTarget:       &entered,
+	})),
+	); err != nil {
 		t.Fatalf("admit transcript session identity: %v", err)
 	}
 
@@ -97,6 +96,98 @@ func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
 	if request.WorkspaceRoot != entered.EffectiveWorkdir {
 		t.Fatalf("status workspace root = %q, want %q", request.WorkspaceRoot, entered.EffectiveWorkdir)
 	}
+}
+
+func TestTranscriptSessionIdentityReplacesConflictingConversationFreshnessCaches(t *testing.T) {
+	sessionID, err := runtimeids.ParseSessionID("session-1")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID: "session-1",
+		mainView: clientui.RuntimeMainView{
+			Session: clientui.RuntimeSessionView{
+				SessionID:             "session-1",
+				ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			},
+			Status: clientui.RuntimeStatus{
+				ConversationFreshness: clientui.ConversationFreshnessEstablished,
+			},
+		},
+		hasMainView: true,
+	}
+	_, err = runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(
+		clientui.TranscriptSessionIdentity{
+			SessionID:             sessionID,
+			ConversationFreshness: clientui.ConversationFreshnessFresh,
+		},
+	)))
+	if err != nil {
+		t.Fatalf("admit transcript session identity: %v", err)
+	}
+	if runtimeClient.mainView.Session.ConversationFreshness != clientui.ConversationFreshnessFresh {
+		t.Fatalf("session-view conversation freshness = %q, want fresh", runtimeClient.mainView.Session.ConversationFreshness)
+	}
+	if runtimeClient.mainView.Status.ConversationFreshness != clientui.ConversationFreshnessFresh {
+		t.Fatalf("status conversation freshness = %q, want fresh", runtimeClient.mainView.Status.ConversationFreshness)
+	}
+	if got := runtimeClient.Status().ConversationFreshness; got != clientui.ConversationFreshnessFresh {
+		t.Fatalf("cached conversation freshness = %q, want fresh", got)
+	}
+}
+
+func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
+	role := "worker"
+	runtimeClient := &runtimeControlFakeClient{
+		cachedMainView: clientui.RuntimeMainView{
+			Session: clientui.RuntimeSessionView{AgentRole: &role},
+		},
+		hasCachedMainView: true,
+	}
+	model := newProjectedTestUIModel(runtimeClient)
+
+	request := model.newStatusRequest(time.Now())
+	if request.AgentRole == nil || *request.AgentRole != role {
+		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
+	}
+}
+
+func TestStatusRefreshUsesCurrentSessionAgentRoleWhenRuntimeCacheIsCold(t *testing.T) {
+	role := "qa_tester"
+	sessionViews := stubSessionViewClient{
+		getSessionMainView: func(_ context.Context, request serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if request.SessionID != "session-1" {
+				t.Fatalf("current session view request = %+v, want session-1", request)
+			}
+			return serverapi.SessionMainViewResponse{
+				MainView: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{SessionID: "session-1", AgentRole: &role},
+				},
+			}, nil
+		},
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID: "session-1",
+		mainView:  clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}},
+	}
+	model := newProjectedTestUIModel(
+		runtimeClient,
+		WithUISessionID("session-1"),
+		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: t.TempDir(), SessionViews: sessionViews}),
+	)
+
+	messages := collectCmdMessages(t, model.statusRefreshCmd())
+	for _, message := range messages {
+		base, ok := message.(statusBaseRefreshDoneMsg)
+		if !ok {
+			continue
+		}
+		if base.snapshot.AgentRole == nil || *base.snapshot.AgentRole != role {
+			t.Fatalf("status agent role = %v, want %q", base.snapshot.AgentRole, role)
+		}
+		return
+	}
+	t.Fatal("status refresh did not emit a base snapshot")
 }
 
 func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
@@ -116,15 +207,21 @@ func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
 }
 
 func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testing.T) {
-	persistenceRoot := t.TempDir()
-	parentStore := createAuthoritativeAppSession(t, persistenceRoot, "/tmp/work-a")
-	if err := parentStore.SetName("incident-root"); err != nil {
-		t.Fatalf("set parent name: %v", err)
-	}
-	sessionViews := sessionview.NewService(testSessionViewSessionResolver{store: parentStore}, nil, nil, nil)
-	previousSessionID, err := runtimeids.ParseSessionID(parentStore.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse previous session id: %v", err)
+	previousSessionID := runtimeids.NewSessionID()
+	sessionViews := stubSessionViewClient{
+		getSessionMainView: func(_ context.Context, request serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if request.SessionID != previousSessionID.String() {
+				t.Fatalf("previous session view request = %+v, want %s", request, previousSessionID)
+			}
+			return serverapi.SessionMainViewResponse{
+				MainView: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{
+						SessionID:   previousSessionID.String(),
+						SessionName: "incident-root",
+					},
+				},
+			}, nil
+		},
 	}
 	collector := &stubProgressiveStatusCollector{base: uiStatusSnapshot{PreviousSessionID: &previousSessionID}}
 	model := newProjectedStaticUIModel(

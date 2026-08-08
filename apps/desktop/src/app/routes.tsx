@@ -1,6 +1,7 @@
 import { createRoute, createRouter, createRootRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
+import { workflowIDSchema } from "@/api";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
@@ -12,7 +13,7 @@ import {
 } from "./routeComponents";
 
 const optionalSearchString = z.string().catch("");
-const optionalWorkflowSelector = z.string().optional().catch(undefined);
+const optionalWorkflowSelector = workflowIDSchema.optional();
 
 const projectSearchSchema = z.object({
   workflowId: optionalWorkflowSelector,
@@ -47,6 +48,7 @@ const workflowLibraryRoute = createRoute({
 const workflowEditorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workflows/$workflowId/editor",
+  parseParams: (params) => ({ workflowId: workflowIDSchema.parse(params.workflowId) }),
   validateSearch: (search: Record<string, unknown>) => workflowEditorSearchSchema.parse(search),
   component: WorkflowEditorShellRoute,
 });

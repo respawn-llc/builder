@@ -10,39 +10,11 @@ import (
 	"testing"
 )
 
-// forbiddenFullTranscriptProjectors materialize an entire events.jsonl history
-// into a transcript snapshot. User-visible transcript must be served from
-// bounded reverse-read windows (ReadSegmentBackward/ReadRecentEvents/
-// ReadEventsBackwardUntil) projected through the engine's cursor page, never a
-// full byte-0->EOF scan. These projectors survive only for test assertions.
-var forbiddenFullTranscriptProjectors = map[string]struct{}{
-	"ChatSnapshot":           {},
-	"TranscriptPageSnapshot": {},
-}
-
-// walkEventsSelectorAllowlist enumerates the production files permitted to scan
-// the whole event log via Store.WalkEvents. Fork is the only production consumer
-// (the "cutoff at offset and copy" read the user exempted); sessiontest is a
-// test-support full-history collector that must never be imported by production.
-var walkEventsSelectorAllowlist = map[string]struct{}{
-	filepath.Join("server", "session", "fork.go"):                       {},
-	filepath.Join("server", "session", "sessiontest", "sessiontest.go"): {},
-}
-
-// fullEventLogReaderIdents are the package-private helpers that read the event
-// log front-to-back. They exist solely to back Store.WalkEvents (the fork
-// primitive); no other production code may call them.
-var fullEventLogReaderIdents = map[string]struct{}{
-	"walkEventsFile":       {},
-	"walkEventsFromReader": {},
-}
-
-// walkHelperIdentAllowlist enumerates the files that own the WalkEvents
-// primitive plumbing the helpers back.
-var walkHelperIdentAllowlist = map[string]struct{}{
-	filepath.Join("server", "session", "event_log.go"): {},
-	filepath.Join("server", "session", "store.go"):     {},
-}
+var forbiddenFullTranscriptProjectors = map[string]struct{}{"ChatSnapshot": {}, "TranscriptPageSnapshot": {}}
+var fullEventLogWalkSelectorAllowlist = map[string]struct{}{filepath.Join("server", "session", "fork.go"): {}, filepath.Join("server", "session", "sessiontest", "sessiontest.go"): {}}
+var fullEventLogWalkSelectors = map[string]struct{}{"WalkEvents": {}, "WalkRecords": {}}
+var fullEventLogReaderIdents = map[string]struct{}{"walkEventsFile": {}, "walkEventsFromReader": {}}
+var walkHelperIdentAllowlist = map[string]struct{}{filepath.Join("server", "session", "event_log.go"): {}, filepath.Join("server", "session", "store.go"): {}}
 
 func TestProductionTranscriptReadsStayBounded(t *testing.T) {
 	repoRoot := findRepoRoot(t)
@@ -69,7 +41,7 @@ func TestProductionTranscriptReadsStayBounded(t *testing.T) {
 		if relErr != nil {
 			relPath = path
 		}
-		_, walkSelectorAllowed := walkEventsSelectorAllowlist[relPath]
+		_, walkSelectorAllowed := fullEventLogWalkSelectorAllowlist[relPath]
 		_, walkHelperAllowed := walkHelperIdentAllowlist[relPath]
 		ast.Inspect(file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
@@ -89,8 +61,8 @@ func TestProductionTranscriptReadsStayBounded(t *testing.T) {
 			if _, forbidden := forbiddenFullTranscriptProjectors[selector.Sel.Name]; forbidden {
 				violations = append(violations, relPath+": production code must not call full-transcript projector "+selector.Sel.Name+" (serve bounded cursor pages instead)")
 			}
-			if selector.Sel.Name == "WalkEvents" && !walkSelectorAllowed {
-				violations = append(violations, relPath+": production code must not scan the full event log via WalkEvents for transcript reads (use ReadSegmentBackward/ReadRecentEvents/ReadEventsBackwardUntil)")
+			if _, forbidden := fullEventLogWalkSelectors[selector.Sel.Name]; forbidden && !walkSelectorAllowed {
+				violations = append(violations, relPath+": production code must not scan the full event log via "+selector.Sel.Name+" for transcript reads (use ReadSegmentBackward/ReadRecentEvents/ReadEventsBackwardUntil)")
 			}
 			return true
 		})

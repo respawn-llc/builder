@@ -7,197 +7,8 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
-	"core/shared/toolspec"
+	"core/shared/runtimeids"
 )
-
-func TestValidateDefaultWorkflowPasses(t *testing.T) {
-	def := validWorkflow()
-
-	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-		Context:      workflow.ValidationContextTaskCreation,
-		RoleResolver: testsetup.QuestionsEnabled("coder"),
-	})
-
-	if result.HasErrors() {
-		t.Fatalf("expected valid workflow, got errors: %+v", result.Errors)
-	}
-	if result.HasBlockingErrors() {
-		t.Fatalf("expected result.Valid()")
-	}
-}
-
-func TestCanonicalContextSourceNormalizesBoundaryValues(t *testing.T) {
-	selected := workflow.CanonicalContextSource(workflow.ContextSource{Kind: " selected_node ", NodeKey: " implementation "})
-	if selected.Kind != workflow.ContextSourceSelectedNode || selected.NodeKey != "implementation" {
-		t.Fatalf("selected context source = %+v, want trimmed selected node", selected)
-	}
-
-	immediate := workflow.CanonicalContextSource(workflow.ContextSource{Kind: " immediate_source ", NodeKey: " implementation "})
-	if immediate.Kind != workflow.ContextSourceImmediateSource || immediate.NodeKey != "" {
-		t.Fatalf("immediate context source = %+v, want normalized immediate source", immediate)
-	}
-}
-
-func TestValidateWorkflowAllowsDefaultAgentRole(t *testing.T) {
-	def := validWorkflow()
-	updateNodeAt(&def, 1, func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
-		fields.SubagentRole = workflow.DefaultAgentRole
-	})
-
-	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-		Context:      workflow.ValidationContextTaskCreation,
-		RoleResolver: testsetup.QuestionsEnabled("coder"),
-	})
-
-	if result.HasErrors() {
-		t.Fatalf("expected default role to be valid, got errors: %+v", result.Errors)
-	}
-}
-
-func TestAgentRoleRequirementReportsMissingRoleWithoutToolDiagnostic(t *testing.T) {
-	def := validWorkflow()
-	updateNodeAt(&def, 1, func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
-		fields.SubagentRole = "reviewer"
-	})
-
-	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-		Context:      workflow.ValidationContextExecution,
-		RoleResolver: testsetup.QuestionsEnabled("coder"),
-	})
-
-	var missing, disabled []workflow.ValidationError
-	for _, diagnostic := range result.Errors {
-		switch diagnostic.Code {
-		case workflow.CodeAgentRoleMissing:
-			missing = append(missing, diagnostic)
-		case workflow.CodeAgentRoleRequiredToolDisabled:
-			disabled = append(disabled, diagnostic)
-		}
-	}
-	if len(missing) != 1 || len(disabled) != 0 {
-		t.Fatalf("missing diagnostics = %+v, disabled diagnostics = %+v", missing, disabled)
-	}
-	if missing[0].AgentRole == nil || *missing[0].AgentRole != "reviewer" {
-		t.Fatalf("missing-role detail = %v, want reviewer", missing[0].AgentRole)
-	}
-	if missing[0].RequiredTool != nil {
-		t.Fatalf("missing role must not report a required tool: %v", missing[0].RequiredTool)
-	}
-}
-
-func TestAgentRoleRequirementReportsEveryUnsafeAgentIncludingUnreachableNodes(t *testing.T) {
-	def := validWorkflow()
-	def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_detached", "detached", "Detached", workflow.NodeFields{
-		SubagentRole:   "coder",
-		PromptTemplate: "Do detached work.",
-	}))
-	resolver := testsetup.QuestionsEnabled()
-	resolver["coder"] = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
-
-	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-		Context:      workflow.ValidationContextExecution,
-		RoleResolver: resolver,
-	})
-
-	var nodeIDs []workflow.NodeID
-	for _, diagnostic := range result.Errors {
-		if diagnostic.Code == workflow.CodeAgentRoleRequiredToolDisabled {
-			nodeIDs = append(nodeIDs, diagnostic.NodeID)
-			if diagnostic.AgentRole == nil || *diagnostic.AgentRole != "coder" {
-				t.Fatalf("agent role = %v, want coder", diagnostic.AgentRole)
-			}
-			if diagnostic.RequiredTool == nil || *diagnostic.RequiredTool != toolspec.ToolAskQuestion {
-				t.Fatalf("required tool = %v, want ask_question", diagnostic.RequiredTool)
-			}
-		}
-	}
-	if !slices.Equal(nodeIDs, []workflow.NodeID{"node_agent", "node_detached"}) {
-		t.Fatalf("unsafe agent node ids = %v, want graph traversal order", nodeIDs)
-	}
-	assertHasCodes(t, result, workflow.CodeNodeUnreachableFromStart)
-}
-
-func TestAgentRoleRequirementBlocksOnlyInitialExecutionContexts(t *testing.T) {
-	def := validWorkflow()
-	resolver := testsetup.QuestionsEnabled()
-	resolver["coder"] = map[toolspec.ID]bool{toolspec.ToolAskQuestion: false}
-
-	for _, test := range []struct {
-		context workflow.ValidationContext
-		blocks  bool
-	}{
-		{context: workflow.ValidationContextDraft, blocks: false},
-		{context: workflow.ValidationContextTaskCreation, blocks: true},
-		{context: workflow.ValidationContextExecution, blocks: true},
-	} {
-		t.Run(string(test.context), func(t *testing.T) {
-			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-				Context:      test.context,
-				RoleResolver: resolver,
-			})
-			var diagnostic *workflow.ValidationError
-			for index := range result.Errors {
-				if result.Errors[index].Code == workflow.CodeAgentRoleRequiredToolDisabled {
-					diagnostic = &result.Errors[index]
-					break
-				}
-			}
-			if diagnostic == nil || diagnostic.BlocksContext != test.blocks {
-				t.Fatalf("diagnostic = %+v, want blocks=%v", diagnostic, test.blocks)
-			}
-		})
-	}
-}
-
-func TestDraftValidationAllowsSemanticErrorsButBlocksHardStorageErrors(t *testing.T) {
-	def := validWorkflow()
-	def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_detached", "detached", "Detached", workflow.NodeFields{SubagentRole: "missing", PromptTemplate: "Do detached work."}))
-
-	draft := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft})
-
-	assertHasCodes(t, draft, workflow.CodeNodeUnreachableFromStart, workflow.CodeNonTerminalCannotReachTerminal, workflow.CodeAgentRoleMissing)
-	if draft.HasBlockingErrors() {
-		t.Fatalf("draft semantic errors should not block saving: %+v", draft.BlockingErrors())
-	}
-
-	updateNodeAt(&def, 0, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
-		*kind = workflow.NodeKindAgent
-		fields.SubagentRole = "coder"
-		fields.PromptTemplate = "Work."
-	})
-	updateNodeAt(&def, 1, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, _ *workflow.NodeFields) {
-		*kind = workflow.NodeKindStart
-	})
-	updateNodeAt(&def, 2, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, _ *workflow.NodeFields) {
-		*kind = workflow.NodeKindStart
-	})
-
-	hard := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft})
-
-	assertHasCodes(t, hard, workflow.CodeMultipleStartNodes)
-	if !hard.HasBlockingErrors() {
-		t.Fatalf("draft hard storage error should block saving")
-	}
-}
-
-func TestTaskCreationValidationRejectsInvalidGraphWithAccumulatedErrors(t *testing.T) {
-	def := validWorkflow()
-	def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_detached", "detached", "Detached", workflow.NodeFields{SubagentRole: "missing", PromptTemplate: "Do detached work."}))
-	def.TransitionGroups = nil
-	def.Edges = nil
-
-	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextTaskCreation})
-
-	assertHasCodes(t, result,
-		workflow.CodeInvalidStartOutgoingShape,
-		workflow.CodeNodeUnreachableFromStart,
-		workflow.CodeNonTerminalCannotReachTerminal,
-		workflow.CodeAgentRoleMissing,
-	)
-	if !result.HasBlockingErrors() {
-		t.Fatalf("task creation errors should block")
-	}
-}
 
 func TestStartNodeRules(t *testing.T) {
 	tests := []struct {
@@ -211,7 +22,6 @@ func TestStartNodeRules(t *testing.T) {
 				updateNodeAt(def, 0, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
 					*kind = workflow.NodeKindAgent
 					fields.SubagentRole = "coder"
-					fields.PromptTemplate = "Work."
 				})
 			},
 			code: workflow.CodeMissingStartNode,
@@ -264,7 +74,7 @@ func TestStartNodeRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			def := validWorkflow()
+			def := validWorkflow(t)
 			tt.edit(&def)
 
 			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
@@ -277,141 +87,51 @@ func TestStartNodeRules(t *testing.T) {
 	}
 }
 
-func TestNodeKindRules(t *testing.T) {
+func TestDefinitionRejectsMissingChildWorkflowIDs(t *testing.T) {
 	tests := []struct {
 		name string
 		edit func(*workflow.Definition)
-		code workflow.ValidationErrorCode
 	}{
 		{
-			name: "terminal outgoing edge",
+			name: "node",
 			edit: func(def *workflow.Definition) {
-				addTransitionForValidationTest(def, "group_done_again", "node_done", "again", "Again", "edge_done_again", "again", "node_agent")
-			},
-			code: workflow.CodeTerminalHasOutgoingEdge,
-		},
-		{
-			name: "join also terminal",
-			edit: func(def *workflow.Definition) {
-				updateNodeAt(def, 2, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, _ *workflow.NodeFields) {
-					*kind = workflow.NodeKindJoin
+				updateNodeAt(def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
+					identity.WorkflowID = runtimeids.WorkflowID{}
 				})
 			},
-			code: workflow.CodeInvalidJoinNode,
 		},
 		{
-			name: "join invalid outgoing shape",
+			name: "node group",
 			edit: func(def *workflow.Definition) {
-				updateNodeAt(def, 1, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
-					*kind = workflow.NodeKindJoin
-					fields.SubagentRole = ""
-					fields.PromptTemplate = ""
+				def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
+					WorkflowID:  def.ID,
+					ID:          "group-test",
+					Key:         "test",
+					DisplayName: "Test",
 				})
-				addTransitionForValidationTest(def, "group_join_alt", "node_agent", "alt", "Alternative", "edge_join_alt", "alt", "node_done")
+				def.NodeGroups[0].WorkflowID = runtimeids.WorkflowID{}
 			},
-			code: workflow.CodeInvalidJoinOutgoingShape,
+		},
+		{
+			name: "transition group",
+			edit: func(def *workflow.Definition) {
+				def.TransitionGroups[0].WorkflowID = runtimeids.WorkflowID{}
+			},
+		},
+		{
+			name: "edge",
+			edit: func(def *workflow.Definition) {
+				def.Edges[0].WorkflowID = runtimeids.WorkflowID{}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			def := validWorkflow()
+			def := validWorkflow(t)
 			tt.edit(&def)
 
-			result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-				Context:      workflow.ValidationContextTaskCreation,
-				RoleResolver: testsetup.QuestionsEnabled("coder"),
-			})
-
-			assertHasCodes(t, result, tt.code)
-		})
-	}
-
-}
-
-func TestGraphReachabilityAndCycles(t *testing.T) {
-	t.Run("detached island rejected", func(t *testing.T) {
-		def := validWorkflow()
-		def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_island", "island", "Island", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Island."}))
-
-		result := validateForTask(def)
-
-		assertHasCodes(t, result, workflow.CodeNodeUnreachableFromStart, workflow.CodeNonTerminalCannotReachTerminal)
-	})
-
-	t.Run("self loop allowed when terminal reachable", func(t *testing.T) {
-		def := validWorkflow()
-		addAgentLoop(&def, "node_agent", "self", "edge_self", "self")
-
-		result := validateForTask(def)
-
-		assertNoCode(t, result, workflow.CodeNonTerminalCannotReachTerminal)
-		assertNoCode(t, result, workflow.CodeInvalidFanoutJoinTopology)
-	})
-}
-
-func TestIdentifierAndReferenceRules(t *testing.T) {
-	tests := []struct {
-		name string
-		edit func(*workflow.Definition)
-		code workflow.ValidationErrorCode
-	}{
-		{name: "missing workflow id", edit: func(def *workflow.Definition) { def.ID = "" }, code: workflow.CodeMissingWorkflowID},
-		{name: "invalid workflow display name", edit: func(def *workflow.Definition) { def.DisplayName = " " }, code: workflow.CodeInvalidDisplayName},
-		{name: "missing node id", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, "", "missing_id", "Missing ID", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeMissingNodeID},
-		{name: "duplicate node id", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, workflow.NodeIDOf(def.Nodes[0]), "duplicate_id", "Duplicate ID", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeDuplicateNodeID},
-		{name: "missing node key", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_missing_key", "", "Missing Key", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeMissingNodeKey},
-		{name: "invalid node key", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_invalid_key", "Bad-Key", "Invalid Key", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeInvalidNodeKey},
-		{name: "duplicate node key", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_duplicate_key", workflow.NodeKey(def.Nodes[0]), "Duplicate Key", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeDuplicateNodeKey},
-		{name: "invalid node display name", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_invalid_display", "invalid_display", strings.Repeat("a", workflow.MaxDisplayNameChars+1), workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeInvalidDisplayName},
-		{name: "missing transition group id", edit: func(def *workflow.Definition) { def.TransitionGroups[0].ID = "" }, code: workflow.CodeMissingTransitionGroupID},
-		{name: "duplicate transition group id", edit: func(def *workflow.Definition) { def.TransitionGroups[1].ID = def.TransitionGroups[0].ID }, code: workflow.CodeDuplicateTransitionGroupID},
-		{name: "empty transition group", edit: func(def *workflow.Definition) { def.Edges = def.Edges[1:] }, code: workflow.CodeEmptyTransitionGroup},
-		{name: "missing transition id", edit: func(def *workflow.Definition) { def.TransitionGroups[1].TransitionID = "" }, code: workflow.CodeMissingTransitionID},
-		{name: "invalid transition id", edit: func(def *workflow.Definition) { def.TransitionGroups[1].TransitionID = "Done!" }, code: workflow.CodeInvalidTransitionID},
-		{name: "invalid transition group display name", edit: func(def *workflow.Definition) { def.TransitionGroups[1].DisplayName = "" }, code: workflow.CodeInvalidDisplayName},
-		{name: "duplicate transition id per source", edit: func(def *workflow.Definition) {
-			addTransitionForValidationTest(def, "group_second_done", "node_agent", "done", "Done Again", "edge_second_done", "second_done", "node_done")
-		}, code: workflow.CodeDuplicateTransitionID},
-		{name: "edge transition group missing", edit: func(def *workflow.Definition) { def.Edges[1].TransitionGroupID = "missing" }, code: workflow.CodeEdgeTransitionGroupMissing},
-		{name: "missing edge id", edit: func(def *workflow.Definition) { def.Edges[1].ID = "" }, code: workflow.CodeMissingEdgeID},
-		{name: "duplicate edge id", edit: func(def *workflow.Definition) { def.Edges[1].ID = def.Edges[0].ID }, code: workflow.CodeDuplicateEdgeID},
-		{name: "missing edge key", edit: func(def *workflow.Definition) { def.Edges[1].Key = "" }, code: workflow.CodeMissingEdgeKey},
-		{name: "invalid edge key", edit: func(def *workflow.Definition) { def.Edges[1].Key = "Done!" }, code: workflow.CodeInvalidEdgeKey},
-		{name: "duplicate edge key per group", edit: func(def *workflow.Definition) {
-			def.Edges = append(def.Edges, workflow.Edge{WorkflowID: def.ID, ID: "edge_start_dup", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_agent", ContextMode: workflow.ContextModeNewSession})
-		}, code: workflow.CodeDuplicateEdgeKey},
-		{name: "edge target missing", edit: func(def *workflow.Definition) {
-			def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_missing_source", SourceNodeID: "missing_source", TransitionID: "missing_source", DisplayName: "Missing Source"})
-			def.Edges = append(def.Edges, workflow.Edge{WorkflowID: def.ID, ID: "edge_missing_target", Key: "missing_target", TransitionGroupID: "group_missing_source", TargetNodeID: "missing_target", ContextMode: workflow.ContextModeNewSession})
-		}, code: workflow.CodeEdgeTargetMissing},
-		{name: "cross workflow node reference", edit: func(def *workflow.Definition) {
-			def.Nodes = append(def.Nodes, testAgentNode("other", "node_other_workflow", "other_workflow", "Other Workflow", workflow.NodeFields{SubagentRole: "coder"}))
-		}, code: workflow.CodeCrossWorkflowReference},
-		{name: "cross workflow group reference", edit: func(def *workflow.Definition) { def.TransitionGroups[1].WorkflowID = "other" }, code: workflow.CodeCrossWorkflowReference},
-		{name: "cross workflow edge reference", edit: func(def *workflow.Definition) { def.Edges[1].WorkflowID = "other" }, code: workflow.CodeCrossWorkflowReference},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			def := validWorkflow()
-			tt.edit(&def)
-
-			result := validateForTask(def)
-
-			assertHasCodes(t, result, tt.code)
+			assertHasCodes(t, workflow.ValidateDefinition(def, workflow.ValidationOptions{}), workflow.CodeMissingWorkflowID)
 		})
 	}
 }
@@ -429,14 +149,14 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 			edgeByIDForValidationTest(t, def, "edge_done").PromptTemplate = "No."
 		}, code: workflow.CodeTransitionPromptForbidden},
 		{name: "prompt forbidden into join target", edit: func(t *testing.T, def *workflow.Definition) {
-			*def = fanoutWorkflow()
+			*def = fanoutWorkflow(t)
 			edgeByIDForValidationTest(t, def, "edge_impl_a_join").PromptTemplate = "No."
 		}, code: workflow.CodeTransitionPromptForbidden},
 		{name: "start transition parameters", edit: func(t *testing.T, def *workflow.Definition) {
 			edgeByIDForValidationTest(t, def, "edge_start").Parameters = []workflow.Parameter{{Key: "task_context", Description: "Task context."}}
 		}, code: workflow.CodeInvalidParameter},
 		{name: "join outgoing transition parameters", edit: func(t *testing.T, def *workflow.Definition) {
-			*def = fanoutWorkflow()
+			*def = fanoutWorkflow(t)
 			edgeByIDForValidationTest(t, def, "edge_join_done").Parameters = []workflow.Parameter{{Key: "aggregate", Description: "Join aggregate."}}
 		}, code: workflow.CodeInvalidParameter},
 		{name: "invalid parameter key", edit: func(t *testing.T, def *workflow.Definition) {
@@ -495,8 +215,9 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			def := validWorkflow()
+			def := validWorkflow(t)
 			tt.edit(t, &def)
+			def = normalizeWorkflowEdgeShape(def)
 
 			result := validateForTask(def)
 
@@ -505,7 +226,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	}
 
 	t.Run("valid current parameter and template functions pass", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edge := edgeByIDForValidationTest(t, &def, "edge_implementation_review")
 		edge.PromptTemplate = `{{if .Params.summary}}{{printf "%s" .Params.summary}}{{end}}`
 
@@ -516,7 +237,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("draft validation allows empty agent transition prompt", func(t *testing.T) {
-		def := validWorkflow()
+		def := validWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_start").PromptTemplate = ""
 
 		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft, RoleResolver: testsetup.QuestionsEnabled("coder")})
@@ -525,7 +246,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("valid start prompt built-ins pass", func(t *testing.T) {
-		def := validWorkflow()
+		def := validWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_start").PromptTemplate = "Start {{.TaskId}} {{.TaskShortId}} {{.TaskTitle}} {{.TaskBody}} for {{.NodeId}} {{.NodeKey}} {{.NodeDisplayName}}."
 
 		result := validateForTask(def)
@@ -534,7 +255,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("valid commentary placeholder passes without declared parameter", func(t *testing.T) {
-		def := validWorkflow()
+		def := validWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_start").PromptTemplate = "Start after {{.Params.commentary}}."
 
 		result := validateForTask(def)
@@ -543,7 +264,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("unknown current parameter placeholder exposes structured details", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_implementation_review").PromptTemplate = "Use {{.Params.missing}}."
 
 		result := validateForTask(def)
@@ -560,7 +281,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("valid prior transition parameter placeholder passes", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.summary}}."
 
 		result := validateForTask(def)
@@ -568,8 +289,26 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
 	})
 
+	t.Run("valid prior transition commentary placeholder passes without declared parameter", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.commentary}}."
+
+		result := validateForTask(def)
+
+		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
+	})
+
+	t.Run("legacy prior node placeholder is unsupported even when the node is guaranteed prior", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Nodes.implementation.summary}}."
+
+		result := validateForTask(def)
+
+		assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+	})
+
 	t.Run("missing prior transition parameter exposes structured details", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.missing}}."
 
 		result := validateForTask(def)
@@ -586,7 +325,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("future transition parameter placeholder blocks task validation", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_accept_open_pr").Parameters = []workflow.Parameter{{Key: "summary", Description: "Approval summary."}}
 		edgeByIDForValidationTest(t, &def, "edge_implementation_review").PromptTemplate = "Review {{.Params.approved.summary}}."
 
@@ -595,18 +334,29 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
 	})
 
-	t.Run("ambiguous prior transition parameter placeholder blocks task validation", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+	t.Run("duplicate transition key across source nodes blocks task validation", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
 		transitionGroupByIDForValidationTest(t, &def, "group_start").TransitionID = "review"
-		edgeByIDForValidationTest(t, &def, "edge_join_accept").PromptTemplate = "Accept {{.Params.review.summary}}."
 
 		result := validateForTask(def)
 
-		assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
+	})
+
+	t.Run("duplicate transition key across source nodes blocks execution", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		transitionGroupByIDForValidationTest(t, &def, "group_start").TransitionID = "review"
+
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+			Context:      workflow.ValidationContextExecution,
+			RoleResolver: testsetup.QuestionsEnabled("coder"),
+		})
+
+		assertHasCodes(t, result, workflow.CodeDuplicateTransitionID)
 	})
 
 	t.Run("join source prompt validates current parameters against join aggregate", func(t *testing.T) {
-		def := joinParameterWorkflow()
+		def := joinParameterWorkflow(t)
 
 		result := validateForTask(def)
 
@@ -614,7 +364,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("prior transition parameter from join aggregate passes", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_code_review_join").Parameters = []workflow.Parameter{{Key: "code_review_findings", Description: "Code review findings."}}
 		edgeByIDForValidationTest(t, &def, "edge_qa_test_join").Parameters = []workflow.Parameter{{Key: "qa_findings", Description: "QA findings."}}
 		edgeByIDForValidationTest(t, &def, "edge_accept_open_pr").PromptTemplate = "Open PR {{.Params.accept.qa_findings}} and {{.Params.accept.code_review_findings}}."
@@ -625,7 +375,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("missing prior transition parameter from join aggregate blocks task validation", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_code_review_join").Parameters = []workflow.Parameter{{Key: "code_review_findings", Description: "Code review findings."}}
 		edgeByIDForValidationTest(t, &def, "edge_accept_open_pr").PromptTemplate = "Open PR {{.Params.accept.missing}}."
 
@@ -635,7 +385,7 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	})
 
 	t.Run("join aggregate collision from different producing transitions blocks task validation", func(t *testing.T) {
-		def := joinParameterWorkflow()
+		def := joinParameterWorkflow(t)
 		edgeByIDForValidationTest(t, &def, "edge_branch_b_join").Parameters = []workflow.Parameter{{Key: "plan", Description: "Implementation plan."}}
 
 		result := validateForTask(def)
@@ -645,70 +395,38 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 
 }
 
-func TestRuntimeValidationAcceptsExecutionFeatures(t *testing.T) {
-	tests := []struct {
-		name string
-		code workflow.ValidationErrorCode
-		def  func() workflow.Definition
-	}{
-		{
-			name: "approval gated edge",
-			code: workflow.CodeUnsupportedApprovalExecution,
-			def: func() workflow.Definition {
-				def := validWorkflow()
-				def.Edges[1].RequiresApproval = true
-				return def
-			},
-		},
-		{
-			name: "continue session",
-			code: workflow.CodeUnsupportedContextMode,
-			def: func() workflow.Definition {
-				def := validWorkflow()
-				def.Edges[1].ContextMode = workflow.ContextModeContinueSession
-				return def
-			},
-		},
-		{
-			name: "compact and continue session",
-			code: workflow.CodeUnsupportedContextMode,
-			def: func() workflow.Definition {
-				def := validWorkflow()
-				def.Edges[1].ContextMode = workflow.ContextModeCompactAndContinueSession
-				return def
-			},
-		},
-		{name: "join target", code: workflow.CodeUnsupportedJoinExecution, def: fanoutWorkflow},
-		{
-			name: "join binding",
-			code: workflow.CodeUnsupportedJoinBinding,
-			def: func() workflow.Definition {
-				def := validWorkflow()
-				def.Edges[0].InputBindings = []workflow.InputBinding{{Name: "joined", Source: workflow.BindingSourceJoin, Field: "aggregate"}}
-				return def
-			},
-		},
-	}
+func TestValidationRejectsPromptReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	edge := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	edge.Parameters = append(edge.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	edge.PromptTemplate = "Use {{.Params.role}}."
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			def := tt.def()
-			for _, result := range []workflow.ValidationResult{
-				workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContextDraft}),
-				validateForTask(def),
-			} {
-				assertNoCode(t, result, tt.code)
-				if result.HasBlockingErrors() {
-					t.Fatalf("supported runtime feature blocked validation: %+v", result.BlockingErrors())
-				}
-			}
-		})
-	}
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
+}
+
+func TestValidationRejectsPriorReferenceToHiddenSelectorParameter(t *testing.T) {
+	def := parameterWorkflow(t)
+	producer := edgeByIDForValidationTest(t, &def, "edge_plan_implement")
+	producer.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+	producer.Parameters = append(producer.Parameters, workflow.Parameter{
+		Key:     "role",
+		Purpose: workflow.ParameterPurposeTargetAssignee,
+	})
+	consumer := edgeByIDForValidationTest(t, &def, "edge_implement_done")
+	consumer.PromptTemplate = "Use {{.Params.implement.role}}."
+
+	result := validateForTask(def)
+	assertHasCodes(t, result, workflow.CodeInvalidTemplatePlaceholder)
 }
 
 func TestFanoutJoinTopology(t *testing.T) {
 	t.Run("valid fanout has one nearest common join", func(t *testing.T) {
-		def := fanoutWorkflow()
+		def := fanoutWorkflow(t)
 
 		result := validateForTask(def)
 
@@ -716,17 +434,17 @@ func TestFanoutJoinTopology(t *testing.T) {
 	})
 
 	t.Run("valid fanout allows farther common join after unique nearest join", func(t *testing.T) {
-		def := fanoutWorkflow()
+		def := fanoutWorkflow(t)
 		def.Nodes = append(def.Nodes,
-			testAgentNode(def.ID, "node_impl_a_late", "impl_a_late", "Implement A Late", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "A late."}),
-			testAgentNode(def.ID, "node_impl_b_late", "impl_b_late", "Implement B Late", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "B late."}),
+			testAgentNode(def.ID, "node_impl_a_late", "impl_a_late", "Implement A Late", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(def.ID, "node_impl_b_late", "impl_b_late", "Implement B Late", workflow.NodeFields{SubagentRole: "coder"}),
 			testJoinNode(def.ID, "node_join_late", "join_late", "Join Late"),
 		)
 		def.TransitionGroups = append(def.TransitionGroups,
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late", SourceNodeID: "node_impl_a", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late_join", SourceNodeID: "node_impl_a_late", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late", SourceNodeID: "node_impl_b", TransitionID: "join_late", DisplayName: "Join Late"},
-			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late_join", SourceNodeID: "node_impl_b_late", TransitionID: "join_late", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late", SourceNodeID: "node_impl_a", TransitionID: "join_late_a", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_late_join", SourceNodeID: "node_impl_a_late", TransitionID: "join_late_a_join", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late", SourceNodeID: "node_impl_b", TransitionID: "join_late_b", DisplayName: "Join Late"},
+			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_late_join", SourceNodeID: "node_impl_b_late", TransitionID: "join_late_b_join", DisplayName: "Join Late"},
 			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_join_late_done", SourceNodeID: "node_join_late", TransitionID: "done", DisplayName: "Done"},
 		)
 		def.Edges = append(def.Edges,
@@ -755,9 +473,9 @@ func TestFanoutJoinTopology(t *testing.T) {
 		{
 			name: "nested fanout before join",
 			edit: func(def *workflow.Definition) {
-				def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_extra", "extra", "Extra", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Extra."}))
+				def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_extra", "extra", "Extra", workflow.NodeFields{SubagentRole: "coder"}))
 				def.Edges[2].TargetNodeID = "node_extra"
-				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_extra_fanout", SourceNodeID: "node_extra", TransitionID: "split", DisplayName: "Split"})
+				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_extra_fanout", SourceNodeID: "node_extra", TransitionID: "split_extra", DisplayName: "Split"})
 				def.Edges = append(def.Edges,
 					workflow.Edge{WorkflowID: def.ID, ID: "edge_extra_a", Key: "extra_a", TransitionGroupID: "group_extra_fanout", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession},
 					workflow.Edge{WorkflowID: def.ID, ID: "edge_extra_b", Key: "extra_b", TransitionGroupID: "group_extra_fanout", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession},
@@ -775,8 +493,8 @@ func TestFanoutJoinTopology(t *testing.T) {
 			edit: func(def *workflow.Definition) {
 				def.Nodes = append(def.Nodes, testJoinNode(def.ID, "node_join2", "join2", "Join 2"))
 				def.TransitionGroups = append(def.TransitionGroups,
-					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_join2", SourceNodeID: "node_impl_a", TransitionID: "join2", DisplayName: "Join 2"},
-					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_join2", SourceNodeID: "node_impl_b", TransitionID: "join2", DisplayName: "Join 2"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_join2", SourceNodeID: "node_impl_a", TransitionID: "join2_a", DisplayName: "Join 2"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_b_join2", SourceNodeID: "node_impl_b", TransitionID: "join2_b", DisplayName: "Join 2"},
 					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_join2_done", SourceNodeID: "node_join2", TransitionID: "done", DisplayName: "Done"},
 				)
 				def.Edges = append(def.Edges,
@@ -790,7 +508,7 @@ func TestFanoutJoinTopology(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			def := fanoutWorkflow()
+			def := fanoutWorkflow(t)
 			tt.edit(&def)
 
 			result := validateForTask(def)
@@ -800,120 +518,18 @@ func TestFanoutJoinTopology(t *testing.T) {
 	}
 }
 
-func TestNodeGroupV1ParallelGroupValidation(t *testing.T) {
-	t.Run("valid group has branches join fanout and branch join edges", func(t *testing.T) {
-		def := fanoutWorkflow()
-		addV1NodeGroup(&def)
+func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
+	def := fanoutWorkflow(t)
+	edgeByIDForValidationTest(t, &def, "edge_join_done").RequiresApproval = true
 
-		result := validateForTask(def)
+	result := validateForTask(def)
 
-		assertNoCode(t, result, workflow.CodeInvalidNodeGroup)
-	})
-
-	tests := []struct {
-		name         string
-		draft        bool
-		blocksSaving bool
-		edit         func(*testing.T, *workflow.Definition)
-	}{
-		{
-			name:         "one branch missing group",
-			draft:        true,
-			blocksSaving: true,
-			edit: func(_ *testing.T, def *workflow.Definition) {
-				def.Nodes = setNodeGroup(def.Nodes, "node_impl_b", "")
-			},
-		},
-		{
-			name: "missing join",
-			edit: func(_ *testing.T, def *workflow.Definition) {
-				def.Nodes = setNodeGroup(def.Nodes, "node_join", "")
-			},
-		},
-		{
-			name: "missing fanout",
-			edit: func(_ *testing.T, def *workflow.Definition) {
-				def.Edges = def.Edges[:1]
-			},
-		},
-		{
-			name:  "start backed fanout",
-			draft: true,
-			edit: func(t *testing.T, def *workflow.Definition) {
-				transitionGroupByIDForValidationTest(t, def, "group_split").SourceNodeID = "node_start"
-			},
-		},
-		{
-			name:  "separate start backed branch transitions",
-			draft: true,
-			edit: func(t *testing.T, def *workflow.Definition) {
-				transitionGroupByIDForValidationTest(t, def, "group_split").SourceNodeID = "node_start"
-				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
-					WorkflowID: def.ID, ID: "group_start_impl_b", SourceNodeID: "node_start",
-					TransitionID: "split_b", DisplayName: "Split B",
-				})
-				edgeByIDForValidationTest(t, def, "edge_split_b").TransitionGroupID = "group_start_impl_b"
-			},
-		},
-		{
-			name:  "separate source branch transitions",
-			draft: true,
-			edit: func(t *testing.T, def *workflow.Definition) {
-				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
-					WorkflowID: def.ID, ID: "group_plan_impl_b", SourceNodeID: "node_plan",
-					TransitionID: "implement_b", DisplayName: "Implement B",
-				})
-				edgeByIDForValidationTest(t, def, "edge_split_b").TransitionGroupID = "group_plan_impl_b"
-			},
-		},
-		{
-			name:  "stale same source branch transition",
-			draft: true,
-			edit: func(_ *testing.T, def *workflow.Definition) {
-				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
-					WorkflowID: def.ID, ID: "group_plan_impl_b_stale", SourceNodeID: "node_plan",
-					TransitionID: "implement_b_stale", DisplayName: "Implement B",
-				})
-				def.Edges = append(def.Edges, workflow.Edge{
-					WorkflowID: def.ID, ID: "edge_plan_impl_b_stale", Key: "implement_b_stale",
-					TransitionGroupID: "group_plan_impl_b_stale", TargetNodeID: "node_impl_b",
-					ContextMode: workflow.ContextModeNewSession,
-				})
-			},
-		},
-		{
-			name:  "duplicate fanout branch edge",
-			draft: true,
-			edit: func(_ *testing.T, def *workflow.Definition) {
-				def.Edges = append(def.Edges, workflow.Edge{
-					WorkflowID: def.ID, ID: "edge_split_b_duplicate", Key: "split_b_duplicate",
-					TransitionGroupID: "group_split", TargetNodeID: "node_impl_b",
-					ContextMode: workflow.ContextModeNewSession,
-				})
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			def := fanoutWorkflow()
-			addV1NodeGroup(&def)
-			tt.edit(t, &def)
-			result := validateForTask(def)
-			if tt.draft {
-				result = validateDraftForTest(def)
-			}
-			assertHasCodes(t, result, workflow.CodeInvalidNodeGroup)
-			if tt.blocksSaving && !result.HasBlockingErrors() {
-				t.Fatal("invalid draft node group shape did not block graph save")
-			}
-		})
-	}
+	assertHasCodes(t, result, workflow.CodeUnsupportedApprovalExecution)
 }
 
 func TestContextSourceValidation(t *testing.T) {
 	t.Run("default immediate source preserves existing workflows", func(t *testing.T) {
-		def := validWorkflow()
+		def := validWorkflow(t)
 
 		result := validateForTask(def)
 
@@ -921,8 +537,8 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 
 	t.Run("direct selected source node validates", func(t *testing.T) {
-		def := validWorkflow()
-		def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Review."}))
+		def := validWorkflow(t)
+		def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
 		def.TransitionGroups[1] = workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_review", SourceNodeID: "node_agent", TransitionID: "review", DisplayName: "Review"}
 		def.Edges[1] = workflow.Edge{WorkflowID: def.ID, ID: "edge_review", Key: "review", TransitionGroupID: "group_review", TargetNodeID: "node_review", ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implement"}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}}
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_done", SourceNodeID: "node_review", TransitionID: "done", DisplayName: "Done"})
@@ -934,8 +550,8 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 
 	t.Run("optional branch is invalid", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
-		def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_optional", "optional", "Optional", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Optional."}))
+		def := reviewAcceptanceWorkflow(t)
+		def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_optional", "optional", "Optional", workflow.NodeFields{SubagentRole: "coder"}))
 		def.TransitionGroups = append(def.TransitionGroups,
 			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_implementation_optional", SourceNodeID: "node_implementation", TransitionID: "optional", DisplayName: "Optional"},
 			workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_optional_review", SourceNodeID: "node_optional", TransitionID: "review", DisplayName: "Review"},
@@ -987,7 +603,7 @@ func TestContextSourceValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			def := reviewAcceptanceWorkflow()
+			def := reviewAcceptanceWorkflow(t)
 			edge := edgeByIDForValidationTest(t, &def, tt.edgeID)
 			edge.ContextMode = tt.mode
 			edge.ContextSource = tt.source
@@ -997,7 +613,10 @@ func TestContextSourceValidation(t *testing.T) {
 				})
 			}
 			result := validateForTask(def)
-			if tt.valid {
+			if tt.roleMismatch && tt.mode == workflow.ContextModeContinueSession {
+				assertHasCodes(t, result, workflow.CodeInvalidContinueSessionRole)
+				assertNoCode(t, result, workflow.CodeInvalidContextSource)
+			} else if tt.valid {
 				assertNoCode(t, result, workflow.CodeInvalidContextSource)
 			} else {
 				assertHasCodes(t, result, workflow.CodeInvalidContextSource)
@@ -1005,8 +624,25 @@ func TestContextSourceValidation(t *testing.T) {
 		})
 	}
 
+	t.Run("continuation normalized role identity matches", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow(t)
+		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implementation"}
+		updateNodeByKeyForValidationTest(t, &def, "implementation", func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
+			fields.SubagentRole = " Coder "
+		})
+
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
+			Context:      workflow.ValidationContextTaskCreation,
+			RoleResolver: testsetup.QuestionsEnabled("Coder", "coder"),
+		})
+
+		assertNoCode(t, result, workflow.CodeInvalidContinueSessionRole)
+	})
+
 	t.Run("rework loop remains statically valid", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_accept_rework", SourceNodeID: "node_final_acceptance", TransitionID: "needs_changes", DisplayName: "Needs Changes"})
 		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: def.ID, ID: "edge_accept_rework", Key: "rework", TransitionGroupID: "group_accept_rework", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeCompactAndContinueSession})
 		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")
@@ -1019,7 +655,7 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 
 	t.Run("previous target loop source validates when target dominates source", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_accept_rework", SourceNodeID: "node_final_acceptance", TransitionID: "needs_changes", DisplayName: "Needs Changes"})
 		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: def.ID, ID: "edge_accept_rework", Key: "rework", TransitionGroupID: "group_accept_rework", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}})
 
@@ -1029,7 +665,7 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 
 	t.Run("previous target requires continuation mode", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_accept_rework", SourceNodeID: "node_final_acceptance", TransitionID: "needs_changes", DisplayName: "Needs Changes"})
 		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: def.ID, ID: "edge_accept_rework", Key: "rework", TransitionGroupID: "group_accept_rework", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeNewSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}})
 
@@ -1039,7 +675,7 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 
 	t.Run("draft reports nonblocking context source semantics", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow()
+		def := reviewAcceptanceWorkflow(t)
 		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "code_review"}
@@ -1053,27 +689,25 @@ func TestContextSourceValidation(t *testing.T) {
 	})
 }
 
-func validWorkflow() workflow.Definition {
-	return workflow.Definition{
-		ID:          "workflow_default",
+func validWorkflow(t *testing.T) workflow.Definition {
+	return normalizeWorkflowEdgeShape(workflow.Definition{
+		ID:          testsetup.WorkflowID(t, "workflow_default"),
 		DisplayName: "Default Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_default", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_default", "node_agent", "implement", "Implement", workflow.NodeFields{
-				SubagentRole:   "coder",
-				PromptTemplate: "Implement task.",
-				OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Summary of completed work."}},
+			testStartNode(testsetup.WorkflowID(t, "workflow_default"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_default"), "node_agent", "implement", "Implement", workflow.NodeFields{
+				SubagentRole: "coder",
 			}),
-			testTerminalNode("workflow_default", "node_done", "done", "Done"),
+			testTerminalNode(testsetup.WorkflowID(t, "workflow_default"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_default", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_default", ID: "group_done", SourceNodeID: "node_agent", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_default"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_default"), ID: "group_done", SourceNodeID: "node_agent", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_default", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement task."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_default"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement task."},
 			{
-				WorkflowID:         "workflow_default",
+				WorkflowID:         testsetup.WorkflowID(t, "workflow_default"),
 				ID:                 "edge_done",
 				Key:                "done",
 				TransitionGroupID:  "group_done",
@@ -1083,74 +717,74 @@ func validWorkflow() workflow.Definition {
 				OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 			},
 		},
-	}
+	})
 }
 
-func fanoutWorkflow() workflow.Definition {
-	def := workflow.Definition{
-		ID:          "workflow_fanout",
+func fanoutWorkflow(t *testing.T) workflow.Definition {
+	def := normalizeWorkflowEdgeShape(workflow.Definition{
+		ID:          testsetup.WorkflowID(t, "workflow_fanout"),
 		DisplayName: "Fanout Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_fanout", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_fanout", "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Plan.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
-			testAgentNode("workflow_fanout", "node_impl_a", "impl_a", "Implement A", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "A."}),
-			testAgentNode("workflow_fanout", "node_impl_b", "impl_b", "Implement B", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "B."}),
-			testJoinNode("workflow_fanout", "node_join", "join", "Join"),
-			testTerminalNode("workflow_fanout", "node_done", "done", "Done"),
+			testStartNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_impl_a", "impl_a", "Implement A", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_impl_b", "impl_b", "Implement B", workflow.NodeFields{SubagentRole: "coder"}),
+			testJoinNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_join", "join", "Join"),
+			testTerminalNode(testsetup.WorkflowID(t, "workflow_fanout"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_fanout", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_fanout", ID: "group_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"},
-			{WorkflowID: "workflow_fanout", ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join", DisplayName: "Join"},
-			{WorkflowID: "workflow_fanout", ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join", DisplayName: "Join"},
-			{WorkflowID: "workflow_fanout", ID: "group_join_done", SourceNodeID: "node_join", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_a_join", SourceNodeID: "node_impl_a", TransitionID: "join_a", DisplayName: "Join"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_impl_b_join", SourceNodeID: "node_impl_b", TransitionID: "join_b", DisplayName: "Join"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "group_join_done", SourceNodeID: "node_join", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_fanout", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
-			{WorkflowID: "workflow_fanout", ID: "edge_split_a", Key: "split_a", TransitionGroupID: "group_split", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement A."},
-			{WorkflowID: "workflow_fanout", ID: "edge_split_b", Key: "split_b", TransitionGroupID: "group_split", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement B."},
-			{WorkflowID: "workflow_fanout", ID: "edge_impl_a_join", Key: "join_a", TransitionGroupID: "group_impl_a_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_fanout", ID: "edge_impl_b_join", Key: "join_b", TransitionGroupID: "group_impl_b_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_fanout", ID: "edge_join_done", Key: "done", TransitionGroupID: "group_join_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_plan", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_split_a", Key: "split_a", TransitionGroupID: "group_split", TargetNodeID: "node_impl_a", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement A."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_split_b", Key: "split_b", TransitionGroupID: "group_split", TargetNodeID: "node_impl_b", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement B."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_impl_a_join", Key: "join_a", TransitionGroupID: "group_impl_a_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_impl_b_join", Key: "join_b", TransitionGroupID: "group_impl_b_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_fanout"), ID: "edge_join_done", Key: "done", TransitionGroupID: "group_join_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
-	}
+	})
 	return def
 }
 
-func reviewAcceptanceWorkflow() workflow.Definition {
-	return workflow.Definition{
-		ID:          "workflow_review_acceptance",
+func reviewAcceptanceWorkflow(t *testing.T) workflow.Definition {
+	return normalizeWorkflowEdgeShape(workflow.Definition{
+		ID:          testsetup.WorkflowID(t, "workflow_review_acceptance"),
 		DisplayName: "Review Acceptance Workflow",
 		Nodes: []workflow.Node{
-			testStartNode("workflow_review_acceptance", "node_start", "backlog", "Backlog"),
-			testAgentNode("workflow_review_acceptance", "node_implementation", "implementation", "Implementation", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Implement.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}),
-			testAgentNode("workflow_review_acceptance", "node_code_review", "code_review", "Code Review", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Review."}),
-			testAgentNode("workflow_review_acceptance", "node_qa_test", "qa_test", "QA Test", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "QA."}),
-			testJoinNode("workflow_review_acceptance", "node_review_join", "review_join", "Review Join"),
-			testAgentNode("workflow_review_acceptance", "node_final_acceptance", "final_acceptance", "Final Acceptance", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Accept."}),
-			testAgentNode("workflow_review_acceptance", "node_open_pr", "open_pr", "Open PR", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Open PR."}),
-			testTerminalNode("workflow_review_acceptance", "node_done", "done", "Done"),
+			testStartNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_start", "backlog", "Backlog"),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_implementation", "implementation", "Implementation", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_code_review", "code_review", "Code Review", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_qa_test", "qa_test", "QA Test", workflow.NodeFields{SubagentRole: "coder"}),
+			testJoinNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_review_join", "review_join", "Review Join"),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_final_acceptance", "final_acceptance", "Final Acceptance", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_open_pr", "open_pr", "Open PR", workflow.NodeFields{SubagentRole: "coder"}),
+			testTerminalNode(testsetup.WorkflowID(t, "workflow_review_acceptance"), "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
-			{WorkflowID: "workflow_review_acceptance", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_implementation_review", SourceNodeID: "node_implementation", TransitionID: "review", DisplayName: "Review"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "reviewed", DisplayName: "Reviewed"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "reviewed", DisplayName: "Reviewed"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_join_accept", SourceNodeID: "node_review_join", TransitionID: "accept", DisplayName: "Accept"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_accept_open_pr", SourceNodeID: "node_final_acceptance", TransitionID: "approved", DisplayName: "Approved"},
-			{WorkflowID: "workflow_review_acceptance", ID: "group_open_pr_done", SourceNodeID: "node_open_pr", TransitionID: "done", DisplayName: "Done"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_implementation_review", SourceNodeID: "node_implementation", TransitionID: "review", DisplayName: "Review"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_code_review_join", SourceNodeID: "node_code_review", TransitionID: "code_review_done", DisplayName: "Reviewed"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_qa_test_join", SourceNodeID: "node_qa_test", TransitionID: "qa_test_done", DisplayName: "Reviewed"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_join_accept", SourceNodeID: "node_review_join", TransitionID: "accept", DisplayName: "Accept"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_accept_open_pr", SourceNodeID: "node_final_acceptance", TransitionID: "approved", DisplayName: "Approved"},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "group_open_pr_done", SourceNodeID: "node_open_pr", TransitionID: "done", DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_implementation_review", Key: "code_review", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_code_review", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_implementation_qa", Key: "qa_test", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_qa_test", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_code_review_join", Key: "code_review_done", TransitionGroupID: "group_code_review_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_qa_test_join", Key: "qa_test_done", TransitionGroupID: "group_qa_test_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_join_accept", Key: "final_acceptance", TransitionGroupID: "group_join_accept", TargetNodeID: "node_final_acceptance", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_accept_open_pr", Key: "open_pr", TransitionGroupID: "group_accept_open_pr", TargetNodeID: "node_open_pr", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Open PR."},
-			{WorkflowID: "workflow_review_acceptance", ID: "edge_open_pr_done", Key: "done", TransitionGroupID: "group_open_pr_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_start", Key: "start", TransitionGroupID: "group_start", TargetNodeID: "node_implementation", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_implementation_review", Key: "code_review", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_code_review", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_implementation_qa", Key: "qa_test", TransitionGroupID: "group_implementation_review", TargetNodeID: "node_qa_test", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "QA {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Implementation summary."}}, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_code_review_join", Key: "code_review_done", TransitionGroupID: "group_code_review_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_qa_test_join", Key: "qa_test_done", TransitionGroupID: "group_qa_test_join", TargetNodeID: "node_review_join", ContextMode: workflow.ContextModeNewSession},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_join_accept", Key: "final_acceptance", TransitionGroupID: "group_join_accept", TargetNodeID: "node_final_acceptance", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Accept."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_accept_open_pr", Key: "open_pr", TransitionGroupID: "group_accept_open_pr", TargetNodeID: "node_open_pr", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Open PR."},
+			{WorkflowID: testsetup.WorkflowID(t, "workflow_review_acceptance"), ID: "edge_open_pr_done", Key: "done", TransitionGroupID: "group_open_pr_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession},
 		},
-	}
+	})
 }
 
 func validateForTask(def workflow.Definition) workflow.ValidationResult {

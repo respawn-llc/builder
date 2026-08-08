@@ -1,10 +1,12 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
-	"maps"
 	"strings"
 
+	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/workflowkey"
 )
@@ -16,6 +18,9 @@ func ValidateDefinition(def Definition, opts ValidationOptions) ValidationResult
 	}
 	state := newValidationState(def, opts, context)
 	state.validateShape()
+	if def.ID.IsZero() {
+		return ValidationResult{Context: context, Errors: state.errors}
+	}
 	state.validateGraph()
 	state.validateFanouts()
 	state.validateDerivedWiring()
@@ -57,11 +62,12 @@ func newValidationState(def Definition, opts ValidationOptions, context Validati
 }
 
 func (s *validationState) validateShape() {
-	if strings.TrimSpace(string(s.def.ID)) == "" {
+	if s.def.ID.IsZero() {
 		s.addHard(CodeMissingWorkflowID, "workflow id is required", ValidationError{})
+		return
 	}
 	if !validDisplayName(s.def.DisplayName) {
-		s.addHard(CodeInvalidDisplayName, "workflow display name must be non-empty and at most 120 characters", ValidationError{WorkflowID: s.def.ID})
+		s.addHard(CodeInvalidDisplayName, "workflow display name must be non-empty and at most 120 characters", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 	s.validateExecutionTargetPolicy()
 
@@ -78,25 +84,27 @@ func (s *validationState) validateShape() {
 func (s *validationState) validateExecutionTargetPolicy() {
 	policy := s.def.ExecutionTargetPolicy.Canonical()
 	if !validExecutionTargetPolicyMode(policy.Mode) {
-		s.addHard(CodeInvalidExecutionTargetPolicy, "execution target policy mode is invalid", ValidationError{WorkflowID: s.def.ID})
+		s.addHard(CodeInvalidExecutionTargetPolicy, "execution target policy mode is invalid", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 		return
 	}
 	if policy.Mode != ExecutionTargetModeCustomRef {
 		if policy.CustomRef != nil {
-			s.addHard(CodeInvalidExecutionTargetPolicy, "execution target custom ref is only valid for custom_ref policy", ValidationError{WorkflowID: s.def.ID})
+			s.addHard(CodeInvalidExecutionTargetPolicy, "execution target custom ref is only valid for custom_ref policy", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 		}
 		return
 	}
 	if policy.CustomRef == nil || strings.TrimSpace(*policy.CustomRef) == "" {
-		s.addSemantic(CodeExecutionTargetCustomRefRequired, "custom_ref execution target policy requires a custom ref", ValidationError{WorkflowID: s.def.ID})
+		s.addSemantic(CodeExecutionTargetCustomRefRequired, "custom_ref execution target policy requires a custom ref", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 }
 
 func (s *validationState) indexNodeGroups() {
 	seenKeys := map[ModelKey]string{}
 	for _, group := range s.def.NodeGroups {
-		ref := ValidationError{WorkflowID: s.def.ID, RelatedIDs: []string{group.ID}}
-		if strings.TrimSpace(string(group.WorkflowID)) != "" && group.WorkflowID != s.def.ID {
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), RelatedIDs: []string{group.ID}}
+		if group.WorkflowID.IsZero() {
+			s.addHard(CodeMissingWorkflowID, "node group workflow id is required", ref)
+		} else if group.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "node group references another workflow", ref)
 		}
 		id := strings.TrimSpace(group.ID)
@@ -125,8 +133,11 @@ func (s *validationState) indexNodeGroups() {
 
 func (s *validationState) indexNodes() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
-		if strings.TrimSpace(string(NodeWorkflowID(node))) != "" && NodeWorkflowID(node) != s.def.ID {
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(node)}
+		nodeWorkflowID := NodeWorkflowID(node)
+		if nodeWorkflowID == nil || nodeWorkflowID.IsZero() {
+			s.addHard(CodeMissingWorkflowID, "node workflow id is required", ref)
+		} else if *nodeWorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "node references another workflow", ref)
 		}
 		if strings.TrimSpace(string(NodeIDOf(node))) == "" {
@@ -145,10 +156,12 @@ func (s *validationState) indexNodes() {
 }
 
 func (s *validationState) indexTransitionGroups() {
-	seenTransitionBySource := map[NodeID]map[string]TransitionGroupID{}
+	seenTransitions := map[string]TransitionGroupID{}
 	for _, group := range s.def.TransitionGroups {
-		ref := ValidationError{WorkflowID: s.def.ID, TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
-		if strings.TrimSpace(string(group.WorkflowID)) != "" && group.WorkflowID != s.def.ID {
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
+		if group.WorkflowID.IsZero() {
+			s.addHard(CodeMissingWorkflowID, "transition group workflow id is required", ref)
+		} else if group.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "transition group references another workflow", ref)
 		}
 		if strings.TrimSpace(string(group.ID)) == "" {
@@ -167,15 +180,10 @@ func (s *validationState) indexTransitionGroups() {
 		} else if !workflowkey.Valid(transitionID) {
 			s.addHard(CodeInvalidTransitionID, "transition id must "+workflowkey.Description, ref)
 		} else {
-			bySource := seenTransitionBySource[group.SourceNodeID]
-			if bySource == nil {
-				bySource = map[string]TransitionGroupID{}
-				seenTransitionBySource[group.SourceNodeID] = bySource
+			if _, exists := seenTransitions[transitionID]; exists {
+				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref)
 			}
-			if _, exists := bySource[transitionID]; exists {
-				s.addHard(CodeDuplicateTransitionID, "transition id must be unique per source node", ref)
-			}
-			bySource[transitionID] = group.ID
+			seenTransitions[transitionID] = group.ID
 		}
 		if !validDisplayName(group.DisplayName) {
 			s.addHard(CodeInvalidDisplayName, "transition group display name must be non-empty and at most 120 characters", ref)
@@ -185,8 +193,10 @@ func (s *validationState) indexTransitionGroups() {
 
 func (s *validationState) indexEdges() {
 	for _, edge := range s.def.Edges {
-		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
-		if strings.TrimSpace(string(edge.WorkflowID)) != "" && edge.WorkflowID != s.def.ID {
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
+		if edge.WorkflowID.IsZero() {
+			s.addHard(CodeMissingWorkflowID, "edge workflow id is required", ref)
+		} else if edge.WorkflowID != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "edge references another workflow", ref)
 		}
 		if strings.TrimSpace(string(edge.ID)) == "" {
@@ -209,7 +219,7 @@ func (s *validationState) indexEdges() {
 
 func (s *validationState) validateNodes() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(node)}
 		if strings.TrimSpace(string(NodeKey(node))) == "" {
 			s.addHard(CodeMissingNodeKey, "node key is required", ref)
 		} else if !workflowkey.Valid(string(NodeKey(node))) {
@@ -234,16 +244,16 @@ func (s *validationState) validateNodes() {
 		}
 	}
 	if len(s.startNodes) == 0 {
-		s.addHard(CodeMissingStartNode, "workflow must contain exactly one start node", ValidationError{WorkflowID: s.def.ID})
+		s.addHard(CodeMissingStartNode, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 	if len(s.startNodes) > 1 {
-		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ValidationError{WorkflowID: s.def.ID})
+		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 }
 
 func (s *validationState) validateNodeGroups() {
 	for _, group := range s.def.NodeGroups {
-		ref := ValidationError{WorkflowID: s.def.ID, RelatedIDs: []string{group.ID}}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), RelatedIDs: []string{group.ID}}
 		members := s.nodeGroupMembers(group)
 		branchIDs := map[NodeID]bool{}
 		joinIDs := []NodeID{}
@@ -418,7 +428,7 @@ func nodeIDSetEqual(left map[NodeID]bool, right map[NodeID]bool) bool {
 
 func (s *validationState) validateTransitionGroups() {
 	for _, group := range s.def.TransitionGroups {
-		ref := ValidationError{WorkflowID: s.def.ID, TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), TransitionGroupID: group.ID, NodeID: group.SourceNodeID}
 		if strings.TrimSpace(string(group.SourceNodeID)) == "" {
 			s.addHard(CodeEdgeTransitionGroupMissing, "transition group source node is required", ref)
 		} else if _, exists := s.nodesByID[group.SourceNodeID]; !exists {
@@ -433,7 +443,7 @@ func (s *validationState) validateTransitionGroups() {
 				continue
 			}
 			if previousID, exists := seenEdgeKeys[edge.Key]; exists && previousID != edge.ID {
-				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID})
+				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID})
 			}
 			seenEdgeKeys[edge.Key] = edge.ID
 		}
@@ -442,7 +452,7 @@ func (s *validationState) validateTransitionGroups() {
 
 func (s *validationState) validateEdges() {
 	for _, edge := range s.def.Edges {
-		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
 		if _, groupExists := s.groupsByID[edge.TransitionGroupID]; !groupExists {
 			s.addHard(CodeEdgeTransitionGroupMissing, "edge transition group must exist", ref)
 		}
@@ -458,6 +468,12 @@ func (s *validationState) validateEdges() {
 		}
 		if !validContextMode(edge.ContextMode) {
 			s.addHard(CodeInvalidContextMode, "edge context mode is invalid", ref)
+		}
+		if selection := CanonicalAssigneeSelection(edge.AssigneeSelection); selection != AssigneeSelectionConfigured && selection != AssigneeSelectionPreviousNode {
+			s.addHard(CodeInvalidAssigneeSelection, "edge assignee selection is invalid", ref)
+		}
+		if selection := CanonicalThinkingSelection(edge.ThinkingSelection); selection != ThinkingSelectionConfigured && selection != ThinkingSelectionPreviousNode {
+			s.addHard(CodeInvalidThinkingSelection, "edge thinking selection is invalid", ref)
 		}
 		s.validateEdgeInvocationContract(edge, ref)
 	}
@@ -500,11 +516,24 @@ func (s *validationState) edgeSource(edge Edge) (Node, bool) {
 
 func (s *validationState) validateParameters(edge Edge, ref ValidationError) {
 	seen := map[string]bool{}
+	seenPurposes := map[ParameterPurpose]bool{}
 	for index, parameter := range edge.Parameters {
 		ordinal := index + 1
 		key := strings.TrimSpace(parameter.Key)
 		parameterRef := ref
 		parameterRef.FieldName = key
+		purpose := CanonicalParameterPurpose(parameter.Purpose)
+		switch purpose {
+		case ParameterPurposeOrdinary, ParameterPurposeTargetAssignee, ParameterPurposeTargetThinking:
+		default:
+			s.addHard(CodeInvalidParameterPurpose, fmt.Sprintf("%s: parameter #%d purpose is invalid", edgeMessageSubject(edge), ordinal), parameterRef)
+		}
+		if purpose != ParameterPurposeOrdinary {
+			if seenPurposes[purpose] {
+				s.addHard(CodeDuplicateProtectedParameter, fmt.Sprintf("%s: parameter #%d protected purpose must be unique", edgeMessageSubject(edge), ordinal), parameterRef)
+			}
+			seenPurposes[purpose] = true
+		}
 		if key == "" || !workflowkey.Valid(key) || len(key) > MaxParameterKeyChars || workflowkey.ReservedParameter(key) {
 			s.addHard(CodeInvalidParameter, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "key is invalid"), parameterRef)
 		}
@@ -513,11 +542,17 @@ func (s *validationState) validateParameters(edge Edge, ref ValidationError) {
 		}
 		seen[key] = true
 		description := strings.TrimSpace(parameter.Description)
-		if description == "" {
+		if purpose == ParameterPurposeOrdinary && description == "" {
 			s.addHard(CodeParameterDescriptionRequired, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "description is required"), parameterRef)
 		} else if len(description) > MaxParameterDescriptionChars {
 			s.addHard(CodeParameterSchemaTooLarge, fmt.Sprintf("%s: parameter #%d %s", edgeMessageSubject(edge), ordinal, "description is too large"), parameterRef)
 		}
+	}
+	if CanonicalAssigneeSelection(edge.AssigneeSelection) == AssigneeSelectionPreviousNode && !seenPurposes[ParameterPurposeTargetAssignee] {
+		s.addHard(CodeMissingProtectedParameter, "edge assignee selection requires a target-assignee protected parameter", ref)
+	}
+	if CanonicalThinkingSelection(edge.ThinkingSelection) == ThinkingSelectionPreviousNode && !seenPurposes[ParameterPurposeTargetThinking] {
+		s.addHard(CodeMissingProtectedParameter, "edge thinking selection requires a target-thinking protected parameter", ref)
 	}
 }
 
@@ -531,10 +566,10 @@ func (s *validationState) validateGraph() {
 	reachable := s.reachableFrom(NodeIDOf(s.startNodes[0]))
 	for nodeID, node := range s.nodesByID {
 		if !reachable[nodeID] {
-			s.addSemantic(CodeNodeUnreachableFromStart, fmt.Sprintf("%s not reachable", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)})
+			s.addSemantic(CodeNodeUnreachableFromStart, fmt.Sprintf("%s not reachable", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(node)})
 		}
 		if node.Kind() != NodeKindTerminal && !s.canReachTerminal(nodeID) {
-			s.addSemantic(CodeNonTerminalCannotReachTerminal, fmt.Sprintf("%s cannot reach a terminal", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)})
+			s.addSemantic(CodeNonTerminalCannotReachTerminal, fmt.Sprintf("%s cannot reach a terminal", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(node)})
 		}
 	}
 	s.validatePromptPlaceholders()
@@ -542,7 +577,7 @@ func (s *validationState) validateGraph() {
 
 func (s *validationState) validateKindConstraints() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(node)}
 		incoming := len(s.incomingByNode[NodeIDOf(node)])
 		outgoingGroups := s.groupsBySource[NodeIDOf(node)]
 		switch node.Kind() {
@@ -575,8 +610,8 @@ func (s *validationState) validateKindConstraints() {
 	}
 }
 
-func validateAgentRoleRequirement(workflowID WorkflowID, node Node, requiredTool toolspec.ID, resolver RoleResolver) (ValidationError, bool) {
-	ref := ValidationError{WorkflowID: workflowID, NodeID: NodeIDOf(node)}
+func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, requiredTool toolspec.ID, catalog TargetAgentCatalog) (ValidationError, bool) {
+	ref := ValidationError{WorkflowID: WorkflowIDPointer(workflowID), NodeID: NodeIDOf(node)}
 	role := strings.TrimSpace(NodeSubagentRole(node))
 	if role == "" {
 		return ValidationError{
@@ -587,23 +622,37 @@ func validateAgentRoleRequirement(workflowID WorkflowID, node Node, requiredTool
 		}, true
 	}
 	ref.AgentRole = &role
-	if resolver == nil || !resolver.RoleExists(role) {
+	if catalog == nil {
 		ref.Code = CodeAgentRoleMissing
 		ref.Message = fmt.Sprintf("Agent node %s references missing subagent role %s", nodeDisplayName(node), role)
 		return ref, true
 	}
-	if resolver.RoleToolEnabled(role, requiredTool) {
+	_, err := PlanTargetAgentSelection(catalog, TargetAgentSelectionRequest{FallbackRole: role})
+	if err == nil {
 		return ValidationError{}, false
 	}
-	ref.RequiredTool = &requiredTool
-	ref.Code = CodeAgentRoleRequiredToolDisabled
-	ref.Message = fmt.Sprintf("Agent node %s uses role %s without required tool %s; enable it in the role's effective configuration", nodeDisplayName(node), role, requiredTool)
+	var selectionErr TargetAgentSelectionError
+	if errors.As(err, &selectionErr) {
+		switch selectionErr.Code {
+		case TargetAgentSelectionErrorUnavailableRole:
+			ref.Code = CodeAgentRoleMissing
+			ref.Message = fmt.Sprintf("Agent node %s references missing subagent role %s", nodeDisplayName(node), role)
+			return ref, true
+		case TargetAgentSelectionErrorQuestionsDisabled:
+			ref.RequiredTool = &requiredTool
+			ref.Code = CodeAgentRoleRequiredToolDisabled
+			ref.Message = fmt.Sprintf("Agent node %s uses role %s without required tool %s; enable it in the role's effective configuration", nodeDisplayName(node), role, requiredTool)
+			return ref, true
+		}
+	}
+	ref.Code = CodeAgentRoleMissing
+	ref.Message = fmt.Sprintf("Agent node %s references unavailable subagent role %s", nodeDisplayName(node), role)
 	return ref, true
 }
 
 func (s *validationState) validateRuntimeSupport() {
 	for _, edge := range s.def.Edges {
-		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
 		targetKind := NodeKind("")
 		var target Node
 		targetExists := false
@@ -617,11 +666,100 @@ func (s *validationState) validateRuntimeSupport() {
 		if group, groupExists := s.groupsByID[edge.TransitionGroupID]; groupExists {
 			source, sourceExists = s.nodesByID[group.SourceNodeID]
 		}
-		s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
-		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
+		sourceKind := NodeKind("")
+		if sourceExists {
+			sourceKind = source.Kind()
+		}
+		contextSource, contextSourceValid := s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
+		s.validateSelectorApplicability(edge, source, sourceExists, target, targetExists, contextSource, ref)
+		if edge.ContextMode == ContextModeContinueSession && contextSourceValid {
+			selectedSource, selectedSourceExists := s.contextSourceNode(contextSource, source, sourceExists, target, targetExists)
+			if selectedSourceExists && targetExists &&
+				selectedSource.Kind() == NodeKindAgent && target.Kind() == NodeKindAgent &&
+				!sameAgentRoleIdentity(NodeSubagentRole(selectedSource), NodeSubagentRole(target)) {
+				s.addSemantic(CodeInvalidContinueSessionRole, "continue_session requires source and target agent nodes to use the same normalized subagent role", ref)
+			}
+		}
+		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{SourceKind: sourceKind, ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
 			s.addSemantic(issue.Code, issue.Message, ref)
 		}
 	}
+}
+
+func (s *validationState) validateSelectorApplicability(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, contextSource ContextSource, ref ValidationError) {
+	assigneeSelection := CanonicalAssigneeSelection(edge.AssigneeSelection)
+	thinkingSelection := CanonicalThinkingSelection(edge.ThinkingSelection)
+	sourceKind := NodeKind("")
+	if sourceExists {
+		sourceKind = source.Kind()
+	}
+	targetKind := NodeKind("")
+	targetRole := ""
+	if targetExists {
+		targetKind = target.Kind()
+		targetRole = NodeSubagentRole(target)
+	}
+	plan, planErr := PlanTransitionSelection(TransitionParameterContractRequest{
+		Edge:                         edge,
+		SourceKind:                   sourceKind,
+		TargetKind:                   targetKind,
+		TargetRole:                   targetRole,
+		FanOut:                       len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		TargetSessionPolicy:          AssigneeSessionPolicyEstablishTarget,
+		Catalog:                      s.opts.RoleResolver,
+		RequireExecutionDescriptions: s.context == ValidationContextExecution,
+	})
+	applicability := plan.Applicability
+	if assigneeSelection == AssigneeSelectionPreviousNode {
+		if applicability.Assignee.Reason == SelectorApplicabilityTopology ||
+			applicability.Assignee.Reason == SelectorApplicabilityContextSource {
+			s.addSemantic(CodeAssigneeSelectionInapplicable, "edge Assignee selection is not applicable to this serial Agent transition", ref)
+		} else if !applicability.Assignee.Available {
+			s.addSemantic(CodeAssigneeSelectionUnavailable, "edge Assignee selection is unavailable for the current role configuration", ref)
+		}
+	}
+	if thinkingSelection != ThinkingSelectionPreviousNode {
+		return
+	}
+	if applicability.Thinking.Reason == SelectorApplicabilityTopology {
+		s.addSemantic(CodeThinkingSelectionInapplicable, "edge thinking selection is not applicable to this serial Agent transition", ref)
+		return
+	}
+	if !applicability.Thinking.Available {
+		s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection is unavailable for the applicable target models", ref)
+	}
+	if s.context == ValidationContextExecution &&
+		thinkingSelection == ThinkingSelectionPreviousNode &&
+		sourceExists &&
+		targetExists {
+		err := planErr
+		var selectionErr TargetAgentSelectionError
+		if errors.As(err, &selectionErr) &&
+			selectionErr.Code == TargetAgentSelectionErrorThinkingDescriptionRequired {
+			s.addSemantic(CodeThinkingSelectionUnavailable, "edge thinking selection requires an authored description for the open thinking catalog", ref)
+		}
+	}
+}
+
+type agentRoleIdentity struct {
+	value string
+}
+
+func sameAgentRoleIdentity(left, right string) bool {
+	leftIdentity, leftValid := canonicalAgentRoleIdentity(left)
+	rightIdentity, rightValid := canonicalAgentRoleIdentity(right)
+	return leftValid && rightValid && leftIdentity == rightIdentity
+}
+
+func canonicalAgentRoleIdentity(raw string) (agentRoleIdentity, bool) {
+	if strings.EqualFold(strings.TrimSpace(raw), DefaultAgentRole) {
+		return agentRoleIdentity{value: DefaultAgentRole}, true
+	}
+	normalized := config.NormalizeSubagentSelector(raw)
+	if normalized == "" {
+		return agentRoleIdentity{}, false
+	}
+	return agentRoleIdentity{value: normalized}, true
 }
 
 func (s *validationState) validateContextSource(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, ref ValidationError) (ContextSource, bool) {
@@ -708,6 +846,24 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 	}
 }
 
+func (s *validationState) contextSourceNode(contextSource ContextSource, immediate Node, immediateExists bool, target Node, targetExists bool) (Node, bool) {
+	switch contextSource.Kind {
+	case ContextSourceImmediateSource:
+		return immediate, immediateExists
+	case ContextSourceSelectedNode:
+		nodeID, exists := s.nodeKeys[contextSource.NodeKey]
+		if !exists {
+			return nil, false
+		}
+		node, exists := s.nodesByID[nodeID]
+		return node, exists
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+		return target, targetExists
+	default:
+		return nil, false
+	}
+}
+
 func (s *validationState) validateStartOutgoingShape() {
 	start := s.startNodes[0]
 	groups := s.groupsBySource[NodeIDOf(start)]
@@ -715,28 +871,28 @@ func (s *validationState) validateStartOutgoingShape() {
 		return
 	}
 	if len(groups) != 1 {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start requires exactly one outgoing transition group", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start)})
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start requires exactly one outgoing transition group", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(start)})
 		return
 	}
 	edges := s.edgesByGroup[groups[0].ID]
 	if len(edges) != 1 {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start transition group requires exactly one edge", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start), TransitionGroupID: groups[0].ID})
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start transition group requires exactly one edge", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(start), TransitionGroupID: groups[0].ID})
 		return
 	}
 	target, exists := s.nodesByID[edges[0].TargetNodeID]
 	if !exists || !IsExecutableNode(target) {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start edge must target an executable node", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start), EdgeID: edges[0].ID})
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start edge must target an executable node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: NodeIDOf(start), EdgeID: edges[0].ID})
 	}
 }
 
 func (s *validationState) validatePromptPlaceholders() {
-	derived := DeriveWiring(s.def)
+	derived := DeriveWiringWithCatalog(s.def, s.opts.RoleResolver)
 	for _, edge := range s.def.Edges {
 		prompt := strings.TrimSpace(edge.PromptTemplate)
 		if prompt == "" {
 			continue
 		}
-		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID, NodeID: edge.TargetNodeID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID, NodeID: edge.TargetNodeID}
 		refs, err := ExtractPromptTemplateReferences(prompt)
 		if err != nil {
 			s.addHard(CodeInvalidTemplatePlaceholder, "prompt template syntax is invalid", ref)
@@ -747,10 +903,13 @@ func (s *validationState) validatePromptPlaceholders() {
 			invalidRef.Placeholder = invalid.Placeholder
 			s.addHard(CodeInvalidTemplatePlaceholder, invalid.Message, invalidRef)
 		}
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
 		currentParams := edgeParameterNameSet(edge)
 		source, sourceExists := s.edgeSource(edge)
 		if sourceExists && source.Kind() == NodeKindJoin {
 			currentParams = outputFieldNameSet(derived.JoinOutputFieldsForNode(NodeIDOf(source)))
+		} else if sourceExists && targetExists {
+			currentParams = s.promptParameterNameSet(edge, source, target)
 		}
 		for _, param := range refs.Params {
 			name := strings.TrimSpace(param.Name)
@@ -768,6 +927,37 @@ func (s *validationState) validatePromptPlaceholders() {
 			s.validatePriorParameterReference(edge, priorParam, ref, derived)
 		}
 	}
+}
+
+func (s *validationState) promptParameterNameSet(edge Edge, source Node, target Node) map[string]bool {
+	names := edgeParameterNameSet(edge)
+	consumption := PlanTransitionProtectedParameterConsumption(TransitionParameterContractRequest{
+		Edge:                edge,
+		SourceKind:          source.Kind(),
+		TargetKind:          target.Kind(),
+		TargetRole:          NodeSubagentRole(target),
+		FanOut:              len(s.edgesByGroup[edge.TransitionGroupID]) > 1,
+		Catalog:             s.opts.RoleResolver,
+		TargetSessionPolicy: AssigneeSessionPolicyEstablishTarget,
+	})
+	contextSourceKind := CanonicalContextSource(edge.ContextSource).Kind
+	retainedSessionPossible := edge.ContextMode == ContextModeContinueSession &&
+		(contextSourceKind == ContextSourcePreviousTarget || contextSourceKind == ContextSourcePreviousTargetOrNew)
+	for _, parameter := range edge.Parameters {
+		var policy ProtectedParameterConsumptionPolicy
+		switch CanonicalParameterPurpose(parameter.Purpose) {
+		case ParameterPurposeTargetAssignee:
+			policy = consumption.Assignee
+		case ParameterPurposeTargetThinking:
+			policy = consumption.Thinking
+		default:
+			continue
+		}
+		if retainedSessionPossible || policy != ProtectedParameterConsumptionRequiredValidate {
+			delete(names, strings.TrimSpace(parameter.Key))
+		}
+	}
+	return names
 }
 
 func edgeParameterNameSet(edge Edge) map[string]bool {
@@ -809,31 +999,29 @@ func (s *validationState) validatePriorParameterReference(edge Edge, param Promp
 		return
 	}
 	consumer := s.priorParameterConsumerName(edge)
-	matchedAny := false
-	guaranteed := []TransitionGroup{}
-	for _, group := range s.def.TransitionGroups {
-		if strings.TrimSpace(string(group.TransitionID)) != transitionKey {
-			continue
-		}
-		matchedAny = true
-		if s.transitionGroupDominates(group.ID, NodeIDOf(source)) {
-			guaranteed = append(guaranteed, group)
-		}
-	}
+	resolution := resolvePriorParameterTransitionGroups(
+		s.def.TransitionGroups,
+		ModelKey(transitionKey),
+		NodeIDOf(source),
+		NodeIDOf(s.startNodes[0]),
+		s.outgoingByNode,
+	)
 	switch {
-	case !matchedAny:
+	case resolution.matched == 0:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but no %q transition exists in this workflow. Check the transition key for a typo, or define the transition that produces it.",
 			consumer, parameterKey, transitionKey, transitionKey), ref)
-	case len(guaranteed) == 0:
+	case len(resolution.guaranteed) == 0:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but %q is not guaranteed to run before %s: another branch can reach %s without it. Reference a parameter that every incoming branch provides, or remove the bypassing branch.",
 			consumer, parameterKey, transitionKey, transitionKey, consumer, consumer), ref)
-	case len(guaranteed) > 1:
+	case len(resolution.guaranteed) > 1:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but more than one %q transition can run before %s. Give the producing transitions distinct keys and reference one.",
 			consumer, parameterKey, transitionKey, transitionKey, consumer), ref)
-	case !s.transitionGroupParameterSet(guaranteed[0].ID, derived)[parameterKey]:
+	case parameterKey == RuntimePromptParameterCommentary:
+		return
+	case !s.transitionGroupParameterSet(resolution.guaranteed[0].ID, derived)[parameterKey]:
 		s.addHard(CodeInvalidTemplatePlaceholder, fmt.Sprintf(
 			"prompt for %s references parameter %q from transition %q, but transition %q does not declare a %q parameter.",
 			consumer, parameterKey, transitionKey, transitionKey, parameterKey), ref)
@@ -866,9 +1054,17 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 		}
 	}
 	for _, edge := range s.edgesByGroup[groupID] {
+		group := s.groupsByID[groupID]
+		source, sourceExists := s.nodesByID[group.SourceNodeID]
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
+		if sourceExists && targetExists {
+			for key := range s.promptParameterNameSet(edge, source, target) {
+				out[key] = true
+			}
+			continue
+		}
 		for _, parameter := range edge.Parameters {
-			key := strings.TrimSpace(parameter.Key)
-			if key != "" {
+			if key := strings.TrimSpace(parameter.Key); key != "" {
 				out[key] = true
 			}
 		}
@@ -876,68 +1072,11 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 	return out
 }
 
-func (s *validationState) transitionGroupDominates(groupID TransitionGroupID, target NodeID) bool {
-	if len(s.startNodes) != 1 {
-		return false
-	}
-	if !s.reachableFrom(NodeIDOf(s.startNodes[0]))[target] {
-		return false
-	}
-	visited := map[NodeID]bool{}
-	stack := []NodeID{NodeIDOf(s.startNodes[0])}
-	for len(stack) > 0 {
-		nodeID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if visited[nodeID] {
-			continue
-		}
-		if nodeID == target {
-			return false
-		}
-		visited[nodeID] = true
-		for _, edge := range s.outgoingByNode[nodeID] {
-			if edge.TransitionGroupID == groupID {
-				continue
-			}
-			if !visited[edge.TargetNodeID] {
-				stack = append(stack, edge.TargetNodeID)
-			}
-		}
-	}
-	return true
-}
-
 func (s *validationState) nodeDominates(candidate NodeID, target NodeID) bool {
-	if candidate == target {
-		return true
-	}
 	if len(s.startNodes) != 1 {
 		return false
 	}
-	reachableWithoutCandidate := s.reachableFromSkipping(NodeIDOf(s.startNodes[0]), candidate)
-	return !reachableWithoutCandidate[target]
-}
-
-func (s *validationState) reachableFromSkipping(start NodeID, skip NodeID) map[NodeID]bool {
-	visited := map[NodeID]bool{}
-	if start == skip {
-		return visited
-	}
-	stack := []NodeID{start}
-	for len(stack) > 0 {
-		nodeID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if visited[nodeID] || nodeID == skip {
-			continue
-		}
-		visited[nodeID] = true
-		for _, edge := range s.outgoingByNode[nodeID] {
-			if !visited[edge.TargetNodeID] && edge.TargetNodeID != skip {
-				stack = append(stack, edge.TargetNodeID)
-			}
-		}
-	}
-	return visited
+	return nodeDominatesFromStart(NodeIDOf(s.startNodes[0]), candidate, target, s.outgoingByNode)
 }
 
 func (s *validationState) reachableFrom(start NodeID) map[NodeID]bool {
@@ -988,7 +1127,7 @@ func (s *validationState) validateFanouts() {
 			continue
 		}
 		if !s.fanoutHasValidJoin(group, edges) {
-			s.addSemantic(CodeInvalidFanoutJoinTopology, "fan-out transition group must have one unambiguous nearest common join without terminal, nested fan-out, or cycle before it", ValidationError{WorkflowID: s.def.ID, TransitionGroupID: group.ID, NodeID: group.SourceNodeID})
+			s.addSemantic(CodeInvalidFanoutJoinTopology, "fan-out transition group must have one unambiguous nearest common join without terminal, nested fan-out, or cycle before it", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), TransitionGroupID: group.ID, NodeID: group.SourceNodeID})
 		}
 	}
 }
@@ -996,8 +1135,8 @@ func (s *validationState) validateFanouts() {
 func (s *validationState) validateDerivedWiring() {
 	derived := DeriveWiring(s.def)
 	for _, diagnostic := range derived.Diagnostics {
-		if diagnostic.WorkflowID == "" {
-			diagnostic.WorkflowID = s.def.ID
+		if diagnostic.WorkflowID == nil {
+			diagnostic.WorkflowID = WorkflowIDPointer(s.def.ID)
 		}
 		s.errors = append(s.errors, diagnostic)
 	}
@@ -1012,81 +1151,12 @@ func (s *validationState) fanoutHasValidJoin(group TransitionGroup, edges []Edge
 		}
 		branchJoinDistances = append(branchJoinDistances, distances)
 	}
-	common := map[NodeID]int{}
-	for joinID, distance := range branchJoinDistances[0] {
-		common[joinID] = distance
-	}
-	for _, distances := range branchJoinDistances[1:] {
-		for joinID := range common {
-			distance, exists := distances[joinID]
-			if !exists {
-				delete(common, joinID)
-				continue
-			}
-			common[joinID] += distance
-		}
-	}
-	if len(common) == 0 {
-		return false
-	}
-	nearestDistance := 0
-	var nearestJoinID NodeID
-	nearestCount := 0
-	for joinID, distance := range common {
-		if nearestCount == 0 || distance < nearestDistance {
-			nearestDistance = distance
-			nearestJoinID = joinID
-			nearestCount = 1
-			continue
-		}
-		if distance == nearestDistance {
-			nearestCount++
-		}
-	}
-	return nearestCount == 1 && nearestJoinID != group.SourceNodeID
+	nearestJoinID, found := fanoutNearestCommonJoin(branchJoinDistances)
+	return found && nearestJoinID != group.SourceNodeID
 }
 
 func (s *validationState) branchJoinDistances(start NodeID) (map[NodeID]int, bool) {
-	type frame struct {
-		nodeID   NodeID
-		distance int
-		path     map[NodeID]bool
-	}
-	distances := map[NodeID]int{}
-	stack := []frame{{nodeID: start, distance: 0, path: map[NodeID]bool{}}}
-	for len(stack) > 0 {
-		current := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if current.path[current.nodeID] {
-			return nil, false
-		}
-		node, exists := s.nodesByID[current.nodeID]
-		if !exists {
-			return nil, false
-		}
-		if node.Kind() == NodeKindJoin {
-			previous, exists := distances[current.nodeID]
-			if !exists || current.distance < previous {
-				distances[current.nodeID] = current.distance
-			}
-			continue
-		}
-		if node.Kind() == NodeKindTerminal {
-			return nil, false
-		}
-		groups := s.groupsBySource[current.nodeID]
-		for _, branchGroup := range groups {
-			if len(s.edgesByGroup[branchGroup.ID]) > 1 {
-				return nil, false
-			}
-		}
-		nextPath := maps.Clone(current.path)
-		nextPath[current.nodeID] = true
-		for _, edge := range s.outgoingByNode[current.nodeID] {
-			stack = append(stack, frame{nodeID: edge.TargetNodeID, distance: current.distance + 1, path: nextPath})
-		}
-	}
-	return distances, true
+	return fanoutBranchJoinDistances(s.nodesByID, s.groupsBySource, s.edgesByGroup, s.outgoingByNode, start)
 }
 
 func (s *validationState) addHard(code ValidationErrorCode, message string, ref ValidationError) {

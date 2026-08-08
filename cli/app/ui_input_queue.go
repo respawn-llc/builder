@@ -1,12 +1,14 @@
 package app
 
 import (
+	"context"
 	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -108,16 +110,34 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	})
 	client := m.runtimeClient()
 	return func() tea.Msg {
-		item, err := queueRuntimeUserMessage(client, trimmed, clientRequestID)
-		return injectedQueueCreateDoneMsg{token: token, localID: localID, item: item, approvalCommentaryAnswer: answer, err: err}
+		item, completed, err := submitRuntimeSteering(client, trimmed, clientRequestID)
+		return injectedQueueCreateDoneMsg{
+			token:                    token,
+			localID:                  localID,
+			item:                     item,
+			completed:                completed,
+			approvalCommentaryAnswer: answer,
+			err:                      err,
+		}
 	}
 }
 
-func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, error) {
-	return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID},
-		Text:         text,
+func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, bool, error) {
+	submission, err := client.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindSubmit,
+			ClientRequestID: clientRequestID,
+		},
+		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
+		Input:                           runtimeinput.Text(text),
 	})
+	if err != nil {
+		return clientui.QueuedUserMessage{}, false, err
+	}
+	if strings.TrimSpace(submission.Queued.ID) == "" {
+		return clientui.QueuedUserMessage{}, true, nil
+	}
+	return submission.Queued, false, nil
 }
 
 func (m *uiModel) queueInjectedInput(text string) tea.Cmd {
@@ -190,6 +210,17 @@ func (c uiInputController) blockDisconnectedSubmission(restoreHidden bool, submi
 	return true, m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, runtimeDisconnectedStatusMessage, "")
 }
 
+func (c uiInputController) blockDisconnectedQueuedSubmission() (bool, tea.Cmd) {
+	m := c.model
+	if !m.runtimeDisconnectStatusVisible() {
+		return false, nil
+	}
+	c.restoreQueuedMessagesIntoInput()
+	m.layout().syncViewport()
+	statusCmd := m.sendTransientStatusWithNoticeID(runtimeDisconnectedStatusMessage, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	return true, statusCmd
+}
+
 func (c uiInputController) restoreQueuedMessagesIntoInput() {
 	m := c.model
 	if len(m.queued) == 0 {
@@ -251,7 +282,7 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 	if len(m.queued) == 0 {
 		return m, nil
 	}
-	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, ""); blocked {
+	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return m, disconnectCmd
 	}
 	cmds := make([]tea.Cmd, 0, 2)
@@ -301,12 +332,19 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 				if commandResult.Action == commands.ActionCompact {
 					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
 				}
-				_, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueFront)
-				return finalizeSlashCommandCmd(commandResult.Action, cmd, m.recordPromptHistory(text))
+				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult, preSubmitQueueFront, activeSubmitOriginQueued)
+				var recordCmd tea.Cmd
+				if commandResult.PromptCommand == nil {
+					recordCmd = m.recordPromptHistory(text)
+				}
+				return finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 			}
 		}
 	}
-	return c.startSubmissionWithPromptHistoryAndQueuePositionAndID(item.Text, preSubmitQueueFront, item.ID)
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
+	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(item.Text, preSubmitQueueFront, item.ID, activeSubmitOriginQueued)
 }
 
 func (m *uiModel) shouldContinueQueuedInputAutoDrain() bool {
@@ -474,17 +512,28 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		if item.State == injectedRuntimeQueuePendingCreate {
 			c.restoreInjectedTextIntoInput(item.Text)
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
-			m.activity = uiActivityError
-			appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
+			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)
 			m.removeInjectedQueueItemAt(index)
 			m.layout().syncViewport()
 			if approvalCommentaryAnswer != nil {
-				return m, sequenceCmds(appendCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
+				return m, batchCmds(statusCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
 			}
-			return m, appendCmd
+			return m, statusCmd
 		}
 		m.removeInjectedQueueItemAt(index)
+		return m, nil
+	}
+	if msg.completed {
+		m.removePendingInjectedByID(item.LocalID)
+		m.removeInjectedQueueItemAt(index)
+		if item.State != injectedRuntimeQueuePendingCreate {
+			return m, nil
+		}
+		m.rememberPromptHistoryLocally(item.Text)
+		if approvalCommentaryAnswer != nil {
+			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
+		}
 		return m, nil
 	}
 	serverID := strings.TrimSpace(msg.item.ID)

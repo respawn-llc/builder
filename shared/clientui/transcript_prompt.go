@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
 )
 
 type PromptID string
@@ -17,11 +18,11 @@ const (
 	TranscriptPromptKindApproval TranscriptPromptKind = "approval"
 )
 
-type TranscriptPromptState string
+type TranscriptPromptStatus string
 
 const (
-	TranscriptPromptStatePending  TranscriptPromptState = "pending"
-	TranscriptPromptStateResolved TranscriptPromptState = "resolved"
+	TranscriptPromptStatusPending  TranscriptPromptStatus = "pending"
+	TranscriptPromptStatusResolved TranscriptPromptStatus = "resolved"
 )
 
 type ToolProvenance struct {
@@ -31,7 +32,7 @@ type ToolProvenance struct {
 
 type TranscriptPrompt struct {
 	Kind                   TranscriptPromptKind
-	State                  TranscriptPromptState
+	Status                 TranscriptPromptStatus `json:"State"`
 	PromptID               PromptID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
@@ -47,7 +48,7 @@ func (p TranscriptPrompt) Validate() error {
 	if err := p.Kind.Validate(); err != nil {
 		return err
 	}
-	if err := p.State.Validate(); err != nil {
+	if err := p.Status.Validate(); err != nil {
 		return err
 	}
 	if err := p.PromptID.Validate(); err != nil {
@@ -87,9 +88,9 @@ func (k TranscriptPromptKind) Validate() error {
 	}
 }
 
-func (s TranscriptPromptState) Validate() error {
+func (s TranscriptPromptStatus) Validate() error {
 	switch s {
-	case TranscriptPromptStatePending, TranscriptPromptStateResolved:
+	case TranscriptPromptStatusPending, TranscriptPromptStatusResolved:
 		return nil
 	default:
 		return fmt.Errorf("unknown pending prompt state %q", s)
@@ -126,12 +127,8 @@ func (p TranscriptPrompt) validateApproval() error {
 	}
 	seen := make(map[ApprovalDecision]struct{}, len(p.ApprovalOptions))
 	for index, decision := range p.ApprovalOptions {
-		switch decision {
-		case ApprovalDecisionAllowOnce,
-			ApprovalDecisionAllowSession,
-			ApprovalDecisionDeny:
-		default:
-			return fmt.Errorf("pending prompt approval option %d has unknown decision %q", index, decision)
+		if err := sessioncontract.ValidatePromptApprovalDecision(decision); err != nil {
+			return fmt.Errorf("pending prompt approval option %d: %w", index, err)
 		}
 		if _, exists := seen[decision]; exists {
 			return fmt.Errorf("pending prompt approval decision %q is duplicated", decision)
@@ -155,8 +152,12 @@ func (p *ToolProvenance) Validate() error {
 }
 
 func (id PromptID) Validate() error {
-	if strings.TrimSpace(string(id)) == "" {
+	raw := string(id)
+	if strings.TrimSpace(raw) == "" {
 		return fmt.Errorf("pending prompt id is required")
+	}
+	if strings.TrimSpace(raw) != raw {
+		return fmt.Errorf("pending prompt id must not have leading or trailing whitespace")
 	}
 	return nil
 }

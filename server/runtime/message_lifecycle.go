@@ -2,14 +2,18 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type defaultMessageLifecycle struct {
@@ -31,75 +35,190 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	meta := e.store.Meta()
 	recoveredHandoff := newPersistedHandoffRecovery()
 	reminderIssued := meta.CompactionSoonReminderIssued
-	activeWindow, err := e.store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
+	var matchErr error
+	activeWindow, err := e.eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
 		return err
 	}
-	activeListEvents := activeWindow.Events
+	if matchErr != nil {
+		return matchErr
+	}
 	var rollbackLocator rollbackCandidateLocatorTracker
-	for _, evt := range activeListEvents {
-		switch evt.Kind {
-		case "message":
-			var msg llm.Message
-			if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-				return fmt.Errorf("decode message event: %w", err)
+	manualEligible := false
+	type restoredToolGeneration struct {
+		expected  map[string]struct{}
+		completed map[string]struct{}
+	}
+	generationsByStep := make(map[string][]*restoredToolGeneration)
+	for _, record := range activeWindow.Records {
+		stepID, _ := textutil.OptionalExact(record.StepID())
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		switch payload := payload.(type) {
+		case session.MessageRecord:
+			msg, err := llmMessageFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session message record: %w", err)
 			}
-			if err := rollbackLocator.ObserveMessage(evt.Seq, msg); err != nil {
+			if err := rollbackLocator.ObserveMessage(record.Seq(), msg); err != nil {
 				return err
 			}
-			e.transcriptRuntimeState().AppendMessage(evt.StepID, msg)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session message provenance: %w", provenanceErr)
+			}
+			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); err != nil {
+				return fmt.Errorf("restore session message projection: %w", err)
+			}
+			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
+				expected := make(map[string]struct{}, len(msg.ToolCalls))
+				userShellGeneration := true
+				for _, call := range msg.ToolCalls {
+					if call.ID != "" {
+						expected[call.ID] = struct{}{}
+					}
+					if !isUserInitiatedShellCall(call) {
+						userShellGeneration = false
+					}
+				}
+				if len(expected) > 0 && !userShellGeneration {
+					generationsByStep[stepID] = append(generationsByStep[stepID], &restoredToolGeneration{
+						expected:  expected,
+						completed: make(map[string]struct{}, len(expected)),
+					})
+				}
+			} else if msg.Role == llm.RoleAssistant &&
+				((msg.Content != nil && strings.TrimSpace(*msg.Content) != "") || len(msg.ReasoningItems) > 0) {
+				manualEligible = true
+			}
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true
 			}
-		case "tool_completed":
-			if err := e.transcriptRuntimeState().RestoreToolCompletionPayload(evt.Payload); err != nil {
+		case session.ToolCompletionRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session tool completion provenance: %w", provenanceErr)
+			}
+			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload, &provenance); err != nil {
 				return err
 			}
-			if err := recoveredHandoff.ApplyToolCompletion(evt.Payload); err != nil {
-				return err
+			for _, generation := range generationsByStep[stepID] {
+				if _, ok := generation.expected[payload.CallID]; ok {
+					generation.completed[payload.CallID] = struct{}{}
+				}
 			}
-		case "local_entry":
-			var entry storedLocalEntry
-			if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-				return fmt.Errorf("decode local_entry event: %w", err)
-			}
-			e.diagnosticDedupeStore().RestoreLocal(entry.DiagnosticKey)
-			restored := *localEntryChatEntryForStep(entry, evt.StepID)
-			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID)
-		case sessionEventCacheWarning:
-			if err := applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), evt.Payload, e.cfg.CacheWarningMode); err != nil {
-				return err
-			}
-		case sessionEventCacheRequestObserved:
-			if err := e.restorePromptCacheRequest(evt.Payload); err != nil {
-				return err
-			}
-		case sessionEventCacheResponseObserved:
-			if err := e.restorePromptCacheResponse(evt.Payload); err != nil {
-				return err
-			}
-		case "history_replaced":
-			payload, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
+			completion, err := storedToolCompletionFromSessionRecord(payload)
 			if err != nil {
-				return fmt.Errorf("%w: %w", errDecodeHistoryReplacedEvent, err)
+				return fmt.Errorf("restore session tool completion record: %w", err)
 			}
-			if ignoredLegacy {
+			if err := recoveredHandoff.ApplyToolCompletion(completion); err != nil {
+				return err
+			}
+		case session.LocalEntryRecord:
+			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
 				continue
 			}
+			entry, err := storedLocalEntryFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session local entry record: %w", err)
+			}
+			if entry.DiagnosticKey != nil {
+				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
+			}
+			restored := *localEntryChatEntryForStep(entry, stepID)
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session local entry provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID, &provenance)
+		case session.ReviewerFeedbackRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer feedback provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(
+				reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
+			)
+		case session.ReviewerErrorRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore Reviewer error provenance: %w", provenanceErr)
+			}
+			e.transcriptRuntimeState().AppendLocalEntryRecord(
+				reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance), nil,
+			)
+		case session.CacheWarningRecord:
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session cache warning provenance: %w", provenanceErr)
+			}
+			applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), payload, e.cfg.CacheWarningMode, &provenance)
+		case session.CacheRequestObservationRecord:
+			// Cache requests are observational. The following response record
+			// reconstructs the cache tracker state.
+		case session.CacheResponseObservationRecord:
+			if cache := e.modelRequests().RequestCache(); cache != nil {
+				cache.RecordResponse(persistedCacheResponseObservedFromSessionRecord(payload))
+			}
+		case session.HistoryReplacementRecord:
+			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session history replacement record: %w", err)
+			}
 			e.resetLocalDiagnostics()
-			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(evt.StepID, payload.Items, payload.CommittedEntryStart)
-			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
-			if payload.CompactionNumber > 0 {
-				e.compactionRuntimeState().SetCount(payload.CompactionNumber)
+			manualEligible = false
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return fmt.Errorf("restore session history replacement provenance: %w", provenanceErr)
+			}
+			projectedEntries := transcriptEntriesFromHistoryReplacement(
+				replacement.Items,
+				replacement.CompactionNumber,
+			)
+			for index := range projectedEntries {
+				projectedEntries[index].StepID = stepID
+			}
+			projectedEntries = assignHistoryReplacementEntryProvenance(projectedEntries, &provenance)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
+				stepID,
+				replacement.Items,
+				replacement.CommittedEntryStart,
+				projectedEntries,
+			)
+			replacementMode := session.CompactionMode(replacement.Mode)
+			if err := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode); err != nil {
+				return fmt.Errorf("restore history replacement mode: %w", err)
+			}
+			if replacement.LastCommittedAssistantFinalAnswer != nil {
+				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
+					*replacement.LastCommittedAssistantFinalAnswer,
+				)
+			}
+			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {
+				e.compactionRuntimeState().SetCount(*replacement.CompactionNumber)
 			} else {
 				e.compactionRuntimeState().IncrementCount()
 			}
-			e.compactionRuntimeState().SetLastWorkflowRunID(payload.WorkflowRunID)
-			rollbackLocator.ObserveHistoryReplacement(payload)
+			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()
-			recoveredHandoff.SeedFutureMessage(payload.PendingHandoffFutureMessage)
+			if replacement.PendingHandoffFutureMessage != nil {
+				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
+			}
 			reminderIssued = false
+		}
+		e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+			workflowPostCompletionActivityForSessionRecord(payload),
+		)
+	}
+	for _, generations := range generationsByStep {
+		for _, generation := range generations {
+			if len(generation.expected) > 0 && len(generation.completed) == len(generation.expected) {
+				manualEligible = true
+				break
+			}
 		}
 	}
 	restoredRollbackCandidate, err := rollbackLocator.Resolve(activeWindow.EndOffset)
@@ -110,6 +229,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
+	e.compactionRuntimeState().SetManualCompactionEligible(manualEligible)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {
 		return err
 	}
@@ -128,8 +248,41 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	return nil
 }
 
+func workflowPostCompletionActivityForSessionRecord(payload any) workflowPostCompletionActivity {
+	switch record := payload.(type) {
+	case session.MessageRecord:
+		message := llm.Message{
+			Role:            llm.Role(record.Role),
+			SourcePath:      textutil.Pointer(record.SourcePath),
+			WorktreeContext: session.CloneWorktreeContext(record.WorktreeContext),
+		}
+		if record.MessageType != nil {
+			messageType := llm.MessageType(*record.MessageType)
+			message.MessageType = &messageType
+		}
+		return workflowPostCompletionMessageActivity(message)
+	case session.ToolCompletionRecord:
+		return workflowPostCompletionDurableActivity
+	case session.CacheRequestObservationRecord:
+		return workflowPostCompletionNoActivity
+	default:
+		return workflowPostCompletionNoActivity
+	}
+}
+
+func isUserInitiatedShellCall(call llm.ToolCall) bool {
+	if call.Name != string(toolspec.ToolExecCommand) {
+		return false
+	}
+	return tools.ParseShellToolCallUserInitiated(call.Input)
+}
+
 func isCompactionSoonReminderMessage(msg llm.Message) bool {
-	return msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeCompactionSoonReminder && strings.TrimSpace(msg.Content) != ""
+	return msg.Role == llm.RoleDeveloper &&
+		msg.MessageType != nil &&
+		*msg.MessageType == llm.MessageTypeCompactionSoonReminder &&
+		msg.Content != nil &&
+		strings.TrimSpace(*msg.Content) != ""
 }
 
 type persistedHandoffRecovery struct {
@@ -146,7 +299,10 @@ func (r *persistedHandoffRecovery) ApplyMessage(msg llm.Message) {
 	if r == nil {
 		return
 	}
-	if msg.MessageType == llm.MessageTypeHandoffFutureMessage && strings.TrimSpace(msg.Content) != "" {
+	if msg.MessageType != nil &&
+		*msg.MessageType == llm.MessageTypeHandoffFutureMessage &&
+		msg.Content != nil &&
+		strings.TrimSpace(*msg.Content) != "" {
 		r.pendingFutureMessage = ""
 	}
 	if msg.Role != llm.RoleAssistant {
@@ -168,13 +324,9 @@ func (r *persistedHandoffRecovery) ApplyMessage(msg llm.Message) {
 	}
 }
 
-func (r *persistedHandoffRecovery) ApplyToolCompletion(payload []byte) error {
+func (r *persistedHandoffRecovery) ApplyToolCompletion(completion storedToolCompletion) error {
 	if r == nil {
 		return nil
-	}
-	var completion storedToolCompletion
-	if err := json.Unmarshal(payload, &completion); err != nil {
-		return fmt.Errorf("decode tool_completed event: %w", err)
 	}
 	if toolspec.ID(strings.TrimSpace(completion.Name)) != toolspec.ToolTriggerHandoff || completion.IsError {
 		delete(r.toolCalls, strings.TrimSpace(completion.CallID))
@@ -253,123 +405,186 @@ func handoffRequestFromToolCall(call llm.ToolCall) (*handoffRequest, bool) {
 	}, true
 }
 
-func normalizeQueuedUserMessages(messages []queuedUserSteeringIntent) []string {
-	out := make([]string, 0, len(messages))
-	for _, message := range messages {
-		trimmed := queuedUserSteeringIntentText(message.intent)
-		if trimmed == "" {
-			continue
-		}
-		out = append(out, trimmed)
+func queuedUserMessageText(message QueuedUserMessage) (string, error) {
+	text, err := message.DisplayText()
+	if err != nil {
+		return "", err
 	}
-	return out
+	return strings.TrimSpace(text), nil
 }
 
-func queuedUserSteeringIntentText(intent steeringIntent) string {
-	parts := make([]string, 0, len(intent.items))
-	for _, item := range intent.items {
-		if item.message == nil || item.message.message.Role != llm.RoleUser {
-			continue
-		}
-		content := strings.TrimSpace(item.message.message.Content)
-		if content == "" {
-			continue
-		}
-		parts = append(parts, content)
-	}
-	return strings.Join(parts, "\n\n")
+type queuedUserMessageFlushGroup struct {
+	message    llm.Message
+	batch      []string
+	queueItems []QueuedUserMessage
+	pending    []queuedUserMessage
 }
 
-func queuedUserMessagesForFlush(messages []queuedUserSteeringIntent) []QueuedUserMessage {
+func queuedUserMessageFlushGroups(messages []queuedUserMessage) ([]queuedUserMessageFlushGroup, error) {
+	groups := make([]queuedUserMessageFlushGroup, 0, len(messages))
+	for _, pending := range messages {
+		text, err := queuedUserMessageText(pending.message)
+		if err != nil {
+			return nil, err
+		}
+		if text == "" {
+			continue
+		}
+		queueItems, err := queuedUserMessagesForFlush([]queuedUserMessage{pending})
+		if err != nil {
+			return nil, err
+		}
+		if len(queueItems) == 0 {
+			continue
+		}
+		message := pending.message.Message
+		if message.Role == llm.RoleUser && len(groups) > 0 && groups[len(groups)-1].message.Role == llm.RoleUser {
+			group := &groups[len(groups)-1]
+			group.message.Content = textutil.Value(strings.Join([]string{*group.message.Content, text}, "\n\n"))
+			group.batch = append(group.batch, text)
+			group.queueItems = append(group.queueItems, queueItems...)
+			group.pending = append(group.pending, pending)
+			continue
+		}
+		groups = append(groups, queuedUserMessageFlushGroup{
+			message:    message,
+			batch:      []string{text},
+			queueItems: queueItems,
+			pending:    []queuedUserMessage{pending},
+		})
+	}
+	return groups, nil
+}
+
+func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessage, error) {
 	items := make([]QueuedUserMessage, 0, len(messages))
 	for _, message := range messages {
 		item := message.message
 		item.ID = strings.TrimSpace(item.ID)
 		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-		if item.ID == "" || queuedUserSteeringIntentText(message.intent) == "" {
+		text, err := queuedUserMessageText(item)
+		if err != nil {
+			return nil, err
+		}
+		if item.ID == "" || text == "" {
 			continue
 		}
 		items = append(items, item)
 	}
-	return items
+	return items, nil
 }
 
-// FlushPendingUserInjections flushes queued user injections for the step. An empty
-// queueItemIDs flushes every pending injection; a non-empty set flushes only those
-// IDs.
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
-	var pending []queuedUserSteeringIntent
-	if len(queueItemIDs) == 0 {
-		pending = m.queue.Drain()
-	} else {
-		pending = m.queue.DrainByID(queueItemIDs)
+func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
+	result, err := m.CommitPendingUserInjections(stepID, selection)
+	if err != nil || result.disposition != userInjectionFlushContinue {
+		return result, err
 	}
-	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
-	return m.flushPendingUserInjections(stepID, pending)
+	if m.background != nil {
+		flushed, flushErr := m.background.flushPendingNotices(stepID)
+		result.flushed += flushed
+		if flushErr != nil {
+			return result, flushErr
+		}
+	}
+	return result, nil
 }
 
-func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (int, session.CommitReceipt, error) {
-	e := m.engine
-	flushed := 0
-	var flushReceipt session.CommitReceipt
-
-	queuedMessages := normalizeQueuedUserMessages(pending)
-	if len(queuedMessages) > 0 {
-		pending = e.dropStoppedLiveRunQueueItems(pending)
-		queuedMessages = normalizeQueuedUserMessages(pending)
-		if len(queuedMessages) == 0 {
-			return flushed, flushReceipt, nil
+func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
+	var pending []queuedUserMessage
+	m.engine.outputMutationMu.Lock()
+	switch selected := selection.(type) {
+	case allPendingUserInjectionSelection:
+		pending = m.queue.Drain()
+	case steerUserInjectionSelection:
+		if len(selected.queueItemIDs) > 0 {
+			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
-		joined := strings.Join(queuedMessages, "\n\n")
-		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
+	default:
+		m.engine.outputMutationMu.Unlock()
+		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
+	}
+	m.engine.outputMutationMu.Unlock()
+	return m.commitPendingUserInjections(stepID, pending)
+}
+
+func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserMessage) (userInjectionCommitResult, error) {
+	e := m.engine
+	result := userInjectionCommitResult{disposition: userInjectionFlushContinue}
+
+	// Recheck immediately before commit because a live-run stop can race the drain.
+	pending = e.dropStoppedLiveRunQueueItems(pending)
+	groups, err := queuedUserMessageFlushGroups(pending)
+	if err != nil {
+		return result, err
+	}
+	for groupIndex, group := range groups {
+		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(group.pending, func() error {
 			receipt, persistErr := e.steerWithCommitReceipt(
 				stepID,
-				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)),
+				steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
 			)
-			flushReceipt = receipt
+			result.receipt = receipt
 			return persistErr
 		})
 		if err != nil {
-			if !flushReceipt.Committed {
-				m.queue.RestoreFront(pending)
+			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
+			if !result.receipt.Committed {
+				tail := make([]queuedUserMessage, 0, len(groups)-groupIndex)
+				for _, remaining := range groups[groupIndex:] {
+					for _, item := range remaining.queueItems {
+						for _, original := range pending {
+							if original.message.ID == item.ID {
+								tail = append(tail, original)
+								break
+							}
+						}
+					}
+				}
+				err = errors.Join(err, e.steer(stepID, steerQueuedUserMessageRestoreIntent(tail)))
 			}
-			return flushed, flushReceipt, err
+			return result, err
 		}
 		if !publishAllowed {
-			for _, item := range pending {
-				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			e.outputMutationMu.Lock()
+			tailItems := make([]QueuedUserMessage, 0)
+			for _, remaining := range groups[groupIndex:] {
+				tailItems = append(tailItems, remaining.queueItems...)
 			}
-			return flushed, flushReceipt, nil
+			for _, item := range tailItems {
+				e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+				e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			}
+			e.outputMutationMu.Unlock()
+			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
+			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
+			result.disposition = userInjectionFlushStopped
+			return result, nil
 		}
-		flushed++
+		if result.queueItemIDs == nil {
+			result.queueItemIDs = queuedUserMessageIDSet(group.queueItems)
+		} else {
+			for queueItemID := range queuedUserMessageIDSet(group.queueItems) {
+				result.queueItemIDs[queueItemID] = struct{}{}
+			}
+		}
+		result.flushed++
 	}
 	for _, item := range pending {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 	}
-	pendingNotices := []steeringIntent(nil)
-	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
-	}
-	for _, notice := range pendingNotices {
-		if err := e.steer(stepID, notice); err != nil {
-			return flushed, flushReceipt, err
-		}
-		flushed++
-	}
-	return flushed, flushReceipt, nil
+	return result, nil
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {
+func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}
+		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
 	return m.queue.Queue(text, clientRequestID)
 }
 
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage {
+func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error) {
 	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}
+		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
 	}
 	return m.queue.QueueItem(item)
 }
@@ -398,6 +613,20 @@ func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]
 	return out
 }
 
+func (m *defaultMessageLifecycle) PendingUserMessages() []QueuedUserMessage {
+	if m == nil || m.queue == nil {
+		return nil
+	}
+	return m.queue.Snapshot()
+}
+
+func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserMessage) {
+	if m == nil || m.queue == nil {
+		return
+	}
+	m.queue.RestoreFront(items)
+}
+
 func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
 	if m == nil || m.queue == nil {
 		return QueuedUserMessage{}, false
@@ -409,8 +638,8 @@ func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
-func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
-	roots := activeMetaContextRootsForMeta(meta)
+func newActiveMetaContextBuilder(meta session.Meta, executionRoot, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
+	roots := activeMetaContextRootsForMeta(meta, executionRoot)
 	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
 		withEnvironmentCWD(roots.environmentCWD).
 		withGlobalConfigDir(globalConfigDir)
@@ -422,9 +651,12 @@ type activeMetaContextRoots struct {
 	environmentCWD string
 }
 
-func activeMetaContextRootsForMeta(meta session.Meta) activeMetaContextRoots {
-	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
-	roots := activeMetaContextRoots{discoveryRoot: workspaceRoot, environmentCWD: workspaceRoot}
+func activeMetaContextRootsForMeta(meta session.Meta, executionRoot string) activeMetaContextRoots {
+	activeRoot := strings.TrimSpace(executionRoot)
+	if activeRoot == "" {
+		activeRoot = strings.TrimSpace(meta.WorkspaceRoot)
+	}
+	roots := activeMetaContextRoots{discoveryRoot: activeRoot, environmentCWD: activeRoot}
 	state := session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if state == nil {
 		return roots

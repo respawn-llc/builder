@@ -2,6 +2,7 @@ package clientui
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/shared/runtimeids"
@@ -57,14 +58,12 @@ type RuntimeStatus struct {
 	ContextUsage                      RuntimeContextUsage
 	CompactionCount                   int
 	Goal                              *RuntimeGoal
-	WorkflowActive                    bool
 	WorkflowSession                   *WorkflowSessionStatus
 }
 
 type WorkflowSessionStatus struct {
-	RunID      string
 	TaskID     string
-	WorkflowID string
+	WorkflowID runtimeids.WorkflowID
 }
 
 type RunStatus string
@@ -163,9 +162,21 @@ func SessionExecutionTargetsEqual(a SessionExecutionTarget, b SessionExecutionTa
 		normalizedA.EffectiveWorkdir == normalizedB.EffectiveWorkdir
 }
 
+func SessionExecutionWorkspaceRoot(target SessionExecutionTarget, fallback string) (string, error) {
+	if target.Worktree == nil {
+		return fallback, nil
+	}
+	root := strings.TrimSpace(target.Worktree.Root)
+	if root == "" {
+		return "", errors.New("session execution worktree root is required")
+	}
+	return root, nil
+}
+
 type RuntimeSessionView struct {
 	SessionID             string
 	SessionName           string
+	AgentRole             *string
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
 }
@@ -195,7 +206,6 @@ type RuntimeClient interface {
 	HasQueuedUserWork() (bool, error)
 	SubmitRuntimeQueued(ctx context.Context, req RuntimeSubmitQueuedRequest) (string, error)
 	Interrupt() error
-	QueueRuntimeUserMessage(req RuntimeQueueUserMessageRequest) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) bool
 	RecordPromptHistory(text string) error
 }

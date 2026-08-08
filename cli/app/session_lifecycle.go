@@ -8,9 +8,12 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -33,12 +36,15 @@ type sessionWorkspaceChangeServer interface {
 	sessionConfigProvider
 }
 
+type promptCommandCatalogServer interface {
+	PromptCommandCatalogClient(context.Context, string, clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error)
+}
+
 type interactiveSessionServer interface {
 	appServerCore
 	launchPlannerServer
 	sessionWorkspaceChangeServer
 	sessionTransitionServer
-	ClientPromptRoots() (commands.ClientPromptRoots, error)
 	EnsureAuthReady(ctx context.Context, interactor authInteractor, interactive bool) error
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error)
 }
@@ -62,6 +68,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
+	clientSettings := clientSettingsForInteractiveServer(server)
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -171,6 +178,13 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
+		plan.ClientLifecycleCommand = clientSettings.Hooks.LifecycleCommand()
+		switch intent.Kind() {
+		case serverapi.SessionLaunchIntentCreateNew:
+			plan.ClientLifecycleOpeningKind = lifecyclecontract.OpeningKindNew
+		case serverapi.SessionLaunchIntentOpenExisting:
+			plan.ClientLifecycleOpeningKind = lifecyclecontract.OpeningKindResumed
+		}
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
 		if err != nil {
@@ -254,13 +268,31 @@ func prepareSessionUIRun(
 	if err != nil {
 		return nil, uiLoopRequest{}, err
 	}
-	promptRoots, err := server.ClientPromptRoots()
-	if err != nil {
-		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
-	}
-	commandRegistry, err := commands.NewDefaultRegistryWithClientPromptRoots(promptRoots)
-	if err != nil {
-		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
+	commandRegistry := commands.NewDefaultRegistry()
+	var catalogStatus *string
+	var promptCatalog apicontract.PromptCommandCatalogService
+	var catalogEntries []commands.PromptCommandCatalogEntry
+	if catalogServer, ok := server.(promptCommandCatalogServer); ok {
+		catalogClient, catalogErr := catalogServer.PromptCommandCatalogClient(ctx, plan.SessionID, plan.ExecutionTarget)
+		if catalogErr != nil {
+			notice := "Custom prompt commands are unavailable for this session."
+			catalogStatus = &notice
+		} else if catalogClient != nil {
+			promptCatalog = catalogClient
+			response, catalogErr := catalogClient.GetPromptCommandCatalog(ctx, serverapi.PromptCommandCatalogRequest{})
+			if catalogErr == nil {
+				var entries []commands.PromptCommandCatalogEntry
+				entries, catalogErr = promptCatalogSnapshot(response)
+				catalogEntries = entries
+				if catalogErr == nil {
+					commandRegistry = commands.NewDefaultRegistryWithPromptCatalog(entries)
+				}
+			}
+			if catalogErr != nil {
+				notice := "Custom prompt commands are unavailable for this session."
+				catalogStatus = &notice
+			}
+		}
 	}
 	initialState, err := sessionLaunchInitialStateFromServer(
 		ctx,
@@ -273,6 +305,7 @@ func prepareSessionUIRun(
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
 	}
 	return runtimePlan, uiLoopRequest{
+		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,
@@ -280,10 +313,13 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
-		sessionName:                  plan.SessionName,
+		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
+		initialTransientStatus:       catalogStatus,
+		promptCatalog:                promptCatalog,
+		promptCatalogEntries:         catalogEntries,
 	}, nil
 }
 
@@ -448,7 +484,7 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 			Action:                       transition.Action,
 			InitialPrompt:                transition.InitialPrompt,
 			InitialPromptHistoryRecorded: transition.InitialPromptHistoryRecorded,
-			InitialInput:                 transition.InitialInput,
+			InitialInput:                 sessionTransitionInitialInput(transition),
 			TargetSessionID:              transition.TargetSessionID,
 			ForkRollbackTargetID:         transition.ForkRollbackTargetID,
 			PreviousSessionID:            transition.PreviousSessionID,
@@ -467,4 +503,13 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		}
 	}
 	return resolved, nil
+}
+
+func sessionTransitionInitialInput(transition UITransition) *string {
+	switch transition.Action {
+	case UIActionForkRollback, UIActionOpenSession:
+		return textutil.Pointer(transition.InitialInput)
+	default:
+		return nil
+	}
 }

@@ -14,6 +14,7 @@ import type {
 } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { type SelectFieldOption } from "@/ui";
+import { visibleWorkflowEdgeParameters } from "./workflowEditorEdgeSelection";
 import { fallbackLabel, nodeByID, transitionGroupByID } from "./workflowInspectorModel";
 
 export type Translate = ReturnType<typeof useTranslation>["t"];
@@ -98,6 +99,16 @@ export function derivedEdgeWiring(definition: WorkflowDefinition, edgeID: string
       inputBindings: [],
       requiredProviderFields: [],
       requiredProvisionFields: [],
+      assigneeSelectionApplicability: {
+        available: false,
+        parameterVisible: false,
+        reason: "unavailable_configuration",
+      },
+      thinkingSelectionApplicability: {
+        available: false,
+        parameterVisible: false,
+        reason: "unavailable_configuration",
+      },
     }
   );
 }
@@ -111,9 +122,14 @@ export function edgePromptPlaceholderParameters(
     return derivedNodeWiring(definition, source.id).joinOutputFields.map((field) => ({
       description: field.description,
       key: field.name,
+      purpose: "ordinary",
     }));
   }
-  return edge.parameters;
+  const wiring = derivedEdgeWiring(definition, edge.id);
+  return visibleWorkflowEdgeParameters(edge, {
+    target_assignee: wiring.assigneeSelectionApplicability.parameterVisible,
+    target_thinking: wiring.thinkingSelectionApplicability.parameterVisible,
+  });
 }
 
 export function parameterSummaryFields(

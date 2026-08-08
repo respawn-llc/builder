@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -12,9 +13,11 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -33,6 +36,36 @@ func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
 	return *entry.Registered.Git.BranchName
 }
 
+func createExistingOutsideManagedWorktree(t *testing.T, env *serviceTestEnv, branch string) (string, GitRevision, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "legacy")
+	runGit(t, env.workspaceRoot, "worktree", "add", "-b", branch, root, "HEAD")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	worktrees, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range worktrees {
+		if worktree.Root != canonicalRoot {
+			continue
+		}
+		head, err := env.service.git.ResolveHEAD(env.ctx, canonicalRoot)
+		if err != nil {
+			t.Fatalf("ResolveHEAD: %v", err)
+		}
+		gitMetadata, err := marshalGitMetadata(worktree)
+		if err != nil {
+			t.Fatalf("marshalGitMetadata: %v", err)
+		}
+		return canonicalRoot, head, gitMetadata
+	}
+	t.Fatalf("created outside managed Worktree %q was not listed", canonicalRoot)
+	return "", GitRevision{}, ""
+}
+
 func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -49,6 +82,170 @@ func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want no provisional candidate", row.ManagedWorktreeID)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	legacyRoot, resolved, gitMetadata := createExistingOutsideManagedWorktree(t, env, "legacy-initial")
+	creationBase := resolved.CommitOID
+	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
+		ID: "legacy-initial-record", WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: legacyRoot,
+		Managed: true, CreatedBranch: true, GitMetadataJSON: gitMetadata,
+		CreationBaseCommitOID: &creationBase,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: "legacy-initial-record", Valid: true},
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+
+	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	if err == nil {
+		t.Fatal("MaterializeInitialTaskWorktree accepted an existing root outside the server namespace")
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	record.CanonicalRoot = filepath.Join(env.workspaceRoot, "nested")
+	record.UpdatedAt = time.Now().UTC()
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(record.CanonicalRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot overlapping root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   record.UpdatedAt.UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot overlapping root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if _, err := os.Stat(record.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("overlapping root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	originalRoot := taskWorktreeRoot(materialized.Worktree)
+	legacyRoot := filepath.Join(t.TempDir(), "legacy")
+	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", originalRoot)
+	runGit(t, env.workspaceRoot, "worktree", "add", legacyRoot, task.ShortID)
+	legacyRoot, err := config.CanonicalWorkspaceRoot(legacyRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot legacy root: %v", err)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, taskWorktreeID(materialized.Worktree))
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: legacyRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted an existing root outside the server namespace")
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range registered {
+		if worktree.Root == legacyRoot {
+			return
+		}
+	}
+	t.Fatalf("legacy root %q disappeared after rejected restore", legacyRoot)
+}
+
+func TestRestoreLockedTaskWorktreeRejectsLegacyRootOutsideNamespace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	legacyRoot := filepath.Join(t.TempDir(), "legacy")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(legacyRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot legacy root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot legacy root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted a legacy root outside the server namespace")
+	}
+	if _, err := os.Stat(legacyRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range registered {
+		if worktree.Root == legacyRoot {
+			t.Fatalf("legacy root %q was registered after rejected restore", legacyRoot)
+		}
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
 	}
 }
 
@@ -308,21 +505,17 @@ func TestRestoreLockedTaskWorktreeRebindsHealthyDeterministicRoot(t *testing.T) 
 		t.Fatalf("task source workspace = %+v, stale worktree workspace = %q", taskRow.SourceWorkspaceID, staleRecord.WorkspaceID)
 	}
 
-	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	if err != nil {
-		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
-	}
-	if restored.Created ||
-		taskWorktreeID(restored.Worktree) != taskWorktreeID(materialized.Worktree) ||
-		taskWorktreeRoot(restored.Worktree) != taskWorktreeRoot(materialized.Worktree) {
-		t.Fatalf("restored worktree = %+v, want healthy deterministic root rebound", restored)
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	var lockedErr *LockedTaskWorktreeError
+	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
+		t.Fatalf("RestoreLockedTaskWorktree error = %v, want conflict without Task ownership evidence", err)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
-		t.Fatalf("task managed worktree id = %+v, want rebound %q", row.ManagedWorktreeID, taskWorktreeID(materialized.Worktree))
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree id = %+v, want unbound", row.ManagedWorktreeID)
 	}
 }
 
@@ -351,8 +544,8 @@ func TestRestoreLockedTaskWorktreeRejectsDetachedUnboundExistingRoot(t *testing.
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 	})
 	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
+	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
+		t.Fatalf("RestoreLockedTaskWorktree error = %v, want conflict for unclaimed occupied root", err)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
@@ -409,17 +602,15 @@ func TestRestoreLockedTaskWorktreeRecreatesMissingUnboundRootFromRecordedNamedBr
 		t.Fatalf("task managed worktree id = %+v, want missing binding", taskRow.ManagedWorktreeID)
 	}
 
-	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	if err != nil {
-		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	var lockedErr *LockedTaskWorktreeError
+	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseMissingBranch {
+		t.Fatalf("RestoreLockedTaskWorktree error = %v, want missing-branch without Task ownership evidence", err)
 	}
-	if !restored.Created || restored.CreatedBranch {
-		t.Fatalf("restored worktree = %+v, want recreated unbound root from recorded branch", restored)
-	}
-	if taskWorktreeID(restored.Worktree) != taskWorktreeID(materialized.Worktree) ||
-		taskWorktreeRoot(restored.Worktree) != taskWorktreeRoot(materialized.Worktree) ||
-		taskWorktreeBranch(restored.Worktree) != "operator-renamed" {
-		t.Fatalf("restored worktree = %+v, want original worktree identity on operator-renamed branch", restored)
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, "operator-renamed"); branchErr != nil {
+		t.Fatalf("BranchExists: %v", branchErr)
+	} else if !exists {
+		t.Fatal("restore removed operator-renamed branch")
 	}
 }
 
@@ -868,8 +1059,13 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
-	if taskWorktreeID(resp.Worktree) == "" || !strings.Contains(taskWorktreeRoot(resp.Worktree), source.WorkspaceID) {
-		t.Fatalf("worktree = %+v, want root under source workspace id %q", resp.Worktree, source.WorkspaceID)
+	canonicalBase, err := filepath.EvalSymlinks(env.baseDir)
+	if err != nil {
+		t.Fatalf("canonical managed worktree base: %v", err)
+	}
+	expectedParent := filepath.Join(canonicalBase, normalizeWorkspacePathKey(filepath.Base(sourceRoot)))
+	if taskWorktreeID(resp.Worktree) == "" || filepath.Dir(taskWorktreeRoot(resp.Worktree)) != expectedParent {
+		t.Fatalf("worktree = %+v, want compact parent %q", resp.Worktree, expectedParent)
 	}
 	if got := runGit(t, sourceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
 		t.Fatalf("source branch list = %q, want task branch %q", got, task.ShortID)
@@ -879,14 +1075,35 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	}
 }
 
+func TestTaskSourceWorkspaceRetainsProjectPrimaryOutsideCollectionLimit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := env.store.AttachWorkspaceToProject(env.ctx, env.binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+	}
+
+	source, err := env.service.taskSourceWorkspace(env.ctx, env.binding.ProjectID, "")
+	if err != nil {
+		t.Fatalf("taskSourceWorkspace: %v", err)
+	}
+	if source.WorkspaceID != env.binding.WorkspaceID {
+		t.Fatalf("source workspace = %q, want project primary %q", source.WorkspaceID, env.binding.WorkspaceID)
+	}
+	if source.RootPath != env.workspaceRoot {
+		t.Fatalf("source root = %q, want project primary root %q", source.RootPath, env.workspaceRoot)
+	}
+}
+
 func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	baseRoot, err := defaultWorktreeRoot(env.baseDir, env.binding.WorkspaceID, task.ShortID)
+	parent, err := env.service.managedRoots.ensureWorkspaceParent(env.workspaceRoot)
 	if err != nil {
-		t.Fatalf("defaultWorktreeRoot: %v", err)
+		t.Fatalf("ensure compact parent: %v", err)
 	}
-	if err := os.MkdirAll(baseRoot, 0o755); err != nil {
+	baseRoot := filepath.Join(parent, task.ShortID)
+	if err := os.Mkdir(baseRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll collision root: %v", err)
 	}
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
@@ -901,8 +1118,8 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 	if taskWorktreeRoot(resp.Worktree) == baseRoot {
 		t.Fatalf("worktree root = %q, want suffixed root because base exists", taskWorktreeRoot(resp.Worktree))
 	}
-	if !strings.HasSuffix(taskWorktreeRoot(resp.Worktree), filepath.Base(baseRoot)+"-2") {
-		t.Fatalf("worktree root = %q, want -2 suffix from existing collision behavior", taskWorktreeRoot(resp.Worktree))
+	if filepath.Base(taskWorktreeRoot(resp.Worktree)) == filepath.Base(baseRoot) {
+		t.Fatalf("worktree root = %q, want compact suffix after existing collision", taskWorktreeRoot(resp.Worktree))
 	}
 
 	otherTask, _ := createTaskWorktreeTestTask(t, env)
@@ -917,25 +1134,47 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 	}
 }
 
-func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
+func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testing.T) {
 	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
-	})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
-	}
+	task, created, _ := materializeAndLockTaskWorktree(t, env)
 
-	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
+	_, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+		},
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
-	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
-		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if _, err := os.Stat(taskWorktreeRoot(created.Worktree)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted task worktree root stat error = %v, want not exist", err)
+	}
+	taskAfterDelete, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after deletion: %v", err)
+	}
+	if !taskAfterDelete.ManagedWorktreeID.Valid || taskAfterDelete.ManagedWorktreeID.String != taskWorktreeID(created.Worktree) {
+		t.Fatalf("managed worktree id after deletion = %+v, want retained %q", taskAfterDelete.ManagedWorktreeID, taskWorktreeID(created.Worktree))
+	}
+
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID: task.ID,
+	})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if !restored.Created || taskWorktreeRoot(restored.Worktree) != taskWorktreeRoot(created.Worktree) {
+		t.Fatalf("restored worktree = %+v, want recreated worktree at %q", restored, taskWorktreeRoot(created.Worktree))
+	}
+	taskAfterRestore, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask after restore: %v", err)
+	}
+	if !taskAfterRestore.ManagedWorktreeID.Valid || taskAfterRestore.ManagedWorktreeID.String != taskWorktreeID(created.Worktree) {
+		t.Fatalf("managed worktree id after restore = %+v, want retained %q", taskAfterRestore.ManagedWorktreeID, taskWorktreeID(created.Worktree))
 	}
 }
 
@@ -953,13 +1192,21 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if _, err := workflowStore.CompleteRun(env.ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
-		t.Fatalf("CompleteRun: %v", err)
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("StartTask mutation = %+v, want one current node", started.Mutation)
+	}
+	if _, err := workflowStore.CompleteCurrentNode(env.ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source:       started.Mutation.Created[0].Reference,
+		TransitionID: "done",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+		},
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -1134,20 +1381,20 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 	}
 	startID := taskWorktreeNodeIDByKind(t, def, workflow.NodeKindStart)
 	doneID := taskWorktreeNodeIDByKind(t, def, workflow.NodeKindTerminal)
-	agentID := workflow.NodeID("node-agent-" + string(created.ID))
-	if _, err := store.AddNode(env.ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "implement", Kind: workflow.NodeKindAgent, DisplayName: "Implement", SubagentRole: "workflow-test", PromptTemplate: "Do work"}); err != nil {
+	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	if _, err := store.AddNode(env.ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "implement", Kind: workflow.NodeKindAgent, DisplayName: "Implement", SubagentRole: "workflow-test"}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + created.ID.String()), WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
-	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + string(created.ID)), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"}); err != nil {
+	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + created.ID.String()), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"}); err != nil {
 		t.Fatalf("AddEdge start: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
+	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + created.ID.String()), WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(created.ID)), Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + created.ID.String()), Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	if _, err := store.LinkWorkflow(env.ctx, env.binding.ProjectID, created.ID, true); err != nil {

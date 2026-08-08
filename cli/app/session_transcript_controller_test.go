@@ -92,9 +92,10 @@ func TestOngoingTranscriptControllerHydratesQueuedMessagesIntoLiveFrame(t *testi
 	controller := newTestOngoingTranscriptController(surface, ongoingTestFrameProvider)
 	hydration := ongoingHydrationMessage(1)
 	queued := ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedMessageState)
-	hydration.Payload.Hydration.QueuedMessages = []clientui.TranscriptQueuedMessageState{
-		*queued.Payload.QueuedMessageState,
-	}
+	hydrationPayload := hydration.Payload().(clientui.TranscriptHydration)
+	queuedPayload := queued.Payload().(clientui.TranscriptQueuedMessageState)
+	hydrationPayload.QueuedMessages = []clientui.TranscriptQueuedMessageState{queuedPayload}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydrationPayload))
 
 	if _, err := controller.Accept(hydration); err != nil {
 		t.Fatalf("accept hydration: %v", err)
@@ -118,7 +119,7 @@ func TestOngoingTranscriptControllerLeavesUserMessageFlushPresentationToStateObs
 		ongoingTestFrameProvider,
 		noopOngoingTranscriptRuntimeAdmission,
 		func(message clientui.TranscriptMessage, _ runtimeTupleMergeResult) tea.Cmd {
-			observed = append(observed, message.Kind)
+			observed = append(observed, message.Kind())
 			return nil
 		},
 	)
@@ -149,18 +150,13 @@ func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageAssistantDelta,
-		Payload: clientui.TranscriptPayload{
-			AssistantDelta: &clientui.TranscriptAssistantDelta{
-				StepID:   ongoingTestStepID(),
-				StreamID: streamID,
-				Delta:    "roundtrip commentary\n\n",
-				Phase:    transcript.AssistantPhaseCommentary,
-			},
-		},
-	}); err != nil {
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptAssistantDelta{
+		StepID:   ongoingTestStepID(),
+		StreamID: streamID,
+		Delta:    "roundtrip commentary\n\n",
+		Phase:    transcript.AssistantPhaseCommentary,
+	})),
+	); err != nil {
 		t.Fatalf("accept assistant delta: %v", err)
 	}
 	surface.calls = nil
@@ -168,23 +164,19 @@ func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail
 		t.Fatalf("mark unowned: %v", err)
 	}
 
-	if _, err := controller.Accept(clientui.TranscriptMessage{
-		Sequence: 3,
-		Kind:     clientui.TranscriptMessageCommittedRow,
-		Payload: clientui.TranscriptPayload{
-			CommittedRow: &clientui.TranscriptCommittedRow{
-				Visibility: transcript.EntryVisibilityOngoing,
-				Integrity:  transcript.RowIntegrityValid,
-				Kind:       clientui.TranscriptRowAssistant,
-				Assistant: &clientui.TranscriptAssistantRow{
-					StepID:   ongoingTestStepID(),
-					StreamID: &streamID,
-					Text:     "roundtrip commentary\n\nroundtrip complete",
-					Phase:    transcript.AssistantPhaseFinal,
-				},
-			},
+	if _, err := controller.Accept(clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowAssistant,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+		Assistant: &clientui.TranscriptAssistantRow{
+			StepID:   ongoingTestStepID(),
+			StreamID: &streamID,
+			Text:     "roundtrip commentary\n\nroundtrip complete",
+			Phase:    transcript.AssistantPhaseFinal,
 		},
-	}); err != nil {
+	})),
+	); err != nil {
 		t.Fatalf("accept queued assistant finalization: %v", err)
 	}
 	if len(surface.calls) != 0 {
@@ -197,7 +189,8 @@ func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail
 	if got, want := surface.callKinds(), []string{"apply"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("surface calls after restore = %v, want %v", got, want)
 	}
-	if got, want := surface.calls[0].message.Payload.CommittedRow.Assistant.Text, "roundtrip commentary\n\nroundtrip complete"; got != want {
+	row := surface.calls[0].message.Payload().(clientui.TranscriptCommittedRow)
+	if got, want := row.Assistant.Text, "roundtrip commentary\n\nroundtrip complete"; got != want {
 		t.Fatalf("drained finalization text = %q, want %q", got, want)
 	}
 }
@@ -244,7 +237,9 @@ func TestOngoingTranscriptControllerQueuesOnlyTerminalWorkWhileUnowned(t *testin
 
 	for sequence := uint64(2); sequence <= ongoingTranscriptQueueLimit+2; sequence++ {
 		message := ongoingTranscriptMessage(sequence, clientui.TranscriptMessageQueuedMessageState)
-		*message.Payload.QueuedMessageState.Text = "latest queued prompt"
+		payload := message.Payload().(clientui.TranscriptQueuedMessageState)
+		*payload.Text = "latest queued prompt"
+		message = clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(payload))
 		if _, err := controller.Accept(message); err != nil {
 			t.Fatalf("accept app-owned message %d: %v", sequence, err)
 		}
@@ -279,13 +274,13 @@ func TestOngoingTranscriptControllerDrainsQueuedNonRowsInArrivalOrderWithOneRend
 	queued := []clientui.TranscriptMessage{
 		ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate),
 		ongoingTranscriptMessage(3, clientui.TranscriptMessageQueuedMessageState),
-		ongoingTranscriptMessage(4, clientui.TranscriptMessagePromptPending),
+		ongoingTranscriptMessage(4, clientui.TranscriptMessagePrompt),
 		ongoingTranscriptMessage(5, clientui.TranscriptMessageContextUsage),
 		ongoingTranscriptMessage(6, clientui.TranscriptMessageGoalStatus),
 	}
 	for _, message := range queued {
 		if _, err := controller.Accept(message); err != nil {
-			t.Fatalf("accept queued %s: %v", message.Kind, err)
+			t.Fatalf("accept queued %s: %v", message.Kind(), err)
 		}
 	}
 	if len(surface.calls) != 0 {
@@ -389,7 +384,7 @@ func (s *ongoingSurfaceSpy) appliedKinds() []clientui.TranscriptMessageKind {
 	kinds := make([]clientui.TranscriptMessageKind, 0, len(s.calls))
 	for _, call := range s.calls {
 		if call.name == "apply" {
-			kinds = append(kinds, call.message.Kind)
+			kinds = append(kinds, call.message.Kind())
 		}
 	}
 	return kinds
@@ -456,108 +451,106 @@ func assertTerminalSafeFrameLines(t *testing.T, lines []string) {
 }
 
 func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: sequence,
-		Kind:     clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
-			SessionIdentity: clientui.TranscriptSessionIdentity{
-				SessionID:             ongoingTestSessionID(),
-				ConversationFreshness: clientui.ConversationFreshnessFresh,
+	return clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(clientui.TranscriptHydration{
+		SessionIdentity: clientui.TranscriptSessionIdentity{
+			SessionID:             ongoingTestSessionID(),
+			ConversationFreshness: clientui.ConversationFreshnessFresh,
+		},
+		SessionStatus: clientui.TranscriptSessionStatus{
+			ReviewerFrequency: "off",
+			ThinkingLevel:     "medium",
+			CompactionMode:    "auto",
+		},
+		RuntimeReadModelUpdate: clientui.RuntimeReadModelUpdate{
+			Version: clientui.ReadModelVersion{Epoch: "ongoing-test", Generation: 1, Sequence: 1},
+			Activity: clientui.RuntimeActivity{
+				State:          clientui.RuntimeActivityRegisteredIdle,
+				QueueAccepting: true,
 			},
-			SessionStatus: clientui.TranscriptSessionStatus{
-				ReviewerFrequency: "off",
-				ThinkingLevel:     "medium",
-				CompactionMode:    "auto",
-			},
-			RuntimeReadModelUpdate: clientui.RuntimeReadModelUpdate{
-				Version: clientui.ReadModelVersion{Epoch: "ongoing-test", Generation: 1, Sequence: 1},
-				Activity: clientui.RuntimeActivity{
-					State:          clientui.RuntimeActivityRegisteredIdle,
-					QueueAccepting: true,
-				},
-				InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-			},
-			CommittedRows: []clientui.TranscriptCommittedRow{},
-		}},
-	}
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+		},
+		CommittedRows: []clientui.TranscriptCommittedRow{},
+	}))
+
 }
 
 func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKind) clientui.TranscriptMessage {
-	message := clientui.TranscriptMessage{Sequence: sequence, Kind: kind}
+	var event clientui.TranscriptEvent
 	switch kind {
 	case clientui.TranscriptMessageCommittedRow:
-		message.Payload.CommittedRow = &clientui.TranscriptCommittedRow{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
 			Visibility: transcript.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowUser,
+			Locator:    transcript.CommittedRowLocator{EventSequence: int64(sequence), RowOrdinal: 1},
 			User:       &clientui.TranscriptUserRow{StepID: ongoingTestStepID(), Text: "hello"},
-		}
+		})
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
-		message.Payload.RuntimeReadModelUpdate = &clientui.RuntimeReadModelUpdate{
+		event = clientui.NewTranscriptEvent(clientui.RuntimeReadModelUpdate{
 			Version: clientui.ReadModelVersion{Epoch: "ongoing-test", Generation: 1, Sequence: sequence},
 			Activity: clientui.RuntimeActivity{
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
 			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}
+		})
 	case clientui.TranscriptMessageQueuedMessageState:
 		text := "queued prompt"
-		message.Payload.QueuedMessageState = &clientui.TranscriptQueuedMessageState{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptQueuedMessageState{
 			ClientRequestID: ongoingTestClientRequestID(),
 			QueueItemID:     ongoingTestQueueItemID(),
 			Status:          clientui.QueuedUserMessageAccepted,
 			Text:            &text,
-		}
+		})
 	case clientui.TranscriptMessageUserMessageFlushed:
-		message.Payload.UserMessageFlushed = &clientui.TranscriptUserMessageFlushed{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
 			StepID: ongoingTestStepID(),
 			Operations: []clientui.RuntimeOperationRef{{
 				Kind:            clientui.RuntimeOperationKindSubmit,
 				ClientRequestID: ongoingTestClientRequestID(),
 			}},
-		}
+		})
 	case clientui.TranscriptMessageSessionStatus:
-		message.Payload.SessionStatus = &clientui.TranscriptSessionStatus{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptSessionStatus{
 			ReviewerFrequency: "off",
 			ThinkingLevel:     "high",
 			CompactionMode:    "auto",
-		}
+		})
 	case clientui.TranscriptMessageSessionIdentity:
 		sessionName := "KENT-196"
-		message.Payload.SessionIdentity = &clientui.TranscriptSessionIdentity{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptSessionIdentity{
 			SessionID:             ongoingTestSessionID(),
 			SessionName:           &sessionName,
 			ConversationFreshness: clientui.ConversationFreshnessEstablished,
-		}
+		})
 	case clientui.TranscriptMessageCompactionStatus:
-		message.Payload.CompactionStatus = &clientui.TranscriptCompactionStatus{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptCompactionStatus{
 			StepID: ongoingTestStepID(),
 			Mode:   "auto",
 			Count:  2,
 			State:  clientui.CompactionCompleted,
-		}
-	case clientui.TranscriptMessagePromptPending:
-		message.Payload.PromptPending = &clientui.TranscriptPrompt{
+		})
+	case clientui.TranscriptMessagePrompt:
+		event = clientui.NewTranscriptEvent(clientui.TranscriptPrompt{
 			Kind:      clientui.TranscriptPromptKindQuestion,
-			State:     clientui.TranscriptPromptStatePending,
+			Status:    clientui.TranscriptPromptStatusPending,
 			PromptID:  "ask-1",
 			SessionID: ongoingTestSessionID(),
 			StepID:    ongoingTestStepID(),
 			Question:  "Approve command?",
 			CreatedAt: time.Unix(1, 0).UTC(),
-		}
+		})
 	case clientui.TranscriptMessageContextUsage:
-		message.Payload.ContextUsage = &clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000}
+		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})
 	case clientui.TranscriptMessageGoalStatus:
-		message.Payload.GoalStatus = &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
 			ID:        "goal-1",
 			Objective: "finish review fixes",
 			Status:    clientui.RuntimeGoalStatusActive,
-		}}
+		}})
 	case clientui.TranscriptMessageBackgroundActivity:
 		preview := "running tests"
-		message.Payload.BackgroundActivity = &clientui.TranscriptBackgroundActivity{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptBackgroundActivity{
 			ActivityID:  ongoingTestBackgroundActivityID(),
 			ProcessID:   "process-1",
 			OwnerRunID:  ongoingTestRunID(),
@@ -566,23 +559,23 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Command:     "go test ./...",
 			Workdir:     "/tmp",
 			Preview:     &preview,
-		}
+		})
 	case clientui.TranscriptMessageToolStart:
-		message.Payload.ToolStart = &clientui.TranscriptToolStart{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
 			StepID:     ongoingTestStepID(),
 			ToolCallID: "tool-1",
 			ToolName:   "shell",
-		}
+		})
 	case clientui.TranscriptMessageToolAbort:
-		message.Payload.ToolAbort = &clientui.TranscriptToolAbort{
+		event = clientui.NewTranscriptEvent(clientui.TranscriptToolAbort{
 			StepID:     ongoingTestStepID(),
 			ToolCallID: "tool-1",
 			Reason:     clientui.ToolAbortCanceled,
-		}
+		})
 	default:
 		panic("unsupported test message kind " + string(kind))
 	}
-	return message
+	return clientui.NewTranscriptMessage(sequence, event)
 }
 
 func ongoingTestSessionID() runtimeids.SessionID {

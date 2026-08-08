@@ -3,15 +3,15 @@ package workflow
 import (
 	"fmt"
 	"strings"
+
+	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 )
 
-type WorkflowID string
 type NodeID string
 type TransitionGroupID string
 type EdgeID string
 type TaskID string
-type PlacementID string
-type RunID string
 type TransitionID string
 type ModelKey string
 
@@ -32,6 +32,44 @@ const (
 	ContextModeContinueSession           ContextMode = "continue_session"
 	ContextModeCompactAndContinueSession ContextMode = "compact_and_continue_session"
 )
+
+type AssigneeSelection string
+
+const (
+	AssigneeSelectionConfigured   AssigneeSelection = "configured"
+	AssigneeSelectionPreviousNode AssigneeSelection = "previous_node"
+)
+
+func CanonicalAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	return AssigneeSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	canonical := CanonicalAssigneeSelection(selection)
+	if canonical == "" {
+		return AssigneeSelectionConfigured
+	}
+	return canonical
+}
+
+type ThinkingSelection string
+
+const (
+	ThinkingSelectionConfigured   ThinkingSelection = "configured"
+	ThinkingSelectionPreviousNode ThinkingSelection = "previous_node"
+)
+
+func CanonicalThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	return ThinkingSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	canonical := CanonicalThinkingSelection(selection)
+	if canonical == "" {
+		return ThinkingSelectionConfigured
+	}
+	return canonical
+}
 
 type ContextSourceKind string
 
@@ -68,23 +106,21 @@ const (
 )
 
 const (
-	MaxModelKeyChars               = 64
-	MaxDisplayNameChars            = 120
-	MaxOutputFieldNameChars        = 64
-	MaxOutputFieldDescriptionChars = 1000
-	MaxInputFieldNameChars         = MaxOutputFieldNameChars
-	MaxInputFieldDescriptionChars  = MaxOutputFieldDescriptionChars
-	MaxParameterKeyChars           = MaxOutputFieldNameChars
-	MaxParameterDescriptionChars   = MaxOutputFieldDescriptionChars
-	MaxOutputValueBytes            = 64 * 1024
-	MaxCommentaryBytes             = 64 * 1024
-	MaxTaskCommentBytes            = 256 * 1024
+	MaxModelKeyChars               = workflowcontract.MaxModelKeyChars
+	MaxDisplayNameChars            = workflowcontract.MaxDisplayNameChars
+	MaxOutputFieldNameChars        = workflowcontract.MaxOutputFieldNameChars
+	MaxOutputFieldDescriptionChars = workflowcontract.MaxOutputFieldDescriptionChars
+	MaxParameterKeyChars           = workflowcontract.MaxParameterKeyChars
+	MaxParameterDescriptionChars   = workflowcontract.MaxParameterDescriptionChars
+	MaxOutputValueBytes            = workflowcontract.MaxOutputValueBytes
+	MaxCommentaryBytes             = workflowcontract.MaxCommentaryBytes
+	MaxTaskCommentBytes            = workflowcontract.MaxTaskCommentBytes
 )
 
-const RuntimePromptParameterCommentary = "commentary"
+const RuntimePromptParameterCommentary = workflowcontract.RuntimePromptParameterCommentary
 
 type Definition struct {
-	ID                    WorkflowID
+	ID                    runtimeids.WorkflowID
 	DisplayName           string
 	ExecutionTargetPolicy ExecutionTargetPolicy
 	NodeGroups            []NodeGroup
@@ -94,7 +130,7 @@ type Definition struct {
 }
 
 type NodeGroup struct {
-	WorkflowID    WorkflowID
+	WorkflowID    runtimeids.WorkflowID
 	ID            string
 	Key           ModelKey
 	DisplayName   string
@@ -109,7 +145,7 @@ type Node interface {
 }
 
 type NodeIdentity struct {
-	WorkflowID  WorkflowID
+	WorkflowID  runtimeids.WorkflowID
 	ID          NodeID
 	Key         ModelKey
 	DisplayName string
@@ -171,10 +207,7 @@ func (StartNode) Kind() NodeKind {
 type AgentNode struct {
 	NodeIdentity
 	SubagentRole   string
-	PromptTemplate string
 	CompletionMode string
-	InputFields    []InputField
-	OutputFields   []OutputField
 }
 
 func (AgentNode) sealedWorkflowNode() {}
@@ -187,8 +220,7 @@ func (AgentNode) Kind() NodeKind {
 
 type ScriptNode struct {
 	NodeIdentity
-	ScriptPath   OptionalScriptPath
-	OutputFields []OutputField
+	ScriptPath OptionalScriptPath
 }
 
 func (ScriptNode) sealedWorkflowNode() {}
@@ -224,11 +256,15 @@ func (TerminalNode) Kind() NodeKind {
 	return NodeKindTerminal
 }
 
-func NodeWorkflowID(node Node) WorkflowID {
+func WorkflowIDPointer(workflowID runtimeids.WorkflowID) *runtimeids.WorkflowID {
+	return &workflowID
+}
+
+func NodeWorkflowID(node Node) *runtimeids.WorkflowID {
 	if node == nil {
-		return ""
+		return nil
 	}
-	return node.Identity().WorkflowID
+	return WorkflowIDPointer(node.Identity().WorkflowID)
 }
 
 func NodeIDOf(node Node) NodeID {
@@ -278,13 +314,6 @@ func NodeSubagentRole(node Node) string {
 	return ""
 }
 
-func NodePromptTemplate(node Node) string {
-	if agent, ok := node.(AgentNode); ok {
-		return agent.PromptTemplate
-	}
-	return ""
-}
-
 func NodeCompletionMode(node Node) string {
 	if agent, ok := node.(AgentNode); ok {
 		return agent.CompletionMode
@@ -292,29 +321,11 @@ func NodeCompletionMode(node Node) string {
 	return ""
 }
 
-func NodeInputFields(node Node) []InputField {
-	if agent, ok := node.(AgentNode); ok {
-		return append([]InputField(nil), agent.InputFields...)
-	}
-	return nil
-}
-
 func NodeJoinInputProviders(node Node) []JoinInputProvider {
 	if join, ok := node.(JoinNode); ok {
 		return append([]JoinInputProvider(nil), join.JoinInputProviders...)
 	}
 	return nil
-}
-
-func NodeOutputFields(node Node) []OutputField {
-	switch typed := node.(type) {
-	case AgentNode:
-		return append([]OutputField(nil), typed.OutputFields...)
-	case ScriptNode:
-		return append([]OutputField(nil), typed.OutputFields...)
-	default:
-		return nil
-	}
 }
 
 func NodeScriptPath(node Node) OptionalScriptPath {
@@ -326,11 +337,8 @@ func NodeScriptPath(node Node) OptionalScriptPath {
 
 type NodeFields struct {
 	SubagentRole       string
-	PromptTemplate     string
 	CompletionMode     string
-	InputFields        []InputField
 	JoinInputProviders []JoinInputProvider
-	OutputFields       []OutputField
 	ScriptPath         OptionalScriptPath
 }
 
@@ -342,16 +350,12 @@ func NewNode(identity NodeIdentity, kind NodeKind, fields NodeFields) (Node, err
 		return AgentNode{
 			NodeIdentity:   identity,
 			SubagentRole:   fields.SubagentRole,
-			PromptTemplate: fields.PromptTemplate,
 			CompletionMode: fields.CompletionMode,
-			InputFields:    append([]InputField(nil), fields.InputFields...),
-			OutputFields:   append([]OutputField(nil), fields.OutputFields...),
 		}, nil
 	case NodeKindScript:
 		return ScriptNode{
 			NodeIdentity: identity,
 			ScriptPath:   fields.ScriptPath,
-			OutputFields: append([]OutputField(nil), fields.OutputFields...),
 		}, nil
 	case NodeKindJoin:
 		return JoinNode{
@@ -366,7 +370,7 @@ func NewNode(identity NodeIdentity, kind NodeKind, fields NodeFields) (Node, err
 }
 
 type TransitionGroup struct {
-	WorkflowID   WorkflowID
+	WorkflowID   runtimeids.WorkflowID
 	ID           TransitionGroupID
 	SourceNodeID NodeID
 	TransitionID TransitionID
@@ -375,11 +379,13 @@ type TransitionGroup struct {
 }
 
 type Edge struct {
-	WorkflowID         WorkflowID
+	WorkflowID         runtimeids.WorkflowID
 	ID                 EdgeID
 	Key                ModelKey
 	TransitionGroupID  TransitionGroupID
 	TargetNodeID       NodeID
+	AssigneeSelection  AssigneeSelection
+	ThinkingSelection  ThinkingSelection
 	ContextMode        ContextMode
 	ContextSource      ContextSource
 	RequiresApproval   bool
@@ -389,17 +395,43 @@ type Edge struct {
 	OutputRequirements []OutputRequirement
 }
 
+func (edge Edge) Canonical() Edge {
+	edge.AssigneeSelection = CanonicalAssigneeSelection(edge.AssigneeSelection)
+	edge.ThinkingSelection = CanonicalThinkingSelection(edge.ThinkingSelection)
+	edge.ContextSource = CanonicalContextSource(edge.ContextSource)
+	edge.Parameters = append([]Parameter(nil), edge.Parameters...)
+	for index := range edge.Parameters {
+		edge.Parameters[index] = edge.Parameters[index].Canonical()
+	}
+	edge.InputBindings = append([]InputBinding(nil), edge.InputBindings...)
+	edge.OutputRequirements = append([]OutputRequirement(nil), edge.OutputRequirements...)
+	return edge
+}
+
 type Parameter struct {
-	Key         string `json:"key"`
-	Description string `json:"description"`
+	Key         string           `json:"key"`
+	Description string           `json:"description"`
+	Purpose     ParameterPurpose `json:"purpose"`
+}
+
+type ParameterPurpose string
+
+const (
+	ParameterPurposeOrdinary       ParameterPurpose = "ordinary"
+	ParameterPurposeTargetAssignee ParameterPurpose = "target_assignee"
+	ParameterPurposeTargetThinking ParameterPurpose = "target_thinking"
+)
+
+func CanonicalParameterPurpose(purpose ParameterPurpose) ParameterPurpose {
+	return ParameterPurpose(strings.TrimSpace(string(purpose)))
+}
+
+func (parameter Parameter) Canonical() Parameter {
+	parameter.Purpose = CanonicalParameterPurpose(parameter.Purpose)
+	return parameter
 }
 
 type OutputField struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-type InputField struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }

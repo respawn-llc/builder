@@ -70,8 +70,8 @@ func TestPlannerHeadlessCreatesNewSessionAndAppliesContinuationContext(t *testin
 	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != "http://headless.local/v1" {
 		t.Fatalf("expected continuation base url applied, got %+v", meta.Continuation)
 	}
-	if plan.SessionName != meta.Name {
-		t.Fatalf("expected plan session name %q, got %q", meta.Name, plan.SessionName)
+	if plan.SessionName == nil || *plan.SessionName != meta.Name {
+		t.Fatalf("expected plan session name %q, got %v", meta.Name, plan.SessionName)
 	}
 	if plan.WorkspaceRoot != "/tmp/workspace-a" {
 		t.Fatalf("expected workspace root passthrough, got %q", plan.WorkspaceRoot)
@@ -498,6 +498,14 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceBinding: %v", err)
 	}
+	siblingWorkspace := t.TempDir()
+	canonicalSiblingWorkspace, err := config.CanonicalWorkspaceRoot(siblingWorkspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot sibling: %v", err)
+	}
+	if _, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, canonicalSiblingWorkspace); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
 	parent := createTestSessionInContainer(t, containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
 	if err := parent.EnsureDurable(); err != nil {
@@ -530,6 +538,7 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
@@ -549,10 +558,11 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState parent: %v", err)
 	}
 	planner := Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: metadataStore,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        metadataStore,
+		ProjectWorkspaceBoundary: metadataStore,
 	}
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
@@ -609,6 +619,29 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if target.EffectiveWorkdir != filepath.Join(canonicalWorktreeRoot, "pkg") {
 		t.Fatalf("child effective workdir = %q, want %q", target.EffectiveWorkdir, filepath.Join(canonicalWorktreeRoot, "pkg"))
 	}
+	if !clientui.SessionExecutionTargetsEqual(plan.ExecutionTarget, target) {
+		t.Fatalf("new child plan execution target = %+v, want %+v", plan.ExecutionTarget, target)
+	}
+	foundSibling := false
+	for _, workspace := range plan.ProjectWorkspaceBoundary.Workspaces {
+		if workspace.CanonicalRoot == canonicalSiblingWorkspace {
+			foundSibling = true
+			break
+		}
+	}
+	if !foundSibling {
+		t.Fatalf("interactive plan boundary = %+v, want sibling Workspace %q", plan.ProjectWorkspaceBoundary, canonicalSiblingWorkspace)
+	}
+	reopenedPlan, err := planner.PlanSession(ctx, SessionRequest{
+		Mode:   ModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, childMeta.SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession existing child: %v", err)
+	}
+	if !clientui.SessionExecutionTargetsEqual(reopenedPlan.ExecutionTarget, target) {
+		t.Fatalf("existing child plan execution target = %+v, want %+v", reopenedPlan.ExecutionTarget, target)
+	}
 }
 
 func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T) {
@@ -664,7 +697,14 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 		t.Fatalf("PlanSession child: %v", err)
 	}
 
-	updated, warnings, err := planner.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")}, auth.EmptyState())
+	childStore := testStoreForPlannerPlan(t, planner, plan)
+	updated, warnings, err := planner.ApplyRunPromptOverridesWithStore(
+		plan,
+		childStore,
+		serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverrides: %v", err)
 	}
@@ -809,6 +849,7 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)

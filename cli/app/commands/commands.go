@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"core/prompts"
+	"core/shared/runtimeinput"
 	"sort"
 	"strings"
 	"unicode"
@@ -48,6 +48,7 @@ type Result struct {
 	Args               string
 	SubmitUser         bool
 	User               string
+	PromptCommand      *runtimeinput.PromptCommand
 	FreshConversation  bool
 	SessionName        string
 	ThinkingLevel      string
@@ -166,20 +167,7 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("back", "Jump to parent session if current session was spawned from another", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionBack}
 	})
-	registerPromptCommands(r, []promptCommandSpec{
-		{
-			Name:         "review",
-			Description:  "Run code review (optional: /review <what to review>)",
-			Prompt:       prompts.ReviewPrompt,
-			FreshSession: true,
-		},
-		{
-			Name:         "init",
-			Description:  "Run repository initialization prompt (optional: /init <instructions>)",
-			Prompt:       prompts.InitPrompt,
-			FreshSession: true,
-		},
-	})
+	registerBuiltinPromptCommands(r)
 	return r
 }
 

@@ -5,11 +5,13 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
 func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		messageType llm.MessageType
@@ -23,11 +25,12 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 		{name: "active goal continuation", messageType: llm.MessageTypeActiveGoalContinuation, want: transcript.EntryVisibilityDetail},
 		{name: "background notice", messageType: llm.MessageTypeBackgroundNotice, want: transcript.EntryVisibilityOngoingCollapsed},
 		{name: "custom tool output", messageType: llm.MessageTypeCustomToolCallOutput, want: transcript.EntryVisibilityOngoing},
+		{name: "agent steer", messageType: llm.MessageTypeAgentSteer, want: transcript.EntryVisibilityOngoing},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := messageTypeTranscriptVisibility(tt.messageType); got != tt.want {
+			if got := messageTypeTranscriptVisibility(textutil.Value(tt.messageType)); got != tt.want {
 				t.Fatalf("message type visibility = %q, want %q", got, tt.want)
 			}
 		})
@@ -35,6 +38,7 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 }
 
 func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		phase llm.MessagePhase
@@ -48,16 +52,16 @@ func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			entries := VisibleChatEntriesFromMessage(llm.Message{
 				Role:    llm.RoleAssistant,
-				Phase:   test.phase,
-				Content: "assistant content",
+				Phase:   textutil.Value(test.phase),
+				Content: textutil.Value("assistant content"),
 			})
 			if len(entries) != 1 || entries[0].Visibility != test.want {
 				t.Fatalf("assistant entries = %+v, want one %q row", entries, test.want)
 			}
 			facts := transcriptCommittedRowFactsFromMessage(llm.Message{
 				Role:    llm.RoleAssistant,
-				Phase:   test.phase,
-				Content: "assistant content",
+				Phase:   textutil.Value(test.phase),
+				Content: textutil.Value("assistant content"),
 			}, nil, nil, nil)
 			if len(facts) != 1 || facts[0].Visibility != test.want {
 				t.Fatalf("assistant facts = %+v, want one %q row", facts, test.want)
@@ -65,8 +69,8 @@ func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testin
 			scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Limit: 1}, nil, nil)
 			scan.ApplyMessage(llm.Message{
 				Role:    llm.RoleAssistant,
-				Phase:   test.phase,
-				Content: "assistant content",
+				Phase:   textutil.Value(test.phase),
+				Content: textutil.Value("assistant content"),
 			}, 1, chatStoreTestStepID)
 			scannedEntries := scan.PageSnapshot().Snapshot.Entries
 			if len(scannedEntries) != 1 || scannedEntries[0].Visibility != test.want {
@@ -77,27 +81,29 @@ func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testin
 }
 
 func TestUnknownDeveloperMessageVisibilityDependsOnRecoverableContent(t *testing.T) {
+	t.Parallel()
 	unknownType := llm.MessageType("unknown_future_context")
 
-	withText := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: "recoverable text"})
+	withText := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(unknownType), Content: textutil.Value("recoverable text")})
 	if len(withText) != 1 || withText[0].Visibility != transcript.EntryVisibilityOngoing || withText[0].Text != "recoverable text" {
 		t.Fatalf("unknown developer with text entries = %+v, want ongoing recoverable text", withText)
 	}
 
-	emptyUnknown := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: " \n\t "})
+	emptyUnknown := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(unknownType)})
 	if len(emptyUnknown) != 1 || emptyUnknown[0].Visibility != transcript.EntryVisibilityDetail {
 		t.Fatalf("empty unknown developer entries = %+v, want detail diagnostic", emptyUnknown)
 	}
 
-	emptyUntyped := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, Content: " \n\t "})
+	emptyUntyped := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper})
 	if len(emptyUntyped) != 0 {
 		t.Fatalf("empty untyped developer entries = %+v, want hidden no-op", emptyUntyped)
 	}
 }
 
 func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) {
+	t.Parallel()
 	unknownType := llm.MessageType("unknown_future_context")
-	facts := transcriptCommittedRowFactsFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: " "}, nil, nil, nil)
+	facts := transcriptCommittedRowFactsFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(unknownType), Content: textutil.Value(" ")}, nil, nil, nil)
 
 	if len(facts) != 1 || facts[0].Kind != TranscriptCommittedRowFactNotice || facts[0].Visibility != transcript.EntryVisibilityDetail || facts[0].Notice == nil {
 		t.Fatalf("empty unknown developer facts = %+v, want one detail diagnostic notice", facts)
@@ -109,11 +115,12 @@ func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) 
 }
 
 func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T) {
+	t.Parallel()
 	exitCode := 9
 	msg := llm.Message{
 		Role:               llm.RoleDeveloper,
-		MessageType:        llm.MessageTypeBackgroundNotice,
-		Content:            "background command failed",
+		MessageType:        textutil.Value(llm.MessageTypeBackgroundNotice),
+		Content:            textutil.Value("background command failed"),
 		BackgroundExitCode: &exitCode,
 	}
 
@@ -131,6 +138,7 @@ func TestBackgroundNoticePreservesExitCodeAcrossPersistedProjection(t *testing.T
 }
 
 func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
+	t.Parallel()
 	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{{
 		Visibility: transcript.EntryVisibilityDetail,
 		Role:       cacheWarningTranscriptRole,
@@ -145,18 +153,19 @@ func TestCacheWarningSnapshotProjectionPreservesDetailVisibility(t *testing.T) {
 }
 
 func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
+	t.Parallel()
 	msg := llm.Message{
 		Role:        llm.RoleTool,
-		MessageType: llm.MessageTypeCustomToolCallOutput,
-		ToolCallID:  "call-patch-1",
-		Name:        string(toolspec.ToolPatch),
-		Content:     `"patched"`,
+		MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput),
+		ToolCallID:  textutil.Value("call-patch-1"),
+		Name:        textutil.Value(string(toolspec.ToolPatch)),
+		Content:     textutil.Value(`"patched"`),
 	}
 	completions := map[string]tools.Result{
-		msg.ToolCallID: {
-			CallID:        msg.ToolCallID,
+		*msg.ToolCallID: {
+			CallID:        *msg.ToolCallID,
 			Name:          toolspec.ToolPatch,
-			CondensedText: "patch result",
+			CondensedText: textutil.Value("patch result"),
 		},
 	}
 
@@ -168,7 +177,7 @@ func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
 	if fact.Visibility != transcript.EntryVisibilityOngoingCollapsed {
 		t.Fatalf("custom tool output fact visibility = %q, want %q", fact.Visibility, transcript.EntryVisibilityOngoingCollapsed)
 	}
-	if fact.Tool.ToolCallID != msg.ToolCallID || fact.Tool.ToolName != string(toolspec.ToolPatch) {
+	if fact.Tool.ToolCallID != *msg.ToolCallID || fact.Tool.ToolName != string(toolspec.ToolPatch) {
 		t.Fatalf("custom tool output fact identity = %+v", fact.Tool)
 	}
 	if fact.Tool.CondensedText != "patch result" {

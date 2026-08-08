@@ -64,7 +64,7 @@ func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnter
 	}
 	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
 		return s.executeEnterWorktree(runCtx, request.sessionID, target, authority, sync)
-	}, req.Origin)
+	}, req.WorktreeTransitionHeader.Origin)
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
@@ -78,7 +78,7 @@ func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeave
 	}
 	return s.scheduleWorktreeTransition(ctx, request, func(runCtx context.Context, authority transitionAuthority, sync transitionTargetSync) error {
 		return s.executeLeaveWorktree(runCtx, request.sessionID, authority, sync)
-	}, nil)
+	}, req.WorktreeTransitionHeader.Origin)
 }
 
 func (s *Service) scheduleWorktreeTransition(
@@ -148,6 +148,11 @@ func (s *Service) runWorktreeTransition(
 		if err != nil {
 			outcome.State = clientui.WorktreeTransitionFailed
 			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
+			var precondition *serverapi.WorktreeDeletePreconditionError
+			if errors.As(err, &precondition) {
+				dirtyState := precondition.DirtyState
+				outcome.Failure.DeletePrecondition = &dirtyState
+			}
 		}
 		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
 		if err != nil {

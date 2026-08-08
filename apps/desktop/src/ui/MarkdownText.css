@@ -59,6 +59,22 @@
   padding-inline-start: var(--space-1);
 }
 
+.markdown-text li.task-list-item {
+  position: relative;
+  list-style: none;
+}
+
+.markdown-text .markdown-task-list-checkbox {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-start: calc(-1 * var(--space-5));
+}
+
+.markdown-text .markdown-task-list-checkbox:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
 .markdown-text blockquote {
   border-inline-start: 3px solid var(--color-outline);
   color: var(--color-muted);

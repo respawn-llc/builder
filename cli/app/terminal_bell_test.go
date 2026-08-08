@@ -86,7 +86,7 @@ func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	hooks := newUnfocusedBellHooks(unfocused)
 	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "question"))
 	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "approval"))
-	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"))
+	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedCurrentNode, "interrupted"))
 	if unfocused.notifications != 2 || unfocused.bells != 0 {
 		t.Fatalf("unfocused events = notifications %d, bells %d", unfocused.notifications, unfocused.bells)
 	}
@@ -539,6 +539,8 @@ func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKin
 	notification := clientui.AttentionNotification{ID: attentionNotificationID(kind, id), Kind: kind}
 	if kind == clientui.AttentionNotificationKindApproval {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: body}
+	} else if kind == clientui.AttentionNotificationKindInterruptedCurrentNode {
+		notification.InterruptedCurrentNode = &clientui.AttentionNotificationInterruptedCurrentNodeState{Message: body}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
 			PreparedAskIDs:          []string{id},
@@ -557,7 +559,7 @@ func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid strin
 }
 
 func bellTestPrompt(id, question string) clientui.TranscriptPrompt {
-	prompt := *ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending).Payload.PromptPending
+	prompt := ongoingTranscriptMessage(2, clientui.TranscriptMessagePrompt).Payload().(clientui.TranscriptPrompt)
 	prompt.PromptID = clientui.PromptID(id)
 	prompt.Question = question
 	return prompt
@@ -580,13 +582,10 @@ func bellTestStepID(index int) runtimeids.StepID {
 }
 
 func bellToolStartMessage(step int) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageToolStart,
-		Payload: clientui.TranscriptPayload{ToolStart: &clientui.TranscriptToolStart{
-			StepID: bellTestStepID(step), ToolCallID: "tool-call", ToolName: "exec_command",
-		}},
-	}
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+		StepID: bellTestStepID(step), ToolCallID: "tool-call", ToolName: "exec_command",
+	}))
+
 }
 
 func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
@@ -594,50 +593,38 @@ func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
 }
 
 func bellAssistantFinalMessageWithText(step int, text string) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageCommittedRow,
-		Payload: clientui.TranscriptPayload{CommittedRow: &clientui.TranscriptCommittedRow{
-			Visibility: transcript.EntryVisibilityOngoing,
-			Integrity:  transcript.RowIntegrityValid,
-			Kind:       clientui.TranscriptRowAssistant,
-			Assistant: &clientui.TranscriptAssistantRow{
-				StepID: bellTestStepID(step), Text: text, Phase: transcript.AssistantPhaseFinal,
-			},
-		}},
-	}
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			StepID: bellTestStepID(step), Text: text, Phase: transcript.AssistantPhaseFinal,
+		},
+	}))
+
 }
 
 func bellReviewerStateMessage(step int, state clientui.ReviewerState) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageReviewerState,
-		Payload: clientui.TranscriptPayload{ReviewerState: &clientui.TranscriptReviewerState{
-			StepID: bellTestStepID(step),
-			State:  state,
-		}},
-	}
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptReviewerState{
+		StepID: bellTestStepID(step),
+		State:  state,
+	}))
+
 }
 
 func bellStepFinishedMessage(step int) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageStepState,
-		Payload: clientui.TranscriptPayload{StepState: &clientui.TranscriptStepState{
-			StepID:    bellTestStepID(step),
-			Lifecycle: clientui.StepLifecycleFinished,
-		}},
-	}
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptStepState{
+		StepID:    bellTestStepID(step),
+		Lifecycle: clientui.StepLifecycleFinished,
+	}))
+
 }
 
 func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessage {
-	return clientui.TranscriptMessage{
-		Sequence: 2,
-		Kind:     clientui.TranscriptMessageAssistantDelta,
-		Payload: clientui.TranscriptPayload{AssistantDelta: &clientui.TranscriptAssistantDelta{
-			StepID: bellTestStepID(step), StreamID: runtimeids.NewAssistantStreamID(), Delta: delta, Phase: transcript.AssistantPhaseFinal,
-		}},
-	}
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptAssistantDelta{
+		StepID: bellTestStepID(step), StreamID: runtimeids.NewAssistantStreamID(), Delta: delta, Phase: transcript.AssistantPhaseFinal,
+	}))
+
 }
 
 func recordToolHeavyBellTurn(hooks *bellHooks, step int) {

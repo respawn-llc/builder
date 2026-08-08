@@ -21,18 +21,18 @@ const (
 )
 
 type CacheWarning struct {
-	Scope           CacheWarningScope  `json:"scope,omitempty"`
+	Scope           CacheWarningScope  `json:"scope"`
 	Reason          CacheWarningReason `json:"reason"`
-	CacheKey        string             `json:"cache_key,omitempty"`
-	LostInputTokens int                `json:"lost_input_tokens,omitempty"`
+	CacheKey        *string            `json:"cache_key,omitempty"`
+	LostInputTokens *int               `json:"lost_input_tokens,omitempty"`
 }
 
 func CacheWarningText(w CacheWarning) string {
 	text := fmt.Sprintf("Cache miss: %s", reasonText(w))
-	if w.LostInputTokens <= 0 {
+	if w.LostInputTokens == nil || *w.LostInputTokens <= 0 {
 		return text
 	}
-	return fmt.Sprintf("%s, -%s tokens", text, formatTokenDeltaThousands(w.LostInputTokens))
+	return fmt.Sprintf("%s, -%s tokens", text, formatTokenDeltaThousands(*w.LostInputTokens))
 }
 
 func reasonText(w CacheWarning) string {

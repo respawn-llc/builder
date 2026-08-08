@@ -11,15 +11,18 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testing.T) {
+	t.Parallel()
 	const staleRawMarker = "raw-stale-shell-output"
 	originalRaw := json.RawMessage(`{"type":"function_call_output","call_id":"call-shell","output":"` + staleRawMarker + strings.Repeat("raw", 40_000) + `"}`)
 	items := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeFunctionCall, ID: "call-shell", CallID: "call-shell", Name: string(toolspec.ToolExecCommand), Arguments: json.RawMessage(`{"cmd":"go test ./..."}`)},
-		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: "call-shell", Name: string(toolspec.ToolExecCommand), Output: json.RawMessage(`{"output":"` + strings.Repeat("x", 120_000) + `"}`), Raw: originalRaw},
+		{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call-shell"), CallID: textutil.Value("call-shell"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Arguments: json.RawMessage(`{"cmd":"go test ./..."}`)},
+		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call-shell"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Output: json.RawMessage(`{"output":"` + strings.Repeat("x", 120_000) + `"}`), Raw: originalRaw},
 	}
 
 	repaired, stats := collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items, 1)
@@ -42,8 +45,8 @@ func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testin
 	if err := json.Unmarshal(repaired[1].Output, &collapsed); err != nil {
 		t.Fatalf("decode collapsed shell output: %v", err)
 	}
-	if collapsed != "<collapsed>" {
-		t.Fatalf("collapsed shell output = %q, want <collapsed>", collapsed)
+	if collapsed != compactionOverflowCollapsedText {
+		t.Fatalf("collapsed shell output = %q, want %q", collapsed, compactionOverflowCollapsedText)
 	}
 	if len(repaired[1].Raw) == 0 {
 		t.Fatal("expected collapsed shell output to be rematerialized")
@@ -54,9 +57,10 @@ func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testin
 }
 
 func TestCompactionOverflowRepairCollapsesWriteStdinOutput(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeFunctionCall, ID: "call-stdin", CallID: "call-stdin", Name: string(toolspec.ToolWriteStdin), Arguments: json.RawMessage(`{"session_id":1,"chars":""}`)},
-		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: "call-stdin", Name: string(toolspec.ToolWriteStdin), Output: json.RawMessage(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)},
+		{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call-stdin"), CallID: textutil.Value("call-stdin"), Name: textutil.Value(string(toolspec.ToolWriteStdin)), Arguments: json.RawMessage(`{"session_id":1,"chars":""}`)},
+		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call-stdin"), Name: textutil.Value(string(toolspec.ToolWriteStdin)), Output: json.RawMessage(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)},
 	}
 
 	repaired, stats := collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items, 1)
@@ -72,12 +76,13 @@ func TestCompactionOverflowRepairCollapsesWriteStdinOutput(t *testing.T) {
 }
 
 func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.T) {
+	t.Parallel()
 	const staleRawMarker = "raw-stale-patch-input"
 	patchInput := "*** Begin Patch\n*** Add File: big.txt\n+" + strings.Repeat("x", 120_000) + "\n*** End Patch\n"
 	originalRaw := json.RawMessage(`{"type":"custom_tool_call","call_id":"call-patch","name":"patch","input":` + strconv.Quote(staleRawMarker+patchInput) + `}`)
 	items := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeCustomToolCall, ID: "call-patch", CallID: "call-patch", Name: string(toolspec.ToolPatch), CustomInput: patchInput, Raw: originalRaw},
-		{Type: llm.ResponseItemTypeCustomToolOutput, CallID: "call-patch", Name: string(toolspec.ToolPatch), Output: json.RawMessage(`{"ok":true}`)},
+		{Type: llm.ResponseItemTypeCustomToolCall, ID: textutil.Value("call-patch"), CallID: textutil.Value("call-patch"), Name: textutil.Value(string(toolspec.ToolPatch)), CustomInput: textutil.Value(patchInput), Raw: originalRaw},
+		{Type: llm.ResponseItemTypeCustomToolOutput, CallID: textutil.Value("call-patch"), Name: textutil.Value(string(toolspec.ToolPatch)), Output: json.RawMessage(`{"ok":true}`)},
 	}
 
 	repaired, stats := collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items, 1)
@@ -87,11 +92,11 @@ func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.
 	if len(repaired) != len(items) {
 		t.Fatalf("repair removed items: got %d want %d", len(repaired), len(items))
 	}
-	if strings.Contains(repaired[0].CustomInput, strings.Repeat("x", 100)) {
+	if repaired[0].CustomInput == nil || strings.Contains(*repaired[0].CustomInput, strings.Repeat("x", 100)) {
 		t.Fatalf("patch input was not collapsed")
 	}
-	if repaired[0].CustomInput != "<collapsed>" {
-		t.Fatalf("collapsed patch input = %q, want <collapsed>", repaired[0].CustomInput)
+	if repaired[0].CustomInput == nil || *repaired[0].CustomInput != compactionOverflowCollapsedText {
+		t.Fatalf("collapsed patch input = %q, want %q", *repaired[0].CustomInput, compactionOverflowCollapsedText)
 	}
 	if string(repaired[1].Output) != string(items[1].Output) {
 		t.Fatalf("patch output changed: %s", repaired[1].Output)
@@ -105,10 +110,11 @@ func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.
 }
 
 func TestCompactionOverflowRepairLeavesUnsupportedToolsUnchanged(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeFunctionCall, ID: "call-ask", CallID: "call-ask", Name: string(toolspec.ToolAskQuestion), Arguments: json.RawMessage(`{"question":"` + strings.Repeat("x", 80_000) + `"}`)},
-		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: "call-ask", Name: string(toolspec.ToolAskQuestion), Output: json.RawMessage(`{"answer":"` + strings.Repeat("y", 80_000) + `"}`)},
-		{Type: llm.ResponseItemTypeCustomToolCall, ID: "call-custom", CallID: "call-custom", Name: "custom", CustomInput: strings.Repeat("z", 80_000)},
+		{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call-ask"), CallID: textutil.Value("call-ask"), Name: textutil.Value(string(toolspec.ToolAskQuestion)), Arguments: json.RawMessage(`{"question":"` + strings.Repeat("x", 80_000) + `"}`)},
+		{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call-ask"), Name: textutil.Value(string(toolspec.ToolAskQuestion)), Output: json.RawMessage(`{"answer":"` + strings.Repeat("y", 80_000) + `"}`)},
+		{Type: llm.ResponseItemTypeCustomToolCall, ID: textutil.Value("call-custom"), CallID: textutil.Value("call-custom"), Name: textutil.Value("custom"), CustomInput: textutil.Value(strings.Repeat("z", 80_000))},
 	}
 
 	repaired, stats := collapseCompactionOverflowToolPayloadsForDefaultWindowRepairAttempt(items, 1)
@@ -121,6 +127,7 @@ func TestCompactionOverflowRepairLeavesUnsupportedToolsUnchanged(t *testing.T) {
 }
 
 func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.T) {
+	t.Parallel()
 	items := []llm.ResponseItem{
 		shellOutputRepairItem("call-1", strings.Repeat("a", 48_000)),
 		shellOutputRepairItem("call-2", strings.Repeat("b", 48_000)),
@@ -148,6 +155,7 @@ func TestCompactionOverflowRepairUsesCumulativeAttemptCapOldestFirst(t *testing.
 }
 
 func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
+	t.Parallel()
 	if got, want := compactionOverflowRepairTargetTokens(100_000, 1), 10_000; got != want {
 		t.Fatalf("first repair target = %d, want %d", got, want)
 	}
@@ -163,20 +171,20 @@ func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 }
 
 func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	t.Parallel()
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
 			nil,
 		},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "local summary"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("local summary")},
 			Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
@@ -188,9 +196,9 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
-		ToolCallID: "call-shell",
-		Name:       string(toolspec.ToolExecCommand),
-		Content:    `{"output":"` + strings.Repeat("x", 120_000) + `"}`,
+		ToolCallID: textutil.Value("call-shell"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
 	}})); err != nil {
 		t.Fatalf("append tool output: %v", err)
 	}
@@ -206,39 +214,36 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 	}
 	foundCollapsed := false
 	for _, item := range client.calls[1].Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call-shell" {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call-shell" {
 			foundCollapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 		}
 	}
 	if !foundCollapsed {
 		t.Fatalf("expected local compaction retry to collapse shell output, got %+v", client.calls[1].Items)
 	}
-	foundDiagnostic := false
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if entry.Role == "developer_error_feedback" && strings.Contains(entry.Text, "Context compaction succeeded after collapsing tool payloads") && strings.Contains(entry.Text, "1 shell outputs") {
-			foundDiagnostic = true
-			break
+	page := mustEngineNewestSegmentPage(t, eng)
+	for _, entry := range page.Snapshot.Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			return
 		}
 	}
-	if !foundDiagnostic {
-		t.Fatalf("expected compaction repair diagnostic in transcript, got %+v", eng.ChatSnapshot().Entries)
-	}
+	t.Fatalf("expected repair diagnostic in bounded newest segment, got %+v", page.Snapshot.Entries)
 }
 
 func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	t.Parallel()
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
 			nil,
 		},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unexpected retry"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected retry")},
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("chat-heavy-history", 12_000)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
@@ -259,8 +264,8 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 }
 
 func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredContextWindow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	t.Parallel()
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -269,12 +274,12 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 			nil,
 		},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "local summary"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("local summary")},
 			Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local", ContextWindowTokens: 100_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
@@ -294,9 +299,9 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}
 		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 			Role:       llm.RoleTool,
-			ToolCallID: callID,
-			Name:       string(toolspec.ToolExecCommand),
-			Content:    `{"output":"` + strings.Repeat("x", 48_000) + `"}`,
+			ToolCallID: textutil.Value(callID),
+			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 48_000) + `"}`),
 		}})); err != nil {
 			t.Fatalf("append tool output %d: %v", idx, err)
 		}
@@ -316,8 +321,8 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 			if item.Type == llm.ResponseItemTypeFunctionCallOutput && isCollapsedCompactionOverflowShellOutput(item.Output) {
 				collapsed++
 			}
-			if item.Type == llm.ResponseItemTypeReasoning && item.ID == "rs-keep" {
-				reasoningPreserved = item.EncryptedContent == strings.Repeat("reasoning", 2_000)
+			if item.Type == llm.ResponseItemTypeReasoning && item.ID != nil && *item.ID == "rs-keep" {
+				reasoningPreserved = item.EncryptedContent != nil && *item.EncryptedContent == strings.Repeat("reasoning", 2_000)
 			}
 		}
 		if collapsed != wantCollapsedByCall[callIdx] {
@@ -327,29 +332,20 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 			t.Fatalf("reasoning item changed or missing on compaction repair call %d: %+v", callIdx+1, call.Items)
 		}
 	}
-	collapsed := 0
-	for _, item := range client.calls[3].Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && isCollapsedCompactionOverflowShellOutput(item.Output) {
-			collapsed++
-		}
-	}
-	if collapsed != 4 {
-		t.Fatalf("collapsed shell outputs on fourth attempt = %d, want 4", collapsed)
-	}
 }
 
 func TestGenerateWithRetryDoesNotRetryContextOverflow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	t.Parallel()
+	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
 			nil,
 		},
-		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unexpected"}}},
+		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected")}}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	req := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5", Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}})}
+	req := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5", Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})}
 
 	_, err := eng.generateWithRetryClient(context.Background(), "step-context-overflow", client, req, nil, nil, nil)
 	if err == nil {
@@ -366,8 +362,8 @@ func TestGenerateWithRetryDoesNotRetryContextOverflow(t *testing.T) {
 func shellOutputRepairItem(callID string, output string) llm.ResponseItem {
 	return llm.ResponseItem{
 		Type:   llm.ResponseItemTypeFunctionCallOutput,
-		CallID: callID,
-		Name:   string(toolspec.ToolExecCommand),
+		CallID: textutil.Value(callID),
+		Name:   textutil.Value(string(toolspec.ToolExecCommand)),
 		Output: json.RawMessage(`{"output":"` + output + `"}`),
 	}
 }

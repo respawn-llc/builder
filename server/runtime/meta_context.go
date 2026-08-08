@@ -18,6 +18,8 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -57,8 +59,9 @@ type metaContextBuildOptions struct {
 	ActiveGoal                *session.GoalState
 	IncludeWorkflow           bool
 	WorkflowCompletionMode    workflowruntime.CompletionMode
-	WorkflowRun               *workflowruntime.Config
-	WorkflowTaskCommentCount  int64
+	WorkflowPrompt            *workflowruntime.PromptContract
+	WorkflowTaskAwareness     workflowruntime.TaskAwareness
+	WorkflowTaskPromptKind    prompts.WorkflowTaskPromptKind
 	WorktreeReminder          *session.WorktreeReminderState
 	IncludeSkillWarnings      bool
 	PermissiveAgentsReadError bool
@@ -186,8 +189,8 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		if len(result.Skills) > 0 {
 			collector.addMessages([]llm.Message{{
 				Role:        llm.RoleDeveloper,
-				MessageType: llm.MessageTypeSkills,
-				Content:     renderSkillsContext(result.Skills),
+				MessageType: textutil.Value(llm.MessageTypeSkills),
+				Content:     textutil.Value(renderSkillsContext(result.Skills)),
 			}})
 		}
 	}
@@ -205,8 +208,8 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		}
 		collector.addMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeEnvironment,
-			Content:     environmentMessage,
+			MessageType: textutil.Value(llm.MessageTypeEnvironment),
+			Content:     textutil.Value(environmentMessage),
 		}})
 	}
 
@@ -227,13 +230,20 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		}
 	}
 	if opts.IncludeWorkflow {
-		message, ok, err := workflowModeMetaMessage(opts.WorkflowCompletionMode, opts.WorkflowRun, opts.WorkflowTaskCommentCount)
+		message, ok, err := workflowModeMetaMessage(
+			opts.WorkflowTaskPromptKind,
+			opts.WorkflowCompletionMode,
+			opts.WorkflowPrompt,
+			opts.WorkflowTaskAwareness,
+		)
 		if err != nil {
 			return metaContextBuildResult{}, err
 		}
 		if ok {
-			if opts.WorkflowRun != nil {
-				message.SourcePath = strings.TrimSpace(string(opts.WorkflowRun.Contract.RunID))
+			if opts.WorkflowPrompt != nil {
+				message.SourcePath = textutil.OptionalTrimmedString(
+					opts.WorkflowPrompt.Identity,
+				)
 			}
 			collector.addMessages([]llm.Message{message})
 		}
@@ -264,9 +274,9 @@ func activeGoalContinuationMetaMessage(goal session.GoalState) (llm.Message, boo
 	}
 	return llm.Message{
 		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeActiveGoalContinuation,
-		Content:        content,
-		CompactContent: clientui.GoalNudgeCompactLabel,
+		MessageType:    textutil.Value(llm.MessageTypeActiveGoalContinuation),
+		Content:        textutil.Value(content),
+		CompactContent: textutil.Value(clientui.GoalNudgeCompactLabel),
 	}, true
 }
 
@@ -301,9 +311,9 @@ func (b metaContextBuilder) discoverAgents(permissive bool) ([]llm.Message, erro
 		}
 		out = append(out, llm.Message{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeAgentsMD,
-			SourcePath:  path,
-			Content:     fmt.Sprintf("%s\nsource: %s\n\n```%s\n%s\n```", agentsInjectedHeader, path, agentsInjectedFenceLabel, string(data)),
+			MessageType: textutil.Value(llm.MessageTypeAgentsMD),
+			SourcePath:  textutil.Value(path),
+			Content:     textutil.Value(fmt.Sprintf("%s\nsource: %s\n\n```%s\n%s\n```", agentsInjectedHeader, path, agentsInjectedFenceLabel, string(data))),
 		})
 	}
 	return out, nil
@@ -329,7 +339,7 @@ func (b metaContextBuilder) subagentsMetaMessage(context config.SubagentInvocati
 	}
 	lines = append(lines, "---")
 	lines = append(lines, "Invoke with `"+prompts.LaunchCommand()+" run --agent=<role> \"<prompt>\"`.")
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: strings.Join(lines, "\n")}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value(strings.Join(lines, "\n"))}, true
 }
 
 type renderedSubagentRole struct {
@@ -418,7 +428,7 @@ func headlessModeMetaMessage() (llm.Message, bool) {
 	if content == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: content}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value(content)}, true
 }
 
 func headlessModeExitMetaMessage() (llm.Message, bool) {
@@ -426,78 +436,96 @@ func headlessModeExitMetaMessage() (llm.Message, bool) {
 	if content == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: content}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value(content)}, true
 }
 
-func workflowModeMetaMessage(mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (llm.Message, bool, error) {
+func workflowModeMetaMessage(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, awareness workflowruntime.TaskAwareness) (llm.Message, bool, error) {
 	if cfg != nil {
-		content, err := workflowTaskInstructionsContent(mode, cfg, taskCommentCount)
+		content, err := workflowTaskInstructionsContent(kind, mode, cfg, awareness)
 		if err != nil {
 			return llm.Message{}, false, err
 		}
 		if strings.TrimSpace(content) == "" {
 			return llm.Message{}, false, nil
 		}
-		return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: content}, true, nil
+		return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 	}
-	content := ""
-	var err error
-	content, err = workflowCompletionInstructionsFragment(mode, "", workflowruntime.CompletionContract{})
-	if err != nil {
-		return llm.Message{}, false, err
-	}
-	if content == "" {
-		return llm.Message{}, false, nil
-	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: content}, true, nil
+	return llm.Message{}, false, nil
 }
 
-func workflowTaskInstructionsContent(mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (string, error) {
+func buildWorkflowAssignmentMessage(assignment WorkflowAssignment) (llm.Message, error) {
+	var kind prompts.WorkflowTaskPromptKind
+	switch assignment.ContextMode {
+	case workflow.ContextModeNewSession:
+		kind = prompts.WorkflowTaskPromptInitialAssignment
+	case workflow.ContextModeContinueSession, workflow.ContextModeCompactAndContinueSession:
+		kind = prompts.WorkflowTaskPromptReassignment
+	default:
+		return llm.Message{}, fmt.Errorf("unsupported workflow assignment context mode %q", assignment.ContextMode)
+	}
+	message, ok, err := workflowModeMetaMessage(
+		kind,
+		assignment.CompletionMode,
+		&assignment.Prompt,
+		assignment.Prompt.TaskAwareness,
+	)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	if !ok {
+		return llm.Message{}, errors.New("workflow assignment message is empty")
+	}
+	message.SourcePath = textutil.OptionalTrimmedString(assignment.Prompt.Identity)
+	return message, nil
+}
+
+func workflowTaskInstructionsContent(kind prompts.WorkflowTaskPromptKind, mode workflowruntime.CompletionMode, cfg *workflowruntime.PromptContract, awareness workflowruntime.TaskAwareness) (string, error) {
 	instructions := cfg.Instructions
-	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowShortID, cfg.Contract)
+	completionInstructions, err := workflowCompletionInstructionsFragment(mode, instructions.WorkflowID, workflowruntime.CompletionContract{Transitions: cfg.Transitions})
 	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(completionInstructions) == "" {
 		return "", nil
 	}
-	return prompts.RenderWorkflowTaskInstructions(prompts.WorkflowNodeContextArgs{
-		TaskId:               instructions.TaskID,
-		TaskShortId:          instructions.TaskShortID,
-		TaskTitle:            instructions.TaskTitle,
-		TaskBody:             instructions.TaskBody,
-		WorkflowId:           instructions.WorkflowID,
-		WorkflowShortId:      instructions.WorkflowShortID,
-		NodeId:               instructions.NodeID,
-		NodeKey:              instructions.NodeKey,
-		NodeDisplayName:      instructions.NodeDisplayName,
-		ContextMode:          instructions.ContextMode,
-		SourceSessionID:      instructions.SourceSessionID,
-		CompletionMode:       string(mode),
-		TaskNumberOfComments: taskCommentCount,
-		Transitions:          workflowInstructionTransitions(instructions.Transitions),
-		NodePrompt:           instructions.NodePrompt,
+	return prompts.RenderWorkflowTaskInstructions(kind, prompts.WorkflowNodeContextArgs{
+		TaskId:                         string(instructions.CurrentNode.TaskID),
+		TaskShortId:                    instructions.TaskShortID,
+		TaskTitle:                      instructions.TaskTitle,
+		TaskBody:                       instructions.TaskBody,
+		WorkflowID:                     instructions.WorkflowID,
+		WorkflowName:                   instructions.WorkflowName,
+		NodeId:                         string(instructions.CurrentNode.NodeID),
+		NodeKey:                        instructions.NodeKey,
+		NodeDisplayName:                instructions.NodeDisplayName,
+		ContextMode:                    instructions.ContextMode,
+		SourceSessionID:                instructions.SourceSessionID,
+		CompletionMode:                 string(mode),
+		TaskNumberOfComments:           awareness.CommentCount,
+		TaskUnsatisfiedDependencyCount: awareness.UnsatisfiedDependencyCount,
+		Transitions:                    workflowInstructionTransitions(instructions.Transitions),
+		TransitionPrompt:               instructions.TransitionPrompt,
 	}, completionInstructions)
 }
 
-func workflowCompletionInstructionsFragment(mode workflowruntime.CompletionMode, workflowShortID string, contract workflowruntime.CompletionContract) (string, error) {
+func workflowCompletionInstructionsFragment(mode workflowruntime.CompletionMode, workflowID runtimeids.WorkflowID, contract workflowruntime.CompletionContract) (string, error) {
 	switch mode {
 	case workflowruntime.CompletionModeTool:
-		return prompts.RenderWorkflowToolCompletionInstructions(workflowShortID)
+		return prompts.RenderWorkflowToolCompletionInstructions(workflowID)
 	case workflowruntime.CompletionModeStructuredOutput:
-		return prompts.RenderWorkflowStructuredCompletionInstructions(workflowShortID)
+		return prompts.RenderWorkflowStructuredCompletionInstructions(workflowID)
 	case workflowruntime.CompletionModeShellCommand:
-		return prompts.RenderWorkflowShellCompletionInstructions(workflowCompletionPromptArgs(workflowShortID, contract))
+		return prompts.RenderWorkflowShellCompletionInstructions(workflowCompletionPromptArgs(workflowID, contract))
 	case workflowruntime.CompletionModeUnstructuredOutput:
-		return prompts.RenderWorkflowUnstructuredCompletionInstructions(workflowCompletionPromptArgs(workflowShortID, contract))
+		return prompts.RenderWorkflowUnstructuredCompletionInstructions(workflowCompletionPromptArgs(workflowID, contract))
 	default:
 		return "", nil
 	}
 }
 
-func workflowCompletionPromptArgs(workflowShortID string, contract workflowruntime.CompletionContract) prompts.WorkflowCompletionInstructionsArgs {
+func workflowCompletionPromptArgs(workflowID runtimeids.WorkflowID, contract workflowruntime.CompletionContract) prompts.WorkflowCompletionInstructionsArgs {
 	return prompts.WorkflowCompletionInstructionsArgs{
-		WorkflowShortID: strings.TrimSpace(workflowShortID),
+		WorkflowID: workflowID,
 		Contract: prompts.WorkflowCompletionContract{
 			Transitions: workflowCompletionPromptTransitions(contract.Transitions),
 		},
@@ -552,9 +580,9 @@ func worktreeModeMetaMessage(state session.WorktreeReminderState) (llm.Message, 
 	}
 	return llm.Message{
 		Role:            llm.RoleDeveloper,
-		MessageType:     llm.MessageTypeWorktreeMode,
+		MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
 		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
-		Content:         content,
+		Content:         textutil.Value(content),
 	}, true
 }
 
@@ -565,9 +593,9 @@ func worktreeModeExitMetaMessage(state session.WorktreeReminderState) (llm.Messa
 	}
 	return llm.Message{
 		Role:            llm.RoleDeveloper,
-		MessageType:     llm.MessageTypeWorktreeModeExit,
+		MessageType:     textutil.Value(llm.MessageTypeWorktreeModeExit),
 		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
-		Content:         content,
+		Content:         textutil.Value(content),
 	}, true
 }
 
@@ -755,12 +783,13 @@ func splitMetaContextMessages(messages []llm.Message) ([]llm.Message, []llm.Mess
 }
 
 func classifyMetaContextMessage(message llm.Message) (metaContextClassification, bool) {
-	if message.Role != llm.RoleDeveloper {
+	if message.Role != llm.RoleDeveloper || message.MessageType == nil {
 		return metaContextClassification{}, false
 	}
-	switch message.MessageType {
+	sourcePath, _ := textutil.OptionalTrimmed(message.SourcePath)
+	switch *message.MessageType {
 	case llm.MessageTypeAgentsMD:
-		sourcePath := agentSourceKey(message.SourcePath)
+		sourcePath = agentSourceKey(sourcePath)
 		if sourcePath == "" {
 			return metaContextClassification{}, false
 		}
@@ -786,14 +815,14 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 		return metaContextClassification{
 			kind:        metaContextKindWorkflow,
 			key:         "workflow",
-			sourcePath:  strings.TrimSpace(message.SourcePath),
+			sourcePath:  sourcePath,
 			messageType: llm.MessageTypeWorkflowMode,
 		}, true
 	case llm.MessageTypeWorktreeMode:
 		return metaContextClassification{
 			kind:            metaContextKindWorktree,
 			key:             "worktree",
-			sourcePath:      strings.TrimSpace(message.SourcePath),
+			sourcePath:      sourcePath,
 			worktreeContext: message.WorktreeContext,
 			messageType:     llm.MessageTypeWorktreeMode,
 		}, true
@@ -801,7 +830,7 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 		return metaContextClassification{
 			kind:            metaContextKindWorktreeExit,
 			key:             "worktree_exit",
-			sourcePath:      strings.TrimSpace(message.SourcePath),
+			sourcePath:      sourcePath,
 			worktreeContext: message.WorktreeContext,
 			messageType:     llm.MessageTypeWorktreeModeExit,
 		}, true
@@ -811,7 +840,7 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 
 func canonicalizeMetaContextMessage(message llm.Message, classification metaContextClassification) llm.Message {
 	message.Role = llm.RoleDeveloper
-	message.MessageType = classification.messageType
+	message.MessageType = textutil.Value(classification.messageType)
 	return message
 }
 

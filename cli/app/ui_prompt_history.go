@@ -204,6 +204,13 @@ func (m *uiModel) rememberPromptHistoryLocally(text string) bool {
 	return true
 }
 
+func (m *uiModel) rememberPromptCommandHistoryLocally(text string) bool {
+	draft := m.capturePromptHistoryDraftForReuse()
+	remembered := m.rememberPromptHistoryLocally(text)
+	m.restoreCapturedPromptHistoryDraft(draft)
+	return remembered
+}
+
 func appendPromptHistoryTail(tail []string, appended []string) []string {
 	if len(appended) == 0 {
 		return tail

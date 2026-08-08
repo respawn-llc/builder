@@ -105,7 +105,7 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 			if got := developerErr.Facts["terminal_size"]; got != (ongoing.Size{Width: 93, Height: 31}) {
 				t.Fatalf("terminal size diagnostic = %+v, want 93x31", got)
 			}
-			wantPayload := strconv.Quote(fmt.Sprintf("%+v", hydration.Payload.Hydration))
+			wantPayload := strconv.Quote(fmt.Sprintf("%+v", hydration.Payload().(clientui.TranscriptHydration)))
 			if got, ok := developerErr.Facts["quoted_payload"].(string); !ok || got != wantPayload {
 				t.Fatalf("quoted payload diagnostic = %#v, want %#v", developerErr.Facts["quoted_payload"], wantPayload)
 			}
@@ -157,7 +157,7 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 		t.Fatalf("accept current hydration: %v", err)
 	}
 
-	wantUpdate := hydration.Payload.Hydration.RuntimeReadModelUpdate
+	wantUpdate := hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate
 	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
 		11,
 		wantUpdate.Activity,
@@ -183,6 +183,75 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	}
 	if len(controller.liveReadModel.sections) == 0 {
 		t.Fatal("hydrated tools/prompts/queue did not reach controller live state")
+	}
+}
+
+func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {
+	runtimeClient := newTestSessionRuntimeClient(
+		&countingSessionViewClient{},
+		newUnavailableRuntimeControlService(),
+	)
+	current := runtimeTupleTestView(10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	runtimeClient.storeMainView(current)
+	m := newProjectedTestUIModel(runtimeClient)
+	m.processList.entries = []clientui.BackgroundProcess{
+		{ID: "completed-while-disconnected", OwnerSessionID: ongoingTestSessionID().String(), Running: true, Backgrounded: true},
+		{ID: "other-session", OwnerSessionID: "other-session", Running: true, Backgrounded: true},
+	}
+	m.ongoingTranscript = newOngoingTranscriptController(
+		&ongoingSurfaceSpy{},
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+	payload := hydration.Payload().(clientui.TranscriptHydration)
+	payload.BackgroundActivities = []clientui.TranscriptBackgroundActivity{{
+		ActivityID:  runtimeids.NewBackgroundActivityID(),
+		ProcessID:   "still-running",
+		OwnerRunID:  ongoingTestRunID(),
+		OwnerStepID: ongoingTestStepID(),
+		Lifecycle:   clientui.BackgroundLifecycleBackgrounded,
+		Command:     "sleep 10",
+		Workdir:     "/workspace",
+	}}
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
+
+	if _, _, err := m.ongoingTranscript.Accept(hydration); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if len(m.processList.entries) != 2 || m.processList.entries[0].ID != "still-running" || m.processList.entries[1].ID != "other-session" {
+		t.Fatalf("hydrated process entries = %+v, want fresh current-session process plus other-session cache", m.processList.entries)
+	}
+}
+
+func TestHydrationReplacesStaleCompletedCompactionCountWithoutActiveCompaction(t *testing.T) {
+	runtimeClient := newTestSessionRuntimeClient(
+		&countingSessionViewClient{},
+		newUnavailableRuntimeControlService(),
+	)
+	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	current.Status.CompactionCount = 9
+	runtimeClient.storeMainView(current)
+	m := newProjectedTestUIModel(runtimeClient)
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(
+		surface,
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+	payload := hydration.Payload().(clientui.TranscriptHydration)
+	payload.SessionStatus.CompactionCount = 4
+	payload.ActiveCompaction = nil
+	hydration = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
+
+	if _, _, err := controller.Accept(hydration); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if got := runtimeClient.MainView().Status.CompactionCount; got != 4 {
+		t.Fatalf("hydrated compaction count = %d, want 4", got)
 	}
 }
 
@@ -229,8 +298,8 @@ func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 	}
 	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
 		11,
-		hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity,
-		hydration.Payload.Hydration.RuntimeReadModelUpdate.InputReconciliation,
+		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.Activity,
+		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.InputReconciliation,
 	))
 }
 
@@ -305,8 +374,8 @@ func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEven
 
 	wantV11 := runtimeTupleTestView(
 		11,
-		hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity,
-		hydration.Payload.Hydration.RuntimeReadModelUpdate.InputReconciliation,
+		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.Activity,
+		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.InputReconciliation,
 	)
 	assertRuntimeTupleView(t, runtimeClient.MainView(), wantV11)
 	if !m.runtimeActivityBusy() || controller.lastSequence != 1 || !controller.hydrated {
@@ -408,7 +477,7 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		runtimeTupleTestRunningActivity(),
 		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
 	)
-	hydration := message.Payload.Hydration
+	hydration := message.Payload().(clientui.TranscriptHydration)
 	stepID := ongoingTestStepID()
 	runID := ongoingTestRunID()
 	hydration.RuntimeReadModelUpdate.Activity.ActiveStep = &clientui.RuntimeActiveStep{
@@ -416,23 +485,28 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		StepID:     stepID,
 		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 	}
-	row := ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload.CommittedRow
+	row := ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow).Payload().(clientui.TranscriptCommittedRow)
 	row.User.Text = "committed hydration row"
-	hydration.CommittedRows = []clientui.TranscriptCommittedRow{*row}
+	hydration.CommittedRows = []clientui.TranscriptCommittedRow{row}
 	hydration.ActiveAssistant = &clientui.TranscriptAssistantStream{
 		StepID:   stepID,
 		StreamID: runtimeids.NewAssistantStreamID(),
 		Text:     "assistant hydration",
 		Phase:    transcript.AssistantPhaseCommentary,
 	}
-	hydration.ActiveReasoning = &clientui.TranscriptReasoningUpdate{
+	hydration.ActiveThinkingStatus = &clientui.TranscriptThinkingStatusUpdate{
 		StepID: stepID,
-		Key:    "reasoning",
-		Text:   "reasoning body",
-		CurrentStatus: &clientui.ReasoningStatus{
-			Text: "reasoning",
-		},
+		Text:   "reasoning",
 	}
+	traceID := runtimeids.NewReasoningTraceID()
+	hydration.ActiveReasoningTraces = []clientui.TranscriptReasoningTraceUpdate{{
+		StepID: stepID,
+		Identity: clientui.TranscriptReasoningTraceIdentity{
+			Kent: &traceID,
+		},
+		CompactText: "reasoning body",
+		Text:        "reasoning body",
+	}}
 	hydration.ActiveStep = &clientui.TranscriptStepState{
 		RunID:      runID,
 		StepID:     stepID,
@@ -465,5 +539,5 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 	hydration.PendingPrompts = []clientui.TranscriptPrompt{
 		testQuestionPrompt("prompt-1", "Approve hydration?", "yes"),
 	}
-	return message
+	return clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(hydration))
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 const (
@@ -39,25 +40,6 @@ func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderC
 		return llm.ProviderCapabilities{}, err
 	}
 	return providerCaps, nil
-}
-
-func ordinal(v int) string {
-	if v <= 0 {
-		return "0th"
-	}
-	if v%100 >= 11 && v%100 <= 13 {
-		return fmt.Sprintf("%dth", v)
-	}
-	switch v % 10 {
-	case 1:
-		return fmt.Sprintf("%dst", v)
-	case 2:
-		return fmt.Sprintf("%dnd", v)
-	case 3:
-		return fmt.Sprintf("%drd", v)
-	default:
-		return fmt.Sprintf("%dth", v)
-	}
 }
 
 func (e *Engine) inputTokensForItems(ctx context.Context, model string, instructions string, items []llm.ResponseItem) (int, bool) {
@@ -94,17 +76,20 @@ func sanitizeRemoteCompactionOutput(output []llm.ResponseItem) ([]llm.ResponseIt
 		typeCounts[outputItemTypeLabel(item)]++
 		switch item.Type {
 		case llm.ResponseItemTypeMessage:
-			if item.Role == llm.RoleUser && strings.TrimSpace(item.Content) != "" {
+			if item.Role != nil &&
+				*item.Role == llm.RoleUser &&
+				item.Content != nil &&
+				strings.TrimSpace(*item.Content) != "" {
 				filtered = append(filtered, item)
 			}
 		case llm.ResponseItemTypeCompaction:
-			if strings.TrimSpace(item.EncryptedContent) == "" {
+			if _, present := textutil.OptionalTrimmed(item.EncryptedContent); !present {
 				continue
 			}
 			filtered = append(filtered, item)
 			hasCheckpoint = true
 		case llm.ResponseItemTypeReasoning:
-			if strings.TrimSpace(item.EncryptedContent) == "" {
+			if _, present := textutil.OptionalTrimmed(item.EncryptedContent); !present {
 				continue
 			}
 			filtered = append(filtered, item)
@@ -141,7 +126,7 @@ func outputItemTypeLabel(item llm.ResponseItem) string {
 }
 
 func itemHasEncryptedCheckpoint(item llm.ResponseItem) bool {
-	if strings.TrimSpace(item.EncryptedContent) != "" {
+	if _, present := textutil.OptionalTrimmed(item.EncryptedContent); present {
 		return true
 	}
 	if len(item.Raw) == 0 || !json.Valid(item.Raw) {
@@ -182,11 +167,17 @@ func estimateTokensFromBytes(byteLen int) int {
 func estimateItemsTokens(items []llm.ResponseItem) int {
 	totalTokens := 0
 	for _, item := range items {
-		totalTokens += estimateTokensFromBytes(len(item.Content))
-		totalTokens += estimateTokensFromBytes(len(item.ID))
-		totalTokens += estimateTokensFromBytes(len(item.Name))
-		totalTokens += estimateTokensFromBytes(len(item.CallID))
-		totalTokens += estimateTokensFromBytes(len(item.EncryptedContent))
+		for _, value := range []*string{
+			item.Content,
+			item.ID,
+			item.Name,
+			item.CallID,
+			item.EncryptedContent,
+		} {
+			if value != nil {
+				totalTokens += estimateTokensFromBytes(len(*value))
+			}
+		}
 		totalTokens += estimateTokensFromBytes(len(item.Arguments))
 		if outputTokens, ok := estimateStructuredOutputTokens(item.Output); ok {
 			totalTokens += outputTokens
@@ -194,7 +185,9 @@ func estimateItemsTokens(items []llm.ResponseItem) int {
 			totalTokens += estimateTokensFromBytes(len(item.Output))
 		}
 		for _, summary := range item.ReasoningSummary {
-			totalTokens += estimateTokensFromBytes(len(summary.Role))
+			if summary.Role != nil {
+				totalTokens += estimateTokensFromBytes(len(*summary.Role))
+			}
 			totalTokens += estimateTokensFromBytes(len(summary.Text))
 		}
 	}

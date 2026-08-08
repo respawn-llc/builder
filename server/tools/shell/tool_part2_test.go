@@ -11,13 +11,11 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	t.Helper()
 	manager := newShellTestManager(t, 50*time.Millisecond)
 	events := make(chan Event, 2)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventCompleted || evt.Type == EventKilled {
-			select {
-			case events <- evt:
-			default:
-			}
+			events <- evt
 		}
+		return true
 	})
 
 	result := callExecCommand(t, NewExecCommandTool(t.TempDir(), 16_000, manager, ""), execID, map[string]any{
@@ -40,13 +38,13 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 	return manager, events
 }
 
-func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
-	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 800)
+func TestWriteStdinCompletionLeavesBackgroundNoticeEventUnsuppressed(t *testing.T) {
+	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 15_000)
 
 	select {
 	case evt := <-events:
-		if !evt.NoticeSuppressed {
-			t.Fatalf("expected completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		if evt.NoticeSuppressed {
+			t.Fatalf("completion event notice must remain unsuppressed after write_stdin harvest, got %+v", evt)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completion event")
@@ -54,13 +52,13 @@ func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
-func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
+func TestWriteStdinFallbackCompletionLeavesBackgroundNoticeEventUnsuppressed(t *testing.T) {
 	manager, events := runCompletionNoticeTest(
 		t,
 		"bg-large-1",
 		"sleep 0.15; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
 		"bg-large-2",
-		1_500,
+		15_000,
 	)
 
 	select {
@@ -68,13 +66,59 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 		if evt.completion == nil || evt.completion.source != completionOutputFallback {
 			t.Fatalf("expected fallback completion event, got %+v", evt)
 		}
-		if !evt.NoticeSuppressed {
-			t.Fatalf("expected fallback completion event notice to be suppressed after write_stdin harvest, got %+v", evt)
+		if evt.NoticeSuppressed {
+			t.Fatalf("fallback completion event notice must remain unsuppressed after write_stdin harvest, got %+v", evt)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for fallback completion event")
 	}
 	waitForManagerCount(t, manager, 0, 3*time.Second)
+}
+
+func TestSharedManagerWriteStdinHarvestLeavesProcessOwnerNoticeUnsuppressed(t *testing.T) {
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	events := make(chan Event, 1)
+	manager.SetEventHandler(func(evt Event) bool {
+		if evt.Type == EventCompleted || evt.Type == EventKilled {
+			events <- evt
+		}
+		return true
+	})
+
+	started, err := manager.Start(context.Background(), ExecRequest{
+		Command:        []string{"/bin/sh", "-c", "sleep 0.15; printf owner"},
+		DisplayCommand: "sleep briefly",
+		OwnerSessionID: "process-owner",
+		Workdir:        t.TempDir(),
+		YieldTime:      50 * time.Millisecond,
+		MaxOutputChars: 16_000,
+	})
+	if err != nil {
+		t.Fatalf("start owner process: %v", err)
+	}
+	if !started.Backgrounded {
+		t.Fatalf("owner process must transition to background, got %+v", started)
+	}
+	if _, err := manager.WriteStdin(context.Background(), WriteRequest{
+		SessionID:      started.SessionID,
+		YieldTime:      15 * time.Second,
+		MaxOutputChars: 16_000,
+	}); err != nil {
+		t.Fatalf("harvest owner completion: %v", err)
+	}
+
+	select {
+	case evt := <-events:
+		if evt.Snapshot.OwnerSessionID != "process-owner" {
+			t.Fatalf("terminal event owner = %q, want process-owner", evt.Snapshot.OwnerSessionID)
+		}
+		if evt.NoticeSuppressed {
+			t.Fatalf("process owner terminal event must remain unsuppressed after shared-manager harvest, got %+v", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for owner terminal event")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
@@ -84,13 +128,14 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	terminalHandlerStarted := make(chan struct{})
 	releaseTerminalHandler := make(chan struct{})
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type != EventCompleted && evt.Type != EventKilled {
-			return
+			return true
 		}
 		close(terminalHandlerStarted)
 		<-releaseTerminalHandler
 		events <- evt
+		return true
 	})
 
 	result := callExecCommand(t, execTool, "bg-lock-1", map[string]any{
@@ -143,11 +188,9 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
 	manager := newBackgroundTestManager(t)
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
-		select {
-		case events <- evt:
-		default:
-		}
+	manager.SetEventHandler(func(evt Event) bool {
+		events <- evt
+		return true
 	})
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 
@@ -184,13 +227,14 @@ func TestManagerCloseKillsRunningProcesses(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(evt Event) {
+	manager.SetEventHandler(func(evt Event) bool {
 		if evt.Type == EventKilled {
 			select {
 			case events <- evt:
 			default:
 			}
 		}
+		return true
 	})
 
 	result, err := manager.Start(context.Background(), ExecRequest{

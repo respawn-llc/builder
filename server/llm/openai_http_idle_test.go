@@ -78,8 +78,8 @@ func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *tes
 	if err != nil {
 		t.Fatalf("healthy long stream failed: %v", err)
 	}
-	if resp.Assistant.Content != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.Assistant.Content)
+	if messageContent(resp.Assistant) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", messageContent(resp.Assistant))
 	}
 }
 
@@ -132,7 +132,7 @@ func TestGenerateStream_ParentCancelIsDistinguishableFromStall(t *testing.T) {
 }
 
 func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
-	client := newPacedWatchdogClient(t, 120*time.Millisecond,
+	client := newPacedWatchdogClient(t, time.Second,
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
 		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_text.delta","delta":"Done"}`},
 		completedStreamEvent(20*time.Millisecond),
@@ -143,8 +143,8 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a fully-received response must not be discarded as a stall: %v", err)
 	}
-	if resp.Assistant.Content != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.Assistant.Content)
+	if messageContent(resp.Assistant) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", messageContent(resp.Assistant))
 	}
 }
 

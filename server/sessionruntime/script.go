@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	shelltool "core/server/tools/shell"
+	"core/shared/boundedio"
 )
 
 const (
@@ -28,7 +28,7 @@ type ScriptCommand struct {
 }
 
 type ScriptExecutionRequest struct {
-	Workflow *WorkflowExecutionRef
+	Workflow *WorkflowExecutionLease
 	Command  ScriptCommand
 	Finalize func(context.Context, ExecutionScope, ScriptResult, error) error
 }
@@ -54,8 +54,8 @@ func (r ScriptResult) clone() ScriptResult {
 
 type scriptProcess struct {
 	cmd               *exec.Cmd
-	stdout            *shelltool.BoundedOutput
-	stderr            *shelltool.BoundedOutput
+	stdout            *boundedio.Writer
+	stderr            *boundedio.Writer
 	cancellationGrace time.Duration
 }
 
@@ -73,9 +73,6 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 
 	a.mu.Lock()
 	execution, err := a.reserveScriptExecutionLocked(req)
-	if err == nil {
-		err = process.cmd.Start()
-	}
 	if err != nil {
 		a.mu.Unlock()
 		return nil, err
@@ -83,12 +80,38 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	handle := executionHandle{execution: execution}
 	a.byScope[execution.scope.ID()] = execution
 	if workflowRef, ok := execution.scope.Workflow(); ok {
-		a.byWorkflow[workflowRef] = execution
+		workflowKey, keyErr := workflowExecutionKeyFor(workflowRef)
+		if keyErr != nil {
+			a.mu.Unlock()
+			return nil, keyErr
+		}
+		a.addWorkflowExecutionLocked(workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
 
 	go func() {
+		if req.Workflow != nil {
+			if waitErr := req.Workflow.wait(execution.ctx); waitErr != nil {
+				execution.finish(ExecutionResult{}, waitErr, nil)
+				return
+			}
+		}
+		if startErr := process.cmd.Start(); startErr != nil {
+			// A failed start never becomes running. Its completion finalizer
+			// retains exact ownership without publishing queued/running state.
+			execution.beginWorkflowFinalization()
+			var finalizeErr error
+			if req.Finalize != nil {
+				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
+			}
+			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
+			return
+		}
+		if req.Workflow != nil {
+			a.beginWorkflowExecution(execution)
+		}
 		result, runErr, stopErr := process.wait(execution.ctx)
+		execution.beginWorkflowFinalization()
 		var finalizeErr error
 		if req.Finalize != nil {
 			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
@@ -130,8 +153,14 @@ func prepareAuthorityScriptProcess(command ScriptCommand) (*scriptProcess, error
 		cmd.Stdin = bytes.NewReader(command.Stdin)
 	}
 	prepareScriptCommand(cmd)
-	stdout := shelltool.NewBoundedOutput(outputLimit)
-	stderr := shelltool.NewBoundedOutput(outputLimit)
+	stdout, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stdout capture: %w", err)
+	}
+	stderr, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stderr capture: %w", err)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return &scriptProcess{

@@ -86,9 +86,11 @@ func (s Service) Enter(selector string) (serverapi.WorktreeScheduledAcknowledgem
 	operationID := s.operationID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return s.Client.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			OperationID: operationID,
-			SessionID:   s.SessionID,
-			Selector:    strings.TrimSpace(selector),
+			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+				OperationID: operationID,
+				SessionID:   s.SessionID,
+			},
+			Selector: strings.TrimSpace(selector),
 		})
 	})
 }
@@ -101,8 +103,10 @@ func (s Service) Delete(
 	operationID := s.operationID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResult, error) {
 		return s.Client.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			OperationID:         operationID,
-			SessionID:           s.SessionID,
+			WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+				OperationID: operationID,
+				SessionID:   s.SessionID,
+			},
 			Selector:            strings.TrimSpace(selector),
 			ForceFolderRemoval:  forceFolderRemoval,
 			BranchCleanupPolicy: cleanupPolicy,

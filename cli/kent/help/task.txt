@@ -1,23 +1,34 @@
 Usage of kent task:
-  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
+  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--label <name-or-uuid>]... [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
-  kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]
+  kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]
+  kent task interrupt <short-id-or-task-id> [--project <project>] [--session <session-id>] [--reason <text>]
   kent task resume <short-id-or-task-id> [--project <project>]
-  kent task approve <transition-id> [--execution-target none|head|default-branch|ref:<revision>]
-  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]
-  kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task approve <approval-id>
+  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--transition <key>] [--values-json <json>|--values-file <path>] [--commentary <text>] [--execution-target none|head|default-branch|ref:<revision>] [--ignore-dependencies] [--json]
+  kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
+  kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--not-label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--offset <n>] [--limit <n>] [--json]
+  kent task search <query> [--fts5] [--case-sensitive] [--context <n>] [--include-comments] [--project <project>]... [--status <status>[,<status>...]] [--page-size <n>] [--offset <n>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
-  kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
+  kent task wait <short-id-or-task-id> [--project <project>]
+  kent task watch <short-id-or-task-id> [--project <project>]
   kent task delete <short-id-or-task-id> [--project <project>]
+  kent task dep add --blocker <short-id-or-task-id> --blocked <short-id-or-task-id> [--project <project>] [--json]
+  kent task dep remove --blocker <short-id-or-task-id> --blocked <short-id-or-task-id> [--project <project>] [--json]
+  kent task dep list <short-id-or-task-id> [--direction blocks|blocked-by] [--project <project>] [--json]
+  kent task label create <name> [--project <project>] [--json]
+  kent task label list [--project <project>] [--name <name>] [--json]
+  kent task label rename --label <name-or-uuid> <new-name> [--project <project>] [--json]
+  kent task label delete --label <name-or-uuid> [--project <project>] [--json]
+  kent task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]
+  kent task label remove <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]
   kent task comment add <short-id-or-task-id> (--body <text>|--body-file <path>) [--project <project>] [--author <user|agent>] [--author-id <id>]
-  kent task comment list <short-id-or-task-id> [--project <project>] [--page-size <n>] [--page-token <token>]
+  kent task comment list <short-id-or-task-id> [--project <project>] [--offset <n>] [--limit <n>]
   kent task comment replace <comment-id> --body <text>
   kent task comment delete <comment-id>
   kent task comments <add|list|replace|delete> ... (alias of kent task comment)
 
-Create tasks, start or resume their workflow work, inspect progress, and manage
-task comments.
+Create tasks, start or resume their workflow work, inspect progress, and manage task comments.
 
 Task references:
   Commands accept a task ID or project-scoped short ID such as `KENT-123`.
@@ -25,22 +36,21 @@ Task references:
   project attached to the current workspace.
 
 Workflow selection:
-  Workflow selectors are bare canonical UUIDv4 values. Workflow names and
-  persisted `workflow-...` IDs are not accepted.
   Task creation uses `--workflow` when supplied. Otherwise it uses the project
   default, or the lone linked workflow when the project has no default.
 
-Selecting an execution target:
-  Task start, approve, and move never prompt. If a workflow requires target
-  selection, rerun the action with
-  `--execution-target none|head|default-branch|ref:<revision>`. The override
-  applies only to an unlocked task and does not edit its workflow.
+Labels:
+  Label selectors are literal repeatable `--label` and `--not-label` values.
+  Catalog deletion is immediate and removes the label from every Project task.
+
+Starting ahead of dependencies:
+  If direct unsatisfied dependencies require confirmation, inspect them with `kent task show <task>` and rerun with `--ignore-dependencies` to proceed despite the risk of conflicts or confusion.
 
 Completing workflow work:
-For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Humans, and humans only, can pass `--force` and exactly one of `--run`, `--session`, or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted.
+For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Humans, and humans only, can pass `--force` and exactly one of `--session` or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted.
 If you are an agent, refer to the developer guidance you received for how to mark your task as completed if you are confused, or ask the User a question if stuck or unable to complete the task for any reason.
 
-Subcommands `resume`, `approve`, `move`, `cancel`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
+Subcommand `delete` is available only to humans. Do not try to circumvent this restriction, and give the user the command they have to run instead.
 
 Listing tasks:
   Task listing is always project-scoped. `--project` defaults to the project
@@ -51,6 +61,8 @@ Listing tasks:
   node keys.
   `--column` and `--sort column` require `--workflow` because column keys and
   positions belong to one workflow.
-  `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
+  `--sort` accepts `created`, `updated`, `status`, `column`, `title`, `labels`,
+  or `short-id`
   followed by `:asc` or `:desc`.
+  `--label-match` defaults to `any`; `all` requires every included and excluded label condition. `--unlabeled` cannot be combined with `--label`, `--not-label`, or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.

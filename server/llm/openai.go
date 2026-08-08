@@ -130,11 +130,15 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 		return Response{}, fmt.Errorf("openai response omitted authoritative provider phase fact")
 	}
 	assistantPhase := providerPhaseProjection(providerResp.ProviderPhase)
+	var typedAssistantPhase *MessagePhase
+	if assistantPhase != "" {
+		typedAssistantPhase = textutil.Value(assistantPhase)
+	}
 	return Response{
 		Assistant: Message{
 			Role:           RoleAssistant,
-			Content:        providerResp.AssistantText,
-			Phase:          assistantPhase,
+			Content:        textutil.OptionalExactString(providerResp.AssistantText),
+			Phase:          typedAssistantPhase,
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
 		},
@@ -193,8 +197,12 @@ func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Req
 	if err != nil {
 		return Response{}, err
 	}
-	if callbacks.OnAssistantDelta != nil && resp.Assistant.Content != "" {
-		callbacks.OnAssistantDelta(AssistantDelta{Text: resp.Assistant.Content, Phase: resp.Assistant.Phase})
+	if callbacks.OnAssistantDelta != nil && resp.Assistant.Content != nil {
+		delta := AssistantDelta{Text: *resp.Assistant.Content}
+		if resp.Assistant.Phase != nil {
+			delta.Phase = *resp.Assistant.Phase
+		}
+		callbacks.OnAssistantDelta(delta)
 	}
 	return resp, nil
 }

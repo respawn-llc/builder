@@ -1,17 +1,19 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ActivityItem, AttentionItem, TaskComment, TaskDetail } from "@/api";
+import type { ActivityItem, AttentionItem, TaskComment, TaskDetail, TaskDependencyDirection } from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
-import { ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
+import type { TaskDependencyPair } from "@/shared/task-dependencies";
+import { ErrorState, LoadingState, VirtualizedInfiniteList, type VirtualizedPixelOffsetRequest } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskInbox } from "./TaskDetailInbox";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
+import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type {
   useTaskActivity,
@@ -23,6 +25,7 @@ import type {
 type TaskDetailListItem =
   | Readonly<{ kind: "header" }>
   | Readonly<{ kind: "body" }>
+  | Readonly<{ kind: "dependencies" }>
   | Readonly<{ kind: "inbox" }>
   | Readonly<{ kind: "tabs" }>
   | Readonly<{ kind: "comment-composer" }>
@@ -49,12 +52,17 @@ export function TaskDetailList({
   newCommentBody,
   onDraftChange,
   onDescriptionPresentationChange,
+  onAddDependency,
+  onRemoveDependency,
+  onSelectDependencyTask,
   onNewCommentBodyChange,
   onEditingCommentChange,
   onQuestionSelectionChange,
+  onScrollElementChange,
   onSaveDraft,
-  openLink,
+  pixelOffsetRequest,
   questionSelections,
+  relationshipNavigationAvailable,
   selectedTab,
   setTab,
   updateError,
@@ -73,12 +81,17 @@ export function TaskDetailList({
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onAddDependency: (direction: TaskDependencyDirection) => void;
+  onRemoveDependency: (pair: TaskDependencyPair) => void;
+  onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
+  pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -86,6 +99,8 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
+  const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
+  const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
     () => activity.data?.pages.flatMap((page) => page.items) ?? [],
     [activity.data],
@@ -126,10 +141,18 @@ export function TaskDetailList({
       selectedTab,
     ],
   );
-  const pinnedItemKeys = useMemo(
-    () => (attention.isPending || initialFocus !== undefined ? new Set(["inbox"]) : undefined),
-    [attention.isPending, initialFocus],
-  );
+  const initialScrollKey =
+    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? undefined : "inbox";
+  const pinnedItemKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (attention.isPending || (initialFocus !== undefined && initialFocus.kind !== "dependencies")) {
+      keys.add("inbox");
+    }
+    if (initialFocus?.kind === "dependencies") {
+      keys.add("dependencies");
+    }
+    return keys.size === 0 ? undefined : keys;
+  }, [attention.isPending, initialFocus]);
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
 
   return (
@@ -139,7 +162,7 @@ export function TaskDetailList({
       estimateSize={() => 160}
       getItemKey={taskDetailListItemKey}
       hasNextPage={paging.hasNextPage}
-      initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
+      initialScrollKey={initialScrollKey}
       initialScrollRequestKey={
         initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
       }
@@ -149,15 +172,23 @@ export function TaskDetailList({
       loadMoreKey={paging.loadMoreKey}
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
+      onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
+      pixelOffsetRequest={
+        !attention.isPending && !(selectedTab === "comments" ? comments.isPending : activity.isPending)
+          ? pixelOffsetRequest
+          : undefined
+      }
       rowSpacing="compact"
       renderItem={(item) => (
         <TaskDetailListRow
           activityCount={activityItems.length}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={detail.comments.length}
+          commentCount={commentItems.length}
+          canSaveDraft={canSaveDraft}
+          draftDirty={draftDirty}
           detail={detail}
           disabled={disabled}
           draft={draft}
@@ -173,12 +204,15 @@ export function TaskDetailList({
           noCommentsTitle={t("task.noCommentsTitle")}
           onDraftChange={onDraftChange}
           onDescriptionPresentationChange={onDescriptionPresentationChange}
+          onAddDependency={onAddDependency}
+          onRemoveDependency={onRemoveDependency}
+          onSelectDependencyTask={onSelectDependencyTask}
           onNewCommentBodyChange={onNewCommentBodyChange}
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
           onSaveDraft={onSaveDraft}
-          openLink={openLink}
           questionSelections={questionSelections}
+          relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
           setTab={setTab}
           updateError={updateError}
@@ -194,10 +228,12 @@ type TaskDetailListRowProps = Readonly<{
   activityCount: number;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
+  canSaveDraft: boolean;
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
   errorTitle: string;
@@ -210,12 +246,15 @@ type TaskDetailListRowProps = Readonly<{
   noCommentsTitle: string;
   onDraftChange: (draft: TaskDraft) => void;
   onDescriptionPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onAddDependency: (direction: TaskDependencyDirection) => void;
+  onRemoveDependency: (pair: TaskDependencyPair) => void;
+  onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -225,6 +264,7 @@ type TaskDetailListRowProps = Readonly<{
 const rowRenderers: Record<TaskDetailListItem["kind"], (props: TaskDetailListRowProps) => ReactNode> = {
   header: HeaderRow,
   body: BodyRow,
+  dependencies: DependenciesRow,
   inbox: InboxRow,
   tabs: TabsRow,
   "comment-composer": CommentComposerRow,
@@ -251,6 +291,7 @@ function TaskDetailListRow(props: TaskDetailListRowProps): ReactNode {
 }
 
 function HeaderRow({
+  canSaveDraft,
   detail,
   disabled,
   draft,
@@ -260,6 +301,7 @@ function HeaderRow({
 }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskHeaderIsland
+      canSaveDraft={canSaveDraft}
       detail={detail}
       disabled={disabled || updatePending}
       draft={draft}
@@ -273,9 +315,11 @@ function BodyRow({
   detail,
   disabled,
   draft,
+  draftDirty,
   mutations,
   onDraftChange,
   onDescriptionPresentationChange,
+  onSaveDraft,
   descriptionPresentation,
   updateError,
   updatePending,
@@ -288,13 +332,44 @@ function BodyRow({
       <DescriptionIsland
         disabled={disabled || updatePending}
         draft={draft}
+        draftDirty={draftDirty}
         error={updateError}
         onDraftChange={onDraftChange}
         onPresentationChange={onDescriptionPresentationChange}
+        onSave={onSaveDraft}
         presentation={descriptionPresentation}
       />
       <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
     </div>
+  );
+}
+
+function DependenciesRow({
+  detail,
+  disabled,
+  mutations,
+  onAddDependency,
+  onRemoveDependency,
+  onSelectDependencyTask,
+  relationshipNavigationAvailable,
+  updatePending,
+}: TaskDetailListRowProps): ReactNode {
+  return (
+    <TaskDependenciesArea
+      dependencies={detail.dependencies}
+      disabled={disabled}
+      navigationDisabled={
+        disabled ||
+        !relationshipNavigationAvailable ||
+        updatePending ||
+        mutations.addComment.isPending ||
+        mutations.replaceComment.isPending
+      }
+      onAdd={onAddDependency}
+      onRemove={onRemoveDependency}
+      onSelectTask={onSelectDependencyTask}
+      taskID={detail.id}
+    />
   );
 }
 
@@ -375,7 +450,6 @@ function CommentItemRow({
   item,
   mutations,
   onEditingCommentChange,
-  openLink,
 }: TaskDetailListRowProps): ReactNode {
   const comment = item.kind === "comment" ? item.comment : undefined;
   return comment === undefined ? null : (
@@ -387,7 +461,6 @@ function CommentItemRow({
       onEdit={(nextComment) => {
         onEditingCommentChange({ id: nextComment.id, body: nextComment.body });
       }}
-      openLink={openLink}
     />
   );
 }
@@ -432,12 +505,12 @@ function taskDetailListItems({
   initialFocus?: TaskDetailInitialFocus | undefined;
   tab: DetailTab;
 }>): readonly TaskDetailListItem[] {
-  const staticItems: TaskDetailListItem[] = [{ kind: "header" }, { kind: "body" }];
+  const staticItems: TaskDetailListItem[] = [{ kind: "header" }, { kind: "body" }, { kind: "dependencies" }];
   if (
     !attentionFailed &&
     (detail.attentionCount > 0 ||
       attentionItems.length > 0 ||
-      (attentionPending && initialFocus !== undefined))
+      (attentionPending && initialFocus !== undefined && initialFocus.kind !== "dependencies"))
   ) {
     staticItems.push({ kind: "inbox" });
   }
@@ -515,7 +588,13 @@ function taskDetailListItemKey(item: TaskDetailListItem): string {
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {
-  return item.kind !== "header" && item.kind !== "body" && item.kind !== "inbox" && item.kind !== "tabs";
+  return (
+    item.kind !== "header" &&
+    item.kind !== "body" &&
+    item.kind !== "dependencies" &&
+    item.kind !== "inbox" &&
+    item.kind !== "tabs"
+  );
 }
 
 function taskDetailPaging({
@@ -535,11 +614,12 @@ function taskDetailPaging({
   loadMore: () => void;
 }> {
   if (selectedTab === "comments") {
-    const nextPageToken = comments.data?.pages.at(-1)?.nextPageToken ?? "";
+    const nextOffset = comments.data?.pages.at(-1)?.nextOffset;
+    const nextOffsetKey = nextOffset === undefined || nextOffset === null ? "none" : nextOffset.toString();
     return {
       hasNextPage: comments.hasNextPage,
       isFetchingNextPage: comments.isFetchingNextPage,
-      loadMoreKey: `${detailID}:comments:${nextPageToken}:${comments.dataUpdatedAt.toString()}`,
+      loadMoreKey: `${detailID}:comments:${nextOffsetKey}:${comments.dataUpdatedAt.toString()}`,
       loadMore: () => {
         void comments.fetchNextPage();
       },

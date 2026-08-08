@@ -8,11 +8,12 @@ This skill describes workflow creation and editing. For creating, inspecting, an
 ## Workflow Concepts
 
 - A workflow is a graph of node states connected by transition branches.
-- A task is the durable user-facing unit of work moving through one workflow.
+- A task is the durable user-facing unit of work moving through one workflow. It directly owns its Current Nodes: normally one, or several during parallel fan-out.
 - A node is a visible workflow state. `start` is where tasks are created, `agent` node runs Kent sessions, `join` waits for parallel branches of a group, and `terminal` is a sink where automation stops.
 - An edge connects a transition group to a target node. A transition group is selected by a `transition_id`; if the group has multiple edges, it fans out to parallel target nodes.
 - A graph revision increments when graph-affecting edits are made.
 - Model-facing keys such as node keys, edge keys, transition IDs, and parameter keys must be stable lower-case keys matching Kent's model-key rules. Prefer `implement`, `review`, `done`, `needs_changes` over display labels with spaces.
+- Humans perceive workflows as Kanban boards where each node is a column.
 
 Authoritative command details are the live CLI:
 
@@ -46,13 +47,12 @@ For validation modes, use `draft` while authoring, `task_creation` before creati
 To understand what `--agent` roles are available (the reminder in your memory might not list all of them), inspect the repo-local and user global `config.toml` files. More info in the `kent-dogfooding` skill.
 
 Important CLI behavior:
-- Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context.
+- Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context. `--json` is **very verbose**, avoid it except for scripting.
 - `workflow create` auto-creates the initial backlog/start and done/terminal shape; inspect after create before adding duplicate start or terminal nodes.
-- Workflow selectors use bare canonical UUIDv4 values emitted by the CLI. Names and `workflow-...` persistence IDs are rejected.
 - `workflow list --project <path-or-id>` discovers linked workflows with the default first. `workflow inspect <uuid> --summary` reads metadata without loading the graph.
 - Agent-targeting edges require `--prompt <text>`. Omit `--prompt` for edges targeting `start`, `join`, or `terminal` nodes, as there's nobody to prompt.
 - Script nodes use `--kind script --script-path <path>` and can appear anywhere an agent node can appear. Absolute paths resolve on the Kent server; relative paths resolve against the task managed worktree when the script runs.
-- Link, unlink, and set project defaults with `kent workflow link`, `kent workflow unlink`, and `kent workflow default`. This sets up bindings between a project (repo, workspace) and a workflow, and enables sharing of workflows.
+- Link, unlink, and set project defaults with `kent workflow link`, `kent workflow unlink`, and `kent workflow default`. This sets up bindings between a project (repo, workspace) and a workflow, and enables reuse of workflows.
 - `--transition-description <text>` sets the model-facing transition description on the edge's transition group. The agent will see it when it completes the task. Use it to tell the agent when to pick this transition over its siblings.
 - `--param <key>=<description>` (repeatable on `edge add` and `edge update`) declares a transition parameter the source agent must produce when taking the transition. On `edge update`, passing `--param` replaces the full parameter set; `--clear-params` removes all parameters. Omitting both preserves existing parameters.
 
@@ -65,7 +65,18 @@ kent workflow node add "$workflow_uuid" --key release_notes --kind script --scri
 kent workflow edge add "$workflow_uuid" --from implement --transition release_notes --edge-key release_notes --to release_notes --context new_session
 ```
 
-Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains runtime identifiers such as `run_id` and `placement_id`. Prefer placing scripts in the repository main workspace (checked into VCS or not depends on user choice) for workflows that are tailored to a project, and at `~/.kent/scripts` or similar generic directory for reusable workflows, unless the user gives guidance.
+Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains metadata about the execution. Prefer placing scripts in the repository main workspace (checked into VCS or not depends on user choice) for workflows that are tailored to a project, and at `~/.kent/scripts` or similar generic directory for reusable workflows, unless the user gives guidance.
+
+```json
+{
+  "release_notes_path": "docs/release-notes.md",
+  "_kent": {
+    "task_id": "task_123",
+    "node_id": "node_456",
+    "transition_branch_key": "release_notes"
+  }
+}
+```
 
 Stdout of your scripts must be workflow completion JSON. Stderr is diagnostics only. A typical stdout payload is:
 
@@ -77,9 +88,9 @@ Stdout of your scripts must be workflow completion JSON. Stderr is diagnostics o
 }
 ```
 
-If there is only one outgoing transition, `transition` can be omitted. Include declared transition parameters as top-level string fields. For multiple outgoing transitions, fields for unselected transitions should be `null`. Validate workflows in execution mode before using them.
+If there is only one outgoing transition, `transition` can be omitted. Include declared transition parameters as top-level string fields. For multiple outgoing transitions, fields for unselected transitions should be `null`.
 
-Execution validation and task start require the selected script path to exist on the Kent server, be a file, and be executable. Relative script paths cannot be fully checked until the task managed worktree exists, so run manual QA on them to ensure the user doesn't discover bugs when they try to execute real work.
+Relative script paths cannot be fully checked until the task-managed worktree exists, so run manual QA on them to ensure the user doesn't discover bugs when they try to execute real work.
 
 ## Edit Existing Workflows
 Use the edge/node CRUD commands to manage the workflow:
@@ -94,9 +105,9 @@ Node update flags are partial: omitted scalar fields keep current values. Edge u
 ## Context And Approval
 Each edge requires a context mode:
 
-- `new_session`: start a fresh Kent session and inject task metadata plus outputs from the previous node. This is a double-edged sword: The new session starts with the lowest token count, giving the agent the most memory space for their task, keeps it free from bias, and does not invalidate caches, keeping costs low, and is most flexible (can change agent roles etc.), but the agent must receive **all** the necessary context to effectively complete their task in the node prompt and input parameters, and they will have to gather context from the workspace **from scratch** to orient themselves (possibly negating token and cost benefits gained). This means `new_session` is a good fit for isolated tasks, verification, self-contained units of work, e.g. code review, QA runs, requirement verification; and a poor fit for continuation of existing work, next-phase of a plan, or highly contextual tasks that need carry-over of information.
+- `new_session`: start a fresh Kent session and inject task metadata plus outputs from the previous node. This is a double-edged sword: The new session starts with the lowest token count, giving the agent the most memory space for their task; keeps it free from bias; does not invalidate caches, keeping costs low; and is most flexible (can change agent roles etc.), but the agent must receive **all** the necessary context to effectively complete their task in the node prompt and input parameters, and they will have to gather context from the workspace **from scratch** to orient themselves (possibly negating token and cost benefits gained). This means `new_session` is a good fit for isolated tasks, verification, self-contained units of work, e.g., code review, QA runs, requirement verification; and a poor fit for continuation of existing work, next-phase of a plan, or highly contextual tasks that need carry-over of information.
 
-- `compact_and_continue_session`: ask the previous agent for a handoff, then start a new session with the next node prompt, their handoff, and task metadata. This is the middle ground - it frees context, but keeps only the important details about the previous agent's work state and actions in context, then starts a new session. It does not invalidate caches, allows changing the subagent role, and still keeps a lot of free memory space available. However, this incurs additional costs to **handoff the previous session**, leaves the previous session cache abandoned, and the context preservation is imperfect. Use this when source node is a large chunk of work (such as feature implementation or research task) and the next one continues their work in another direction (does not benefit much from the full context).
+- `compact_and_continue_session`: ask the previous agent for a handoff, then start a new session with the next node prompt, their handoff, and task metadata. This is the middle ground - it frees context, but keeps only the important details about the previous agent's work state and actions in context, then starts a new session. It does not invalidate caches, allows changing the subagent role, and still keeps a lot of free memory space available. However, this incurs additional costs to **handoff the previous session**, leaves the previous session cache abandoned, and the context preservation is imperfect. Use this when source node is a large chunk of work (such as feature implementation or research task) and the next one continues their work in another direction (does not benefit much from the full context). Using this in cyclic subgraphs with small tasks (e.g., re-reviews) can be detrimental because the handoffs will be issued repeatedly; prefer continue_session in that case.
 
 - `continue_session`: directly continue one of the previous Kent sessions, keeping the **same subagent role**, conversation history, state, and cache. This mode directly gives the agent the next task as a message and runs the loop. This is best when the task that the source node completed was relatively small (fitting in roughly one agent memory window) and the next node directly continues it or some other previous node. For example, an `investigation` phase that continues into `planning` phase, or `implementation` node that teleports context into another `implementation` node as a loop after code review findings were posted.
 
@@ -105,9 +116,9 @@ Note that to prevent high costs due to cache invalidation, only compact and new_
 Continuation modes also have a context source. Use `--context-source <source>` on `workflow edge add` or `workflow edge update`.
 
 - `immediate_source`: continue or compact the session from the node that selected the transition. This is the default.
-- `node:<node-key>`: continue or compact the latest completed run of a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
-- `previous_target`: continue or compact the latest completed run of this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no completed prior target run exists, the transition fails.
-- `previous_target_or_new`: continue or compact the latest completed run of this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review session. This is good for looping re-checks, re-reviews, or re-verification.
+- `node:<node-key>`: continue or compact the latest retained Session associated with a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
+- `previous_target`: continue or compact the latest retained Session associated with this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no retained target Session exists, the transition fails.
+- `previous_target_or_new`: continue or compact the latest retained Session associated with this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review Session. This is good for looping re-checks, re-reviews, or re-verification.
 
 Examples:
 
@@ -127,9 +138,9 @@ Context source constraints:
 - `previous_target` requires an agent target that dominates the source node in the workflow graph.
 - `previous_target_or_new` requires an agent target but does not require dominance.
 - `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
-- Manual task moves are blocked for `node:<node-key>`, `previous_target`, and `previous_target_or_new` continuation sources.
+- Manual task moves support `previous_target` and `previous_target_or_new` through concrete edges. `node:<node-key>` remains blocked.
 
-Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
+Use `--requires-approval` when a transition must stop for explicit review before the target node starts. Approval can happen asynchronously with a delay, thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point continuation requires approval.
 
 ## Completion modes
 The completion mode controls the technicality of how an agent node signals task completion.
@@ -137,7 +148,7 @@ The completion mode controls the technicality of how an agent node signals task 
 Set it per node with `--completion-mode <mode>` on `node add` or `node update`. Omit the flag to default to user-configured default or resolve automatically based on surrounding configuration.
 
 - `auto`: resolve the effective mode based on configuration. This is the default and the right choice for most nodes, because it dynamically applies the rules below.
-- `structured_output`: provider-native structured output. Lowest-friction on capable providers, but fails run start when the provider does not support it, and **causes full cache invalidation** when applied to continued sessions.
+- `structured_output`: provider-native structured output. Lowest-friction on capable providers, but prevents the Current Node from starting when the provider does not support it, and **causes full cache invalidation** when applied to continued sessions.
 - `tool`: completion via the dynamic `complete_node` tool. Use it for tool-driven completion on providers without structured-output support. Also causes **full cache invalidation** for continued sessions.
 - `shell_command`: the agent runs `kent task complete` from its shell. Requires a runtime `shell` tool to be enabled in the subagent role config, but the shell tool gives the agent full access to the host system. Prefer this when the workflow contains `continue_session` transitions, because this mode does not cause cache invalidation.
 - `unstructured_output`: the agent tries a best-effort JSON submission as its answer. This is the most fragile configuration, use it only if you must use `continue_session` for the node chain and the agents there do not have the `shell` tool that'd have enabled the `shell_command` mode.
@@ -172,5 +183,3 @@ For workflow authoring requests:
 2. Create or add graph pieces using stable keys. Keep display names human-readable and keys machine-stable.
 3. Validate in the strictest mode that matches the user's intent.
 4. Link the workflow to the project and set it as default when the user wants new tasks to use it.
-
-Once the workflow validates, create a smoke-test task and inspect it via the `kent-tasks` skill.

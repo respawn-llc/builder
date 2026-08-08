@@ -100,11 +100,7 @@ func indexCommandTouchesPromptNamespace(args []parse.Node) bool {
 		return false
 	}
 	if _, ok := args[0].(*parse.DotNode); ok {
-		for _, arg := range args[1:] {
-			if typed, ok := arg.(*parse.StringNode); ok && promptNamespace(typed.Text) {
-				return true
-			}
-		}
+		return true
 	}
 	for _, arg := range args {
 		switch typed := arg.(type) {
@@ -134,7 +130,7 @@ func indexCommandTouchesPromptNamespace(args []parse.Node) bool {
 
 func variableTouchesPromptNamespace(ident []string) bool {
 	for _, part := range ident {
-		if part == "$Inputs" || part == "$Nodes" || part == "$Params" || promptNamespace(part) {
+		if part == "$Inputs" || part == "$Params" || promptNamespace(part) {
 			return true
 		}
 	}
@@ -157,9 +153,7 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 	placeholder := "." + strings.Join(ident, ".")
 	switch ident[0] {
 	case "Inputs":
-		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs prompt references are not supported; use .Params.<parameter_key>"})
-	case "Nodes":
-		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Nodes prompt references are not supported; use .Params.<transition_key>.<parameter_key>"})
+		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs prompt references are unsupported; use .Params.<parameter_key>"})
 	case "Params":
 		switch len(ident) {
 		case 2:
@@ -181,7 +175,7 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 }
 
 func promptNamespace(value string) bool {
-	return value == "Inputs" || value == "Nodes" || value == "Params"
+	return value == "Inputs" || value == "Params"
 }
 
 func promptBuiltin(value string) bool {

@@ -1,31 +1,29 @@
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEventHandler, type RefObject } from "react";
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail, TaskRun } from "@/api";
+import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { useAppServices } from "@/app-facade";
+import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
+import { taskStatusTone } from "@/shared/task-status";
 import {
   Button,
   Island,
-  MarkdownText,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+  StaticMarkdown,
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
 } from "@/ui";
 import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
-import { taskStatusTone } from "./taskStatusTone";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
+import { TaskDetailLabels } from "./TaskDetailLabels";
+import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
-import { useScriptOpenAvailability } from "./useScriptOpenAvailability";
 
 export type TaskDraft = Readonly<{
   title: string;
@@ -33,12 +31,14 @@ export type TaskDraft = Readonly<{
 }>;
 
 export function TaskHeaderIsland({
+  canSaveDraft,
   detail,
   disabled,
   draft,
   onDraftChange,
   onSave,
 }: Readonly<{
+  canSaveDraft: boolean;
   detail: TaskDetail;
   disabled: boolean;
   draft: TaskDraft;
@@ -48,6 +48,10 @@ export function TaskHeaderIsland({
   const { t } = useTranslation();
   const title = draft.title;
   const dirty = draft.title !== detail.title || draft.body !== detail.body;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSaveDraft,
+    kind: "form",
+  });
 
   function nextTitle(value: string): TaskDraft {
     return { ...draft, title: value.replaceAll("\n", " ") };
@@ -57,9 +61,12 @@ export function TaskHeaderIsland({
     <form
       className="flex min-w-0 items-center gap-[var(--space-2)]"
       data-testid="task-detail-title-island"
+      onKeyDown={formShortcut}
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave();
+        if (canSaveDraft) {
+          void onSave();
+        }
       }}
     >
       <input
@@ -73,7 +80,7 @@ export function TaskHeaderIsland({
           onDraftChange(nextTitle(event.target.value));
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
             event.preventDefault();
             event.currentTarget.form?.requestSubmit();
           }
@@ -86,7 +93,7 @@ export function TaskHeaderIsland({
           aria-label={t("task.save")}
           className="shrink-0"
           data-testid="task-detail-save"
-          disabled={disabled || title.trim().length === 0}
+          disabled={!canSaveDraft}
           size="icon"
           type="submit"
           variant="primary"
@@ -101,21 +108,38 @@ export function TaskHeaderIsland({
 export function DescriptionIsland({
   disabled,
   draft,
+  draftDirty,
   error,
   onDraftChange,
   onPresentationChange,
+  onSave,
   presentation,
 }: Readonly<{
   disabled: boolean;
   draft: TaskDraft;
+  draftDirty: boolean;
   error: unknown;
   onDraftChange: (draft: TaskDraft) => void;
   onPresentationChange: (presentation: DescriptionPresentationState) => void;
+  onSave: (draft?: TaskDraft) => Promise<void>;
   presentation: DescriptionPresentationState;
 }>) {
   const descriptionId = useId();
   const descriptionErrorId = `${descriptionId}-error`;
   const descriptionError = error == null ? "" : errorMessage(error);
+  const descriptionShortcut = useTextFieldSubmitShortcut({
+    action: () => {
+      if (!draftDirty) {
+        onPresentationChange({ ...presentation, editing: false });
+        return;
+      }
+      void onSave(draft).then(() => {
+        onPresentationChange({ ...presentation, editing: false });
+      });
+    },
+    available: !disabled && draft.title.trim().length > 0 && presentation.editing,
+    kind: "direct",
+  });
 
   return (
     <div className="grid min-h-0 min-w-0 gap-[var(--space-2)]" data-testid="task-description-input-frame">
@@ -130,12 +154,16 @@ export function DescriptionIsland({
           onChange={(body) => {
             onDraftChange({ ...draft, body });
           }}
+          onKeyDown={descriptionShortcut}
           value={draft.body}
         />
       ) : (
         <DescriptionReadView
           disabled={disabled}
           expanded={presentation.expanded}
+          onChange={(body) => {
+            onDraftChange({ ...draft, body });
+          }}
           onEdit={() => {
             onPresentationChange({ editing: true, expanded: true });
           }}
@@ -160,6 +188,7 @@ function DescriptionEditor({
   id,
   onBlur,
   onChange,
+  onKeyDown,
   value,
 }: Readonly<{
   describedBy: string | undefined;
@@ -167,6 +196,7 @@ function DescriptionEditor({
   id: string;
   onBlur: () => void;
   onChange: (value: string) => void;
+  onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   value: string;
 }>) {
   const { t } = useTranslation();
@@ -185,6 +215,7 @@ function DescriptionEditor({
       onChange={(event) => {
         onChange(event.target.value);
       }}
+      onKeyDown={onKeyDown}
       placeholder={t("task.bodyPlaceholder")}
       value={value}
     />
@@ -194,18 +225,19 @@ function DescriptionEditor({
 function DescriptionReadView({
   disabled,
   expanded,
+  onChange,
   onEdit,
   onExpand,
   value,
 }: Readonly<{
   disabled: boolean;
   expanded: boolean;
+  onChange: (value: string) => void;
   onEdit: () => void;
   onExpand: () => void;
   value: string;
 }>) {
   const { t } = useTranslation();
-  const openExternalLink = useOpenExternalLink();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const overflows = useDescriptionOverflow({ contentRef, enabled: !expanded, viewportRef });
@@ -232,7 +264,14 @@ function DescriptionReadView({
       >
         <div ref={contentRef}>
           {value.trim().length > 0 ? (
-            <MarkdownText onOpenLink={openExternalLink} value={value} />
+            <StaticMarkdown
+              disabled={disabled}
+              onTaskListChange={onChange}
+              taskListItemToggleLabel={(checked) =>
+                checked ? t("markdown.markIncomplete") : t("markdown.markComplete")
+              }
+              value={value}
+            />
           ) : (
             <span className="text-[var(--color-muted)]">{t("task.bodyPlaceholder")}</span>
           )}
@@ -338,6 +377,7 @@ export function PropertiesIsland({
           label={t("task.identifier", { defaultValue: "ID" })}
           value={<span className="font-mono">{detail.shortID}</span>}
         />
+        <TaskDetailLabels disabled={disabled} />
         <TaskPropertyLine label={t("task.project")} value={detail.projectName} />
         <TaskPropertyLine
           label={t("task.status")}
@@ -351,10 +391,33 @@ export function PropertiesIsland({
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-        <TaskPropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
+        <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
+        {detail.currentNodes.map((node) => (
+          <TaskCurrentNodeSelectionProperties key={node.nodeID} node={node} />
+        ))}
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
+  );
+}
+
+export function TaskCurrentNodeSelectionProperties({ node }: Readonly<{ node: TaskCurrentNode }>) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {node.effectiveAssignee === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeAssignee", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveAssignee}</span>}
+        />
+      )}
+      {node.effectiveThinking === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeThinking", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveThinking}</span>}
+        />
+      )}
+    </>
   );
 }
 
@@ -368,78 +431,23 @@ function TaskActionPanel({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
-  const activeRuns = useMemo(
-    () => detail.runs.filter((run) => run.completedAt === null && run.interruptedAt === null),
-    [detail.runs],
-  );
-  const interruptableRuns = useMemo(
-    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
-    [activeRuns],
-  );
-  const hasTaskWideInterrupt = useMemo(
-    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
-    [activeRuns],
-  );
   return (
     <>
       <div className="grid gap-[var(--space-2)] pt-[var(--space-1)]">
         <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
-          <Button
-            disabled={disabled}
-            onClick={() => {
-              void mutations.resume.mutateAsync();
-            }}
-            variant="primary"
-          >
-            {t("board.resume")}
-          </Button>
+          <TaskResumeButton disabled={disabled} />
         ) : null}
-        {detail.actions.canInterrupt && hasTaskWideInterrupt ? (
+        {detail.actions.canInterrupt ? (
           <Button
-            disabled={disabled}
+            disabled={disabled || mutations.interrupt.isPending}
             onClick={() => {
-              void mutations.interrupt.mutateAsync(undefined);
+              mutations.interrupt.mutate(undefined);
             }}
             variant="secondary"
           >
             {t("board.interrupt")}
           </Button>
-        ) : null}
-        {detail.actions.canInterrupt
-          ? interruptableRuns.map((run) => (
-              <Button
-                disabled={disabled}
-                key={run.id}
-                onClick={() => {
-                  void mutations.interrupt.mutateAsync(run.sessionID);
-                }}
-                variant="secondary"
-              >
-                {t("board.interrupt")} <span>{run.sessionName.trim() || run.sessionID}</span>
-              </Button>
-            ))
-          : null}
-        {detail.actions.canCancel ? (
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button disabled={disabled} variant="danger">
-                {t("task.cancel")}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-56" side="top">
-              <strong>{t("task.cancelConfirmTitle")}</strong>
-              <Button
-                disabled={disabled}
-                onClick={() => {
-                  void mutations.cancel.mutateAsync();
-                }}
-                variant="danger"
-              >
-                {t("app.confirm")}
-              </Button>
-            </PopoverContent>
-          </Popover>
         ) : null}
       </div>
     </>
@@ -449,26 +457,12 @@ function TaskActionPanel({
 function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; disabled: boolean }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const [openCliError, setOpenCliError] = useState("");
-  const [openScriptError, setOpenScriptError] = useState("");
-  const cliSessionExists = useMemo(
-    () => detail.runs.some((run) => run.sessionID.trim().length > 0),
-    [detail.runs],
-  );
-  const scriptRun = useMemo(() => preferredScriptRun(detail.runs), [detail.runs]);
+  const [openError, setOpenError] = useState("");
   const executionRoot = taskExecutionRoot(detail);
-  const scriptOpenAvailable = useScriptOpenAvailability({
-    basePath: executionRoot,
-    scriptPath: scriptRun?.scriptPath ?? "",
-  });
-  const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
+  const canOpenScript = nativeBridge.capabilities.files.open;
 
-  async function openInCli(): Promise<void> {
-    if (cliCommand.length === 0) {
-      setOpenCliError(t("task.cliCommandUnavailable"));
-      return;
-    }
-    await writeClipboardText(cliCommand, nativeBridge);
+  async function openInCli(sessionID: string): Promise<void> {
+    await writeClipboardText(`kent --session=${sessionID}`, nativeBridge);
     showStatusToast({
       id: "task-cli-command-copied",
       title: t("task.cliCommandCopied"),
@@ -476,50 +470,45 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
     });
   }
 
-  async function openScript(): Promise<void> {
-    if (scriptRun === null || scriptRun.scriptPath.trim().length === 0 || executionRoot === null) {
-      setOpenScriptError(t("task.scriptPathUnavailable"));
-      return;
-    }
-    await nativeBridge.files.openFile({ basePath: executionRoot, path: scriptRun.scriptPath });
+  async function openScript(path: string): Promise<void> {
+    await nativeBridge.files.openFile({ basePath: executionRoot, path });
   }
 
   return (
     <>
-      {cliSessionExists ? (
+      {detail.liveSessionIDs.map((sessionID) => (
         <Button
-          disabled={disabled || cliCommand.length === 0}
+          disabled={disabled}
+          key={sessionID}
           onClick={() => {
-            setOpenCliError("");
-            void openInCli().catch((cause: unknown) => {
-              setOpenCliError(errorMessage(cause));
+            setOpenError("");
+            void openInCli(sessionID).catch((cause: unknown) => {
+              setOpenError(errorMessage(cause));
             });
           }}
           variant="secondary"
         >
-          {t("task.openInCli")}
+          {t("task.openInCli")} <span className="truncate font-mono">{sessionID}</span>
         </Button>
-      ) : null}
-      {scriptOpenAvailable ? (
-        <Button
-          disabled={disabled || scriptRun === null}
-          onClick={() => {
-            setOpenScriptError("");
-            void openScript().catch((cause: unknown) => {
-              setOpenScriptError(errorMessage(cause));
-            });
-          }}
-          variant="secondary"
-        >
-          {t("task.openScript")}
-        </Button>
-      ) : null}
-      {openCliError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p>
-      ) : null}
-      {openScriptError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openScriptError}</p>
-      ) : null}
+      ))}
+      {canOpenScript
+        ? detail.currentScripts.map((script) => (
+            <Button
+              disabled={disabled}
+              key={`${script.currentNode.nodeID}:${script.currentNode.transitionBranchKey ?? "serial"}`}
+              onClick={() => {
+                setOpenError("");
+                void openScript(script.path).catch((cause: unknown) => {
+                  setOpenError(errorMessage(cause));
+                });
+              }}
+              variant="secondary"
+            >
+              {t("task.openScript")} <span className="truncate font-mono">{script.path}</span>
+            </Button>
+          ))
+        : null}
+      {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>
   );
 }
@@ -580,28 +569,5 @@ function SourceLine({
         </a>
       }
     />
-  );
-}
-
-function sessionCommand(runs: readonly TaskRun[]): string {
-  const run = preferredSessionRun(runs);
-  return run === null ? "" : `kent --session=${run.sessionID}`;
-}
-
-function preferredSessionRun(runs: readonly TaskRun[]): TaskRun | null {
-  const sessionRuns = runs.filter((run) => run.sessionID.trim().length > 0);
-  return (
-    [...sessionRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
-    sessionRuns.at(-1) ??
-    null
-  );
-}
-
-function preferredScriptRun(runs: readonly TaskRun[]): TaskRun | null {
-  const scriptRuns = runs.filter((run) => run.nodeKind === "script" && run.scriptPath.trim().length > 0);
-  return (
-    [...scriptRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
-    scriptRuns.at(-1) ??
-    null
   );
 }

@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode, Ref } from "react";
 
 import { cx } from "./classes";
 
@@ -7,6 +7,7 @@ export type ButtonSize = "default" | "icon" | "icon-sm";
 
 export type ButtonProps = Readonly<{
   children: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
   size?: ButtonSize;
   variant?: ButtonVariant;
 }> &
@@ -15,6 +16,7 @@ export type ButtonProps = Readonly<{
 export function Button({
   children,
   className,
+  ref,
   size = "default",
   style,
   variant = "secondary",
@@ -26,10 +28,12 @@ export function Button({
       className={cx(
         "border border-[var(--button-border)] bg-[var(--button-bg)] text-[var(--button-color)] disabled:cursor-not-allowed disabled:opacity-55",
         buttonSizeClassNames[size],
+        size === "default" && variant === "primary" && "min-w-[var(--button-primary-min-width)]",
         className,
       )}
       style={{ ...buttonVariantStyles[variant], ...style }}
       type={type}
+      ref={ref}
       {...props}
     >
       {children}

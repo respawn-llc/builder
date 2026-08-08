@@ -2,6 +2,7 @@ package readimage
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,10 +11,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/imagefileio"
 	"core/shared/toolspec"
 )
 
@@ -21,6 +24,16 @@ var tinyPNG = []byte{
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
 	8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
 	0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("KENT_TEST_BLOCK_IMAGE_FILE_READER") == "1" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	os.Exit(m.Run())
 }
 
 func newReadImageTestTool(t *testing.T, workspace string, supported bool, opts ...Option) *Tool {
@@ -192,6 +205,30 @@ func TestCall_DirectoryPathReturnsToolError(t *testing.T) {
 	result := callReadImageTool(t, tool, "call-1", `{"path":"."}`)
 	if !result.IsError {
 		t.Fatalf("expected tool error result for directory path")
+	}
+}
+
+func TestCall_CancelledBlockedFileOpenReturnsToolError(t *testing.T) {
+	workspace := t.TempDir()
+	writeReadImageTestFile(t, workspace, "blocked.png", tinyPNG)
+	t.Setenv("KENT_TEST_BLOCK_IMAGE_FILE_READER", "1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	result, err := newReadImageTestTool(t, workspace, true).Call(ctx, tools.Call{
+		ID:    "call-blocked-open",
+		Name:  toolspec.ToolViewImage,
+		Input: json.RawMessage(`{"path":"blocked.png"}`),
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected blocked file open to return a tool error")
+	}
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("blocked file open returned after %s, want prompt cancellation", elapsed)
 	}
 }
 
@@ -470,13 +507,14 @@ func TestCall_OutsideWorkspaceRejectionIncludesReadSpecificGuidance(t *testing.T
 	workspace := t.TempDir()
 	outside := filepath.Join(outsideNonTempDir(t), "outside.png")
 	writeReadImageTestPath(t, outside, tinyPNG)
+	commentary := "keep it inside the repo"
 
 	tool := newReadImageTestTool(
 		t,
 		workspace,
 		true,
 		WithOutsideWorkspaceApprover(func(context.Context, patchtool.OutsideWorkspaceRequest) (patchtool.OutsideWorkspaceApproval, error) {
-			return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: "keep it inside the repo"}, nil
+			return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: &commentary}, nil
 		}),
 	)
 
@@ -562,34 +600,11 @@ func findCaseVariantExistingAlias(path string) (string, bool) {
 
 func outsideNonTempDir(t *testing.T) string {
 	t.Helper()
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		bases = append(bases, home)
-	}
-	for _, base := range bases {
-		dir, err := os.MkdirTemp(base, "kent-readimage-outside-*")
-		if err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		if patchtool.IsPathInTemporaryDir(abs) {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		t.Cleanup(func() {
-			_ = os.RemoveAll(dir)
-		})
-		return abs
-	}
-	t.Skip("unable to create non-temporary outside directory for test")
-	return ""
+	return testsetup.NonTemporaryDirectory(
+		t,
+		"kent-readimage-outside-",
+		patchtool.IsPathInTemporaryDir,
+	)
 }
 
 func caseAliasUsersSubstitution(canonical string, canonicalInfo os.FileInfo) (string, bool) {

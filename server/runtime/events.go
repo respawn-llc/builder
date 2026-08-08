@@ -43,6 +43,7 @@ const (
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventLiveRunFinished            EventKind = "live_run_finished"
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
@@ -102,6 +103,7 @@ type Event struct {
 	CommittedEntryCount          int
 	CommittedEntryStart          int
 	CommittedEntryStartSet       bool
+	CommittedProvenance          *TranscriptCommittedRowProvenance
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase
@@ -109,6 +111,7 @@ type Event struct {
 	AssistantTranscriptStreamID  *uuid.UUID
 	AssistantStreamAbortReason   string
 	ReasoningDelta               *llm.ReasoningSummaryDelta
+	ReasoningTraceIdentity       *TranscriptReasoningTraceIdentity
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string
@@ -129,6 +132,7 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
+	LiveRunResult                *LiveRunResult
 }
 
 type GoalStatusUpdate struct {

@@ -1,0 +1,20 @@
+Usage of kent detach:
+  kent detach --project <project-id> [path]
+  kent detach --project <project-id> --workspace <workspace-id>
+  kent project detach --project <project-id> [path]
+  kent project detach --project <project-id> --workspace <workspace-id>
+
+Detach one workspace binding from one explicitly selected project.
+
+The path defaults to the current directory. Paths are converted to absolute
+server paths before the request. Use --workspace when a saved path is missing
+or inaccessible. The path and --workspace selectors are mutually exclusive.
+Detach applies immediately and never deletes files or retained artifacts.
+
+Use --json for one stable JSON result or error object.
+
+Examples:
+  kent detach --project <project-id> ../other-checkout
+  kent detach --project <project-id> --workspace <workspace-id> --json
+
+Flags:

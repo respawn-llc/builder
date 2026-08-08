@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -61,6 +62,9 @@ type streamIdleWatchdog struct {
 	cancel context.CancelCauseFunc
 	pings  chan struct{}
 	done   chan struct{}
+
+	activityMu   sync.Mutex
+	lastActivity time.Time
 }
 
 func newStreamIdleWatchdog(parent context.Context, idle time.Duration) *streamIdleWatchdog {
@@ -71,6 +75,7 @@ func newStreamIdleWatchdog(parent context.Context, idle time.Duration) *streamId
 	}
 	w.pings = make(chan struct{}, 1)
 	w.done = make(chan struct{})
+	w.lastActivity = time.Now()
 	go w.run(idle)
 	return w
 }
@@ -84,9 +89,12 @@ func (w *streamIdleWatchdog) run(idle time.Duration) {
 		case <-w.ctx.Done():
 			return
 		case <-w.pings:
-			timer.Stop()
-			timer.Reset(idle)
+			timer.Reset(w.remainingIdle(idle))
 		case <-timer.C:
+			if remaining := w.remainingIdle(idle); remaining > 0 {
+				timer.Reset(remaining)
+				continue
+			}
 			w.cancel(ErrModelStreamStalled)
 			return
 		}
@@ -97,10 +105,20 @@ func (w *streamIdleWatchdog) ping() {
 	if w.pings == nil {
 		return
 	}
+	w.activityMu.Lock()
+	w.lastActivity = time.Now()
+	w.activityMu.Unlock()
 	select {
 	case w.pings <- struct{}{}:
 	default:
 	}
+}
+
+func (w *streamIdleWatchdog) remainingIdle(idle time.Duration) time.Duration {
+	w.activityMu.Lock()
+	lastActivity := w.lastActivity
+	w.activityMu.Unlock()
+	return idle - time.Since(lastActivity)
 }
 
 func (w *streamIdleWatchdog) stop() {

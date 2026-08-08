@@ -13,6 +13,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -20,6 +21,7 @@ import (
 )
 
 func TestSteerWorktreeTransitionFailureRejectsInvalidOutcomeBeforeRuntimeMutation(t *testing.T) {
+	t.Parallel()
 	engine := &Engine{}
 	err := engine.SteerWorktreeTransitionFailure(clientui.WorktreeTransitionOutcome{
 		Transition: clientui.WorktreeTransitionEnter,
@@ -32,6 +34,7 @@ func TestSteerWorktreeTransitionFailureRejectsInvalidOutcomeBeforeRuntimeMutatio
 }
 
 func TestPersistedWorktreeContextRejectsDuplicateSourcePath(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	target := mustSetWorktreeReminderState(t, store, testWorktreeReminderState(
 		session.WorktreeReminderModeEnter,
@@ -43,10 +46,10 @@ func TestPersistedWorktreeContextRejectsDuplicateSourcePath(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 	err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:            llm.RoleDeveloper,
-		MessageType:     llm.MessageTypeWorktreeMode,
-		SourcePath:      target.EffectiveCwd,
+		MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
+		SourcePath:      textutil.Value(target.EffectiveCwd),
 		WorktreeContext: &target.WorktreeContext,
-		Content:         "typed worktree context",
+		Content:         textutil.Value("typed worktree context"),
 	}}))
 	if err == nil {
 		t.Fatal("expected duplicate worktree source path to be rejected")
@@ -89,21 +92,21 @@ func TestFirstMetaInjectionUsesPendingWorktreeCWD(t *testing.T) {
 		t.Fatalf("expected environment, agents, and user messages, got %+v", messages)
 	}
 	envMsg := messages[0]
-	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType != llm.MessageTypeEnvironment {
+	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType == nil || *envMsg.MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected environment context first, got %+v", envMsg)
 	}
-	if !strings.Contains(envMsg.Content, "\nCWD: "+worktreeSubdir+"\n") {
-		t.Fatalf("expected environment cwd to use pending worktree subdir %q, got %q", worktreeSubdir, envMsg.Content)
+	if !strings.Contains(messageContent(envMsg), "\nCWD: "+worktreeSubdir+"\n") {
+		t.Fatalf("expected environment cwd to use pending worktree subdir %q, got %q", worktreeSubdir, messageContent(envMsg))
 	}
-	if strings.Contains(envMsg.Content, "\nCWD: "+workspace+"\n") {
-		t.Fatalf("expected environment cwd not to use stale workspace %q, got %q", workspace, envMsg.Content)
+	if strings.Contains(messageContent(envMsg), "\nCWD: "+workspace+"\n") {
+		t.Fatalf("expected environment cwd not to use stale workspace %q, got %q", workspace, messageContent(envMsg))
 	}
 	agentsMsg := messages[1]
-	if agentsMsg.Role != llm.RoleDeveloper || agentsMsg.MessageType != llm.MessageTypeAgentsMD || !strings.Contains(agentsMsg.Content, "source: "+filepath.Join(worktree, agentsFileName)) {
+	if agentsMsg.Role != llm.RoleDeveloper || agentsMsg.MessageType == nil || *agentsMsg.MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(agentsMsg), "source: "+filepath.Join(worktree, agentsFileName)) {
 		t.Fatalf("expected active worktree AGENTS context second, got %+v", agentsMsg)
 	}
-	if strings.Contains(agentsMsg.Content, "stale workspace instruction") {
-		t.Fatalf("expected stale workspace AGENTS context to be excluded, got %q", agentsMsg.Content)
+	if strings.Contains(messageContent(agentsMsg), "stale workspace instruction") {
+		t.Fatalf("expected stale workspace AGENTS context to be excluded, got %q", messageContent(agentsMsg))
 	}
 }
 
@@ -131,7 +134,7 @@ func TestSubmitUserMessageInjectsPendingWorktreeEnterReminder(t *testing.T) {
 	messages := requestMessages(client.calls[0])
 	reminderIdx := -1
 	for i, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeMode {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeMode {
 			reminderIdx = i
 			if msg.WorktreeContext == nil || !session.WorktreeContextEqual(*msg.WorktreeContext, target.WorktreeContext) {
 				t.Fatalf("worktree context = %+v, want %+v", msg.WorktreeContext, target)
@@ -192,13 +195,13 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	messages := requestMessages(client.calls[0])
 	reminderCount := 0
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeMode {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeMode {
 			reminderCount++
 			if msg.WorktreeContext == nil || !session.WorktreeContextEqual(*msg.WorktreeContext, target.WorktreeContext) {
 				t.Fatalf("worktree context = %+v, want %+v", msg.WorktreeContext, target)
 			}
-			if msg.CompactContent != "" {
-				t.Fatalf("server-authored worktree compact content = %q, want empty", msg.CompactContent)
+			if msg.CompactContent != nil {
+				t.Fatalf("server-authored worktree compact content = %v, want absent", msg.CompactContent)
 			}
 		}
 	}
@@ -228,8 +231,8 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 	sawReminderDuringPreCompactionCount := false
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
-			Assistant:   llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok"},
-			OutputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok"}},
+			Assistant:   llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok")},
+			OutputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok")}},
 			Usage:       llm.Usage{WindowTokens: 2_000},
 		}},
 		inputTokenCountFn: func(req llm.Request) int {
@@ -242,8 +245,8 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "compacted seed"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("compacted seed")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 100, WindowTokens: 2_000},
 		}},
@@ -253,7 +256,7 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "native",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 999, WindowTokens: 2_000})
@@ -292,7 +295,7 @@ func TestManualCompactionReinjectsWorktreeReminderExactlyOnce(t *testing.T) {
 	client := &fakeCompactionClient{responses: []llm.Response{
 		finalOutputItemResponse("before compaction"),
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "compacted summary"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("compacted summary")},
 			Usage:     llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		},
 	}}
@@ -343,7 +346,8 @@ func worktreeReminderMessageCount(messages []llm.Message) int {
 	count := 0
 	for _, message := range messages {
 		if message.Role == llm.RoleDeveloper &&
-			(message.MessageType == llm.MessageTypeWorktreeMode || message.MessageType == llm.MessageTypeWorktreeModeExit) {
+			message.MessageType != nil &&
+			(*message.MessageType == llm.MessageTypeWorktreeMode || *message.MessageType == llm.MessageTypeWorktreeModeExit) {
 			count++
 		}
 	}
@@ -358,7 +362,7 @@ func assertLatestWorktreeContext(t *testing.T, messages []llm.Message, want sess
 	t.Helper()
 	var latest *session.WorktreeContext
 	for _, message := range messages {
-		if message.MessageType != llm.MessageTypeWorktreeMode && message.MessageType != llm.MessageTypeWorktreeModeExit {
+		if message.MessageType == nil || (*message.MessageType != llm.MessageTypeWorktreeMode && *message.MessageType != llm.MessageTypeWorktreeModeExit) {
 			continue
 		}
 		latest = message.WorktreeContext
@@ -370,7 +374,7 @@ func assertLatestWorktreeContext(t *testing.T, messages []llm.Message, want sess
 
 func requestHasCompactionCheckpoint(req llm.Request) bool {
 	for _, item := range req.Items {
-		if item.Type == llm.ResponseItemTypeCompaction || item.MessageType == llm.MessageTypeCompactionSummary {
+		if item.Type == llm.ResponseItemTypeCompaction || (item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary) {
 			return true
 		}
 	}
@@ -449,7 +453,7 @@ func TestSameCWDChangedWorktreeTargetMaterializesNewContext(t *testing.T) {
 	}
 	var latest *llm.Message
 	for idx := range messages {
-		if messages[idx].MessageType == llm.MessageTypeWorktreeMode {
+		if messages[idx].MessageType != nil && *messages[idx].MessageType == llm.MessageTypeWorktreeMode {
 			latest = &messages[idx]
 		}
 	}
@@ -475,11 +479,11 @@ func TestConfirmedSameCWDTargetChangeBypassesLegacyFallback(t *testing.T) {
 		"/tmp/workspace",
 		sharedCWD,
 	))
-	if _, _, err := store.AppendEvent("legacy-worktree", "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, "legacy-worktree", llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeWorktreeMode,
-		SourcePath:  sharedCWD,
-		Content:     "legacy worktree context",
+		MessageType: textutil.Value(llm.MessageTypeWorktreeMode),
+		SourcePath:  textutil.Value(sharedCWD),
+		Content:     textutil.Value("legacy worktree context"),
 	}); err != nil {
 		t.Fatalf("persist legacy worktree context: %v", err)
 	}
@@ -512,24 +516,25 @@ func TestConfirmedSameCWDTargetChangeBypassesLegacyFallback(t *testing.T) {
 }
 
 func TestLegacyWorktreeFallbackOnlyMatchesUnversionedTarget(t *testing.T) {
+	t.Parallel()
 	const sharedCWD = "/tmp/legacy-fallback-cwd"
 	legacyItems := []llm.ResponseItem{{
 		Type:        llm.ResponseItemTypeMessage,
-		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeWorktreeMode,
-		SourcePath:  sharedCWD,
-		Content:     "legacy worktree context",
+		Role:        textutil.Value(llm.RoleDeveloper),
+		MessageType: textutil.Value(llm.MessageTypeWorktreeMode),
+		SourcePath:  textutil.Value(sharedCWD),
+		Content:     textutil.Value("legacy worktree context"),
 	}}
 	desired := llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeWorktreeMode,
+		MessageType: textutil.Value(llm.MessageTypeWorktreeMode),
 		WorktreeContext: &session.WorktreeContext{
 			Branch:        session.OptionalWorktreeBranch("feature/legacy"),
 			WorktreePath:  "/tmp/worktree-legacy",
 			WorkspaceRoot: "/tmp/workspace",
 			EffectiveCwd:  sharedCWD,
 		},
-		Content: "current worktree context",
+		Content: textutil.Value("current worktree context"),
 	}
 	if !latestActiveMetaContextMatches(legacyItems, desired) {
 		t.Fatal("unversioned target did not match legacy same-cwd context")
@@ -558,30 +563,30 @@ func TestLegacyCompactionWithoutWorktreeReminderSelfHealsOnceAcrossResume(t *tes
 	legacyItems := llm.ItemsFromMessages([]llm.Message{
 		{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeCompactionSummary,
-			Content:     "legacy compacted summary",
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("legacy compacted summary"),
 		},
 		{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeEnvironment,
-			Content:     "legacy environment context",
+			MessageType: textutil.Value(llm.MessageTypeEnvironment),
+			Content:     textutil.Value("legacy environment context"),
 		},
 		{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeSkills,
-			Content:     "legacy skills context",
+			MessageType: textutil.Value(llm.MessageTypeSkills),
+			Content:     textutil.Value("legacy skills context"),
 		},
 		{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeAgentsMD,
-			SourcePath:  "/tmp/workspace/AGENTS.md",
-			Content:     "legacy AGENTS context",
+			MessageType: textutil.Value(llm.MessageTypeAgentsMD),
+			SourcePath:  textutil.Value("/tmp/workspace/AGENTS.md"),
+			Content:     textutil.Value("legacy AGENTS context"),
 		},
 	})
-	if _, _, err := store.AppendEvent("legacy-compact", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine:           "local",
 		Mode:             string(compactionModeManual),
-		CompactionNumber: 1,
+		CompactionNumber: textutil.Value(1),
 		Items:            legacyItems,
 	}); err != nil {
 		t.Fatalf("append legacy history replacement: %v", err)
@@ -638,7 +643,7 @@ func assertMessageTypesInOrder(t *testing.T, messages []llm.Message, expected ..
 		foundIndex := -1
 		count := 0
 		for idx, message := range messages {
-			if message.Role != llm.RoleDeveloper || message.MessageType != messageType {
+			if message.Role != llm.RoleDeveloper || message.MessageType == nil || *message.MessageType != messageType {
 				continue
 			}
 			count++
@@ -690,7 +695,7 @@ func TestSubmitUserMessageInjectsPendingWorktreeExitReminder(t *testing.T) {
 	messages := requestMessages(client.calls[0])
 	found := false
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeModeExit {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeModeExit {
 			found = true
 			if msg.WorktreeContext == nil || !session.WorktreeContextEqual(*msg.WorktreeContext, target.WorktreeContext) {
 				t.Fatalf("worktree exit context = %+v, want %+v", msg.WorktreeContext, target)
@@ -735,7 +740,7 @@ func TestSubmitUserMessageMaterializesWorktreeReminderBeforeModelFailure(t *test
 	assertModelCallCount(t, successClient, 1)
 	reminderCount := 0
 	for _, msg := range requestMessages(successClient.calls[0]) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeMode {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeMode {
 			reminderCount++
 		}
 	}
@@ -773,7 +778,7 @@ func TestSubmitUserMessageUsesLatestPendingWorktreeReminder(t *testing.T) {
 	}
 	messages := requestMessages(client.calls[0])
 	for _, msg := range messages {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeWorktreeMode {
+		if msg.Role != llm.RoleDeveloper || msg.MessageType == nil || *msg.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
 		if msg.WorktreeContext == nil || !session.WorktreeContextEqual(*msg.WorktreeContext, latestTarget.WorktreeContext) {
@@ -795,11 +800,11 @@ func TestSubmitUserMessagePreservesHistoricalWorktreeRemindersInRequest(t *testi
 	}()
 
 	store := mustCreateTestSession(t)
-	firstOutput := llm.ResponseItem{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok-1"}
-	secondOutput := llm.ResponseItem{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok-2"}
+	firstOutput := llm.ResponseItem{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok-1")}
+	secondOutput := llm.ResponseItem{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok-2")}
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok-1"}, OutputItems: []llm.ResponseItem{firstOutput}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok-2"}, OutputItems: []llm.ResponseItem{secondOutput}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok-1")}, OutputItems: []llm.ResponseItem{firstOutput}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("ok-2")}, OutputItems: []llm.ResponseItem{secondOutput}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
@@ -821,7 +826,7 @@ func TestSubmitUserMessagePreservesHistoricalWorktreeRemindersInRequest(t *testi
 	expectedSecondItems = append(expectedSecondItems, llm.PrepareOpenAIInputItems([]llm.ResponseItem{firstOutput})...)
 	expectedSecondItems = append(expectedSecondItems, llm.ItemsFromMessages([]llm.Message{
 		exitMessage,
-		{Role: llm.RoleUser, Content: "second"},
+		{Role: llm.RoleUser, Content: textutil.Value("second")},
 	})...)
 	if !reflect.DeepEqual(client.calls[1].Items, expectedSecondItems) {
 		t.Fatalf("second request items changed historical order/content\nwant=%+v\n got=%+v", expectedSecondItems, client.calls[1].Items)
@@ -829,7 +834,7 @@ func TestSubmitUserMessagePreservesHistoricalWorktreeRemindersInRequest(t *testi
 	firstMessages := requestMessages(client.calls[0])
 	firstCount := 0
 	for _, msg := range firstMessages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeMode {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeMode {
 			firstCount++
 		}
 	}
@@ -841,9 +846,9 @@ func TestSubmitUserMessagePreservesHistoricalWorktreeRemindersInRequest(t *testi
 	exitCount := 0
 	for _, msg := range secondMessages {
 		switch {
-		case msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeMode:
+		case msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeMode:
 			enterCount++
-		case msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorktreeModeExit:
+		case msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorktreeModeExit:
 			exitCount++
 		}
 	}

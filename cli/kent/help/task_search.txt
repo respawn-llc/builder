@@ -1,0 +1,30 @@
+Usage of kent task search:
+  kent task search <query> [--project <project>]... [--status <status>[,<status>...]] [flags]
+
+Search Task Short IDs, titles, and bodies across Projects. Task Comments are
+searched only with `--include-comments`.
+
+The default mode treats the query as a literal substring. Short ID matching is
+always case-insensitive. Complete Short IDs and canonical numeric suffixes rank
+before partial Short ID matches, which rank before title, body, and Comment
+matches. Text matching ignores case and removable diacritics according to the
+FTS5 trigram search contract; `--case-sensitive` requires exact original code
+points only for title, body, and Comment text.
+
+`--fts5` treats the query as a raw SQLite FTS5 expression over the public
+`title`, `body`, and `comment` columns. Boolean terms must match within one title, Task body, or Comment body rather than across sources.
+
+With no `--project`, search spans every Project. Repeat `--project` to search a union of Project IDs or registered workspace paths. Repeat `--status` or use
+comma-separated values to filter by primary Task status. Every Project selector must resolve before search begins; Kent performs no partial scoped search.
+
+`--context` controls the surrounding grapheme clusters for literal matches and
+the snippet token budget for FTS5 matches.
+
+Pagination is breadth-first by per-Task hit ordinal: each matching Task's first hit precedes any Task's second hit. Continue with the `Next offset` value written to standard error.
+
+Examples:
+  kent task search "retry policy"
+  kent task search "RetryPolicy" --case-sensitive --include-comments
+  kent task search 'title:"retry policy"' --fts5 --project . --json
+
+Flags:

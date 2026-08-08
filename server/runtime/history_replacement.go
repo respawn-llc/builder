@@ -1,32 +1,13 @@
 package runtime
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/rollbacktarget"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
-
-// errDecodeHistoryReplacedEvent wraps failures to decode a persisted history_replaced event payload.
-var errDecodeHistoryReplacedEvent = errors.New("decode history_replaced event")
-
-type historyReplacementEnvelope struct {
-	Engine                            string                           `json:"engine"`
-	Mode                              string                           `json:"mode"`
-	WorkflowRunID                     string                           `json:"workflow_run_id"`
-	CompactionNumber                  int                              `json:"compaction_number"`
-	CommittedEntryStart               *int                             `json:"committed_entry_start"`
-	PendingHandoffFutureMessage       string                           `json:"pending_handoff_future_message"`
-	LastCommittedAssistantFinalAnswer string                           `json:"last_committed_assistant_final_answer"`
-	LatestRollbackCandidate           *rollbacktarget.CandidateLocator `json:"latest_rollback_candidate"`
-	Items                             json.RawMessage                  `json:"items"`
-}
 
 func normalizeHistoryReplacementEngine(engine string) string {
 	engine = strings.TrimSpace(engine)
@@ -36,55 +17,99 @@ func normalizeHistoryReplacementEngine(engine string) string {
 	return engine
 }
 
-func isPersistedHistoryReplacementBoundary(payload []byte) bool {
-	return session.IsCompactionHistoryReplacementPayload(payload)
+func isCompactionEventRecordBoundary(record session.EventRecord) (bool, error) {
+	payload, err := record.Payload()
+	if err != nil {
+		return false, err
+	}
+	_, ok := payload.(session.HistoryReplacementRecord)
+	return ok, nil
 }
 
-func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacementPayload, bool, error) {
-	var envelope historyReplacementEnvelope
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return historyReplacementPayload{}, false, err
-	}
-	engine := strings.TrimSpace(envelope.Engine)
-	if session.IsLegacyReviewerRollbackHistoryReplacementEngine(engine) {
-		return historyReplacementPayload{Engine: engine, Mode: strings.TrimSpace(envelope.Mode)}, true, nil
-	}
-	decoded := historyReplacementPayload{
-		Engine:                            engine,
-		Mode:                              strings.TrimSpace(envelope.Mode),
-		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
-		CompactionNumber:                  envelope.CompactionNumber,
-		CommittedEntryStart:               textutil.Pointer(envelope.CommittedEntryStart),
-		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
-		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
-		LatestRollbackCandidate:           textutil.Pointer(envelope.LatestRollbackCandidate),
-	}
-	if decoded.LatestRollbackCandidate != nil {
-		if err := decoded.LatestRollbackCandidate.Validate(); err != nil {
-			return historyReplacementPayload{}, false, fmt.Errorf("latest rollback candidate: %w", err)
+func compactionBoundaryMatcher(matchErr *error) func(session.EventRecord) bool {
+	return func(record session.EventRecord) bool {
+		matches, err := isCompactionEventRecordBoundary(record)
+		if err != nil {
+			*matchErr = err
+			return true
 		}
+		return matches
 	}
-	trimmedItems := bytes.TrimSpace(envelope.Items)
-	if len(trimmedItems) == 0 || bytes.Equal(trimmedItems, []byte("null")) {
-		return decoded, false, nil
-	}
-	if err := json.Unmarshal(trimmedItems, &decoded.Items); err != nil {
-		return historyReplacementPayload{}, false, err
-	}
-	return decoded, false, nil
 }
 
-func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {
-	if len(items) == 0 {
-		return nil
+func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem, compactionNumber *int) []ChatEntry {
+	entries := make([]ChatEntry, 0, len(items)+1)
+	hasCompactionSummary := false
+	walker := newResponseItemMessageWalker(func(msg llm.Message) {
+		if entry, ok := preservedUserMessageEntry(msg); ok {
+			entries = append(entries, entry)
+			return
+		}
+		for _, entry := range VisibleChatEntriesFromMessage(msg) {
+			if entry.MessageType == llm.MessageTypeCompactionSummary {
+				hasCompactionSummary = true
+				entry.CompactionNumber = textutil.Pointer(compactionNumber)
+			}
+			entries = append(entries, clonePersistedChatEntry(entry))
+		}
+	})
+	for _, item := range items {
+		walker.Apply(item)
 	}
-	entries := visibleChatEntriesFromResponseItems(items)
-	if len(entries) == 0 {
-		return nil
+	walker.Flush()
+
+	// Empty legacy replacements are segment boundaries only. Non-empty
+	// replacements represent compacted working sets and always receive a notice.
+	if !hasCompactionSummary && len(items) > 0 {
+		entries = append(
+			[]ChatEntry{syntheticCompactionSummaryEntry(compactionNumber)},
+			entries...,
+		)
 	}
-	out := make([]ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, clonePersistedChatEntry(entry))
+	return entries
+}
+
+func preservedUserMessageEntry(msg llm.Message) (ChatEntry, bool) {
+	if msg.Role != llm.RoleUser || msg.MessageType != nil || msg.Content == nil ||
+		strings.TrimSpace(*msg.Content) == "" {
+		return ChatEntry{}, false
 	}
-	return out
+	// manual_compaction_carryover is the legacy wire name for any user message
+	// preserved across a compaction boundary.
+	messageType := llm.MessageTypeCompactionPreservedUserMessage
+	return ChatEntry{
+		Visibility:   messageTypeTranscriptVisibility(&messageType),
+		Role:         string(transcript.EntryRoleCompactionPreservedUserMessage),
+		Text:         *msg.Content,
+		MessageType:  messageType,
+		CompactLabel: compactLabelForMessage(llm.Message{MessageType: &messageType}),
+	}, true
+}
+
+func syntheticCompactionSummaryEntry(compactionNumber *int) ChatEntry {
+	return ChatEntry{
+		Visibility:       transcript.EntryVisibilityOngoing,
+		Role:             string(transcript.EntryRoleCompactionSummary),
+		MessageType:      llm.MessageTypeCompactionSummary,
+		CompactionNumber: textutil.Pointer(compactionNumber),
+	}
+}
+
+func assignHistoryReplacementEntryProvenance(
+	entries []ChatEntry,
+	base *TranscriptCommittedRowProvenance,
+) []ChatEntry {
+	var ordinal int64
+	for index := range entries {
+		entries[index].CommittedProvenance = cloneTranscriptCommittedRowProvenance(base)
+		if _, projected := transcriptCommittedRowFactFromChatEntry(entries[index]); !projected {
+			continue
+		}
+		ordinal++
+		provenance := cloneTranscriptCommittedRowProvenance(base)
+		projectedOrdinal := ordinal
+		provenance.ProjectedOrdinal = &projectedOrdinal
+		entries[index].CommittedProvenance = provenance
+	}
+	return entries
 }

@@ -1,0 +1,9 @@
+Usage of kent question:
+  kent question (--session <id>|--task <task>) [--project <project>]
+  kent question answer (--session <id>|--task <task>) [--project <project>] [--option <number>] [--commentary <text>]
+
+Show or answer another session's first pending question. Task short IDs use the
+project selected by --project, which defaults to the current workspace's project.
+
+Aliases:
+  kent questions

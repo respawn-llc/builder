@@ -3,11 +3,11 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { SidebarDestination } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import type { SidebarPageNavigator } from "@/app-facade";
 import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
 import { IconTooltipButton } from "@/ui";
 import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
-import { useGlobalAttentionPages } from "./useHomeData";
+import { useSidebarGlobalAttentionPages } from "./useHomeData";
 
 type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>;
 
@@ -17,10 +17,9 @@ type TaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>
  * stays mounted beneath the overlay sidebar) so navigation always reflects the
  * current inbox, including after the open task is resolved and drops out.
  */
-export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDetailDestination }>) {
+export function SidebarInboxNav({ destination, navigator }: Readonly<{ destination: TaskDetailDestination; navigator: SidebarPageNavigator }>) {
   const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
-  const attention = useGlobalAttentionPages();
+  const attention = useSidebarGlobalAttentionPages();
   // Remembers the open task's last position so Next still works after it is
   // resolved and drops out of the live inbox; updated only while it is present.
   const [anchorIndex, setAnchorIndex] = useState(0);
@@ -29,7 +28,10 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     () => attention.data?.pages.flatMap((page) => page.items) ?? [],
     [attention.data],
   );
-  const taskIDs = useMemo(() => orderedInboxTaskIDs(attentionItems), [attentionItems]);
+  const taskIDs = useMemo(
+    () => orderedInboxTaskIDs(attentionItems.map((item) => item.taskID)),
+    [attentionItems],
+  );
 
   // Adjust the remembered anchor while rendering (the sanctioned alternative to a
   // ref read or an effect): whenever the open task is present, its current index
@@ -45,7 +47,7 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     if (taskID === null) {
       return;
     }
-    void openSidebar({
+    navigator.replace({
       ...destination,
       initialFocus: taskDetailInitialFocusFromAttentionItem(
         attentionItems.find((candidate) => candidate.taskID === taskID),

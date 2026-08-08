@@ -1,832 +1,688 @@
 package core_test
 
 import (
-	"fmt"
 	"go/ast"
-	"go/parser"
+	"go/constant"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
-	"unicode"
+
+	testharness "core/internal/testharness/testsetup"
+
+	"github.com/antlr4-go/antlr/v4"
+	"github.com/tursodatabase/libsql-client-go/sqliteparser"
+	"golang.org/x/tools/go/packages"
 )
 
-func TestRawSQLGuardScannerFixtures(t *testing.T) {
-	tests := []struct {
-		name      string
-		path      string
-		source    string
-		wantParts []string
-	}{
-		{
-			name: "direct database call with nonliteral query on typed receiver",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
+func TestProductionGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Run("rejects constant query through typed DBTX helper", func(t *testing.T) {
+		pkg, root := generatedQueryGuardFixture(t, `package fixture
+
 import (
 	"context"
 	"database/sql"
 )
-func f(ctx context.Context, handle *sql.DB, query string) { _, _ = handle.QueryContext(ctx, query) }`,
-			wantParts: []string{"direct database SQL call QueryContext"},
-		},
-		{
-			name: "direct database call with inferred sql open receiver",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-import (
-	"context"
-	"database/sql"
-)
-func f(ctx context.Context, dsn string, query string) {
-	handle, _ := sql.Open("sqlite", dsn)
-	_, _ = handle.QueryContext(ctx, query)
-}`,
-			wantParts: []string{"direct database SQL call QueryContext"},
-		},
-		{
-			name: "direct database call with inferred metadata db accessor",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f(ctx context.Context, store Store, query string) {
-	handle := store.DB()
-	_, _ = handle.ExecContext(ctx, query)
-}`,
-			wantParts: []string{"direct database SQL call ExecContext"},
-		},
-		{
-			name: "helper sql literal",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { helper("SELECT id FROM sessions") }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name: "constant concatenated sql literal",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { helper("SELECT " + "id FROM sessions") }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name: "case insensitive select literals",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { helper("select id from sessions"); helper("select 1"); helper("SELECT COUNT(*)") }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name: "clause fragments",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { _, _, _ = "name = ?", "WHERE project_id = ?", "WHERE project_id=?" }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name: "lowercase clause fragments",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { _, _, _, _ = "from sessions", "join tasks t on t.id = s.task_id", "order by updated_at_unix_ms desc", "limit 10" }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name: "private query embed",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-import "embed"
-//go:embed queries/list.sql
-var q string
-var _ embed.FS`,
-			wantParts: []string{"production code must not embed private SQL query files"},
-		},
-		{
-			name: "sqlite starters",
-			path: filepath.Join("server", "example", "store.go"),
-			source: `package example
-func f() { _, _, _, _, _ = "EXPLAIN SELECT 1", "ANALYZE", "ATTACH DATABASE ? AS aux", "SAVEPOINT graph", "RELEASE graph" }`,
-			wantParts: []string{"raw SQL string literal"},
-		},
-		{
-			name:   "test sql ignored",
-			path:   filepath.Join("server", "example", "store_test.go"),
-			source: `package example; func f() { _ = "SELECT id FROM sessions" }`,
-		},
-		{
-			name:   "approved generated package ignored",
-			path:   filepath.Join("server", "metadata", "sqlitegen", "queries.sql.go"),
-			source: `package sqlitegen; func f() { _ = "SELECT id FROM sessions" }`,
-		},
-		{
-			name: "metadata migration embed allowed",
-			path: filepath.Join("server", "metadata", "db.go"),
-			source: `package metadata
-import "embed"
-//go:embed migrations/*.up.sql
-var migrationsFS embed.FS`,
-		},
-		{
-			name: "non sql api names ignored",
-			path: filepath.Join("server", "example", "cache.go"),
-			source: `package example
-func f(u url.URL, c RequestCache) { _ = u.Query(); _ = c.Prepare("entry") }`,
-		},
-		{
-			name: "ordinary prose and pragma dsn options ignored",
-			path: filepath.Join("server", "metadata", "db.go"),
-			source: `package metadata
-func f() { _, _, _, _, _, _, _ = "select a task in the UI", "join node missing", "from the UI", "limit must be positive", "foreign_keys(1)", "journal_mode(WAL)", "busy_timeout(5000)" }`,
-		},
-	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			violations, err := scanGoSourceForRawSQL(tt.path, []byte(tt.source))
-			if err != nil {
-				t.Fatalf("scan source: %v", err)
-			}
-			for _, part := range tt.wantParts {
-				if !containsViolationPart(violations, part) {
-					t.Fatalf("violations %v do not contain %q", violations, part)
-				}
-			}
-			if len(tt.wantParts) == 0 && len(violations) > 0 {
-				t.Fatalf("unexpected violations: %v", violations)
-			}
-		})
-	}
+type DBTX interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func TestProductionGoDoesNotContainRawSQL(t *testing.T) {
+const query = "SELECT id FROM sessions"
+
+func execute(ctx context.Context, db DBTX) {
+	run(ctx, db, query)
+}
+
+func run(ctx context.Context, db DBTX, statement string) {
+	_, _ = db.QueryContext(ctx, statement)
+}
+`)
+		if violations := generatedQueryBoundaryViolations(pkg, root); len(violations) < 2 {
+			t.Fatalf("typed DBTX helper must reject both the dynamic query sink and forwarded constant query, violations = %v", violations)
+		}
+	})
+
+	t.Run("allows constants that do not reach a query seam", func(t *testing.T) {
+		pkg, root := generatedQueryGuardFixture(t, `package fixture
+
+const label = "SELECT a task in the UI"
+
+func display() string {
+	return label
+}
+`)
+		if violations := generatedQueryBoundaryViolations(pkg, root); len(violations) > 0 {
+			t.Fatalf("non-query constant violations = %v, want none", violations)
+		}
+	})
+
+	t.Run("accepts database syntax and rejects ambiguous prose", func(t *testing.T) {
+		cases := map[string]bool{
+			"SELECT id FROM sessions":           true,
+			"SELECT 1":                          true,
+			"select 1":                          true,
+			"DELETE FROM sessions WHERE id = ?": true,
+			"WHERE id = ?":                      true,
+			"EXPLAIN SELECT 1":                  true,
+			"ANALYZE":                           true,
+			"ATTACH DATABASE ? AS aux":          true,
+			"SAVEPOINT graph":                   true,
+			"RELEASE graph":                     true,
+			"VACUUM":                            true,
+			"BEGIN":                             true,
+			"COMMIT":                            true,
+			"ROLLBACK":                          true,
+			"DROP INDEX stale_sessions":         true,
+			"SELECT a task in the UI":           false,
+			"Select Workspace":                  false,
+			"AGENT=kent":                        false,
+			"end":                               false,
+			"rollback":                          false,
+			"SELECT id FROM":                    false,
+		}
+		for source, want := range cases {
+			if got := isSQLiteStatementOrFragment(source); got != want {
+				t.Errorf("isSQLiteStatementOrFragment(%q) = %t, want %t", source, got, want)
+			}
+		}
+	})
+
+	t.Run("rejects standalone and externally forwarded raw SQL constants", func(t *testing.T) {
+		pkg, root := generatedQueryGuardFixture(t, `package fixture
+
+const standalone = "select 1"
+
+var packageQuery = "DELETE FROM sessions WHERE id = ?"
+
+func external(statement string) {}
+
+func forward() {
+	external(packageQuery)
+}
+`)
+		if violations := generatedQueryBoundaryViolations(pkg, root); len(violations) < 2 {
+			t.Fatalf("standalone and external-helper raw SQL constants must violate, violations = %v", violations)
+		}
+	})
+}
+
+func TestProductionDarwinGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "darwin", "arm64")
+}
+
+func TestProductionLinuxGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "linux", "amd64")
+}
+
+func TestProductionWindowsGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
+	t.Parallel()
+	assertProductionGeneratedQueryBoundaries(t, "windows", "amd64")
+}
+
+func assertProductionGeneratedQueryBoundaries(t *testing.T, goos string, goarch string) {
+	t.Helper()
 	repoRoot := findRepoRoot(t)
+	pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, goos, goarch, "./server/...", "./cli/...", "./shared/...")
+	assertCoreRepositoryModule(t, pkgs)
 	violations := make([]string, 0)
-	if err := walkProductionGoFiles(repoRoot, func(path string, relPath string) error {
-		if !isRawSQLScannedGoFile(relPath) {
-			return nil
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) {
+			continue
 		}
-		source, readErr := osReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		fileViolations, scanErr := scanGoSourceForRawSQL(relPath, source)
-		if scanErr != nil {
-			return scanErr
-		}
-		violations = append(violations, fileViolations...)
-		return nil
-	}); err != nil {
-		t.Fatalf("scan repository for raw SQL: %v", err)
+		violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
 	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
-		t.Fatalf("production raw SQL violations:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf("%s/%s production database query boundary violations:\n%s", goos, goarch, strings.Join(violations, "\n"))
 	}
 }
 
-var osReadFile = func(path string) ([]byte, error) {
-	return os.ReadFile(path)
+var generatedDatabaseQueryPackage = map[string]bool{
+	"core/server/metadata/sqlitegen":          true,
+	"core/server/metadata/sqlitelifecyclegen": true,
 }
 
-func scanGoSourceForRawSQL(path string, source []byte) ([]string, error) {
-	if !isRawSQLScannedGoFile(path) {
-		return nil, nil
+func generatedQueryGuardFixture(t *testing.T, source string) (*packages.Package, string) {
+	t.Helper()
+	root := t.TempDir()
+	testharness.WriteFile(t, filepath.Join(root, "go.mod"), "module core\n\ngo 1.26.4\n")
+	testharness.WriteFile(t, filepath.Join(root, "server/core/testfixture/fixture.go"), source)
+	pkgs := testharness.LoadTypedPackages(t, root, false, "./server/core/testfixture")
+	return testharness.PackageByPath(t, pkgs, "core/server/core/testfixture"), root
+}
+
+func generatedQueryBoundaryViolations(pkg *packages.Package, repoRoot string) []string {
+	if generatedDatabaseQueryPackage[pkg.PkgPath] {
+		return nil
 	}
-	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, path, source, parser.ParseComments)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	violations := embeddedSQLViolations(pkg)
+	violations = append(violations, rawSQLConstantViolations(pkg, repoRoot)...)
+	violations = append(violations, databaseQueryFlowViolations(pkg, repoRoot)...)
+	return violations
+}
+
+func embeddedSQLViolations(pkg *packages.Package) []string {
+	if len(pkg.EmbedPatterns) == 0 {
+		return nil
 	}
-	context := newRawSQLScanContext(file)
 	violations := make([]string, 0)
-	for _, group := range file.Comments {
-		for _, comment := range group.List {
-			if strings.HasPrefix(comment.Text, "//go:embed") && embedsPrivateSQLQuery(comment.Text) {
-				violations = append(violations, rawSQLViolation(path, fileSet.Position(comment.Pos()).Line, "production code must not embed private SQL query files"))
-			}
-		}
-	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.BasicLit:
-			if n.Kind == token.STRING && rawSQLLiteral(n.Value) {
-				violations = append(violations, rawSQLViolation(path, fileSet.Position(n.Pos()).Line, "raw SQL string literal"))
-			}
-		case *ast.BinaryExpr:
-			if text, ok := constantStringExpression(n); ok && rawSQLText(text) {
-				violations = append(violations, rawSQLViolation(path, fileSet.Position(n.Pos()).Line, "raw SQL string literal"))
-			}
-		case *ast.CallExpr:
-			if selector, ok := n.Fun.(*ast.SelectorExpr); ok && context.isDirectDatabaseSQLCall(selector, n) {
-				violations = append(violations, rawSQLViolation(path, fileSet.Position(selector.Sel.Pos()).Line, "direct database SQL call "+selector.Sel.Name))
-			}
-		}
-		return true
-	})
-	return violations, nil
-}
-
-type rawSQLScanContext struct {
-	databaseSQLImportNames map[string]struct{}
-	databaseTypedNames     map[string]struct{}
-}
-
-func newRawSQLScanContext(file *ast.File) rawSQLScanContext {
-	context := rawSQLScanContext{
-		databaseSQLImportNames: map[string]struct{}{},
-		databaseTypedNames:     map[string]struct{}{},
-	}
-	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil || path != "database/sql" {
+	for _, pattern := range pkg.EmbedPatterns {
+		if filepath.Ext(pattern) != ".sql" {
 			continue
 		}
-		name := "sql"
-		if spec.Name != nil {
-			name = spec.Name.Name
+		if isMetadataMigrationEmbed(pkg, pattern) {
+			continue
 		}
-		if name != "_" {
-			context.databaseSQLImportNames[name] = struct{}{}
-		}
+		violations = append(violations, pkg.PkgPath+": production SQL embeds must be metadata migrations declared through the generated-query boundary")
 	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.FuncDecl:
-			context.collectFieldListDatabaseTypes(n.Type.Params)
-			context.collectFieldListDatabaseTypes(n.Type.Results)
-		case *ast.FuncLit:
-			context.collectFieldListDatabaseTypes(n.Type.Params)
-			context.collectFieldListDatabaseTypes(n.Type.Results)
-		case *ast.ValueSpec:
-			if context.isDatabaseHandleType(n.Type) {
-				for _, name := range n.Names {
-					context.databaseTypedNames[name.Name] = struct{}{}
+	return violations
+}
+
+func isMetadataMigrationEmbed(pkg *packages.Package, pattern string) bool {
+	if pkg.PkgPath == "core/server/metadata/migrations" {
+		return filepath.Base(filepath.Clean(pattern)) == "*.up.sql"
+	}
+	return false
+}
+
+func rawSQLConstantViolations(pkg *packages.Package, repoRoot string) []string {
+	violations := make([]string, 0)
+	seen := make(map[token.Pos]struct{})
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(node ast.Node) bool {
+			expression, ok := node.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if binary, ok := expression.(*ast.BinaryExpr); ok && isConstantStringExpression(pkg, binary) {
+				if isSQLiteStatementOrFragment(constantStringValue(pkg, binary)) {
+					violations = appendRawSQLConstantViolation(violations, seen, pkg, repoRoot, binary.Pos())
 				}
+				return false
 			}
-		case *ast.AssignStmt:
-			context.collectAssignedDatabaseHandles(n)
-		}
+			literal, ok := expression.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING || !isConstantStringExpression(pkg, literal) {
+				return true
+			}
+			if isSQLiteStatementOrFragment(constantStringValue(pkg, literal)) {
+				violations = appendRawSQLConstantViolation(violations, seen, pkg, repoRoot, literal.Pos())
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func constantStringValue(pkg *packages.Package, expression ast.Expr) string {
+	value := pkg.TypesInfo.Types[expression].Value
+	return constant.StringVal(value)
+}
+
+func isSQLiteStatementOrFragment(source string) bool {
+	tokens, valid := sqliteTokens(source)
+	if !valid || len(tokens) == 0 {
+		return false
+	}
+	if hasNonProseRelationTarget(tokens) && parsesSQLiteStatement(source) {
 		return true
-	})
-	return context
+	}
+	if hasStandaloneSQLiteStatementStart(tokens) && parsesSQLiteStatement(source) {
+		return true
+	}
+	switch tokens[0].GetTokenType() {
+	case sqliteparser.SQLiteParserFROM_:
+		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserWHERE_, sqliteparser.SQLiteParserHAVING_, sqliteparser.SQLiteParserON_:
+		return hasSQLBoundOrQuotedValue(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserORDER_, sqliteparser.SQLiteParserGROUP_:
+		return parsesSQLiteStatement("SELECT 1 " + source)
+	case sqliteparser.SQLiteParserLIMIT_, sqliteparser.SQLiteParserOFFSET_:
+		return hasSQLValueSyntax(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserJOIN_, sqliteparser.SQLiteParserLEFT_, sqliteparser.SQLiteParserRIGHT_, sqliteparser.SQLiteParserINNER_, sqliteparser.SQLiteParserCROSS_:
+		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 FROM raw_sql_guard "+source)
+	case sqliteparser.SQLiteParserSET_:
+		return hasSQLBoundOrQuotedValue(tokens) && parsesSQLiteStatement("UPDATE raw_sql_guard "+source)
+	case sqliteparser.SQLiteParserVALUES_:
+		return hasSQLValueSyntax(tokens) && parsesSQLiteStatement("INSERT INTO raw_sql_guard(value) "+source)
+	}
+	return hasComparisonOperator(tokens) &&
+		hasSQLBoundOrQuotedValue(tokens) &&
+		parsesSQLiteStatement("SELECT 1 WHERE "+source)
 }
 
-func (c rawSQLScanContext) collectAssignedDatabaseHandles(assign *ast.AssignStmt) {
-	for index, lhs := range assign.Lhs {
-		name, ok := lhs.(*ast.Ident)
-		if !ok || name.Name == "_" || index >= len(assign.Rhs) {
-			continue
-		}
-		if c.isDatabaseHandleValue(assign.Rhs[index]) {
-			c.databaseTypedNames[name.Name] = struct{}{}
-		}
+func hasStandaloneSQLiteStatementStart(tokens []antlr.Token) bool {
+	first := tokens[0]
+	switch first.GetTokenType() {
+	case sqliteparser.SQLiteParserANALYZE_,
+		sqliteparser.SQLiteParserATTACH_,
+		sqliteparser.SQLiteParserBEGIN_,
+		sqliteparser.SQLiteParserCOMMIT_,
+		sqliteparser.SQLiteParserDETACH_,
+		sqliteparser.SQLiteParserEXPLAIN_,
+		sqliteparser.SQLiteParserREINDEX_,
+		sqliteparser.SQLiteParserRELEASE_,
+		sqliteparser.SQLiteParserROLLBACK_,
+		sqliteparser.SQLiteParserSAVEPOINT_,
+		sqliteparser.SQLiteParserVACUUM_:
+		return isUppercaseSQLiteKeyword(first)
+	case sqliteparser.SQLiteParserSELECT_:
+		return isUppercaseSQLiteKeyword(first) || hasSQLValueSyntax(tokens)
+	case sqliteparser.SQLiteParserINSERT_,
+		sqliteparser.SQLiteParserUPDATE_,
+		sqliteparser.SQLiteParserDELETE_,
+		sqliteparser.SQLiteParserREPLACE_:
+		return hasNonProseRelationTarget(tokens)
+	case sqliteparser.SQLiteParserPRAGMA_:
+		return len(tokens) > 1
+	case sqliteparser.SQLiteParserCREATE_,
+		sqliteparser.SQLiteParserALTER_,
+		sqliteparser.SQLiteParserDROP_:
+		return hasSQLiteStatementQualifier(
+			tokens,
+			sqliteparser.SQLiteParserTABLE_,
+			sqliteparser.SQLiteParserINDEX_,
+			sqliteparser.SQLiteParserVIEW_,
+			sqliteparser.SQLiteParserTRIGGER_,
+		)
+	default:
+		return false
 	}
 }
 
-func (c rawSQLScanContext) collectFieldListDatabaseTypes(fields *ast.FieldList) {
-	if fields == nil {
-		return
-	}
-	for _, field := range fields.List {
-		if !c.isDatabaseHandleType(field.Type) {
-			continue
-		}
-		for _, name := range field.Names {
-			c.databaseTypedNames[name.Name] = struct{}{}
-		}
-	}
+func isUppercaseSQLiteKeyword(token antlr.Token) bool {
+	return token.GetText() == strings.ToUpper(token.GetText())
 }
 
-func containsViolationPart(violations []string, part string) bool {
-	for _, violation := range violations {
-		if strings.Contains(violation, part) {
+func hasSQLiteStatementQualifier(tokens []antlr.Token, qualifiers ...int) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	for _, qualifier := range qualifiers {
+		if tokens[1].GetTokenType() == qualifier {
 			return true
 		}
 	}
 	return false
 }
 
-func rawSQLViolation(path string, line int, reason string) string {
-	return fmt.Sprintf("%s:%d: %s; declare production SQL in server/metadata/queries.sql or server/metadata/lifecycle.sql and consume it through an approved generated seam", path, line, reason)
+func sqliteTokens(source string) ([]antlr.Token, bool) {
+	tokens, err := testharness.SQLiteTokens(source)
+	return tokens, err == nil
 }
 
-func isRawSQLScannedGoFile(path string) bool {
-	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-		return false
-	}
-	return !isApprovedGeneratedSQLPath(path)
+func parsesSQLiteStatement(source string) bool {
+	return testharness.ParseSQLite(source) == nil
 }
 
-func isApprovedGeneratedSQLPath(path string) bool {
-	clean := filepath.Clean(path)
-	approved := []string{
-		filepath.Join("server", "metadata", "sqlitegen"),
-		filepath.Join("server", "metadata", "sqlitelifecyclegen"),
-	}
-	for _, prefix := range approved {
-		if clean == prefix || strings.HasPrefix(clean, prefix+string(filepath.Separator)) {
+func hasComparisonOperator(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserASSIGN,
+			sqliteparser.SQLiteParserEQ,
+			sqliteparser.SQLiteParserNOT_EQ1,
+			sqliteparser.SQLiteParserNOT_EQ2,
+			sqliteparser.SQLiteParserLT,
+			sqliteparser.SQLiteParserLT_EQ,
+			sqliteparser.SQLiteParserGT,
+			sqliteparser.SQLiteParserGT_EQ,
+			sqliteparser.SQLiteParserLIKE_,
+			sqliteparser.SQLiteParserGLOB_,
+			sqliteparser.SQLiteParserMATCH_,
+			sqliteparser.SQLiteParserREGEXP_:
 			return true
 		}
 	}
 	return false
 }
 
-func embedsPrivateSQLQuery(text string) bool {
-	fields := strings.Fields(strings.TrimPrefix(text, "//go:embed"))
-	for _, field := range fields {
-		clean := filepath.ToSlash(field)
-		if strings.HasSuffix(clean, ".sql") && !strings.HasPrefix(clean, "migrations/") {
+func hasSQLValueSyntax(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserBIND_PARAMETER,
+			sqliteparser.SQLiteParserNUMERIC_LITERAL,
+			sqliteparser.SQLiteParserSTRING_LITERAL,
+			sqliteparser.SQLiteParserNULL_:
 			return true
 		}
 	}
 	return false
 }
 
-var directSQLSelectors = map[string]struct{}{
-	"QueryContext":    {},
-	"QueryRowContext": {},
-	"ExecContext":     {},
-	"PrepareContext":  {},
-	"Query":           {},
-	"QueryRow":        {},
-	"Exec":            {},
-	"Prepare":         {},
-}
-
-func (c rawSQLScanContext) isDirectDatabaseSQLCall(selector *ast.SelectorExpr, call *ast.CallExpr) bool {
-	if _, ok := directSQLSelectors[selector.Sel.Name]; !ok {
-		return false
-	}
-	if !hasSQLCallArity(selector.Sel.Name, len(call.Args)) {
-		return false
-	}
-	return c.isTypedDatabaseReceiver(selector.X) || isDatabaseLikeReceiver(selector.X)
-}
-
-func hasSQLCallArity(name string, argCount int) bool {
-	switch name {
-	case "QueryContext", "QueryRowContext", "ExecContext", "PrepareContext":
-		return argCount >= 2
-	case "Query", "QueryRow", "Exec", "Prepare":
-		return argCount >= 1
-	default:
-		return false
-	}
-}
-
-func isDatabaseLikeReceiver(expr ast.Expr) bool {
-	switch x := expr.(type) {
-	case *ast.Ident:
-		return isDatabaseLikeName(x.Name)
-	case *ast.SelectorExpr:
-		return isDatabaseLikeName(x.Sel.Name)
-	case *ast.CallExpr:
-		selector, ok := x.Fun.(*ast.SelectorExpr)
-		return ok && isDatabaseLikeName(selector.Sel.Name)
-	case *ast.IndexExpr:
-		return isDatabaseLikeReceiver(x.X)
-	case *ast.ParenExpr:
-		return isDatabaseLikeReceiver(x.X)
-	default:
-		return false
-	}
-}
-
-func (c rawSQLScanContext) isTypedDatabaseReceiver(expr ast.Expr) bool {
-	switch x := expr.(type) {
-	case *ast.Ident:
-		_, ok := c.databaseTypedNames[x.Name]
-		return ok
-	case *ast.ParenExpr:
-		return c.isTypedDatabaseReceiver(x.X)
-	case *ast.IndexExpr:
-		return c.isTypedDatabaseReceiver(x.X)
-	default:
-		return false
-	}
-}
-
-func (c rawSQLScanContext) isDatabaseHandleType(expr ast.Expr) bool {
-	switch x := expr.(type) {
-	case *ast.StarExpr:
-		return c.isDatabaseHandleType(x.X)
-	case *ast.SelectorExpr:
-		if x.Sel.Name == "DBTX" {
+func hasSQLBoundOrQuotedValue(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserBIND_PARAMETER, sqliteparser.SQLiteParserSTRING_LITERAL:
 			return true
 		}
-		if _, ok := x.X.(*ast.Ident); !ok {
-			return false
-		}
-		qualifier := x.X.(*ast.Ident).Name
-		if _, ok := c.databaseSQLImportNames[qualifier]; !ok {
-			return false
-		}
-		switch x.Sel.Name {
-		case "DB", "Tx", "Conn", "Stmt", "Rows", "Row":
-			return true
-		default:
-			return false
-		}
-	case *ast.InterfaceType:
-		for _, method := range x.Methods.List {
-			for _, name := range method.Names {
-				if _, ok := directSQLSelectors[name.Name]; ok {
-					return true
-				}
+	}
+	return false
+}
+
+func hasNonProseRelationTarget(tokens []antlr.Token) bool {
+	for index, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserFROM_,
+			sqliteparser.SQLiteParserJOIN_,
+			sqliteparser.SQLiteParserINTO_,
+			sqliteparser.SQLiteParserUPDATE_,
+			sqliteparser.SQLiteParserTABLE_,
+			sqliteparser.SQLiteParserVIEW_:
+			if index+1 >= len(tokens) {
+				return false
 			}
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-func (c rawSQLScanContext) isDatabaseHandleValue(expr ast.Expr) bool {
-	switch x := expr.(type) {
-	case *ast.CallExpr:
-		selector, ok := x.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return false
-		}
-		if qualifier, ok := selector.X.(*ast.Ident); ok {
-			if _, imported := c.databaseSQLImportNames[qualifier.Name]; imported && selector.Sel.Name == "Open" {
+			if isNonProseRelationIdentifier(tokens[index+1]) {
 				return true
 			}
 		}
-		switch selector.Sel.Name {
-		case "DB":
-			return true
-		case "Begin", "BeginTx", "Conn":
-			return c.isTypedDatabaseReceiver(selector.X) || isDatabaseLikeReceiver(selector.X)
-		default:
-			return false
-		}
-	case *ast.ParenExpr:
-		return c.isDatabaseHandleValue(x.X)
-	default:
-		return false
-	}
-}
-
-func isDatabaseLikeName(name string) bool {
-	lower := strings.ToLower(name)
-	switch lower {
-	case "db", "tx", "conn", "database", "databaseconn", "sqldb", "sqltx":
-		return true
-	}
-	return strings.HasSuffix(name, "DB") || strings.HasSuffix(name, "Tx") || strings.HasSuffix(name, "Conn")
-}
-
-func rawSQLLiteral(quoted string) bool {
-	value, err := strconv.Unquote(quoted)
-	if err != nil {
-		return false
-	}
-	return rawSQLText(value)
-}
-
-func constantStringExpression(expr ast.Expr) (string, bool) {
-	switch x := expr.(type) {
-	case *ast.BasicLit:
-		if x.Kind != token.STRING {
-			return "", false
-		}
-		value, err := strconv.Unquote(x.Value)
-		if err != nil {
-			return "", false
-		}
-		return value, true
-	case *ast.BinaryExpr:
-		if x.Op != token.ADD {
-			return "", false
-		}
-		left, ok := constantStringExpression(x.X)
-		if !ok {
-			return "", false
-		}
-		right, ok := constantStringExpression(x.Y)
-		if !ok {
-			return "", false
-		}
-		return left + right, true
-	case *ast.ParenExpr:
-		return constantStringExpression(x.X)
-	default:
-		return "", false
-	}
-}
-
-func rawSQLText(value string) bool {
-	text := trimLeadingSQLTrivia(value)
-	if text == "" {
-		return false
-	}
-	if containsSQLPredicateFragment(strings.ToUpper(text)) {
-		return true
-	}
-	upper := strings.ToUpper(text)
-	if startsWithSQLStatement(upper) {
-		first, _ := firstSQLWord(upper)
-		if ambiguousSQLStatementStarterRequiresUppercase(first) && !startsWithUppercaseSQLKeyword(text) {
-			return false
-		}
-		return true
-	}
-	return startsWithSQLClause(upper)
-}
-
-func ambiguousSQLStatementStarterRequiresUppercase(first string) bool {
-	switch first {
-	case "VACUUM", "BEGIN", "COMMIT", "ROLLBACK", "ANALYZE", "ATTACH", "DETACH", "SAVEPOINT", "RELEASE":
-		return true
-	default:
-		return false
-	}
-}
-
-func trimLeadingSQLTrivia(text string) string {
-	trimmed := strings.TrimSpace(text)
-	for {
-		switch {
-		case strings.HasPrefix(trimmed, "--"):
-			newline := strings.IndexByte(trimmed, '\n')
-			if newline < 0 {
-				return ""
-			}
-			trimmed = strings.TrimSpace(trimmed[newline+1:])
-		case strings.HasPrefix(trimmed, "/*"):
-			end := strings.Index(trimmed, "*/")
-			if end < 0 {
-				return ""
-			}
-			trimmed = strings.TrimSpace(trimmed[end+2:])
-		default:
-			return trimmed
-		}
-	}
-}
-
-func startsWithSQLStatement(upper string) bool {
-	first, rest := firstSQLWord(upper)
-	switch first {
-	case "SELECT":
-		return containsSQLToken(rest, "FROM") || containsSQLToken(rest, "WHERE") || startsWithSQLSelectExpression(rest)
-	case "WITH":
-		return containsSQLToken(rest, "AS") && strings.Contains(rest, "(")
-	case "INSERT", "REPLACE":
-		next, _ := firstSQLWord(rest)
-		return next == "INTO"
-	case "UPDATE":
-		return containsSQLToken(rest, "SET")
-	case "DELETE":
-		next, _ := firstSQLWord(rest)
-		return next == "FROM"
-	case "PRAGMA":
-		return rest != ""
-	case "CREATE", "ALTER", "DROP":
-		next, _ := firstSQLWord(rest)
-		switch next {
-		case "TABLE", "INDEX", "VIEW", "TRIGGER":
-			return true
-		default:
-			return false
-		}
-	case "VACUUM", "BEGIN", "COMMIT", "ROLLBACK", "ANALYZE":
-		return rest == ""
-	case "ATTACH":
-		next, _ := firstSQLWord(rest)
-		return next == "DATABASE"
-	case "DETACH":
-		next, _ := firstSQLWord(rest)
-		return next == "DATABASE"
-	case "SAVEPOINT", "RELEASE":
-		return rest != ""
-	case "EXPLAIN":
-		next, _ := firstSQLWord(rest)
-		switch next {
-		case "SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "QUERY":
-			return true
-		default:
-			return false
-		}
-	default:
-		return false
-	}
-}
-
-func startsWithSQLClause(upper string) bool {
-	first, rest := firstSQLWord(upper)
-	switch first {
-	case "WHERE", "HAVING":
-		return containsSQLPredicateFragment(rest) || containsSQLComparison(rest)
-	case "FROM":
-		return startsWithSQLTableReference(rest)
-	case "JOIN":
-		return startsWithSQLTableReference(rest) && containsSQLToken(rest, "ON")
-	case "ON":
-		return containsSQLPredicateFragment(rest) || containsSQLComparison(rest)
-	case "SET":
-		return containsSQLPredicateFragment(rest) || containsSQLEqualityAssignment(rest)
-	case "VALUES":
-		return strings.HasPrefix(strings.TrimSpace(rest), "(")
-	case "RETURNING":
-		return startsWithSQLIdentifierList(rest)
-	case "LIMIT", "OFFSET":
-		return startsWithSQLLimitValue(rest)
-	case "ORDER", "GROUP":
-		next, afterNext := firstSQLWord(strings.TrimSpace(rest))
-		return next == "BY" && startsWithSQLIdentifierList(afterNext)
-	case "AND", "OR":
-		return containsSQLPredicateFragment(rest)
-	default:
-		return false
-	}
-}
-
-func startsWithSQLTableReference(rest string) bool {
-	word, remaining := firstSQLWord(rest)
-	if word == "" || isCommonProseWord(word) {
-		return false
-	}
-	if remaining == "" {
-		return true
-	}
-	next, afterNext := firstSQLWord(remaining)
-	switch next {
-	case "AS":
-		alias, _ := firstSQLWord(afterNext)
-		return alias != "" && !isCommonProseWord(alias)
-	case "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "CROSS", "ON", "ORDER", "GROUP", "LIMIT":
-		return true
-	default:
-		return containsSQLToken(remaining, "ON") || containsSQLToken(remaining, "WHERE")
-	}
-}
-
-func startsWithSQLIdentifierList(rest string) bool {
-	word, remaining := firstSQLWord(rest)
-	if word == "" || isCommonProseWord(word) {
-		return false
-	}
-	if strings.Contains(remaining, ",") || containsSQLToken(remaining, "DESC") || containsSQLToken(remaining, "ASC") {
-		return true
-	}
-	return remaining == ""
-}
-
-func startsWithSQLLimitValue(rest string) bool {
-	trimmed := strings.TrimSpace(rest)
-	if trimmed == "" {
-		return false
-	}
-	first := rune(trimmed[0])
-	return unicode.IsDigit(first) || first == '?' || first == ':' || first == '$'
-}
-
-func containsSQLComparison(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || !startsWithIdentifier(trimmed) {
-		return false
-	}
-	comparisonMarkers := []string{"=", "<>", "!=", ">=", "<=", ">", "<"}
-	compact := removeSQLWhitespace(trimmed)
-	for _, marker := range comparisonMarkers {
-		if strings.Contains(compact, marker) {
-			return true
-		}
 	}
 	return false
 }
 
-func containsSQLEqualityAssignment(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || !startsWithIdentifier(trimmed) {
+func isNonProseRelationIdentifier(token antlr.Token) bool {
+	if token.GetTokenType() != sqliteparser.SQLiteParserIDENTIFIER {
 		return false
 	}
-	return strings.Contains(removeSQLWhitespace(trimmed), "=")
+	switch strings.ToLower(token.GetText()) {
+	case "a", "an", "the", "this", "that", "these", "those", "node", "task", "run", "user", "ui":
+		return false
+	default:
+		return true
+	}
 }
 
-func removeSQLWhitespace(text string) string {
-	var out strings.Builder
-	out.Grow(len(text))
-	for _, r := range text {
-		if !unicode.IsSpace(r) {
-			out.WriteRune(r)
+type databaseQueryFlow struct {
+	function       *types.Func
+	parameters     map[*types.Var]int
+	queryParameter map[int]struct{}
+	directCalls    []databaseQueryArgument
+}
+
+type databaseQueryArgument struct {
+	expression ast.Expr
+	position   token.Pos
+}
+
+type databaseQueryForwardingCall struct {
+	caller        *databaseQueryFlow
+	callee        *types.Func
+	argumentIndex int
+	argument      ast.Expr
+	position      token.Pos
+}
+
+func databaseQueryFlowViolations(pkg *packages.Package, repoRoot string) []string {
+	flows, forwardingCalls := collectDatabaseQueryFlows(pkg)
+	propagateDatabaseQueryParameters(pkg, flows, forwardingCalls)
+	violations := make([]string, 0)
+	seen := make(map[token.Pos]struct{})
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if _, queryCall := databaseQueryArgumentIndex(pkg.TypesInfo.Selections[selector]); queryCall {
+				violations = appendDatabaseQuerySinkViolation(violations, seen, pkg, repoRoot, selector.Sel.Pos())
+			}
+			return true
+		})
+	}
+	for _, flow := range flows {
+		for _, call := range flow.directCalls {
+			if isConstantStringExpression(pkg, call.expression) {
+				violations = appendDatabaseQueryViolation(violations, seen, pkg, repoRoot, call.position)
+			}
 		}
 	}
-	return out.String()
+	for _, call := range forwardingCalls {
+		callee, found := flows[call.callee]
+		if !found {
+			continue
+		}
+		if _, reachesQuery := callee.queryParameter[call.argumentIndex]; reachesQuery && isConstantStringExpression(pkg, call.argument) {
+			violations = appendDatabaseQueryViolation(violations, seen, pkg, repoRoot, call.position)
+		}
+	}
+	return violations
 }
 
-func isCommonProseWord(word string) bool {
-	switch word {
-	case "A", "AN", "THE", "THIS", "THAT", "THESE", "THOSE", "NODE", "TASK", "RUN", "USER", "UI":
-		return true
+func collectDatabaseQueryFlows(pkg *packages.Package) (map[*types.Func]*databaseQueryFlow, []databaseQueryForwardingCall) {
+	flows := make(map[*types.Func]*databaseQueryFlow)
+	for _, file := range pkg.Syntax {
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			object, ok := pkg.TypesInfo.Defs[function.Name].(*types.Func)
+			if !ok {
+				continue
+			}
+			signature, ok := object.Type().(*types.Signature)
+			if !ok {
+				continue
+			}
+			parameters := make(map[*types.Var]int, signature.Params().Len())
+			for index := 0; index < signature.Params().Len(); index++ {
+				parameters[signature.Params().At(index)] = index
+			}
+			flows[object] = &databaseQueryFlow{
+				function:       object,
+				parameters:     parameters,
+				queryParameter: make(map[int]struct{}),
+			}
+		}
+	}
+
+	var forwardingCalls []databaseQueryForwardingCall
+	for _, file := range pkg.Syntax {
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			object, ok := pkg.TypesInfo.Defs[function.Name].(*types.Func)
+			if !ok {
+				continue
+			}
+			flow, found := flows[object]
+			if !found {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if ok {
+					if argumentIndex, queryCall := databaseQueryArgumentIndex(pkg.TypesInfo.Selections[selector]); queryCall && argumentIndex < len(call.Args) {
+						argument := call.Args[argumentIndex]
+						flow.directCalls = append(flow.directCalls, databaseQueryArgument{
+							expression: argument,
+							position:   argument.Pos(),
+						})
+						if parameterIndex, parameter := flow.parameterIndex(pkg, argument); parameter {
+							flow.queryParameter[parameterIndex] = struct{}{}
+						}
+						return true
+					}
+				}
+				callee := calledPackageFunction(pkg, call.Fun)
+				if callee == nil {
+					return true
+				}
+				if _, local := flows[callee]; !local {
+					return true
+				}
+				for index, argument := range call.Args {
+					forwardingCalls = append(forwardingCalls, databaseQueryForwardingCall{
+						caller:        flow,
+						callee:        callee,
+						argumentIndex: index,
+						argument:      argument,
+						position:      argument.Pos(),
+					})
+				}
+				return true
+			})
+		}
+	}
+	return flows, forwardingCalls
+}
+
+func (f *databaseQueryFlow) parameterIndex(pkg *packages.Package, expression ast.Expr) (int, bool) {
+	identifier, ok := expression.(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	parameter, ok := pkg.TypesInfo.Uses[identifier].(*types.Var)
+	if !ok {
+		return 0, false
+	}
+	index, found := f.parameters[parameter]
+	return index, found
+}
+
+func propagateDatabaseQueryParameters(pkg *packages.Package, flows map[*types.Func]*databaseQueryFlow, calls []databaseQueryForwardingCall) {
+	for changed := true; changed; {
+		changed = false
+		for _, call := range calls {
+			callee, found := flows[call.callee]
+			if !found {
+				continue
+			}
+			if _, reachesQuery := callee.queryParameter[call.argumentIndex]; !reachesQuery {
+				continue
+			}
+			parameterIndex, parameter := call.caller.parameterIndex(pkg, call.argument)
+			if !parameter {
+				continue
+			}
+			if _, found := call.caller.queryParameter[parameterIndex]; found {
+				continue
+			}
+			call.caller.queryParameter[parameterIndex] = struct{}{}
+			changed = true
+		}
+	}
+}
+
+func calledPackageFunction(pkg *packages.Package, expression ast.Expr) *types.Func {
+	switch call := expression.(type) {
+	case *ast.Ident:
+		function, _ := pkg.TypesInfo.Uses[call].(*types.Func)
+		return function
+	case *ast.SelectorExpr:
+		function, _ := pkg.TypesInfo.Uses[call.Sel].(*types.Func)
+		return function
+	default:
+		return nil
+	}
+}
+
+func databaseQueryArgumentIndex(selection *types.Selection) (int, bool) {
+	if selection == nil {
+		return 0, false
+	}
+	function, ok := selection.Obj().(*types.Func)
+	if !ok {
+		return 0, false
+	}
+	signature, ok := function.Type().(*types.Signature)
+	if !ok || !returnsDatabaseQueryResult(signature.Results()) {
+		return 0, false
+	}
+	if signature.Params().Len() > 1 && isContextType(signature.Params().At(0).Type()) && isStringType(signature.Params().At(1).Type()) {
+		return 1, true
+	}
+	if signature.Params().Len() > 0 && isStringType(signature.Params().At(0).Type()) {
+		return 0, true
+	}
+	return 0, false
+}
+
+func returnsDatabaseQueryResult(results *types.Tuple) bool {
+	switch results.Len() {
+	case 1:
+		return isDatabaseSQLNamedType(results.At(0).Type(), "Row")
+	case 2:
+		return isErrorType(results.At(1).Type()) &&
+			(isDatabaseSQLNamedType(results.At(0).Type(), "Rows") ||
+				isDatabaseSQLNamedType(results.At(0).Type(), "Result") ||
+				isDatabaseSQLNamedType(results.At(0).Type(), "Stmt"))
 	default:
 		return false
 	}
 }
 
-func startsWithSQLSelectExpression(rest string) bool {
-	trimmed := strings.TrimSpace(rest)
-	if trimmed == "" {
-		return false
-	}
-	first := rune(trimmed[0])
-	if first == '*' || first == '\'' || first == '"' || unicode.IsDigit(first) {
-		return true
-	}
-	word, afterWord := firstSQLWord(trimmed)
-	if word == "" {
-		return false
-	}
-	if strings.HasPrefix(strings.TrimSpace(afterWord), "(") {
-		return true
-	}
-	expressionMarkers := []string{",", "||", "+", "-", "*", "/", "%"}
-	for _, marker := range expressionMarkers {
-		if strings.Contains(trimmed, marker) {
-			return true
-		}
-	}
-	switch word {
-	case "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "CAST", "EXISTS":
-		return true
+func isDatabaseSQLNamedType(typ types.Type, name string) bool {
+	switch typed := types.Unalias(typ).(type) {
+	case *types.Pointer:
+		return isDatabaseSQLNamedType(typed.Elem(), name)
+	case *types.Named:
+		return typed.Obj().Pkg() != nil && typed.Obj().Pkg().Path() == "database/sql" && typed.Obj().Name() == name
 	default:
 		return false
 	}
 }
 
-func containsSQLPredicateFragment(upper string) bool {
-	trimmed := strings.TrimSpace(upper)
-	if trimmed == "" || !startsWithIdentifier(trimmed) {
+func isConstantStringExpression(pkg *packages.Package, expression ast.Expr) bool {
+	value, found := pkg.TypesInfo.Types[expression]
+	if !found || value.Value == nil {
 		return false
 	}
-	predicateMarkers := []string{
-		"=?", "<>?", "!=?", ">?", "<?", ">=?", "<=?",
-		"LIKE?", "IN(", "ISNULL", "ISNOTNULL",
-	}
-	compact := removeSQLWhitespace(trimmed)
-	for _, marker := range predicateMarkers {
-		if strings.Contains(compact, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func firstSQLWord(text string) (string, string) {
-	trimmed := strings.TrimLeftFunc(text, unicode.IsSpace)
-	end := 0
-	for end < len(trimmed) {
-		r := rune(trimmed[end])
-		if !isWordRune(r) {
-			break
-		}
-		end++
-	}
-	if end == 0 {
-		return "", trimmed
-	}
-	return trimmed[:end], strings.TrimSpace(trimmed[end:])
-}
-
-func startsWithUppercaseSQLKeyword(text string) bool {
-	word, _ := firstSQLWord(text)
-	if word == "" {
+	basic, ok := types.Unalias(value.Type).Underlying().(*types.Basic)
+	if !ok {
 		return false
 	}
-	for _, r := range word {
-		if unicode.IsLetter(r) && !unicode.IsUpper(r) {
-			return false
-		}
-	}
-	return true
+	return basic.Kind() == types.String || basic.Kind() == types.UntypedString
 }
 
-func containsSQLToken(text string, token string) bool {
-	for {
-		word, rest := firstSQLWord(text)
-		if word == "" {
-			return false
-		}
-		if word == token {
-			return true
-		}
-		if rest == "" {
-			return false
-		}
-		text = rest
+func appendDatabaseQueryViolation(violations []string, seen map[token.Pos]struct{}, pkg *packages.Package, repoRoot string, position token.Pos) []string {
+	if _, duplicate := seen[position]; duplicate {
+		return violations
 	}
+	seen[position] = struct{}{}
+	sourcePosition := testharness.SourcePosition(pkg, position)
+	relPath, found := testharness.RepositoryRelativePath(repoRoot, sourcePosition.Filename)
+	if !found {
+		relPath = sourcePosition.Filename
+	}
+	return append(violations, relPath+":"+sourcePosition.String()+": constant query text bypasses generated query seams")
 }
 
-func startsWithIdentifier(text string) bool {
-	if text == "" {
-		return false
+func appendRawSQLConstantViolation(violations []string, seen map[token.Pos]struct{}, pkg *packages.Package, repoRoot string, position token.Pos) []string {
+	if _, duplicate := seen[position]; duplicate {
+		return violations
 	}
-	r := rune(text[0])
-	return r == '_' || unicode.IsLetter(r)
+	seen[position] = struct{}{}
+	sourcePosition := testharness.SourcePosition(pkg, position)
+	relPath, found := testharness.RepositoryRelativePath(repoRoot, sourcePosition.Filename)
+	if !found {
+		relPath = sourcePosition.Filename
+	}
+	return append(violations, relPath+":"+sourcePosition.String()+": raw SQL constant must be declared in a generated query seam")
 }
 
-func isWordRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+func appendDatabaseQuerySinkViolation(violations []string, seen map[token.Pos]struct{}, pkg *packages.Package, repoRoot string, position token.Pos) []string {
+	if _, duplicate := seen[position]; duplicate {
+		return violations
+	}
+	seen[position] = struct{}{}
+	sourcePosition := testharness.SourcePosition(pkg, position)
+	relPath, found := testharness.RepositoryRelativePath(repoRoot, sourcePosition.Filename)
+	if !found {
+		relPath = sourcePosition.Filename
+	}
+	return append(violations, relPath+":"+sourcePosition.String()+": database query call bypasses generated query seams")
 }

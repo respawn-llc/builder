@@ -1,12 +1,9 @@
 import { useEffect, useRef } from "react";
-import { useTranslation } from "react-i18next";
-
 import type { AttentionItem, TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
-import { Island } from "@/ui";
-import { ApprovalBox, InterruptedRunBox, QuestionBox } from "./TaskDetailAttention";
+import { ApprovalBox, InterruptedCurrentNodeBox, QuestionBox } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -58,9 +55,8 @@ export function TaskInbox({
           key={item.id}
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
-          questionSelection={questionSelections.get(item.askID) ?? emptyQuestionSelection(item.askID)}
+          questionSelections={questionSelections}
           taskId={detail.id}
-          transitions={detail.transitions}
         />
       ))}
     </>
@@ -72,9 +68,9 @@ function initialFocusLogContext(focus: TaskDetailInitialFocus): Readonly<Record<
     return { focusAskIDs: focus.askIDs.join(","), focusKind: focus.kind };
   }
   if (focus.kind === "approval") {
-    return { focusKind: focus.kind, focusTaskTransitionID: focus.taskTransitionID };
+    return { focusKind: focus.kind, focusApprovalID: focus.approvalID };
   }
-  return { focusKind: focus.kind, focusRunID: focus.runID };
+  return { focusKind: focus.kind };
 }
 
 function focusedAttentionItemID(
@@ -84,11 +80,14 @@ function focusedAttentionItemID(
   if (initialFocus === undefined) {
     return undefined;
   }
+  if (initialFocus.kind === "dependencies") {
+    return undefined;
+  }
   if (initialFocus.kind === "question") {
     const itemIDByAskID = new Map<string, string>();
     for (const item of attentionItems) {
-      if (item.kind === "question" && !itemIDByAskID.has(item.askID)) {
-        itemIDByAskID.set(item.askID, item.id);
+      if (item.kind === "question" && !itemIDByAskID.has(item.questionID)) {
+        itemIDByAskID.set(item.questionID, item.id);
       }
     }
     return initialFocus.askIDs
@@ -97,11 +96,10 @@ function focusedAttentionItemID(
   }
   if (initialFocus.kind === "approval") {
     return attentionItems.find(
-      (item) => item.kind === "approval" && item.taskTransitionID === initialFocus.taskTransitionID,
+      (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_run" && item.runID === initialFocus.runID)
-    ?.id;
+  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
 }
 
 function InboxItem({
@@ -111,9 +109,8 @@ function InboxItem({
   focusOnMount,
   mutations,
   onQuestionSelectionChange,
-  questionSelection,
+  questionSelections,
   taskId,
-  transitions,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
@@ -121,11 +118,9 @@ function InboxItem({
   focusOnMount: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
-  questionSelection: QuestionSelectionState;
+  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   taskId: string;
-  transitions: TaskDetail["transitions"];
 }>) {
-  const { t } = useTranslation();
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
   const scrolledRef = useRef(false);
 
@@ -147,14 +142,16 @@ function InboxItem({
   }, [focusOnMount]);
 
   if (attention.kind === "question") {
+    const questionSelection =
+      questionSelections.get(attention.questionID) ?? emptyQuestionSelection(attention.questionID);
     return (
       <div ref={focusTargetRef}>
         <QuestionBox
           attention={attention}
+          answerQuestion={mutations.answerQuestion}
           disabled={disabled}
-          mutations={mutations}
           onSelectionStateChange={(selection) => {
-            onQuestionSelectionChange(attention.askID, selection);
+            onQuestionSelectionChange(attention.questionID, selection);
           }}
           selectionState={questionSelection}
           taskId={taskId}
@@ -170,29 +167,13 @@ function InboxItem({
           currentVersion={currentVersion}
           disabled={disabled}
           mutations={mutations}
-          transitions={transitions}
         />
-      </div>
-    );
-  }
-  if (attention.kind === "interrupted_run") {
-    return (
-      <div ref={focusTargetRef}>
-        <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
       </div>
     );
   }
   return (
     <div ref={focusTargetRef}>
-      <Island
-        aria-label={attention.kind || t("task.inbox")}
-        className="grid gap-[var(--space-2)]"
-        level={1}
-        radius="l"
-      >
-        <h3 className="m-0">{attention.kind || t("task.inbox")}</h3>
-        <p className="m-0">{attention.message}</p>
-      </Island>
+      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} />
     </div>
   );
 }

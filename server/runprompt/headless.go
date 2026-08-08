@@ -7,14 +7,18 @@ import (
 	"strings"
 
 	"core/server/launch"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/apicontract"
+	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -38,6 +42,8 @@ type HeadlessBootstrap struct {
 	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
+	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
+	ManagedWorktreeBaseDir string
 }
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
@@ -77,7 +83,11 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if plan.Goal != nil {
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
-	runtimePlan, err := l.prepareRuntime(ctx, plan, progress)
+	agentSteer, err := agentSteerForRunPrompt(req, openingExisting)
+	if err != nil {
+		return nil, err
+	}
+	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer)
 	if err != nil {
 		return nil, err
 	}
@@ -98,13 +108,41 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	}, nil
 }
 
+func agentSteerForRunPrompt(req serverapi.RunPromptRequest, openingExisting bool) (*runtime.AgentSteer, error) {
+	if !openingExisting || req.CallerSessionID == nil {
+		return nil, nil
+	}
+	sourceID, err := runtimeids.ParseSessionID(*req.CallerSessionID)
+	if err != nil {
+		return nil, err
+	}
+	steer, err := runtime.NewAgentSteer(sourceID, req.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return &steer, nil
+}
+
 type headlessRuntimePlan struct {
 	handle     sessionruntime.ExecutionHandle
 	sessionID  string
-	submission chan string
+	submission chan headlessPromptSubmission
 	content    string
 	name       string
 	onActive   func()
+	agentSteer *runtime.AgentSteer
+}
+
+type headlessPromptSubmission struct {
+	prompt string
+	steer  *runtime.AgentSteer
+}
+
+func (p *headlessRuntimePlan) PromptHistoryText(fallback string) string {
+	if p != nil && p.agentSteer != nil && p.agentSteer.Message().Content != nil {
+		return *p.agentSteer.Message().Content
+	}
+	return fallback
 }
 
 func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
@@ -118,27 +156,52 @@ func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
 	return errors.Join(stopErr, p.handle.Close(context.Background()))
 }
 
-func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink) (*headlessRuntimePlan, error) {
+func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink, agentSteer *runtime.AgentSteer) (*headlessRuntimePlan, error) {
 	if l.boot.RuntimeAuthority == nil {
 		return nil, errors.New("headless run prompt requires a session runtime authority")
 	}
 	sessionID := plan.Descriptor.SessionID()
-	workdir := headlessRuntimeWorkdir(plan)
+	executionTarget := clientui.NormalizeSessionExecutionTarget(plan.ExecutionTarget)
+	workdir := executionTarget.EffectiveWorkdir
+	if strings.TrimSpace(workdir) == "" {
+		return nil, fmt.Errorf("headless session %q execution target effective workdir is required", sessionID)
+	}
+	if strings.TrimSpace(executionTarget.WorkspaceRoot) == "" {
+		return nil, fmt.Errorf("headless session %q execution target workspace root is required", sessionID)
+	}
+	executionRoot := executionTarget.WorkspaceRoot
+	var currentWorktreeRoot *string
+	if executionTarget.Worktree != nil && strings.TrimSpace(executionTarget.Worktree.Root) != "" {
+		root := executionTarget.Worktree.Root
+		currentWorktreeRoot = &root
+		executionRoot = root
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(workdir, executionRoot, plan.ProjectWorkspaceBoundary)
+	if err != nil {
+		return nil, err
+	}
+	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
+	if strings.TrimSpace(l.boot.ManagedWorktreeBaseDir) != "" {
+		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(l.boot.ManagedWorktreeBaseDir, currentWorktreeRoot, plan.ManagedWorktreeRoots)
+		if err != nil {
+			return nil, err
+		}
+	}
 	startLogLines := []string{
-		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
+		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, executionTarget.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
 		fmt.Sprintf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig),
 	}
 	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:      plan.ActiveSettings,
-		EnabledTools:  plan.EnabledTools,
-		Workdir:       workdir,
-		Sources:       plan.Source.Sources,
-		Headless:      true,
-		FastMode:      l.boot.FastModeState,
-		StartLogLines: startLogLines,
+		Settings:          plan.ActiveSettings,
+		EnabledTools:      plan.EnabledTools,
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:           plan.Source.Sources,
+		Headless:          true,
+		FastMode:          l.boot.FastModeState,
+		StartLogLines:     startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
@@ -156,37 +219,51 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	prepared := &headlessRuntimePlan{
 		sessionID:  sessionID.String(),
-		submission: make(chan string),
+		submission: make(chan headlessPromptSubmission),
+		agentSteer: agentSteer,
 	}
 	handle, err := l.boot.RuntimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: plan.Descriptor,
 		Runtime:    &runtimePlan,
 		Resource:   sessionruntime.ReplaceAgentResource{},
-		Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 			return RunPromptAskHandler(req)
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			var prompt string
+			var submission headlessPromptSubmission
 			select {
-			case prompt = <-prepared.submission:
+			case submission = <-prepared.submission:
 			case <-runCtx.Done():
 				return context.Cause(runCtx)
 			}
 			return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				var waitHandle *runtime.LiveRunWaitHandle
 				var waitStartErr error
-				assistant, submitErr := engine.SubmitUserMessageWithHooks(engineCtx, prompt, func() {
-					waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
-					if waitStartErr == nil && prepared.onActive != nil {
-						prepared.onActive()
+				submit := func() (llm.Message, error) {
+					onActive := func() {
+						waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
+						if waitStartErr == nil && prepared.onActive != nil {
+							prepared.onActive()
+						}
 					}
-				}, nil)
-				prepared.content = assistant.Content
+					if submission.steer != nil {
+						return engine.SubmitAgentSteerWithHooks(engineCtx, *submission.steer, onActive, nil)
+					}
+					return engine.SubmitUserMessageWithHooks(engineCtx, submission.prompt, onActive, nil)
+				}
+				assistant, submitErr := submit()
+				prepared.content = preservePresentAssistantContent(
+					prepared.content,
+					assistant,
+				)
 				prepared.name = engine.SessionName()
 				if waitHandle != nil {
 					result, waitErr := waitHandle.Wait()
 					if waitErr == nil {
-						prepared.content = result.AssistantMessage.Content
+						prepared.content = preservePresentAssistantContent(
+							prepared.content,
+							result.AssistantMessage,
+						)
 					} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
 						submitErr = waitErr
 					}
@@ -207,18 +284,11 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	return prepared, nil
 }
 
-func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
-	if plan.WorktreeReminder != nil {
-		effectiveCwd := strings.TrimSpace(plan.WorktreeReminder.EffectiveCwd)
-		if effectiveCwd != "" {
-			return effectiveCwd
-		}
-		worktreePath := strings.TrimSpace(plan.WorktreeReminder.WorktreePath)
-		if worktreePath != "" {
-			return worktreePath
-		}
+func preservePresentAssistantContent(current string, message llm.Message) string {
+	if message.Content == nil {
+		return current
 	}
-	return strings.TrimSpace(plan.WorkspaceRoot)
+	return *message.Content
 }
 
 type headlessPromptRuntime struct {
@@ -234,7 +304,7 @@ func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt st
 	}
 	r.plan.onActive = r.publishSessionStarted
 	select {
-	case r.plan.submission <- prompt:
+	case r.plan.submission <- headlessPromptSubmission{prompt: prompt, steer: r.plan.agentSteer}:
 	case <-ctx.Done():
 		return serverapi.RunPromptResponse{}, context.Cause(ctx)
 	}
@@ -262,6 +332,6 @@ func (r *headlessPromptRuntime) publishSessionStarted() {
 	})
 }
 
-func RunPromptAskHandler(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	return askquestion.AskQuestionResponse{}, ErrHeadlessAskUnsupported
+func RunPromptAskHandler(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+	return nil, ErrHeadlessAskUnsupported
 }

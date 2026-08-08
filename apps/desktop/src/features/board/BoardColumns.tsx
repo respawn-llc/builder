@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -22,7 +23,8 @@ import {
   ContextMenuTrigger,
   IconTooltipButton,
   InfiniteListBoundary,
-  MarkdownPlainText,
+  TaskBodyMarkdown,
+  OneLineOverflowRow,
   Spinner,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
@@ -34,6 +36,8 @@ import { boardCardInstanceKey, type BoardCardInstance } from "./BoardCardInstanc
 import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
 import type { KanbanCardVM, KanbanColumnVM, KanbanGroupVM } from "./BoardColumnViewModel";
 import { useBoardCardMotion } from "./BoardCardMotionContext";
+import { BoardDependencyProgressChip } from "./BoardDependencyProgressChip";
+import { useOwnedSidebarRoots } from "@/app-facade";
 
 export type KanbanColumnProps = Readonly<{
   cards: readonly KanbanCardVM[];
@@ -45,6 +49,7 @@ export type KanbanColumnProps = Readonly<{
   initialBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   isFirstActive: boolean;
   isCollapsed?: boolean;
   dropState: BoardColumnDropState;
@@ -62,6 +67,8 @@ export type KanbanColumnProps = Readonly<{
   onLoadMoreCards: () => void;
   onLoadPreviousCards?: (() => void) | undefined;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   pinnedItemKeys?: ReadonlySet<string> | undefined;
 }>;
 
@@ -106,6 +113,7 @@ export function KanbanColumn({
   initialBoundary,
   previousBoundary,
   nextBoundary,
+  replacementBoundary,
   isFirstActive,
   isCollapsed = false,
   dropState,
@@ -123,28 +131,30 @@ export function KanbanColumn({
   onLoadMoreCards,
   onLoadPreviousCards,
   onResumeTask,
+  pendingInterruptTaskIDs = emptyPendingTaskIDs,
+  pendingResumeTaskIDs = emptyPendingTaskIDs,
   pinnedItemKeys,
 }: KanbanColumnProps) {
   const { t } = useTranslation();
-  const headerRef = useRef<HTMLElement | null>(null);
-  const [headerHeight, setHeaderHeight] = useState(0);
+  const chromeRef = useRef<HTMLDivElement | null>(null);
+  const [chromeHeight, setChromeHeight] = useState(0);
   useLayoutEffect(() => {
-    const header = headerRef.current;
-    if (header === null) {
+    const chrome = chromeRef.current;
+    if (chrome === null) {
       return;
     }
     const measure = () => {
-      setHeaderHeight(header.getBoundingClientRect().height);
+      setChromeHeight(chrome.getBoundingClientRect().height);
     };
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(header);
+    observer?.observe(chrome);
     return () => {
       observer?.disconnect();
     };
-  }, [isCollapsed]);
+  }, [isCollapsed, replacementBoundary]);
   const columnStyle: CSSProperties & Readonly<Record<"--board-column-header-height", string>> = {
-    "--board-column-header-height": `${headerHeight.toString()}px`,
+    "--board-column-header-height": `${chromeHeight.toString()}px`,
   };
   const columnClassName = isCollapsed
     ? `island-glass board-column-morph board-column-collapsed board-column-drop-${dropState} flex h-full min-h-0 w-[64px] shrink-0 rounded-[var(--radius-xl)] p-[var(--space-2)] align-top`
@@ -181,25 +191,29 @@ export function KanbanColumn({
         <CollapsedColumnHeader column={column} onExpand={onExpandColumn} />
       ) : (
         <>
-          <header
-            className="pointer-events-none absolute top-0 right-0 left-0 z-10 flex items-start justify-between gap-[var(--space-2)] px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)]"
-            ref={headerRef}
-          >
-            <div>
-              <h2 className="m-0 text-[1rem]">{column.name}</h2>
-              {column.assigneeRole.length > 0 ? (
-                <p className="m-0 font-mono text-sm text-[var(--color-muted)]">{column.assigneeRole}</p>
-              ) : null}
-            </div>
-            <Badge
-              title={t("board.taskCount", { count: column.taskCount })}
-              tone={isFirstActive ? "info" : "neutral"}
-            >
-              <span data-testid={`kanban-column-task-count-${column.id}`}>
-                {t("board.taskCount", { count: column.taskCount })}
-              </span>
-            </Badge>
-          </header>
+          <div className="pointer-events-none absolute top-0 right-0 left-0 z-10" ref={chromeRef}>
+            <header className="pointer-events-none flex items-start justify-between gap-[var(--space-2)] px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)]">
+              <div>
+                <h2 className="m-0 text-[1rem]">{column.name}</h2>
+                {column.assigneeRole.length > 0 ? (
+                  <p className="m-0 font-mono text-sm text-[var(--color-muted)]">{column.assigneeRole}</p>
+                ) : null}
+              </div>
+              <Badge
+                title={t("board.taskCount", { count: column.taskCount })}
+                tone={isFirstActive ? "info" : "neutral"}
+              >
+                <span data-testid={`kanban-column-task-count-${column.id}`}>
+                  {t("board.taskCount", { count: column.taskCount })}
+                </span>
+              </Badge>
+            </header>
+            {replacementBoundary === undefined ? null : (
+              <div className="pointer-events-auto px-[var(--space-3)] pb-[var(--space-2)]">
+                <InfiniteListBoundary direction="replacement" state={replacementBoundary} />
+              </div>
+            )}
+          </div>
           <VirtualizedInfiniteList
             ariaLabel={column.name}
             className="board-column-scroll absolute inset-0 min-h-0 overflow-y-auto px-[var(--space-3)] hide-scrollbar"
@@ -217,7 +231,7 @@ export function KanbanColumn({
             onLoadMore={onLoadMoreCards}
             onLoadPrevious={onLoadPreviousCards}
             onScrollElementChange={scrollportRef}
-            paddingStart={headerHeight}
+            paddingStart={chromeHeight}
             pinnedItemKeys={pinnedItemKeys}
             previousBoundary={visiblePreviousBoundary}
             renderItem={(card, cardIndex) => {
@@ -235,6 +249,8 @@ export function KanbanColumn({
                   onDeleteTask={onDeleteTask}
                   onInterruptTask={onInterruptTask}
                   onResumeTask={onResumeTask}
+                  pendingInterrupt={pendingInterruptTaskIDs.has(card.id)}
+                  pendingResume={pendingResumeTaskIDs.has(card.id)}
                 />
               );
             }}
@@ -246,6 +262,8 @@ export function KanbanColumn({
     </section>
   );
 }
+
+const emptyPendingTaskIDs: ReadonlySet<string> = new Set();
 
 function CollapsedColumnHeader({
   column,
@@ -319,6 +337,8 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask,
   onInterruptTask,
   onResumeTask,
+  pendingInterrupt,
+  pendingResume,
 }: Readonly<{
   card: KanbanCardVM;
   cardIndex: number;
@@ -331,6 +351,8 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask: (taskID: string) => void;
   onInterruptTask: (taskID: string) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterrupt: boolean;
+  pendingResume: boolean;
 }>) {
   const { t } = useTranslation();
   const { cardClassName, cardStyle, registerCard: registerMotionCard } = useBoardCardMotion();
@@ -342,12 +364,22 @@ const TaskCard = memo(function TaskCard({
     },
     [instanceColumnID, instanceTaskID, registerMotionCard],
   );
-  const canDrag = !dragDisabled && card.statusKind !== "canceled";
+  const canDrag = !dragDisabled;
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
   const availableActions = taskCardActionAvailability(card);
+  const labelItems = useMemo(
+    () =>
+      card.labels.map((label) => ({
+        content: <Badge tone="neutral">{label.name}</Badge>,
+        id: label.id,
+      })),
+    [card.labels],
+  );
   const hasFooter =
     card.statusKind === "running" ||
     card.workspaceChipLabel !== null ||
+    card.dependencyProgress !== null ||
+    card.labels.length > 0 ||
     availableActions.canInterrupt ||
     availableActions.canResume;
   const dragPayload = {
@@ -355,7 +387,6 @@ const TaskCard = memo(function TaskCard({
     canStart: card.actions.canStart,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.statusKind,
-    manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
   };
   return (
     <ContextMenu>
@@ -418,25 +449,34 @@ const TaskCard = memo(function TaskCard({
           </AdaptiveLineClamp>
           {hasFooter ? (
             <div
-              className="task-card-footer flex items-center justify-between gap-[var(--space-3)]"
+              className="task-card-footer flex min-w-0 items-center justify-between gap-[var(--space-3)]"
               data-testid="task-card-footer"
             >
               <div
-                className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-2)] text-xs text-[var(--color-muted)]"
+                className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] overflow-hidden text-xs text-[var(--color-muted)]"
                 data-testid="task-card-chips"
               >
                 {card.statusKind === "running" ? (
                   <Spinner
-                    className="h-[20px] w-[20px]"
+                    className="h-[20px] w-[20px] shrink-0"
                     strokeWidth={1.8}
                     testID="task-card-active-run-spinner"
                   />
                 ) : null}
                 {card.workspaceChipLabel !== null ? (
-                  <span className="inline-flex items-center" data-testid="task-card-chip-slot">
+                  <span className="inline-flex shrink-0 items-center" data-testid="task-card-chip-slot">
                     <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
                   </span>
                 ) : null}
+                <TaskCardDependencyProgress card={card} />
+                {labelItems.length === 0 ? null : (
+                  <OneLineOverflowRow
+                    ariaLabel={t("labels.filter")}
+                    className="min-w-0 flex-1"
+                    items={labelItems}
+                    renderOverflow={(hiddenCount) => <Badge tone="neutral">+{hiddenCount}</Badge>}
+                  />
+                )}
               </div>
               <TaskCardActions
                 actionsDisabled={actionsDisabled}
@@ -444,6 +484,8 @@ const TaskCard = memo(function TaskCard({
                 cardID={card.id}
                 onInterrupt={onInterruptTask}
                 onResume={onResumeTask}
+                pendingInterrupt={pendingInterrupt}
+                pendingResume={pendingResume}
               />
             </div>
           ) : null}
@@ -452,7 +494,7 @@ const TaskCard = memo(function TaskCard({
       <ContextMenuContent>
         <ContextMenuItem
           className="text-[var(--color-error)]"
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || !card.actions.canDelete}
           onSelect={() => {
             onDeleteTask(card.id);
           }}
@@ -463,6 +505,26 @@ const TaskCard = memo(function TaskCard({
     </ContextMenu>
   );
 });
+
+function TaskCardDependencyProgress({ card }: Readonly<{ card: KanbanCardVM }>): ReactNode {
+  const { open } = useOwnedSidebarRoots();
+  if (card.dependencyProgress === null) {
+    return null;
+  }
+  return (
+    <BoardDependencyProgressChip
+      onActivate={() => {
+        open({
+          kind: "taskDetail",
+          initialFocus: { kind: "dependencies" },
+          mode: "overlay",
+          taskID: card.id,
+        });
+      }}
+      progress={card.dependencyProgress}
+    />
+  );
+}
 
 const TaskCardPreview = memo(function TaskCardPreview({
   instance,
@@ -477,7 +539,7 @@ const TaskCardPreview = memo(function TaskCardPreview({
   }
   return (
     <>
-      <MarkdownPlainText value={preview.markdown} />
+      <TaskBodyMarkdown value={preview.markdown} />
       {preview.truncated ? (
         <span aria-hidden="true" data-testid="task-card-preview-ellipsis">
           …
@@ -535,12 +597,16 @@ function TaskCardActions({
   cardID,
   onInterrupt,
   onResume,
+  pendingInterrupt,
+  pendingResume,
 }: Readonly<{
   actionsDisabled: boolean;
   availableActions: TaskCardActionAvailability;
   cardID: string;
   onInterrupt: (taskID: string) => void;
   onResume: (taskID: string) => void;
+  pendingInterrupt: boolean;
+  pendingResume: boolean;
 }>) {
   const { t } = useTranslation();
   if (!availableActions.canInterrupt && !availableActions.canResume) {
@@ -555,7 +621,7 @@ function TaskCardActions({
             event.stopPropagation();
             onResume(cardID);
           }}
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || pendingResume}
           size="icon-sm"
           variant="primary-outline"
         >
@@ -569,7 +635,7 @@ function TaskCardActions({
             event.stopPropagation();
             onInterrupt(cardID);
           }}
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || pendingInterrupt}
           size="icon-sm"
           variant="danger"
         >
@@ -593,7 +659,7 @@ type TaskCardActionAvailability = Readonly<{
 
 function taskCardActionAvailability(card: KanbanCardVM): TaskCardActionAvailability {
   return {
-    canInterrupt: card.actions.canInterrupt && !isWaitingForAnswer(card.statusKind),
+    canInterrupt: card.actions.canInterrupt,
     canResume: card.actions.canResume,
   };
 }

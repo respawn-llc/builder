@@ -22,10 +22,33 @@ kent run --continue <session-id> "<follow-up>"
 Control an active shared run from another shell or agent:
 
 ```bash
-kent run steer <session-id> "adjust the next step" # inject a user message into a running agent
+kent run steer <session-id> "adjust the next step" # steer a running agent
 kent run stop <session-id> # gracefully interrupt the run
 kent run wait <session-id> # wait for the model's turn to end
+kent run watch <session-id> # report the next question or terminal outcome
 ```
+
+When a human invokes `kent run steer`, the running Session receives a user message. When another Kent Session invokes it, the running Session receives a developer-role agent steer that identifies the source Session and includes the command form for replying.
+
+Headless `kent run` Sessions cannot create Questions. To inspect or answer a pending Question from an interactive or Workflow Session:
+
+```bash
+kent question --session <session-id>
+kent question answer --session <session-id> --option 1 --commentary "Additional context"
+kent questions --task KENT-335
+kent questions answer --task KENT-335 --commentary "Freeform answer"
+```
+
+Workflow Tasks can be observed without polling:
+
+```bash
+kent task wait KENT-335
+kent task watch KENT-335
+```
+
+These commands are one-shot server-side waits. `wait` ignores Questions but reports the next interruption, error, or terminal completion; `watch` reports the next Question, interruption, error, or terminal completion. A reported Question includes a runnable `kent question answer` command.
+
+Use exactly one of `--session` or `--task`. Task short IDs resolve in the current workspace's Project unless `--project` selects another Project. A Task with pending Questions in several Sessions is ambiguous; Kent answers nothing and lists each candidate Session name and ID.
 
 :::tip
 `kent run` needs a server connection to keep long-running shells and agents properly orchestrated. If you want to script kent runs, make sure the [Server](../server/) is running.
@@ -102,8 +125,41 @@ This is needed to enable functionality related to project management and allows 
 - `kent project` prints the project id for the bound workspace at `path` or `cwd`. Use to learn project IDs.
 - `kent attach <path>` attaches another workspace at [path] to the project already bound to `cwd`.
 - `kent attach --project <project-id> [path]` attaches using the ID.
+- `kent detach --project <project-id> [path]` removes one workspace binding from that project. The path defaults to the current directory; use `--workspace <workspace-id>` when the saved path is inaccessible or missing.
+- `kent project default --project <project-id> [path]` changes the project's default workspace. It accepts the same path or workspace-ID selector and applies immediately.
 - `kent rebind <session-id> <new-path>` retargets a session while keeping its source project and attaches an unbound target workspace to that project.
 - `kent rebind --project <project-id> <session-id> <new-path>` moves a non-workflow session to another project and attaches an unbound target workspace.
+
+Detach and default-workspace selection require an explicit project ID. Path selectors are converted to absolute server paths before the request. A shared path can be detached from one project without changing its binding in another project.
+
+Use `--json` for automation. Successful detach returns `status: "ok"` with `project_id` and `workspace_id`; successful default selection returns the updated project at `result.project`. Operational failures return one `status: "error"` object with a stable error code. Detach blockers include bounded guidance; a default-workspace blocker directs you to choose another attached workspace with `kent project default`.
+
+Detach error codes are `project_not_found`, `workspace_not_attached`, `workspace_detach_blocked`, `workspace_detach_conflict`, and `request_failed`. Default-workspace selection uses `project_not_found`, `workspace_not_attached`, and `request_failed`. JSON omits absent results, error identities, blocker counts, and retryability fields.
+
+Detach blockers use these recovery actions:
+
+- `default_workspace`: choose another attached workspace with `kent project default`, then retry.
+- `active_sessions`: stop active runs or rebind their Sessions, then retry.
+- `non_terminal_tasks`: move editable Backlog Tasks to another source workspace, or complete, manually move, or delete dependent Tasks, then retry.
+- `executable_current_nodes`: stop execution and move, complete, or delete affected Tasks until no executable Current Node uses the workspace, then retry.
+- `managed_owned_worktrees`: delete dependent worktrees or their quiescent owning Tasks, then retry.
+- `missing_history_snapshot`: re-save the editable Task's source workspace; keep the binding if its history cannot be edited.
+
+### Project deletion
+
+Delete a Project by its canonical Project ID:
+
+```bash
+kent project delete <project-id> --confirm
+```
+
+Project deletion is non-interactive and accepts only the canonical Project ID. The command checks for unfinished Tasks before checking `--confirm`. An agent-shell invocation is human-only when the Project contains any non-terminal Task, including a Backlog Task; it reports the Project ID and does not request deletion. Task state may change before deletion is processed, and the server's deletion blockers remain authoritative.
+
+Without `--confirm`, the command makes no deletion request. Use `--json` for automation; it emits one `status` envelope on `stdout`, with the canonical Project ID in `result.project_id` on success or `error.project_id` on operational failure. Blocked deletion preserves server blocker codes, messages, order, and positive counts. Blockers and other operational failures exit nonzero.
+
+Stable deletion error codes are `confirmation_required`, `human_only_unfinished_work`, `project_not_found`, `project_delete_blocked`, and `request_failed`.
+
+Project deletion never deletes or moves workspace files.
 
 ## Output Modes
 

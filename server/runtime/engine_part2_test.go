@@ -8,8 +8,10 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +35,7 @@ func TestSystemPromptSnapshotUsesStoredWorkspaceRootWhenTranscriptWorkdirIsNeste
 
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -182,7 +184,7 @@ func TestSystemPromptSnapshotUsesTranscriptWorkingDirForRetargetedSession(t *tes
 
 	store := mustCreateTestSession(t, canonical)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -197,6 +199,42 @@ func TestSystemPromptSnapshotUsesTranscriptWorkingDirForRetargetedSession(t *tes
 	if got := client.calls[0].SystemPrompt; got != "worktree system" {
 		t.Fatalf("system prompt = %q, want worktree system", got)
 	}
+}
+
+func TestEnvironmentContextUsesTranscriptWorkingDirWithoutWorktreeReminder(t *testing.T) {
+	workspace := t.TempDir()
+	worktree := t.TempDir()
+	store := mustCreateTestSession(t, workspace)
+	if store.Meta().WorktreeReminder != nil {
+		t.Fatalf("worktree reminder = %+v, want none", store.Meta().WorktreeReminder)
+	}
+	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
+	eng := mustNewExecTestEngine(t, store, client, Config{
+		Model:                 "gpt-5",
+		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
+		TranscriptWorkingDir:  worktree,
+		AutoCompactTokenLimit: 1_000_000_000,
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	messages := requestMessages(client.calls[0])
+	for _, message := range messages {
+		if message.MessageType == nil ||
+			*message.MessageType != llm.MessageTypeEnvironment ||
+			message.Content == nil {
+			continue
+		}
+		if !strings.Contains(*message.Content, "\nCWD: "+worktree+"\n") {
+			t.Fatalf("environment context = %q, want active runtime CWD %q", *message.Content, worktree)
+		}
+		if strings.Contains(*message.Content, "\nCWD: "+workspace+"\n") {
+			t.Fatalf("environment context leaked persisted workspace CWD %q", workspace)
+		}
+		return
+	}
+	t.Fatalf("environment context missing from request: %+v", messages)
 }
 
 func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
@@ -226,7 +264,11 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok again")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -287,8 +329,11 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("InitializeCreationContext: %v", err)
 	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child: %v", err)
+	}
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, child, client, Config{
@@ -334,11 +379,11 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -369,7 +414,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 		t.Fatalf("reopened locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reopenedEngine := mustNewExecTestEngine(t, reopened, reopenedClient, Config{
@@ -430,8 +475,8 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	store := mustCreateTestSessionAt(t, dir)
 
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -460,16 +505,103 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	}
 }
 
-func TestSetThinkingLevelRejectsInvalidValue(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-		ThinkingLevel: "high",
+func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{caps: llm.ProviderCapabilities{
+			ProviderID:           "azure-openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		}},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{
+			Model:         "gpt-5.3-codex",
+			ThinkingLevel: "high",
+			Reviewer: ReviewerConfig{
+				Frequency:     "off",
+				Model:         "gpt-5",
+				ThinkingLevel: "low",
+			},
+		},
+	)
+
+	t.Run("invalid thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel("unsupported"); err == nil {
+			t.Fatal("expected invalid thinking level error")
+		}
+		if got := eng.ThinkingLevel(); got != "high" {
+			t.Fatalf("thinking level after invalid set = %q, want high", got)
+		}
 	})
-	if err := eng.SetThinkingLevel("unsupported"); err == nil {
-		t.Fatal("expected invalid thinking level error")
+
+	t.Run("unsupported fast mode", func(t *testing.T) {
+		changed, err := eng.SetFastModeEnabled(true)
+		if err == nil {
+			t.Fatal("expected fast mode unsupported error")
+		}
+		if changed {
+			t.Fatal("did not expect changed=true for unsupported fast mode")
+		}
+		if eng.FastModeEnabled() {
+			t.Fatal("did not expect fast mode enabled after failure")
+		}
+	})
+
+	t.Run("missing reviewer client", func(t *testing.T) {
+		changed, mode, err := eng.SetReviewerEnabled(true)
+		if err == nil {
+			t.Fatal("expected enable reviewer error when reviewer client is missing")
+		}
+		if changed {
+			t.Fatal("did not expect changed=true when reviewer client is missing")
+		}
+		if mode != "off" {
+			t.Fatalf("expected mode off on failure, got %q", mode)
+		}
+	})
+}
+
+func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{caps: llm.ProviderCapabilities{
+			ProviderID:           "azure-openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   false,
+		}},
+		tools.NewRegistry(),
+		Config{
+			Model:         "gpt-5.3-codex",
+			FastModeState: NewFastModeState(true),
+		},
+	)
+
+	if eng.FastModeAvailable() {
+		t.Fatal("expected fast mode to be unavailable for non-OpenAI provider")
 	}
-	if got := eng.ThinkingLevel(); got != "high" {
-		t.Fatalf("thinking level after invalid set = %q, want high", got)
+	if eng.FastModeEnabled() {
+		t.Fatal("expected effective fast mode to be disabled when provider is unavailable")
+	}
+}
+
+func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
+	store := mustCreateTestSession(t)
+	capabilityErr := errors.New("provider capability lookup failed")
+
+	_, err := New(
+		store,
+		mustMaterializeTestEventLog(t, store),
+		&fakeClient{capsErr: capabilityErr},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	if !errors.Is(err, capabilityErr) {
+		t.Fatalf("New error = %v, want provider capability error", err)
 	}
 }
 
@@ -491,7 +623,7 @@ func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {
 		t.Fatalf("mark locked: %v", err)
 	}
 
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		Model:         "gpt-5.4",
 		ThinkingLevel: "high",
@@ -516,8 +648,8 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 
 	client := &fakeClient{
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 		},
 		caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true},
 	}
@@ -553,23 +685,6 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 	}
 }
 
-func TestSetFastModeRejectsUnsupportedProvider(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "azure-openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: false}}, Config{
-		Model: "gpt-5.3-codex",
-	})
-	changed, err := eng.SetFastModeEnabled(true)
-	if err == nil {
-		t.Fatal("expected fast mode unsupported error")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true for unsupported fast mode")
-	}
-	if eng.FastModeEnabled() {
-		t.Fatal("did not expect fast mode enabled after failure")
-	}
-}
-
 func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	store := mustCreateTestSession(t)
 	cfg := Config{Model: "gpt-5.3-codex"}
@@ -586,50 +701,6 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	restarted := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, cfg)
 	if restarted.FastModeEnabled() {
 		t.Fatal("expected fast mode disabled after restart")
-	}
-}
-
-func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model: "gpt-5.3-codex",
-	})
-	blocker := mustBlockTestEventLogAppends(t, store)
-
-	changed, _, err := eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
-		if changed {
-			return "Fast mode enabled"
-		}
-		return "Fast mode already enabled"
-	})
-	if err == nil {
-		t.Fatal("enable fast mode did not surface the event-log append failure")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true when committed feedback append failed")
-	}
-	if eng.FastModeEnabled() {
-		t.Fatal("fast mode mutated after committed feedback append failure")
-	}
-
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
-	}
-	changed, _, err = eng.SetFastModeEnabledWithCommittedFeedback(true, func(changed bool) string {
-		if changed {
-			return "Fast mode enabled"
-		}
-		return "Fast mode already enabled"
-	})
-	if err != nil {
-		t.Fatalf("retry enable fast mode: %v", err)
-	}
-	if !changed || !eng.FastModeEnabled() {
-		t.Fatalf("expected retry to apply original change, changed=%v enabled=%v", changed, eng.FastModeEnabled())
-	}
-	snapshot := eng.ChatSnapshot()
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "Fast mode enabled" {
-		t.Fatalf("expected original success feedback after retry, got %+v", snapshot.Entries)
 	}
 }
 
@@ -742,51 +813,6 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	blocker := mustBlockTestEventLogAppends(t, store)
-
-	changed, enabled, _, err := eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
-		if !enabled && changed {
-			return "Questions disabled"
-		}
-		return "Questions already disabled"
-	})
-	if err == nil {
-		t.Fatal("disable questions did not surface the event-log append failure")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true when committed feedback append failed")
-	}
-	if !enabled {
-		t.Fatal("did not expect returned questions state to change after committed feedback append failure")
-	}
-	if !eng.QuestionsEnabled() {
-		t.Fatal("questions setting mutated after committed feedback append failure")
-	}
-
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
-	}
-	changed, enabled, _, err = eng.SetQuestionsEnabledWithCommittedFeedback(false, func(enabled bool, changed bool) string {
-		if !enabled && changed {
-			return "Questions disabled"
-		}
-		return "Questions already disabled"
-	})
-	if err != nil {
-		t.Fatalf("retry disable questions: %v", err)
-	}
-	if !changed || enabled || eng.QuestionsEnabled() {
-		t.Fatalf("expected retry to apply original questions change, changed=%v enabled=%v current=%v", changed, enabled, eng.QuestionsEnabled())
-	}
-	snapshot := eng.ChatSnapshot()
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "Questions disabled" {
-		t.Fatalf("expected original questions success feedback after retry, got %+v", snapshot.Entries)
-	}
-}
-
 func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurrentRun(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
@@ -794,20 +820,20 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 				Usage:     llm.Usage{InputTokens: 390000, OutputTokens: 1000, WindowTokens: 400000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{WindowTokens: 400000},
 			},
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -873,85 +899,6 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 	restarted := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	if got := restarted.ReviewerFrequency(); got != "off" {
 		t.Fatalf("reviewer frequency after restart = %q, want off", got)
-	}
-}
-
-func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
-	cfg := Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "off",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        &fakeClient{},
-		},
-	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
-	blocker := mustBlockTestEventLogAppends(t, store)
-
-	changed, mode, _, err := eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
-		if enabled && changed {
-			return "Supervisor invocation enabled"
-		}
-		return "Supervisor invocation already enabled"
-	})
-	if err == nil {
-		t.Fatal("enable reviewer did not surface the event-log append failure")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true when committed feedback append failed")
-	}
-	if mode != "edits" {
-		t.Fatalf("expected planned retry mode edits, got %q", mode)
-	}
-	if got := eng.ReviewerFrequency(); got != "off" {
-		t.Fatalf("reviewer frequency mutated after committed feedback append failure: %q", got)
-	}
-
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
-	}
-	changed, mode, _, err = eng.SetReviewerEnabledWithCommittedFeedback(true, func(enabled bool, mode string, changed bool) string {
-		if enabled && changed {
-			return "Supervisor invocation enabled"
-		}
-		return "Supervisor invocation already enabled"
-	})
-	if err != nil {
-		t.Fatalf("retry enable reviewer: %v", err)
-	}
-	if !changed || mode != "edits" || eng.ReviewerFrequency() != "edits" {
-		t.Fatalf("expected retry to apply original reviewer change, changed=%v mode=%q freq=%q", changed, mode, eng.ReviewerFrequency())
-	}
-	snapshot := eng.ChatSnapshot()
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "Supervisor invocation enabled" {
-		t.Fatalf("expected original reviewer success feedback after retry, got %+v", snapshot.Entries)
-	}
-}
-
-func TestSetReviewerEnabledFailsWhenReviewerClientMissing(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
-	eng, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "off",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        nil,
-		},
-	})
-	changed, mode, err := eng.SetReviewerEnabled(true)
-	if err == nil {
-		t.Fatal("expected enable reviewer error when reviewer client is missing")
-	}
-	if changed {
-		t.Fatal("did not expect changed=true when reviewer client is missing")
-	}
-	if mode != "off" {
-		t.Fatalf("expected mode off on failure, got %q", mode)
 	}
 }
 

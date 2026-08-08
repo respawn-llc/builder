@@ -26,7 +26,7 @@ type SessionTransition struct {
 	Action                       SessionTransitionAction `json:"action"`
 	InitialPrompt                string                  `json:"initial_prompt,omitempty"`
 	InitialPromptHistoryRecorded bool                    `json:"initial_prompt_history_recorded,omitempty"`
-	InitialInput                 string                  `json:"initial_input,omitempty"`
+	InitialInput                 *string                 `json:"initial_input,omitempty"`
 	TargetSessionID              string                  `json:"target_session_id,omitempty"`
 	ForkRollbackTargetID         string                  `json:"fork_rollback_target_id,omitempty"`
 	PreviousSessionID            *runtimeids.SessionID   `json:"previous_session_id,omitempty"`

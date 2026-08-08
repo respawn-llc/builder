@@ -99,7 +99,15 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 	authoritative.UpdatedAt = authoritative.UpdatedAt.Add(time.Second)
 	if err := persistence.ObservePersistedStore(context.Background(), session.PersistedStoreSnapshot{
 		SessionDir: selected.Dir(),
-		Meta:       authoritative,
+		Meta: session.Meta{
+			SessionID:          authoritative.SessionID,
+			Category:           authoritative.Category,
+			Name:               authoritative.Name,
+			WorkspaceRoot:      authoritative.WorkspaceRoot,
+			WorkspaceContainer: authoritative.WorkspaceContainer,
+			CreatedAt:          authoritative.CreatedAt,
+			UpdatedAt:          authoritative.UpdatedAt,
+		},
 	}); err != nil {
 		t.Fatalf("record authoritative session metadata: %v", err)
 	}

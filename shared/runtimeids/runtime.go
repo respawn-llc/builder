@@ -19,6 +19,17 @@ func NewExecutionScopeID() ExecutionScopeID {
 	return ExecutionScopeID{uuidv4Value: newUUIDv4Value()}
 }
 
+type ReasoningTraceID struct{ uuidv4Value }
+
+func ParseReasoningTraceID(raw string) (ReasoningTraceID, error) {
+	id, err := parseUUIDv4Value(raw, "reasoning_trace_id")
+	return ReasoningTraceID{uuidv4Value: id}, err
+}
+
+func NewReasoningTraceID() ReasoningTraceID {
+	return ReasoningTraceID{uuidv4Value: newUUIDv4Value()}
+}
+
 type ResourceGeneration uint64
 
 func (g ResourceGeneration) Validate() error {

@@ -30,6 +30,7 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   board: SelectedWorkflowBoard;
   displayedCards: readonly KanbanCardVM[] | undefined;
   column: BoardColumn;
+  dragDisabled: boolean;
   dropState: BoardColumnDropState;
   isCollapsed: boolean;
   isFirstActive: boolean;
@@ -37,16 +38,16 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onInterruptTask: (taskID: string) => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
   onRegisterColumn: (columnID: string, element: HTMLElement | null) => void;
   onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>;
 
@@ -58,6 +59,7 @@ type BoardColumnPresentation = Readonly<{
   isLoadingPreviousCards: boolean;
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  replacementBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>;
 
 const inactivePresentation: BoardColumnPresentation = {
@@ -68,6 +70,7 @@ const inactivePresentation: BoardColumnPresentation = {
   isLoadingPreviousCards: false,
   nextBoundary: undefined,
   previousBoundary: undefined,
+  replacementBoundary: undefined,
 };
 
 export function BoardColumnMotionBoundary({
@@ -76,6 +79,7 @@ export function BoardColumnMotionBoundary({
   board,
   displayedCards,
   column,
+  dragDisabled,
   dropState,
   isCollapsed,
   isFirstActive,
@@ -83,16 +87,16 @@ export function BoardColumnMotionBoundary({
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
-  onCardsLoadError,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
-  onInterruptedRunObserved,
   onInterruptTask,
   onReportColumnSnapshot,
   onRegisterColumn,
   onRegisterColumnScrollport,
   onResumeTask,
+  pendingInterruptTaskIDs,
+  pendingResumeTaskIDs,
   scrollportRef,
 }: BoardColumnMotionBoundaryProps) {
   const { t } = useTranslation();
@@ -130,6 +134,7 @@ export function BoardColumnMotionBoundary({
       onLoadMore: () => undefined,
       onLoadPrevious: () => undefined,
       previousBoundary: undefined,
+      replacementBoundary: undefined,
     }),
     [t],
   );
@@ -169,10 +174,8 @@ export function BoardColumnMotionBoundary({
         <BoardColumnDataOwner
           board={board}
           column={column}
-          onCardsLoadError={onCardsLoadError}
           onDataViewChange={setDataView}
           onDataViewRelease={releaseDataView}
-          onInterruptedRunObserved={onInterruptedRunObserved}
           onReportColumnSnapshot={onReportColumnSnapshot}
         />
       ) : null}
@@ -181,7 +184,7 @@ export function BoardColumnMotionBoundary({
         cards={renderedCards}
         column={columnVM}
         columnRef={setRegisteredColumnElement}
-        dragDisabled={actionsDisabled || !board.selectedWorkflow.validForTaskCreation}
+        dragDisabled={dragDisabled}
         scrollportRef={setRegisteredScrollElement}
         dropState={dropState}
         hasMoreCards={presentation.hasMoreCards}
@@ -206,8 +209,11 @@ export function BoardColumnMotionBoundary({
         onLoadMoreCards={activeDataView.onLoadMore}
         onLoadPreviousCards={activeDataView.onLoadPrevious}
         onResumeTask={stableOnResumeTask}
+        pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+        pendingResumeTaskIDs={pendingResumeTaskIDs}
         pinnedItemKeys={pinnedItemKeys}
         previousBoundary={presentation.previousBoundary}
+        replacementBoundary={presentation.replacementBoundary}
       />
     </>
   );
@@ -243,6 +249,7 @@ function presentedDataView(active: boolean, view: BoardColumnDataView): BoardCol
     isLoadingPreviousCards: view.isFetchingPreviousPage,
     nextBoundary: view.nextBoundary,
     previousBoundary: view.previousBoundary,
+    replacementBoundary: view.replacementBoundary,
   };
 }
 

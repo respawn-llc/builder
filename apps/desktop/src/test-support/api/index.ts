@@ -2,6 +2,7 @@ import {
   ConnectionStore,
   type JsonValue,
   type RpcCallOptions,
+  type RpcDedicatedCallOptions,
   type RpcEventHandler,
   type RpcSubscription,
   type RpcTransport,
@@ -17,6 +18,12 @@ export type FakeRoute = Readonly<{
 export class FakeRpcTransport implements RpcTransport {
   readonly connection = new ConnectionStore();
   readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
+  readonly dedicatedCalls: Readonly<{
+    method: string;
+    params: JsonValue;
+    options?: RpcDedicatedCallOptions;
+  }>[] = [];
+  readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
   #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
@@ -30,6 +37,19 @@ export class FakeRpcTransport implements RpcTransport {
 
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     this.calls.push(options === undefined ? { method, params } : { method, params, options });
+    return this.#dispatch(method, params);
+  }
+
+  async callDedicated(
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown> {
+    this.dedicatedCalls.push(options === undefined ? { method, params } : { method, params, options });
+    return this.#dispatch(method, params);
+  }
+
+  #dispatch(method: string, params: JsonValue): unknown {
     const route = this.#routes.get(method);
     if (route === undefined) {
       throw new Error(`Missing fake route: ${method}`);
@@ -54,6 +74,7 @@ export class FakeRpcTransport implements RpcTransport {
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     const entry = { method, params, handler };
+    this.subscriptionStarts.push({ method, params });
     this.#subscribers.push(entry);
     return {
       close: () => {
@@ -66,5 +87,29 @@ export class FakeRpcTransport implements RpcTransport {
     for (const subscriber of [...this.#subscribers]) {
       subscriber.handler.onEvent(method, params);
     }
+  }
+
+  open(subscriptionMethod: string): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onOpen?.();
+    }
+  }
+
+  complete(subscriptionMethod: string, code: number, message: string): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onComplete(code, message);
+    }
+  }
+
+  fail(subscriptionMethod: string, error: Error): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onError(error);
+    }
+  }
+
+  #subscribersFor(
+    subscriptionMethod: string,
+  ): readonly Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] {
+    return this.#subscribers.filter((subscriber) => subscriber.method === subscriptionMethod);
   }
 }

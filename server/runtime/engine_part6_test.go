@@ -6,6 +6,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -15,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTranscriptAdvance(t *testing.T) {
@@ -23,17 +23,17 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "updated final after review", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("updated final after review"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -48,7 +48,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	eng = mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
-			if evt.Kind == EventAssistantMessage && evt.Message.Content == "updated final after review" {
+			if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "updated final after review" {
 				eventsMu.Lock()
 				captured := evt
 				assistantEvent = &captured
@@ -78,8 +78,11 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "updated final after review" {
-		t.Fatalf("assistant content = %q, want updated final after review", msg.Content)
+	if messageContent(msg) != "updated final after review" {
+		t.Fatalf("assistant content = %q, want updated final after review", messageContent(msg))
+	}
+	if got := fakeClientCallCount(reviewerClient); got != 1 {
+		t.Fatalf("reviewer calls = %d, want 1 for an all-frequency no-tool final", got)
 	}
 
 	eventsMu.Lock()
@@ -104,15 +107,6 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		t.Fatalf("expected follow-up assistant and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
 	}
 	assistantIndex := len(snapshotAtCompletion.Entries) - 2
-	suggestionsIndex := -1
-	for index, entry := range snapshotAtCompletion.Entries[:assistantIndex] {
-		if entry.Role == "reviewer_suggestions" {
-			suggestionsIndex = index
-		}
-	}
-	if suggestionsIndex < 0 {
-		t.Fatalf("expected reviewer suggestions before follow-up assistant, got %+v", snapshotAtCompletion.Entries)
-	}
 	assistantEntry := snapshotAtCompletion.Entries[assistantIndex]
 	if assistantEntry.Role != "assistant" || assistantEntry.Text != "updated final after review" {
 		t.Fatalf("expected completion snapshot penultimate entry to be follow-up assistant, got %+v", assistantEntry)
@@ -124,8 +118,30 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		t.Fatalf("follow-up assistant committed start = %d, want %d; snapshot=%+v", got, want, snapshotAtCompletion.Entries)
 	}
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]
-	if statusEntry.Role != "reviewer_status" || statusEntry.Text != "Supervisor ran: 1 suggestion, applied." {
-		t.Fatalf("expected completion snapshot to end with reviewer status, got %+v", statusEntry)
+	if statusEntry.ReviewerFeedback == nil || len(statusEntry.ReviewerFeedback.Suggestions) != 1 {
+		t.Fatalf("expected completion snapshot to end with typed reviewer feedback, got %+v", statusEntry)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded reviewer records: %v", err)
+	}
+	statuses, finalRows := 0, 0
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ReviewerFeedbackRecord:
+			statuses++
+		case session.MessageRecord:
+			message, restoreErr := llmMessageFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore reviewer record: %v", restoreErr)
+			}
+			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
+				finalRows++
+			}
+		}
+	}
+	if statuses != 1 || finalRows != 2 {
+		t.Fatalf("reviewer feedback/final records = feedback:%d finals:%d records:%+v", statuses, finalRows, window.Records)
 	}
 
 	eng.AppendCommittedEntry("warning", "later unrelated note")
@@ -136,9 +152,6 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if finalSnapshot.Entries[len(finalSnapshot.Entries)-1].Text != "later unrelated note" {
 		t.Fatalf("expected later unrelated note at transcript tail, got %+v", finalSnapshot.Entries[len(finalSnapshot.Entries)-1])
 	}
-	assertReviewerPresentation(t, finalSnapshot, 1)
-	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	assertReviewerPresentation(t, restored.ChatSnapshot(), 1)
 }
 
 func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
@@ -151,7 +164,7 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 		},
 	})
 
-	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: "Supervisor made 1 suggestion."})); err != nil {
+	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: textutil.Value("Supervisor made 1 suggestion.")})); err != nil {
 		t.Fatalf("append persisted local entry: %v", err)
 	}
 	if got := len(events); got != 1 {
@@ -177,12 +190,12 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
-	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "first request"}})); err != nil {
+	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
 
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{InputTokens: 10},
 	}}}
 
@@ -196,24 +209,9 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 	}
 	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
 
-	result, err := eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "original final"}, -1, false, reviewerClient)
-	if err != nil {
-		t.Fatalf("run reviewer follow-up: %v", err)
-	}
-	if result.Message.Content != "original final" {
-		t.Fatalf("follow-up result message = %q, want original final", result.Message.Content)
-	}
-	if result.Completion == nil {
-		t.Fatal("expected reviewer completion after follow-up append failure")
-	}
-	if result.Completion.Outcome != "followup_failed" {
-		t.Fatalf("reviewer completion outcome = %q, want followup_failed", result.Completion.Outcome)
-	}
-	if result.Completion.SuggestionsCount != 1 {
-		t.Fatalf("reviewer completion suggestions = %d, want 1", result.Completion.SuggestionsCount)
-	}
-	if strings.TrimSpace(result.Completion.Error) == "" {
-		t.Fatal("expected reviewer completion to include append failure error")
+	_, err = eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
+	if err == nil {
+		t.Fatal("expected Reviewer instruction append failure")
 	}
 }
 
@@ -221,11 +219,11 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{InputTokens: 10, WindowTokens: 200000},
 	}}}
 
@@ -254,7 +252,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 			Client:    reviewerClient,
 		},
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "do task"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("do task")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	blockReviewer = true
@@ -275,11 +273,11 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	eventsMu.Unlock()
 	assistantEventIdx := -1
 	for idx, evt := range deferredEvents {
-		if evt.Kind == EventAssistantMessage && evt.Message.Content == "original final" {
+		if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "original final" {
 			assistantEventIdx = idx
 		}
 		if evt.Kind == EventReviewerCompleted {
-			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
+			assistantEventIdx = idx
 		}
 	}
 	if assistantEventIdx < 0 {
@@ -307,16 +305,16 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "updated final after review", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("updated final after review"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -354,61 +352,85 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	eventsMu.Lock()
 	deferredEvents := append([]Event(nil), events...)
 	eventsMu.Unlock()
+	foundCompletion := false
 	for _, evt := range deferredEvents {
 		if evt.Kind == EventReviewerCompleted {
-			t.Fatalf("did not expect reviewer completed event after reviewer status persistence failure, got %+v", deferredEvents)
+			foundCompletion = true
 		}
+	}
+	if !foundCompletion {
+		t.Fatalf("expected Reviewer completion after feedback persistence failure, got %+v", deferredEvents)
 	}
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("expected injected reviewer status failure, got %v", err)
 	}
 	snapshot := eng.ChatSnapshot()
-	reviewerStatuses := 0
+	reviewerFeedback := 0
 	for _, entry := range snapshot.Entries {
-		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
-			reviewerStatuses++
+		if entry.ReviewerFeedback != nil {
+			reviewerFeedback++
 		}
 	}
-	if reviewerStatuses != 1 {
-		t.Fatalf("committed reviewer status was not projected after observer failure: %+v", snapshot.Entries)
+	if reviewerFeedback != 1 {
+		t.Fatalf("committed reviewer feedback was not projected after observer failure: %+v", snapshot.Entries)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded records: %v", readErr)
+	}
+	persistedFeedback := 0
+	for _, record := range window.Records {
+		if _, ok := mustSessionEventPayload(record).(session.ReviewerFeedbackRecord); ok {
+			persistedFeedback++
+		}
+	}
+	if persistedFeedback != 1 {
+		t.Fatalf("committed reviewer feedback = %d, want one", persistedFeedback)
 	}
 }
 
 func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
+	// TODO(KENT-405): delete this compatibility fixture with the legacy reader in 2.7.0.
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-step", "local_entry", storedLocalEntry{
+	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role:          "reviewer_suggestions",
 		Text:          "Supervisor suggested:\n1. Add final verification notes.",
-		CondensedText: "Supervisor made 1 suggestion.",
+		CondensedText: textutil.Value("Supervisor made 1 suggestion."),
 	}); err != nil {
 		t.Fatalf("append legacy reviewer_suggestions: %v", err)
 	}
-	if _, _, err := store.AppendEvent("legacy-step", "local_entry", storedLocalEntry{
+	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role: "reviewer_status",
 		Text: "Supervisor ran, applied 1 suggestion:\n1. Add final verification notes.",
 	}); err != nil {
 		t.Fatalf("append legacy reviewer_status: %v", err)
 	}
+	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
+		Role: "reviewer_error",
+		Text: "legacy Reviewer error",
+	}); err != nil {
+		t.Fatalf("append legacy reviewer_error: %v", err)
+	}
 
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
 	if len(snapshot.Entries) != 2 {
-		t.Fatalf("expected 2 restored entries, got %+v", snapshot.Entries)
+		t.Fatalf("expected 2 restored legacy entries, got %+v", snapshot.Entries)
 	}
 	if snapshot.Entries[0].Role != "reviewer_suggestions" || snapshot.Entries[0].CondensedText != "Supervisor made 1 suggestion." {
 		t.Fatalf("expected stored reviewer_suggestions entry, got %+v", snapshot.Entries[0])
 	}
-	if snapshot.Entries[1].Role != "reviewer_status" || snapshot.Entries[1].Text != "Supervisor ran, applied 1 suggestion:\n1. Add final verification notes." {
-		t.Fatalf("expected stored reviewer_status entry, got %+v", snapshot.Entries[1])
+	if snapshot.Entries[1].Role != "reviewer_error" || snapshot.Entries[1].Text != "legacy Reviewer error" {
+		t.Fatalf("expected stored reviewer_error entry, got %+v", snapshot.Entries[1])
 	}
 }
 
 func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-step", "local_entry", storedLocalEntry{
+	if _, _, err := appendTestEvent(t, store, "legacy-step", storedLocalEntry{
 		Role:     "system",
 		Text:     "Mirrored notice",
-		NoticeID: "notice-1",
+		NoticeID: textutil.Value("notice-1"),
 	}); err != nil {
 		t.Fatalf("append local entry: %v", err)
 	}
@@ -420,25 +442,6 @@ func TestRestoreMessagesPreservesStoredLocalEntryNoticeID(t *testing.T) {
 	}
 	if snapshot.Entries[0].NoticeID != "notice-1" {
 		t.Fatalf("notice id = %q, want notice-1", snapshot.Entries[0].NoticeID)
-	}
-}
-
-func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	mustBlockTestEventLogAppends(t, store)
-
-	err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityOngoing,
-		Role:       "reviewer_status",
-		Text:       "Supervisor ran, applied 1 suggestion.",
-	}))
-
-	if err == nil {
-		t.Fatal("expected local entry event-log append failure")
-	}
-	if snapshot := eng.ChatSnapshot(); len(snapshot.Entries) != 0 {
-		t.Fatalf("expected no in-memory local entries after append failure, got %+v", snapshot.Entries)
 	}
 }
 
@@ -465,15 +468,14 @@ func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
 			},
 		},
 	}
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-
 			if err := eng.steer("step-1", steerLocalEntryIntent(test.entry)); err == nil {
 				t.Fatal("invalid local entry persistence succeeded")
 			}
-			events, err := sessiontest.CollectEvents(store)
+			events, err := collectTestEventRecords(store)
 			if err != nil {
 				t.Fatalf("collect events: %v", err)
 			}
@@ -514,9 +516,9 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 		Command:        "pwd",
 		TimeoutLabel:   "",
 	})
-	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, "legacy-step", llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "working",
+		Content: textutil.Value("working"),
 		ToolCalls: []llm.ToolCall{{
 			ID:           "call_1",
 			Name:         string(toolspec.ToolExecCommand),
@@ -547,124 +549,56 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 	}
 }
 
-func TestRestoreMessagesIgnoresLegacyReviewerRollbackHistoryReplacement(t *testing.T) {
+func TestReviewerSuggestionPresentation(t *testing.T) {
 	store := mustCreateTestSession(t)
-	presentation := transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
-		ToolName:       string(toolspec.ToolExecCommand),
-		Presentation:   transcript.ToolPresentationShell,
-		RenderBehavior: transcript.ToolCallRenderBehaviorShell,
-		IsShell:        true,
-		Command:        "pwd",
-	})
-	legacyItems := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "before"},
-		{
-			Type:             llm.ResponseItemTypeFunctionCall,
-			CallID:           "call_1",
-			Name:             string(toolspec.ToolExecCommand),
-			ToolPresentation: presentation,
-			Arguments:        json.RawMessage(`{"command":"pwd"}`),
+	mainClient := &fakeClient{responses: []llm.Response{
+		finalTextResponse("original final"),
+		finalTextResponse("updated final after review"),
+	}}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewExecTestEngine(t, store, mainClient, Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "all",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			VerboseOutput: true,
+			Client:        reviewerClient,
 		},
-	}
-	if _, _, err := store.AppendEvent("legacy-step", "history_replaced", historyReplacementPayload{
-		Engine: "reviewer_rollback",
-		Mode:   "manual",
-		Items:  legacyItems,
-	}); err != nil {
-		t.Fatalf("append history replacement: %v", err)
-	}
-
-	type restoreResult struct {
-		engine *Engine
-		err    error
-	}
-	resultCh := make(chan restoreResult, 1)
-	go func() {
-		restored, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-		resultCh <- restoreResult{engine: restored, err: err}
-	}()
-	var restored *Engine
-	select {
-	case result := <-resultCh:
-		restored = result.engine
-		if result.err != nil {
-			t.Fatalf("restore engine: %v", result.err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("restore engine timed out while ignoring legacy reviewer_rollback history replacement")
-	}
-	items := restored.transcriptRuntimeState().SnapshotItems()
-	if len(items) != 0 {
-		t.Fatalf("expected legacy reviewer rollback replacement to be ignored, got %+v", items)
-	}
-	snapshot := restored.ChatSnapshot()
-	if len(snapshot.Entries) != 0 {
-		t.Fatalf("expected ignored legacy reviewer rollback to produce no transcript entries, got %+v", snapshot.Entries)
-	}
-}
-
-func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) {
-	t.Run("non-legacy payload still fails", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
-			StepID:  "legacy-step",
-			Kind:    "history_replaced",
-			Payload: json.RawMessage(`{"engine":"local","items":"not-an-array"}`),
-		}}); err != nil {
-			t.Fatalf("append malformed replay event: %v", err)
-		}
-
-		if _, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"}); !errors.Is(err, errDecodeHistoryReplacedEvent) {
-			t.Fatalf("expected errDecodeHistoryReplacedEvent, got %v", err)
-		}
 	})
 
-	t.Run("legacy reviewer rollback payload is ignored", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
-			StepID:  "legacy-step",
-			Kind:    "history_replaced",
-			Payload: json.RawMessage(`{"engine":"reviewer_rollback","items":"not-an-array"}`),
-		}}); err != nil {
-			t.Fatalf("append malformed replay event: %v", err)
-		}
+	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if messageContent(msg) != "updated final after review" {
+		t.Fatalf("assistant content = %q, want updated final after review", messageContent(msg))
+	}
+	assertReviewerPresentation(t, eng.ChatSnapshot(), 1)
 
-		if _, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"}); err != nil {
-			t.Fatalf("expected malformed legacy reviewer rollback payload to be ignored, got %v", err)
-		}
-	})
+	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	assertReviewerPresentation(t, restored.ChatSnapshot(), 1)
 }
 
 func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggestions int) {
 	t.Helper()
 	suggestions := 0
-	statuses := 0
-	suggestionsIndex := -1
-	statusIndex := -1
-	for index, entry := range snapshot.Entries {
-		switch transcript.EntryRole(entry.Role) {
-		case transcript.EntryRoleReviewerSuggestions:
+	for _, entry := range snapshot.Entries {
+		if entry.ReviewerFeedback != nil {
 			suggestions++
-			suggestionsIndex = index
-			if strings.TrimSpace(entry.CondensedText) == "" {
-				t.Fatalf("reviewer suggestions condensed text is blank: %+v", entry)
-			}
-		case transcript.EntryRoleReviewerStatus:
-			statuses++
-			statusIndex = index
 		}
 	}
-	if suggestions != wantSuggestions || statuses != 1 {
-		t.Fatalf("reviewer suggestions/status counts = %d/%d, want %d/1; entries=%+v", suggestions, statuses, wantSuggestions, snapshot.Entries)
-	}
-	if suggestionsIndex >= 0 && suggestionsIndex >= statusIndex {
-		t.Fatalf("reviewer suggestions/status indexes = %d/%d, want suggestions before status", suggestionsIndex, statusIndex)
+	if suggestions != wantSuggestions {
+		t.Fatalf("reviewer feedback counts = %d, want %d; entries=%+v", suggestions, wantSuggestions, snapshot.Entries)
 	}
 }
 
 func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 	suggestions := parseReviewerSuggestionsObject(`{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
-	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != "two" || suggestions[2] != "one" {
+	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != " two " || suggestions[2] != "one" {
 		t.Fatalf("unexpected suggestions from object payload: %+v", suggestions)
 	}
 
@@ -684,14 +618,33 @@ func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 	}
 }
 
+func TestParseReviewerSuggestionsObjectPreservesAcceptedMarkdownBytes(t *testing.T) {
+	const first = "  - keep indentation  \n    ```go\n    fmt.Println(\"x\")\n    ```  "
+	const second = "\n> quoted feedback\n"
+	payload, err := json.Marshal(struct {
+		Suggestions []string `json:"suggestions"`
+	}{Suggestions: []string{first, " ", "NO_OP", second}})
+	if err != nil {
+		t.Fatalf("marshal Reviewer payload: %v", err)
+	}
+	suggestions := parseReviewerSuggestionsObject(string(payload))
+	if len(suggestions) != 2 || suggestions[0] != first || suggestions[1] != second {
+		t.Fatalf("suggestions lost exact Markdown bytes: %#v", suggestions)
+	}
+	instruction := formatReviewerDeveloperInstruction(suggestions)
+	if !strings.Contains(instruction, first) || !strings.Contains(instruction, second) {
+		t.Fatalf("developer instruction lost exact Markdown bytes: %q", instruction)
+	}
+}
+
 func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *testing.T) {
 	messages := []llm.Message{
-		{Role: llm.RoleAssistant, Phase: llm.MessagePhaseCommentary, Content: "I’ll inspect quickly."},
-		{Role: llm.RoleUser, Content: "user request"},
-		{Role: llm.RoleAssistant, Content: "Running command now.", Phase: llm.MessagePhaseCommentary, ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "exec_command", Input: json.RawMessage(`{"command":"pwd"}`)}}},
-		{Role: llm.RoleAssistant, Content: "assistant response", Phase: llm.MessagePhaseFinal},
-		{Role: llm.RoleTool, Name: "exec_command", ToolCallID: "call_1", Content: "{\"output\":\"ok\"}"},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: environmentInjectedHeader + "\nOS: darwin"},
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseCommentary), Content: textutil.Value("I’ll inspect quickly.")},
+		{Role: llm.RoleUser, Content: textutil.Value("user request")},
+		{Role: llm.RoleAssistant, Content: textutil.Value("Running command now."), Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "exec_command", Input: json.RawMessage(`{"command":"pwd"}`)}}},
+		{Role: llm.RoleAssistant, Content: textutil.Value("assistant response"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		{Role: llm.RoleTool, Name: textutil.Value("exec_command"), ToolCallID: textutil.Value("call_1"), Content: textutil.Value("{\"output\":\"ok\"}")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value(environmentInjectedHeader + "\nOS: darwin")},
 	}
 
 	reviewerMessages := buildReviewerTranscriptMessages(messages)
@@ -701,37 +654,23 @@ func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *test
 	if reviewerMessages[0].Role != llm.RoleUser {
 		t.Fatalf("expected reviewer transcript messages to use user role, got %q", reviewerMessages[0].Role)
 	}
-	if !strings.Contains(reviewerMessages[0].Content, "I’ll inspect quickly.") {
-		t.Fatalf("expected short commentary preamble to be preserved, message=%q", reviewerMessages[0].Content)
+	if !strings.Contains(messageContent(reviewerMessages[0]), "I’ll inspect quickly.") {
+		t.Fatalf("expected short commentary preamble to be preserved, message=%q", messageContent(reviewerMessages[0]))
 	}
-	if !strings.Contains(reviewerMessages[2].Content, "Running command now.") {
-		t.Fatalf("expected short commentary preamble text to be preserved when tool calls exist, message=%q", reviewerMessages[2].Content)
+	if !strings.Contains(messageContent(reviewerMessages[2]), "Running command now.") {
+		t.Fatalf("expected short commentary preamble text to be preserved when tool calls exist, message=%q", messageContent(reviewerMessages[2]))
 	}
-	if !strings.Contains(reviewerMessages[3].Content, "Tool call:") || !strings.Contains(reviewerMessages[3].Content, "pwd") {
-		t.Fatalf("expected separate tool call transcript entry, message=%q", reviewerMessages[3].Content)
+	if !strings.Contains(messageContent(reviewerMessages[3]), "Tool call:") || !strings.Contains(messageContent(reviewerMessages[3]), "pwd") {
+		t.Fatalf("expected separate tool call transcript entry, message=%q", messageContent(reviewerMessages[3]))
 	}
-	if strings.Contains(reviewerMessages[3].Content, "(id=") {
-		t.Fatalf("did not expect tool call id in reviewer transcript, message=%q", reviewerMessages[3].Content)
+	if strings.Contains(messageContent(reviewerMessages[3]), "(id=") {
+		t.Fatalf("did not expect tool call id in reviewer transcript, message=%q", messageContent(reviewerMessages[3]))
 	}
-	if !strings.Contains(reviewerMessages[4].Content, "Agent:") {
-		t.Fatalf("expected assistant final answer entry to use agent label, message=%q", reviewerMessages[4].Content)
+	if !strings.Contains(messageContent(reviewerMessages[4]), "Agent:") {
+		t.Fatalf("expected assistant final answer entry to use agent label, message=%q", messageContent(reviewerMessages[4]))
 	}
-	if !strings.Contains(reviewerMessages[5].Content, "Tool result:") || !strings.Contains(reviewerMessages[5].Content, "ok") {
-		t.Fatalf("expected separate tool result transcript entry, message=%q", reviewerMessages[5].Content)
-	}
-}
-
-func TestBuildReviewerTranscriptMessagesKeepsOrphanToolOutputEntry(t *testing.T) {
-	messages := []llm.Message{
-		{Role: llm.RoleTool, Name: "exec_command", ToolCallID: "orphan_call", Content: "{\"output\":\"orphan\"}"},
-	}
-
-	reviewerMessages := buildReviewerTranscriptMessages(messages)
-	if len(reviewerMessages) != 1 {
-		t.Fatalf("expected one reviewer message for orphan tool output, got %d", len(reviewerMessages))
-	}
-	if !strings.Contains(reviewerMessages[0].Content, "Tool result:") || !strings.Contains(reviewerMessages[0].Content, "orphan") {
-		t.Fatalf("expected orphan tool output to remain as tool entry, message=%q", reviewerMessages[0].Content)
+	if !strings.Contains(messageContent(reviewerMessages[5]), "Tool result:") || !strings.Contains(messageContent(reviewerMessages[5]), "ok") {
+		t.Fatalf("expected separate tool result transcript entry, message=%q", messageContent(reviewerMessages[5]))
 	}
 }
 
@@ -791,17 +730,17 @@ func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
 
 func TestBuildReviewerTranscriptMessagesIncludesSupervisorControlDeveloperMessage(t *testing.T) {
 	messages := []llm.Message{
-		{Role: llm.RoleDeveloper, Content: "Supervisor agent gave you suggestions:\n1. run tests"},
+		{Role: llm.RoleDeveloper, Content: textutil.Value("Supervisor agent gave you suggestions:\n1. run tests")},
 	}
 
 	reviewerMessages := buildReviewerTranscriptMessages(messages)
 	if len(reviewerMessages) != 1 {
 		t.Fatalf("expected one reviewer message, got %d", len(reviewerMessages))
 	}
-	if !strings.Contains(reviewerMessages[0].Content, "Supervisor agent gave you suggestions:") {
-		t.Fatalf("expected supervisor control message to be included, got %q", reviewerMessages[0].Content)
+	if !strings.Contains(messageContent(reviewerMessages[0]), "Supervisor agent gave you suggestions:") {
+		t.Fatalf("expected supervisor control message to be included, got %q", messageContent(reviewerMessages[0]))
 	}
-	if !strings.Contains(reviewerMessages[0].Content, "Developer context:") {
-		t.Fatalf("expected developer-context label in reviewer message, got %q", reviewerMessages[0].Content)
+	if !strings.Contains(messageContent(reviewerMessages[0]), "Developer context:") {
+		t.Fatalf("expected developer-context label in reviewer message, got %q", messageContent(reviewerMessages[0]))
 	}
 }

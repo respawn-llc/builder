@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -23,12 +24,8 @@ type sessionRetargetFixture struct {
 
 func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
 	sourceRoot := t.TempDir()
-	cfg, err := config.Load(sourceRoot, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
+	cfg := loadMetadataTestConfig(t, sourceRoot, filepath.Join(t.TempDir(), "persistence"))
 	store, err := Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -52,9 +49,6 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := sessionStore.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
 	return sessionRetargetFixture{
 		store:         store,
 		config:        cfg,
@@ -65,6 +59,7 @@ func newSessionRetargetFixture(t *testing.T) sessionRetargetFixture {
 }
 
 func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	if _, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, targetRoot); err != nil {
@@ -89,6 +84,7 @@ func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t 
 }
 
 func TestCommitSessionWorkspaceRetargetUsesSourceBindingWhenPathIsShared(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	sourceBinding, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.source.ProjectID, targetRoot)
@@ -116,6 +112,7 @@ func TestCommitSessionWorkspaceRetargetUsesSourceBindingWhenPathIsShared(t *test
 }
 
 func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	targetProjectID := fixture.targetProject.ProjectID
@@ -148,6 +145,7 @@ func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *t
 }
 
 func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
 	targetRoot := t.TempDir()
 	if _, err := fixture.store.AttachWorkspaceToProject(context.Background(), fixture.targetProject.ProjectID, targetRoot); err != nil {
@@ -188,24 +186,59 @@ func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutatio
 	}
 }
 
-func TestPlanSessionWorkspaceRetargetRejectsWorkflowOwnedCrossProject(t *testing.T) {
+func TestSessionSnapshotImportAndRetargetRemoveLegacyWorkflowMetadata(t *testing.T) {
+	t.Parallel()
 	fixture := newSessionRetargetFixture(t)
-	if err := fixture.session.SetWorkflowSessionState(&session.WorkflowSessionState{
-		RunID:      "run-1",
-		TaskID:     "task-1",
-		WorkflowID: "workflow-1",
+	ctx := context.Background()
+	sessionID := fixture.session.Meta().SessionID
+	if _, err := fixture.store.db.ExecContext(ctx, `
+UPDATE sessions
+SET metadata_json = json_set(metadata_json, '$.workflow_session', json_object('run_id', 'stale-run'))
+WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("seed stale workflow metadata: %v", err)
+	}
+	record, err := fixture.store.ResolvePersistedSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession before import: %v", err)
+	}
+	if err := fixture.store.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
+		SessionDir: record.SessionDir,
+		Meta:       *record.Meta,
 	}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
+		t.Fatalf("ImportSessionSnapshot: %v", err)
+	}
+	assertWorkflowSessionMetadataAbsent(t, fixture.store, sessionID)
+	if _, err := fixture.store.db.ExecContext(ctx, `
+UPDATE sessions
+SET metadata_json = json_set(metadata_json, '$.workflow_session', json_object('run_id', 'stale-run'))
+WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("restore stale workflow metadata: %v", err)
 	}
 	targetProjectID := fixture.targetProject.ProjectID
-
-	_, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+	plan, err := fixture.store.PlanSessionWorkspaceRetarget(ctx, SessionWorkspaceRetargetRequest{
+		SessionID:     sessionID,
 		WorkspaceRoot: t.TempDir(),
 		ProjectID:     &targetProjectID,
 	})
-	var retargetErr *serverapi.SessionRetargetError
-	if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetWorkflowOwned {
-		t.Fatalf("PlanSessionWorkspaceRetarget error = %v, want workflow-owned", err)
+	if err != nil {
+		t.Fatalf("PlanSessionWorkspaceRetarget: %v", err)
+	}
+	if _, err := fixture.store.CommitSessionWorkspaceRetarget(ctx, plan, time.Now().UTC()); err != nil {
+		t.Fatalf("CommitSessionWorkspaceRetarget: %v", err)
+	}
+	assertWorkflowSessionMetadataAbsent(t, fixture.store, sessionID)
+}
+
+func assertWorkflowSessionMetadataAbsent(t *testing.T, store *Store, sessionID string) {
+	t.Helper()
+	var workflowMetadata sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT json_type(metadata_json, '$.workflow_session')
+FROM sessions
+WHERE id = ?`, sessionID).Scan(&workflowMetadata); err != nil {
+		t.Fatalf("query workflow session metadata: %v", err)
+	}
+	if workflowMetadata.Valid {
+		t.Fatalf("workflow session metadata = %q, want absent", workflowMetadata.String)
 	}
 }

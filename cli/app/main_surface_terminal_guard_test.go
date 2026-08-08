@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -265,28 +264,4 @@ func mainSurfaceGuardRelativePath(repoRoot, path string) (string, bool) {
 		return "", false
 	}
 	return filepath.ToSlash(relPath), true
-}
-
-func mainSurfaceGuardRepositoryRoot(t *testing.T) string {
-	t.Helper()
-
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get working directory: %v", err)
-	}
-
-	for {
-		goModPath := filepath.Join(dir, "go.mod")
-		if _, err := os.Stat(goModPath); err == nil {
-			return dir
-		} else if !os.IsNotExist(err) {
-			t.Fatalf("stat %s: %v", goModPath, err)
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("could not find repository root from %s", dir)
-		}
-		dir = parent
-	}
 }

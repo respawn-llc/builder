@@ -269,10 +269,17 @@ type SessionPlan struct {
 	ActiveSettings      config.Settings     `json:"active_settings"`
 	EnabledToolIDs      []string            `json:"enabled_tool_ids,omitempty"`
 	ConfiguredModelName string              `json:"configured_model_name,omitempty"`
-	SessionName         string              `json:"session_name,omitempty"`
+	SessionName         *string             `json:"session_name"`
 	PromptHistory       []string            `json:"prompt_history,omitempty"`
 	ModelContractLocked bool                `json:"model_contract_locked,omitempty"`
 	Source              config.SourceReport `json:"source"`
+}
+
+func (p SessionPlan) Validate() error {
+	if p.SessionName != nil && strings.TrimSpace(*p.SessionName) == "" {
+		return errors.New("session plan name cannot be empty or blank")
+	}
+	return nil
 }
 
 type SessionPlanResponse struct {

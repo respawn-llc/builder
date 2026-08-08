@@ -55,7 +55,7 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 	}
 
 	t.Log("starting embedded server")
-	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
+	server, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
 	if err != nil {
 		t.Fatalf("startEmbeddedServer: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt round trip")
-	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "ask-1", submissionFailed)
+	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.eventDispatcher.transcriptEvents, "ask-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Pick one" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
@@ -339,7 +339,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		PromptID:             string(askPrompt.PromptID),
 		SelectedOptionNumber: func() *int { selected := 2; return &selected }(),
 	})
-	approvalPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "", submissionFailed)
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.eventDispatcher.transcriptEvents, "", submissionFailed)
 	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}

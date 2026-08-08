@@ -197,6 +197,35 @@ func TestBackgroundNoticeConciseFallbackRetainsVisibleCompletion(t *testing.T) {
 	}
 }
 
+func TestModelVisibleFallbackPreviewsLimitCommandOutputLines(t *testing.T) {
+	long := strings.Repeat("x", 1001)
+	want := strings.Repeat("x", 975) + "… [26 characters omitted]"
+	path := writeBackgroundNoticeLog(t, []byte(long))
+	exitCode := 0
+	snapshot := completedBackgroundSnapshot(path, &exitCode)
+	event, err := (&Manager{}).fallbackBackgroundEvent(EventCompleted, snapshot, nil)
+	if err != nil || fallbackPreview(t, event) != want {
+		t.Fatalf("fallback event = %v", err)
+	}
+	rawSnapshot := snapshot
+	rawSnapshot.RawOutput = true
+	rawEvent, _ := (&Manager{}).fallbackBackgroundEvent(EventCompleted, rawSnapshot, nil)
+	if got := fallbackPreview(t, rawEvent); got != long {
+		t.Fatalf("raw fallback preview = %q", got)
+	}
+	cache := &terminalEventCache{eventType: EventCompleted, snapshot: Snapshot{ID: "1000", RecentOutput: long}}
+	cached := cache.fallbackEvent(errors.New("cache unavailable"))
+	if got := fallbackPreview(t, cached); got != want {
+		t.Fatalf("cache fallback preview = %q", got)
+	}
+}
+
+func fallbackPreview(t *testing.T, event Event) string {
+	t.Helper()
+	summary, _ := SummarizeBackgroundEvent(event, BackgroundNoticeOptions{SuccessOutputMode: BackgroundOutputVerbose})
+	got, _ := summary.RuntimePreview()
+	return got
+}
 func TestInvariantFailureBackgroundNoticeUsesDistinctTypedProjection(t *testing.T) {
 	exitCode := 17
 	summary := InvariantFailureBackgroundNotice(Event{

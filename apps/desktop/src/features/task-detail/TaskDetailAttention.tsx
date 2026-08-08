@@ -1,17 +1,12 @@
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem, TaskTransition } from "@/api";
+import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
-import {
-  approveExecutionTargetAction,
-  ExecutionTargetContinuationDialog,
-  executeExecutionTargetAction,
-  useExecutionTargetContinuation,
-} from "@/shared/execution-target";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
+import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskDetailCopyableValue } from "./TaskDetailCopyableValue";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -22,33 +17,18 @@ export function ApprovalBox({
   currentVersion,
   disabled,
   mutations,
-  transitions,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: ApprovalAttentionItem;
   currentVersion: number;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  transitions: readonly TaskTransition[];
 }>) {
   const { t } = useTranslation();
-  const { api } = useAppServices();
-  const executionTargetContinuation = useExecutionTargetContinuation({
-    execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
-    onApplied: mutations.refresh,
-    onAppliedError: (error) => {
-      showStatusToast({
-        body: errorMessage(error),
-        id: "task-approval-refresh-failed",
-        title: t("task.refreshFailed"),
-        tone: "danger",
-      });
-    },
-  });
-  const transition = transitions.find((item) => item.id === attention.taskTransitionID);
-  const stale = transition !== undefined && transition.version !== currentVersion;
+  const snapshot = attention.approvalSnapshot;
+  const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void executionTargetContinuation
-      .run(approveExecutionTargetAction(attention.taskTransitionID))
+    void mutations.approveApproval
+      .mutateAsync(attention.approvalID)
       .catch((error: unknown) => {
         showStatusToast({
           body: errorMessage(error),
@@ -67,79 +47,57 @@ export function ApprovalBox({
         radius="l"
         unpadded
       >
-        {transition !== undefined ? (
-          <div className="grid gap-[var(--space-2)]">
-            <div
-              className="flex min-w-0 items-center gap-[var(--space-2)]"
-              data-testid="task-approval-route-action-row"
-            >
-              <WorkflowEdgeRouteGraphic
-                className="-ml-[var(--space-2)]"
-                contextMode=""
-                layout="compact"
-                neutralArrow
-                sourceLabel={transition.sourceNodeName}
-                targetLabel={transitionTargetLabel(transition, t)}
-              />
-              <span className="min-w-0 flex-1" />
-              <Button
-                className="shrink-0"
-                disabled={
-                  disabled ||
-                  executionTargetContinuation.running ||
-                  executionTargetContinuation.pending !== null
-                }
-                onClick={approve}
-                variant="primary"
-              >
-                {t("task.approve")}
-              </Button>
-            </div>
-            {transition.commentary.length > 0 ? (
-              <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
-                {transition.commentary}
-              </p>
-            ) : null}
-            <ApprovalOutputValues outputValues={transition.outputValues} />
-            {stale ? (
-              <p className="m-0 text-sm text-[var(--color-warning)]">
-                <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <>
-            <p>{t("task.unavailableSnapshot")}</p>
+        <div className="grid gap-[var(--space-2)]">
+          <div
+            className="flex min-w-0 items-center gap-[var(--space-2)]"
+            data-testid="task-approval-route-action-row"
+          >
+            <WorkflowEdgeRouteGraphic
+              className="-ml-[var(--space-2)]"
+              contextMode=""
+              layout="compact"
+              neutralArrow
+              sourceLabel={snapshot.sourceNodeName}
+              targetLabel={approvalTargetLabel(snapshot, t)}
+            />
+            <span className="min-w-0 flex-1" />
             <Button
+              className="shrink-0"
               disabled={
                 disabled ||
-                executionTargetContinuation.running ||
-                executionTargetContinuation.pending !== null
+                mutations.approveApproval.isPending
               }
               onClick={approve}
               variant="primary"
             >
               {t("task.approve")}
             </Button>
-          </>
-        )}
+          </div>
+          {snapshot.commentary.length > 0 ? (
+            <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">{snapshot.commentary}</p>
+          ) : null}
+          <ApprovalOutputValues outputValues={snapshot.outputValues} />
+          {stale ? (
+            <p className="m-0 text-sm text-[var(--color-warning)]">
+              <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
+            </p>
+          ) : null}
+        </div>
       </Island>
-      <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
     </>
   );
 }
 
-export function InterruptedRunBox({
+export function InterruptedCurrentNodeBox({
   attention,
   disabled,
-  mutations,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: InterruptedCurrentNodeAttentionItem;
   disabled: boolean;
-  mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
+  const detailJSON = attention.detailJSON;
   return (
     <Island
       aria-label={t("task.interrupted")}
@@ -149,14 +107,14 @@ export function InterruptedRunBox({
       unpadded
     >
       <strong>{t("task.interrupted")}</strong>
-      {attention.message.length > 0 ? (
+      {attention.message !== null ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
-      {attention.detailJSON.trim().length > 0 ? (
+      {detailJSON !== null ? (
         <Button
           disabled={disabled}
           onClick={() => {
-            void writeClipboardText(attention.detailJSON, nativeBridge)
+            void writeClipboardText(detailJSON, nativeBridge)
               .then(() => {
                 showStatusToast({
                   id: "task-interruption-detail-copied",
@@ -178,13 +136,7 @@ export function InterruptedRunBox({
           {t("task.copyInterruptionDetail")}
         </Button>
       ) : null}
-      <Button
-        disabled={disabled || mutations.resume.isPending}
-        onClick={() => void mutations.resume.mutateAsync()}
-        variant="primary"
-      >
-        {t("board.resume")}
-      </Button>
+      <TaskResumeButton disabled={disabled} />
     </Island>
   );
 }
@@ -221,12 +173,12 @@ function ApprovalOutputValues({
   );
 }
 
-function transitionTargetLabel(
-  transition: TaskTransition,
+function approvalTargetLabel(
+  snapshot: ApprovalSnapshot,
   fallback: ReturnType<typeof useTranslation>["t"],
 ): string {
-  const labels = transition.edges
-    .map((edge) => edge.targetNodeName.trim())
+  const labels = snapshot.targets
+    .map((target) => target.displayName.trim())
     .filter((label) => label.length > 0);
   return labels.join(", ") || fallback("task.targetUnavailable");
 }

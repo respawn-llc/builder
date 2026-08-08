@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 	MethodAuthAcknowledgeNoAuth                         = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                                 = "auth.getStatus"
 	MethodCapabilityFactsGet                            = "capability.facts.get"
+	MethodPromptCommandCatalogGet                       = "promptCommands.catalog.get"
 	MethodOnboardingFinalize                            = "onboarding.finalize"
 	MethodAttachProject                                 = "project.attach"
 	MethodAttachSession                                 = "session.attach"
@@ -62,16 +64,26 @@ const (
 	MethodWorkflowGraphDeriveWiring                     = "workflow.graph.deriveWiring"
 	MethodWorkflowGraphSavePreview                      = "workflow.graph.savePreview"
 	MethodWorkflowGraphSave                             = "workflow.graph.save"
+	MethodWorkflowProjectLabelCreate                    = "workflow.project.label.create"
+	MethodWorkflowProjectLabelList                      = "workflow.project.label.list"
+	MethodWorkflowProjectLabelRename                    = "workflow.project.label.rename"
+	MethodWorkflowProjectLabelDelete                    = "workflow.project.label.delete"
+	MethodWorkflowProjectLabelReorder                   = "workflow.project.label.reorder"
+	MethodWorkflowTaskLabelsGet                         = "workflow.task.labels.get"
+	MethodWorkflowTaskLabelsUpdate                      = "workflow.task.labels.update"
 	MethodWorkflowTaskCreate                            = "workflow.task.create"
 	MethodWorkflowTaskUpdate                            = "workflow.task.update"
 	MethodWorkflowTaskStart                             = "workflow.task.start"
 	MethodWorkflowTaskInterrupt                         = "workflow.task.interrupt"
 	MethodWorkflowTaskResume                            = "workflow.task.resume"
 	MethodWorkflowTaskApprove                           = "workflow.task.approve"
+	MethodWorkflowTaskMovePreview                       = "workflow.task.move.preview"
 	MethodWorkflowTaskMove                              = "workflow.task.move"
 	MethodWorkflowTaskComplete                          = "workflow.task.complete"
-	MethodWorkflowTaskCancel                            = "workflow.task.cancel"
 	MethodWorkflowTaskDelete                            = "workflow.task.delete"
+	MethodWorkflowTaskDependencyAdd                     = "workflow.task.dependency.add"
+	MethodWorkflowTaskDependencyRemove                  = "workflow.task.dependency.remove"
+	MethodWorkflowTaskDependencyList                    = "workflow.task.dependency.list"
 	MethodWorkflowAttentionList                         = "workflow.attention.list"
 	MethodWorkflowTaskAttentionList                     = "workflow.task.attention.list"
 	MethodWorkflowTaskQuestionAnswer                    = "workflow.task.question.answer"
@@ -81,6 +93,7 @@ const (
 	MethodWorkflowTaskCommentDelete                     = "workflow.task.comment.delete"
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
+	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
 	MethodWorkflowBoardNodeCardsList                    = "workflow.board.nodeCards.list"
 	MethodWorkflowSubscribe                             = "workflow.subscribe"
@@ -90,6 +103,7 @@ const (
 	MethodWorkflowProjectEvent                          = "workflow.project"
 	MethodWorkflowProjectComplete                       = "workflow.project.complete"
 	MethodWorkflowTaskGet                               = "workflow.task.get"
+	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
@@ -105,6 +119,7 @@ const (
 	MethodWorktreeWorkspaceList                         = "worktree.workspace.list"
 	MethodWorktreeStatus                                = "worktree.status"
 	MethodWorktreeSelectorResolve                       = "worktree.selector.resolve"
+	MethodWorktreeDeletePreview                         = "worktree.deletePreview"
 	MethodWorktreeCreateTargetResolve                   = "worktree.create_target.resolve"
 	MethodWorktreeCreate                                = "worktree.create"
 	MethodWorktreeEnter                                 = "worktree.enter"
@@ -128,10 +143,10 @@ const (
 	MethodRuntimeHasQueuedUserWork                      = "runtime.hasQueuedUserWork"
 	MethodRuntimeSubmitQueuedUserMessages               = "runtime.submitQueuedUserMessages"
 	MethodRuntimeInterrupt                              = "runtime.interrupt"
-	MethodRuntimeQueueUserMessage                       = "runtime.queueUserMessage"
 	MethodRuntimeLiveSteer                              = "runtime.liveSteer"
 	MethodRuntimeLiveStop                               = "runtime.liveStop"
 	MethodRuntimeLiveWait                               = "runtime.liveWait"
+	MethodRuntimeLiveWatch                              = "runtime.liveWatch"
 	MethodRuntimeDiscardQueuedUserMessage               = "runtime.discardQueuedUserMessage"
 	MethodRuntimeRecordPromptHistory                    = "runtime.recordPromptHistory"
 	MethodRuntimeGoalShow                               = "runtime.goal.show"
@@ -146,6 +161,7 @@ const (
 	MethodProcessInlineOutput                           = "process.inlineOutput"
 	MethodAskListPending                                = "ask.listPendingBySession"
 	MethodAskAnswer                                     = "ask.answer"
+	MethodPromptAnswerBatch                             = "prompt.answerBatch"
 	MethodApprovalListPending                           = "approval.listPendingBySession"
 	MethodApprovalAnswer                                = "approval.answer"
 	MethodAttentionNotificationSubscribe                = "attention.notification.subscribe"
@@ -165,7 +181,12 @@ const (
 )
 
 type HandshakeRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
+	ProtocolVersion    string              `json:"protocol_version"`
+	ClientCapabilities *ClientCapabilities `json:"client_capabilities,omitempty"`
+}
+
+type ClientCapabilities struct {
+	TranscriptLiveRunFinished bool `json:"transcript_live_run_finished"`
 }
 
 type HandshakeResponse struct {
@@ -822,13 +843,61 @@ type WorktreeSetupEvent struct {
 	Error               string `json:"error,omitempty"`
 }
 
+type WorkflowProjectEventResource string
+
+const (
+	WorkflowProjectEventResourceWorkflow     WorkflowProjectEventResource = "workflow"
+	WorkflowProjectEventResourceWorkflowLink WorkflowProjectEventResource = "workflow_link"
+	WorkflowProjectEventResourceTask         WorkflowProjectEventResource = "task"
+	WorkflowProjectEventResourceLabel        WorkflowProjectEventResource = "label"
+)
+
+type WorkflowProjectEventAction string
+
+const (
+	WorkflowProjectEventActionCreated                WorkflowProjectEventAction = "created"
+	WorkflowProjectEventActionUpdated                WorkflowProjectEventAction = "updated"
+	WorkflowProjectEventActionRenamed                WorkflowProjectEventAction = "renamed"
+	WorkflowProjectEventActionReordered              WorkflowProjectEventAction = "reordered"
+	WorkflowProjectEventActionDeleted                WorkflowProjectEventAction = "deleted"
+	WorkflowProjectEventActionNodeAdded              WorkflowProjectEventAction = "node_added"
+	WorkflowProjectEventActionNodeUpdated            WorkflowProjectEventAction = "node_updated"
+	WorkflowProjectEventActionNodeGroupAdded         WorkflowProjectEventAction = "node_group_added"
+	WorkflowProjectEventActionNodeGroupUpdated       WorkflowProjectEventAction = "node_group_updated"
+	WorkflowProjectEventActionNodeGroupDeleted       WorkflowProjectEventAction = "node_group_deleted"
+	WorkflowProjectEventActionTransitionGroupAdded   WorkflowProjectEventAction = "transition_group_added"
+	WorkflowProjectEventActionTransitionGroupUpdated WorkflowProjectEventAction = "transition_group_updated"
+	WorkflowProjectEventActionEdgeAdded              WorkflowProjectEventAction = "edge_added"
+	WorkflowProjectEventActionEdgeUpdated            WorkflowProjectEventAction = "edge_updated"
+	WorkflowProjectEventActionGraphSaved             WorkflowProjectEventAction = "graph_saved"
+	WorkflowProjectEventActionLinked                 WorkflowProjectEventAction = "linked"
+	WorkflowProjectEventActionDefaultChanged         WorkflowProjectEventAction = "default_changed"
+	WorkflowProjectEventActionUnlinked               WorkflowProjectEventAction = "unlinked"
+	WorkflowProjectEventActionStarted                WorkflowProjectEventAction = "started"
+	WorkflowProjectEventActionInterrupted            WorkflowProjectEventAction = "interrupted"
+	WorkflowProjectEventActionResumed                WorkflowProjectEventAction = "resumed"
+	WorkflowProjectEventActionApproved               WorkflowProjectEventAction = "approved"
+	WorkflowProjectEventActionMoved                  WorkflowProjectEventAction = "moved"
+	WorkflowProjectEventActionCanceled               WorkflowProjectEventAction = "canceled"
+	WorkflowProjectEventActionCompleted              WorkflowProjectEventAction = "completed"
+	WorkflowProjectEventActionCommentAdded           WorkflowProjectEventAction = "comment_added"
+	WorkflowProjectEventActionCommentUpdated         WorkflowProjectEventAction = "comment_updated"
+	WorkflowProjectEventActionCommentDeleted         WorkflowProjectEventAction = "comment_deleted"
+	WorkflowProjectEventActionQuestionWaiting        WorkflowProjectEventAction = "question_waiting"
+	WorkflowProjectEventActionQuestionCleared        WorkflowProjectEventAction = "question_cleared"
+	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
+	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
+	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
+)
+
 type WorkflowProjectEvent struct {
-	ProjectID        string   `json:"project_id,omitempty"`
-	WorkflowID       string   `json:"workflow_id,omitempty"`
-	Resource         string   `json:"resource"`
-	Action           string   `json:"action"`
-	ChangedIDs       []string `json:"changed_ids,omitempty"`
-	OccurredAtUnixMs int64    `json:"occurred_at_unix_ms"`
+	ProjectID        *string                      `json:"project_id,omitempty"`
+	WorkflowID       *runtimeids.WorkflowID       `json:"workflow_id,omitempty"`
+	Resource         WorkflowProjectEventResource `json:"resource"`
+	Action           WorkflowProjectEventAction   `json:"action"`
+	PrimaryEntityID  string                       `json:"primary_entity_id"`
+	RelatedIDs       []string                     `json:"related_ids,omitempty"`
+	OccurredAtUnixMs int64                        `json:"occurred_at_unix_ms"`
 }
 
 type StreamCompleteParams struct {
@@ -840,6 +909,9 @@ type StreamCompleteParams struct {
 func (r HandshakeRequest) Validate() error {
 	if strings.TrimSpace(r.ProtocolVersion) == "" {
 		return errors.New("protocol_version is required")
+	}
+	if r.ClientCapabilities != nil && !r.ClientCapabilities.TranscriptLiveRunFinished {
+		return errors.New("client_capabilities must advertise at least one supported capability")
 	}
 	return nil
 }

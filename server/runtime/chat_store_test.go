@@ -1,314 +1,352 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
-	"reflect"
 	"testing"
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
-
-	"github.com/google/uuid"
 )
 
-const chatStoreTestStepID = "11111111-1111-4111-8111-111111111111"
-
-func TestChatStoreProviderHistoryUsesLatestCompactionCheckpoint(t *testing.T) {
-	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "before"})
-	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{{
-		Type:    llm.ResponseItemTypeMessage,
+func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	for _, message := range []llm.Message{
+		{Role: llm.RoleUser, Content: textutil.Value("before")},
+	} {
+		if _, _, err := appendTestEvent(t, store, "step", message); err != nil {
+			t.Fatalf("append pre-compaction message: %v", err)
+		}
+	}
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "local",
+		Mode:   string(compactionModeAuto),
+		Items: llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleUser,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("first summary"),
+		}}),
+	}); err != nil {
+		t.Fatalf("append first history replacement: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
 		Role:    llm.RoleUser,
-		Content: "summary-1",
-	}})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "between"})
-
-	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleDeveloper, Content: "context"},
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "summary-2"},
-	})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleAssistant, Content: "after"})
-
-	items := s.snapshotItems()
-	if len(items) != 3 {
-		t.Fatalf("provider items = %+v, want latest checkpoint plus active tail", items)
+		Content: textutil.Value("between"),
+	}); err != nil {
+		t.Fatalf("append between-compaction message: %v", err)
 	}
-	if items[0].Role != llm.RoleDeveloper || items[0].Content != "context" ||
-		items[1].Role != llm.RoleUser || items[1].Content != "summary-2" ||
-		items[2].Role != llm.RoleAssistant || items[2].Content != "after" {
-		t.Fatalf("provider items = %+v, want only latest checkpoint plus active tail", items)
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "local",
+		Mode:   string(compactionModeAuto),
+		Items: llm.ItemsFromMessages([]llm.Message{
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeEnvironment),
+				Content:     textutil.Value("environment"),
+			},
+			{
+				Role:        llm.RoleUser,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("latest summary"),
+			},
+		}),
+	}); err != nil {
+		t.Fatalf("append second history replacement: %v", err)
 	}
-}
-
-func TestChatStoreCompactionPrunesWorkingStateAndPreservesCommittedCount(t *testing.T) {
-	s := newChatStore()
-	for i := 0; i < 3; i++ {
-		callID := fmt.Sprintf("call-%d", i)
-		s.appendMessage(chatStoreTestStepID, llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
-				ID:    callID,
-				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"command":"pwd"}`),
-			}},
-		})
-		s.recordToolCompletionWithProviderItems(tools.Result{
-			CallID: callID,
-			Name:   toolspec.ToolExecCommand,
-			Output: json.RawMessage(`{"output":"/tmp"}`),
-		}, nil)
-		s.appendLocalEntryRecord(ChatEntry{
-			Visibility: transcript.EntryVisibilityAuto,
-			Role:       "system",
-			Text:       "note",
-		}, nil)
-	}
-	committedBeforeCompaction := s.committedEntryCount()
-
-	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{{
-		Type:        llm.ResponseItemTypeMessage,
-		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
-	}})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "after"})
-
-	if len(s.messageRecords) != 1 || len(s.local) != 1 {
-		t.Fatalf("retained cache state after compaction: messages=%d local=%d, want one active message and one projected checkpoint row", len(s.messageRecords), len(s.local))
-	}
-	if len(s.toolCompletions) != 0 ||
-		len(s.toolCompletionProviderItems) != 0 ||
-		len(s.assistantToolCalls) != 0 ||
-		len(s.materializedToolResults) != 0 ||
-		len(s.synthesizedToolResults) != 0 {
-		t.Fatalf(
-			"retained tool working state after compaction: completions=%d provider_items=%d calls=%d materialized=%d synthesized=%d",
-			len(s.toolCompletions),
-			len(s.toolCompletionProviderItems),
-			len(s.assistantToolCalls),
-			len(s.materializedToolResults),
-			len(s.synthesizedToolResults),
-		)
-	}
-	if got := s.committedEntryCount(); got != committedBeforeCompaction+2 {
-		t.Fatalf("committed entry count = %d, want cumulative count %d", got, committedBeforeCompaction+2)
-	}
-}
-
-func TestChatStoreProviderItemsOrderMixedMaterializedAndPendingToolOutputs(t *testing.T) {
-	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{
-			{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)},
-		},
-	})
-	s.recordToolCompletionWithProviderItems(tools.Result{
-		CallID: "call-1",
-		Name:   toolspec.ToolExecCommand,
-		Output: json.RawMessage(`{"output":"/tmp"}`),
-	}, nil)
-	s.recordToolCompletionWithProviderItems(tools.Result{
-		CallID: "call-2",
-		Name:   toolspec.ToolExecCommand,
-		Output: json.RawMessage(`{"output":"a.txt"}`),
-	}, nil)
-	if got := s.committedEntryCount(); got != 4 {
-		t.Fatalf("committed entry count after two calls and completions = %d, want 4", got)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("after"),
+	}); err != nil {
+		t.Fatalf("append active-tail assistant message: %v", err)
 	}
 
-	s.appendMessage(chatStoreTestStepID, llm.Message{
-		Role:       llm.RoleTool,
-		ToolCallID: "call-1",
-		Name:       string(toolspec.ToolExecCommand),
-		Content:    `{"output":"/tmp"}`,
-	})
-	if got := s.committedEntryCount(); got != 4 {
-		t.Fatalf("materialized tool result double-counted: committed entry count = %d, want 4", got)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	request, err := engine.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
 	}
-
-	items := s.snapshotItems()
-	want := []struct {
-		itemType llm.ResponseItemType
-		callID   string
-	}{
-		{llm.ResponseItemTypeFunctionCall, "call-1"},
-		{llm.ResponseItemTypeFunctionCall, "call-2"},
-		{llm.ResponseItemTypeFunctionCallOutput, "call-1"},
-		{llm.ResponseItemTypeFunctionCallOutput, "call-2"},
+	if len(request.Items) < 3 {
+		t.Fatalf("request items = %+v, want replacement plus active tail", request.Items)
 	}
-	if len(items) != len(want) {
-		t.Fatalf("provider items = %+v, want %d ordered call/output items", items, len(want))
-	}
-	for i, expected := range want {
-		if items[i].Type != expected.itemType || items[i].CallID != expected.callID {
-			t.Fatalf("provider item[%d] = %+v, want type=%q call_id=%q", i, items[i], expected.itemType, expected.callID)
+	tail := request.Items[len(request.Items)-3:]
+	assertHistoryReplacementTail(t, tail)
+	for _, item := range request.Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.Role != nil &&
+			*item.Role == llm.RoleUser &&
+			item.MessageType == nil {
+			t.Fatalf("pre-compaction ordinary user item reached the rebuilt request: %+v", item)
 		}
 	}
 }
 
-func TestChatStoreFinalizedStreamIdentityUsesActiveSegmentCoordinates(t *testing.T) {
-	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{
+func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
+	t.Parallel()
+	const replacementStepID = "22222222-2222-4222-8222-222222222222"
+	message := llm.Message{
 		Role: llm.RoleAssistant,
 		ToolCalls: []llm.ToolCall{{
-			ID:   "call-1",
-			Name: string(toolspec.ToolExecCommand),
+			ID:    "call-rebased",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
 		}},
-	})
-	s.appendMessage(chatStoreTestStepID, llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: "streamed before compaction",
-		Phase:   llm.MessagePhaseFinal,
-	})
-	preCompactionStreamID := uuid.New()
-	s.recordAssistantStreamFinalization(1, &preCompactionStreamID)
+	}
+	items := llm.ItemsFromMessages([]llm.Message{message})
 
-	beforeCompaction := s.deliverySnapshot()
-	if len(beforeCompaction.Rows) != 1 ||
-		beforeCompaction.Rows[0].Assistant == nil ||
-		beforeCompaction.Rows[0].Assistant.StreamID == nil ||
-		*beforeCompaction.Rows[0].Assistant.StreamID != preCompactionStreamID {
-		t.Fatalf("pre-compaction delivery rows = %+v, want finalized assistant stream identity after tool row", beforeCompaction.Rows)
+	live := newChatStoreWithCWD(t.TempDir())
+	if err := live.appendMessage(chatStoreTestStepID, message); err != nil {
+		t.Fatalf("append live message: %v", err)
 	}
+	live.replaceHistory(replacementStepID, items)
 
-	activeSegmentStart := s.committedEntryCount()
-	s.replaceHistoryAtCommittedEntryStart(chatStoreTestStepID, nil, &activeSegmentStart)
-	if len(s.assistantStreamIDsByEntry) != 0 {
-		t.Fatalf("pre-compaction stream identities survived active-segment trim: %+v", s.assistantStreamIDsByEntry)
-	}
-	s.appendMessage(chatStoreTestStepID, llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: "streamed after compaction",
-		Phase:   llm.MessagePhaseFinal,
-	})
-	postCompactionStreamID := uuid.New()
-	s.recordAssistantStreamFinalization(activeSegmentStart, &postCompactionStreamID)
+	reopened := newChatStoreWithCWD(t.TempDir())
+	reopened.replaceHistory(replacementStepID, items)
 
-	afterCompaction := s.deliverySnapshot()
-	if len(afterCompaction.Rows) != 1 ||
-		afterCompaction.Rows[0].Assistant == nil ||
-		afterCompaction.Rows[0].Assistant.StreamID == nil ||
-		*afterCompaction.Rows[0].Assistant.StreamID != postCompactionStreamID {
-		t.Fatalf("post-compaction delivery rows = %+v, want stream identity at active-segment origin", afterCompaction.Rows)
-	}
-}
-
-func TestChatStoreDeliveryIncludesCompleteActiveSegment(t *testing.T) {
-	s := newChatStore()
-	const count = 650
-	for i := 0; i < count; i++ {
-		s.appendMessage(chatStoreTestStepID, llm.Message{
-			Role:    llm.RoleUser,
-			Content: fmt.Sprintf("message-%03d", i),
-		})
-	}
-
-	rows := s.deliverySnapshot().Rows
-	if len(rows) != count {
-		t.Fatalf("delivery rows = %d, want complete active segment %d", len(rows), count)
-	}
-	if rows[0].User == nil || rows[0].User.Text != "message-000" {
-		t.Fatalf("first delivery row = %+v, want oldest active row", rows[0])
-	}
-	if last := rows[len(rows)-1]; last.User == nil || last.User.Text != "message-649" {
-		t.Fatalf("last delivery row = %+v, want newest active row", last)
-	}
-}
-
-func TestChatStoreDeliveryPreservesTypedAndLegacyLocalRowsAfterCompaction(t *testing.T) {
-	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "before"})
-	activeSegmentStart := s.committedEntryCount()
-	s.replaceHistoryAtCommittedEntryStart(chatStoreTestStepID, nil, &activeSegmentStart)
-
-	typed := ChatEntry{
-		Visibility:    transcript.EntryVisibilityAuto,
-		Role:          "reviewer_status",
-		Text:          "Supervisor ran: 1 suggestion.",
-		CondensedText: "1 suggestion",
-		NoticeID:      "0d4ad314-f5f9-4b32-a13d-4b8c1d9a2e61",
-	}
-	s.appendLocalEntryRecord(typed, nil)
-	s.appendLocalEntryRecord(ChatEntry{Text: "ancient untyped row"}, nil)
-
-	rows := s.deliverySnapshot().Rows
-	if len(rows) != 2 {
-		t.Fatalf("delivery rows = %+v, want typed and legacy notices", rows)
-	}
-	liveTyped := TranscriptCommittedRowFactsFromEvent(Event{Kind: EventLocalEntryAdded, LocalEntry: &typed})
-	if len(liveTyped) != 1 || !reflect.DeepEqual(rows[0], liveTyped[0]) {
-		t.Fatalf("hydrated typed row = %+v, live row = %+v", rows[0], liveTyped)
-	}
-	if rows[1].Notice == nil ||
-		rows[1].Notice.Reason != "legacy_untyped_notice" ||
-		rows[1].Notice.LegacyText == nil ||
-		*rows[1].Notice.LegacyText != "ancient untyped row" {
-		t.Fatalf("legacy row = %+v, want fossilized untyped notice", rows[1])
-	}
-}
-
-func TestTranscriptFactsNormalizeLegacyProjectedLocalEntryVisibility(t *testing.T) {
-	for _, test := range []struct {
-		legacy transcript.EntryVisibility
-		want   transcript.EntryVisibility
-	}{
-		{legacy: transcript.EntryVisibility("all"), want: transcript.EntryVisibilityOngoing},
-		{legacy: transcript.EntryVisibility("verbose"), want: transcript.EntryVisibilityDetail},
-	} {
-		facts := TranscriptCommittedRowFactsFromEvent(Event{
-			Kind:                EventLocalEntryAdded,
-			LocalEntryProjected: true,
-			LocalEntry: &ChatEntry{
-				Visibility: test.legacy,
-				Role:       "system",
-				Text:       "legacy visibility",
-			},
-		})
-		if len(facts) != 1 || facts[0].Visibility != test.want {
-			t.Fatalf("legacy %q facts = %+v, want one row with visibility %q", test.legacy, facts, test.want)
+	for name, chat := range map[string]*chatStore{"live": live, "reopened": reopened} {
+		dangling := chat.danglingToolCalls()
+		if len(dangling) != 1 {
+			t.Fatalf("%s dangling calls = %+v, want one", name, dangling)
+		}
+		if dangling[0].stepID == nil || *dangling[0].stepID != replacementStepID {
+			t.Fatalf(
+				"%s dangling call step = %v, want replacement step %q",
+				name,
+				dangling[0].stepID,
+				replacementStepID,
+			)
 		}
 	}
 }
 
-func TestChatStoreDeliveryMatchesLiveProjectedCompactionRows(t *testing.T) {
-	s := newChatStore()
-	activeSegmentStart := 7
-	items := llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, Content: "user text"},
-		{
-			Role:    llm.RoleAssistant,
-			Content: "assistant text",
-			Phase:   llm.MessagePhaseFinal,
-			ToolCalls: []llm.ToolCall{{
-				ID:   "call-1",
-				Name: string(toolspec.ToolExecCommand),
-			}},
-		},
-		{
-			Role:       llm.RoleTool,
-			ToolCallID: "call-1",
-			Name:       string(toolspec.ToolExecCommand),
-			Content:    `{"output":"done"}`,
-		},
-	})
-	s.replaceHistoryAtCommittedEntryStart(chatStoreTestStepID, items, &activeSegmentStart)
-
-	hydrated := s.deliverySnapshot().Rows
-	live := make([]TranscriptCommittedRowFact, 0, len(hydrated))
-	for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(items)) {
-		entry.StepID = chatStoreTestStepID
-		live = append(live, TranscriptCommittedRowFactsFromEvent(Event{
-			Kind:                EventLocalEntryAdded,
-			LocalEntry:          &entry,
-			LocalEntryProjected: true,
-		})...)
+func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
+	t.Parallel()
+	const conflictingStepID = "22222222-2222-4222-8222-222222222222"
+	message := llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    "call-conflict",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{}`),
+		}},
 	}
-	if !reflect.DeepEqual(hydrated, live) {
-		t.Fatalf("hydrated rows = %+v, live rows = %+v, want identical projections", hydrated, live)
+
+	t.Run("before persistence", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		intent := steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{message},
+		)
+		if err := engine.steer(chatStoreTestStepID, intent); err != nil {
+			t.Fatalf("append initial tool call: %v", err)
+		}
+		before, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+		if err != nil {
+			t.Fatalf("read records before conflict: %v", err)
+		}
+
+		if err := engine.steer(conflictingStepID, intent); err == nil {
+			t.Fatal("conflicting tool-call Step identity was accepted")
+		}
+		after, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+		if err != nil {
+			t.Fatalf("read records after conflict: %v", err)
+		}
+		if len(after.Records) != len(before.Records) {
+			t.Fatalf(
+				"conflicting tool call persisted records: before=%d after=%d",
+				len(before.Records),
+				len(after.Records),
+			)
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		for _, stepID := range []string{chatStoreTestStepID, conflictingStepID} {
+			if _, _, err := appendTestEvent(t, store, stepID, message); err != nil {
+				t.Fatalf("append conflicting persisted tool call: %v", err)
+			}
+		}
+		engine, err := New(
+			store,
+			mustMaterializeTestEventLog(t, store),
+			&fakeClient{},
+			tools.NewRegistry(),
+			Config{Model: "gpt-5"},
+		)
+		if err == nil {
+			if closeErr := engine.Close(); closeErr != nil {
+				t.Fatalf("close unexpectedly restored engine: %v", closeErr)
+			}
+			t.Fatal("restored conflicting tool-call Step identity")
+		}
+	})
+}
+
+func assertHistoryReplacementTail(t *testing.T, items []llm.ResponseItem) {
+	t.Helper()
+	if len(items) != 3 {
+		t.Fatalf("history replacement tail = %+v, want exactly three items", items)
+	}
+	if items[0].Type != llm.ResponseItemTypeMessage ||
+		items[0].Role == nil ||
+		*items[0].Role != llm.RoleDeveloper ||
+		items[0].MessageType == nil ||
+		*items[0].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("history replacement environment item = %+v", items[0])
+	}
+	if items[1].Type != llm.ResponseItemTypeMessage ||
+		items[1].Role == nil ||
+		*items[1].Role != llm.RoleUser ||
+		items[1].MessageType == nil ||
+		*items[1].MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("history replacement summary item = %+v", items[1])
+	}
+	if items[2].Type != llm.ResponseItemTypeMessage ||
+		items[2].Role == nil ||
+		*items[2].Role != llm.RoleAssistant ||
+		items[2].Phase == nil ||
+		*items[2].Phase != llm.MessagePhaseFinal {
+		t.Fatalf("active-tail assistant item = %+v", items[2])
+	}
+}
+
+func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	calls := []llm.ToolCall{
+		{ID: "call-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "call-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: calls,
+	}); err != nil {
+		t.Fatalf("append tool calls: %v", err)
+	}
+	for _, call := range calls {
+		output := json.RawMessage(`{"ok":true}`)
+		if _, _, err := appendTestEvent(t, store, "step", storedToolCompletion{
+			CallID: call.ID,
+			Name:   call.Name,
+			Output: output,
+			ProviderItems: []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCallOutput,
+				CallID: textutil.Value(call.ID),
+				Name:   textutil.Value(call.Name),
+				Output: output,
+			}},
+		}); err != nil {
+			t.Fatalf("append completion for %s: %v", call.ID, err)
+		}
+	}
+
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	request, err := engine.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	type toolItem struct {
+		kind   llm.ResponseItemType
+		callID string
+	}
+	var actual []toolItem
+	for _, item := range request.Items {
+		if !isToolCallItem(item.Type) && !isToolOutputItem(item.Type) {
+			continue
+		}
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
+			t.Fatalf("tool request item lacks call identity: %+v", item)
+		}
+		actual = append(actual, toolItem{kind: item.Type, callID: callID})
+	}
+	want := []toolItem{
+		{kind: llm.ResponseItemTypeFunctionCall, callID: "call-one"},
+		{kind: llm.ResponseItemTypeFunctionCall, callID: "call-two"},
+		{kind: llm.ResponseItemTypeFunctionCallOutput, callID: "call-one"},
+		{kind: llm.ResponseItemTypeFunctionCallOutput, callID: "call-two"},
+	}
+	if len(actual) != len(want) {
+		t.Fatalf("tool request item count = %d, want %d (%+v)", len(actual), len(want), actual)
+	}
+	for index, expected := range want {
+		if actual[index] != expected {
+			t.Fatalf("tool request item[%d] = %+v, want %+v", index, actual[index], expected)
+		}
+	}
+}
+
+func TestHistoryReplacementPrunesPriorToolWorkingState(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	calls := []llm.ToolCall{
+		{ID: "pruned-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "pruned-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: calls,
+	}); err != nil {
+		t.Fatalf("append pre-compaction tool calls: %v", err)
+	}
+	for _, call := range calls {
+		if _, _, err := appendTestEvent(t, store, "step", storedToolCompletion{
+			CallID: call.ID,
+			Name:   call.Name,
+			Output: json.RawMessage(`{"ok":true}`),
+			ProviderItems: []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCallOutput,
+				CallID: textutil.Value(call.ID),
+				Name:   textutil.Value(call.Name),
+				Output: json.RawMessage(`{"ok":true}`),
+			}},
+		}); err != nil {
+			t.Fatalf("append pre-compaction completion for %s: %v", call.ID, err)
+		}
+	}
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "local",
+		Mode:   string(compactionModeAuto),
+		Items: llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleUser,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	}); err != nil {
+		t.Fatalf("append history replacement: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:    llm.RoleUser,
+		Content: textutil.Value("active input"),
+	}); err != nil {
+		t.Fatalf("append active input: %v", err)
+	}
+
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, call := range calls {
+		if _, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot(call.ID); ok {
+			t.Fatalf("history replacement retained prior tool completion %q", call.ID)
+		}
+	}
+	items := engine.transcriptRuntimeState().SnapshotItems()
+	if len(items) != 2 {
+		t.Fatalf("active provider items = %+v, want summary and active input", items)
+	}
+	if items[0].MessageType == nil || *items[0].MessageType != llm.MessageTypeCompactionSummary ||
+		items[1].Role == nil || *items[1].Role != llm.RoleUser || items[1].MessageType != nil {
+		t.Fatalf("active provider items = %+v, want typed summary plus user input", items)
+	}
+	for _, item := range items {
+		if isToolCallItem(item.Type) || isToolOutputItem(item.Type) {
+			t.Fatalf("history replacement retained a prior tool item: %+v", item)
+		}
 	}
 }

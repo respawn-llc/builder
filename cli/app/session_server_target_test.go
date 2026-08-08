@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	serverstartup "core/server/startup"
+	patchtool "core/server/tools/patch"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -121,16 +122,10 @@ func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
 
 func appTestOutsidePatchPath(t *testing.T) string {
 	t.Helper()
-	workingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("resolve test working dir: %v", err)
-	}
-	dir, err := os.MkdirTemp(workingDir, "kent-prompt-outside-*")
-	if err != nil {
-		t.Fatalf("create outside-workspace test dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return filepath.Join(dir, "approved.txt")
+	return filepath.Join(
+		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", patchtool.IsPathInTemporaryDir),
+		"approved.txt",
+	)
 }
 
 func startAppTestRuntimeSubmission(t *testing.T, client clientui.RuntimeClient, text string) (<-chan appTestRuntimeSubmissionResult, <-chan error) {
@@ -249,11 +244,12 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
 		},
 	}
-	firstServer, err := startSessionServer(context.Background(), Options{
+	firstOptions := Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}, firstInteractor, true)
+	}
+	firstServer, err := startSessionServer(context.Background(), firstOptions, firstInteractor, true)
 	if err != nil {
 		t.Fatalf("first startSessionServer: %v", err)
 	}
@@ -276,11 +272,12 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 			return authMethodPickerResult{}, nil
 		},
 	}
-	secondServer, err := startSessionServer(context.Background(), Options{
+	secondOptions := Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}, secondInteractor, true)
+	}
+	secondServer, err := startSessionServer(context.Background(), secondOptions, secondInteractor, true)
 	if err != nil {
 		t.Fatalf("second startSessionServer: %v", err)
 	}
@@ -451,8 +448,10 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 		t.Fatalf("os.Getwd: %v", err)
 	}
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
-			envContent = msg.Content
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeEnvironment {
+			if msg.Content != nil {
+				envContent = *msg.Content
+			}
 			break
 		}
 	}
@@ -491,7 +490,7 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("expected second client to attach same session, a=%q b=%q", fixture.planA.SessionID, fixture.planB.SessionID)
 	}
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, fixture.runtimePlanA.Wiring.runtimeClient, "start prompt flow")
-	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "ask-race-1", submissionFailed)
+	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents, "ask-race-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Who answers first?" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
@@ -506,17 +505,18 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("AnswerAsk from attached client B: %v", err)
 	}
 
-	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "", submissionFailed)
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents, "", submissionFailed)
 	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
 
+	commentary := "approved by client B"
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       fixture.planA.SessionID,
 		ApprovalID:      string(approvalPrompt.PromptID),
 		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      "approved by client B",
+		Commentary:      &commentary,
 	}); err != nil {
 		t.Fatalf("AnswerApproval from attached client B: %v", err)
 	}
@@ -563,10 +563,11 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	fixture.daemon = configured.daemon
 	fixture.serverA = configured.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspaceA, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
 
-	cfgB, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspaceB, WorkspaceRootExplicit: true}))
+	resolvedB, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspaceB, WorkspaceRootExplicit: true}))
 	if err != nil {
 		t.Fatalf("loadSessionServerConfig workspace B: %v", err)
 	}
+	cfgB := resolvedB.Config
 	remoteB, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfgB))
 	if err != nil {
 		t.Fatalf("DialRemote workspace B: %v", err)

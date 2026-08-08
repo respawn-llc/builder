@@ -132,9 +132,7 @@ export function cardBelongsToColumn(column: BoardColumn, card: KanbanCardVM): bo
     return card.statusKind === "backlog";
   }
   if (column.isDone) {
-    return (
-      card.statusKind === "done" || card.statusKind === "canceled" || card.activeNodeIDs.includes(column.id)
-    );
+    return card.statusKind === "done" || card.activeNodeIDs.includes(column.id);
   }
   return card.activeNodeIDs.includes(column.id);
 }
@@ -158,10 +156,20 @@ function cardContentEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.preview.truncated === right.preview.truncated &&
     left.updatedAt === right.updatedAt &&
     left.statusKind === right.statusKind &&
-    arrayEqual(left.statusRunIDs, right.statusRunIDs) &&
+    labelsEqual(left.labels, right.labels) &&
     left.workspaceChipLabel === right.workspaceChipLabel &&
     left.borderTone === right.borderTone &&
     arrayEqual(left.activeNodeIDs, right.activeNodeIDs)
+  );
+}
+
+function labelsEqual(left: KanbanCardVM["labels"], right: KanbanCardVM["labels"]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((label, index) => {
+      const rightLabel = right[index];
+      return label.id === rightLabel?.id && label.name === rightLabel.name;
+    })
   );
 }
 
@@ -170,7 +178,7 @@ function cardActionsEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.actions.canInterrupt === right.actions.canInterrupt &&
     left.actions.canResume === right.actions.canResume &&
     left.actions.canStart === right.actions.canStart &&
-    arrayEqual(left.actions.manualMoveTargetNodeIDs, right.actions.manualMoveTargetNodeIDs)
+    left.actions.canDelete === right.actions.canDelete
   );
 }
 

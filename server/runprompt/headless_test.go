@@ -38,6 +38,7 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/sessionenv"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -55,6 +56,14 @@ type blockingPromptHistoryStore struct{}
 func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
 	<-ctx.Done()
 	return metadata.PromptHistoryRecord{}, false, ctx.Err()
+}
+
+type fixedSessionExecutionTargetResolver struct {
+	target clientui.SessionExecutionTarget
+}
+
+func (r fixedSessionExecutionTargetResolver) ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error) {
+	return r.target, nil
 }
 
 type headlessLaunchArtifactSnapshot struct {
@@ -130,8 +139,8 @@ func TestRunPromptProgressFromRuntimeEventPublishesUserVisibleEvents(t *testing.
 				Kind: runtime.EventAssistantMessage,
 				Message: llm.Message{
 					Role:    llm.RoleAssistant,
-					Phase:   llm.MessagePhaseCommentary,
-					Content: "I am checking the runtime.",
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					Content: textutil.Value("I am checking the runtime."),
 				},
 			},
 			wantKind:  serverapi.RunPromptProgressKindAssistantMessage,
@@ -242,17 +251,42 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 	}
 }
 
-func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager, persistences ...*sessiontest.Persistence) *sessionlaunch.Service {
+func newTestHeadlessSessionLaunch(
+	cfg config.App,
+	containerDir string,
+	authManager *auth.Manager,
+	authority *sessionruntime.Authority,
+	persistences ...*sessiontest.Persistence,
+) *sessionlaunch.Service {
 	persistence := sessiontest.NewPersistence()
 	if len(persistences) > 0 && persistences[0] != nil {
 		persistence = persistences[0]
 	}
 	return sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}).WithAuthStateReader(authManager)
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             persistence.Options(),
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: fixedProjectWorkspaceBoundaryResolver{root: cfg.WorkspaceRoot},
+		ExecutionTargets: fixedSessionExecutionTargetResolver{target: clientui.SessionExecutionTarget{
+			WorkspaceRoot:    cfg.WorkspaceRoot,
+			CwdRelpath:       ".",
+			EffectiveWorkdir: cfg.WorkspaceRoot,
+		}},
+	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
+}
+
+type fixedProjectWorkspaceBoundaryResolver struct{ root string }
+
+func (r fixedProjectWorkspaceBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "test-project",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}},
+	}, nil
+}
+
+func (r fixedProjectWorkspaceBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
+	return nil, nil
 }
 
 func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, background *shelltool.Manager, storeOptions ...session.StoreOption) *sessionruntime.Authority {
@@ -264,6 +298,77 @@ func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, bac
 	})
 }
 
+func TestHeadlessRuntimeUsesServerManagedWorktreeNamespace(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	serverManagedBase := filepath.Join(root, "server-worktrees")
+	projectManagedBase := filepath.Join(root, "project-worktrees")
+	currentWorktree := filepath.Join(serverManagedBase, "current")
+	workdir := filepath.Join(currentWorktree, "pkg")
+	for _, dir := range []string{workspace, workdir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	persistence := sessiontest.NewPersistence()
+	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, containerDir)
+	if err != nil {
+		t.Fatalf("NewScopedOpenSessionDescriptor: %v", err)
+	}
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{
+			Type:   auth.MethodAPIKey,
+			APIKey: &auth.APIKeyMethod{Key: "test-key"},
+		},
+	}), nil, time.Now)
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
+	launcher := &headlessPromptLauncher{boot: HeadlessBootstrap{
+		RuntimeAuthority:       authority,
+		ManagedWorktreeBaseDir: serverManagedBase,
+	}}
+	runtimePlan, err := launcher.prepareRuntime(context.Background(), launch.SessionPlan{
+		Descriptor: descriptor,
+		ActiveSettings: config.Settings{
+			Model:         "gpt-5",
+			OpenAIBaseURL: "http://127.0.0.1:1",
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		BaseSettings: config.Settings{
+			Worktrees: config.WorktreeSettings{BaseDir: projectManagedBase},
+		},
+		ExecutionTarget: clientui.SessionExecutionTarget{
+			WorkspaceRoot:    workspace,
+			EffectiveWorkdir: workdir,
+			Worktree: &clientui.SessionExecutionWorktreeTarget{
+				Root: currentWorktree,
+			},
+		},
+		ProjectWorkspaceBoundary: metadata.ProjectWorkspaceBoundary{
+			ProjectID:  "project-a",
+			Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: workspace}},
+		},
+		ManagedWorktreeRoots: []string{currentWorktree},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("prepareRuntime: %v", err)
+	}
+	if err := runtimePlan.CloseWithFailure(true); err != nil {
+		t.Fatalf("CloseWithFailure: %v", err)
+	}
+}
+
 type selectedRunPromptFixture struct {
 	store     *session.Store
 	authority *sessionruntime.Authority
@@ -273,9 +378,10 @@ type selectedRunPromptFixture struct {
 func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {
 	t.Helper()
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -301,34 +407,322 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 		store:     store,
 		authority: authority,
 		client: NewInProcessRunPromptClient(HeadlessBootstrap{
-			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 			RuntimeAuthority: authority,
 			PromptHistory:    history,
 		}),
 	}
 }
 
-func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+func TestHeadlessSiblingWorkspacePatchUsesProjectBoundary(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := t.TempDir()
+	sibling := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	if _, err := meta.AttachWorkspaceToProject(ctx, binding.ProjectID, sibling); err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if err := store.SetWorktreeReminderState(&session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			WorktreePath:  "/tmp/worktree",
-			WorkspaceRoot: "/tmp/workspace",
-			EffectiveCwd:  "/tmp/worktree/pkg",
-		},
-	}); err != nil {
-		t.Fatalf("SetWorktreeReminderState: %v", err)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
 	}
 
-	got := headlessRuntimeWorkdir(launch.SessionPlan{WorktreeReminder: store.Meta().WorktreeReminder, WorkspaceRoot: "/tmp/workspace"})
-	if got != "/tmp/worktree/pkg" {
-		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree/pkg", got)
+	target := filepath.Join(sibling, "headless.txt")
+	patchArgs, err := json.Marshal(map[string]any{"patch": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: " + target,
+		"+headless sibling",
+		"*** End Patch",
+		"",
+	}, "\n")})
+	if err != nil {
+		t.Fatalf("marshal patch arguments: %v", err)
 	}
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		switch providerCalls.Add(1) {
+		case 1:
+			writeRunPromptFunctionCallResponse(w, "fc-sibling-patch", "call-sibling-patch", toolspec.ToolPatch, patchArgs)
+		case 2:
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+		default:
+			t.Errorf("unexpected provider request %d", providerCalls.Load())
+		}
+	}))
+	defer provider.Close()
+
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:         "gpt-5",
+			OpenAIBaseURL: provider.URL,
+			EnabledTools:  map[toolspec.ID]bool{toolspec.ToolPatch: true},
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		RuntimeAuthority: authority,
+	})
+	sessionID := mustRunPromptSessionID(t, store.Meta().SessionID)
+	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "headless-sibling-workspace",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		Prompt:          "write to the sibling Workspace",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if response.Result != "done" {
+		t.Fatalf("RunPrompt result = %q, want done", response.Result)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "headless sibling\n" {
+		t.Fatalf("sibling patch data = %q, error = %v", data, err)
+	}
+}
+
+func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsumed(t *testing.T) {
+	t.Setenv("KENT_REVIEWER_FREQUENCY", "off")
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	managedBase := filepath.Join(root, "worktrees")
+	worktreeRoot := filepath.Join(managedBase, "task")
+	worktreeSubdir := filepath.Join(worktreeRoot, "pkg")
+	for _, dir := range []string{workspace, worktreeSubdir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	parent, err := session.Create(
+		containerDir,
+		filepath.Base(containerDir),
+		workspace,
+		sessioncontract.SessionCategoryMain,
+		meta.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create parent: %v", err)
+	}
+	if err := parent.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable parent: %v", err)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktree: %v", err)
+	}
+	canonicalWorktreeSubdir, err := config.CanonicalWorkspaceRoot(worktreeSubdir)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktree subdir: %v", err)
+	}
+	if err := meta.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:              "worktree-task",
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   canonicalWorktreeRoot,
+		DisplayName:     "task",
+		Availability:    "available",
+		Managed:         true,
+		GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if err := meta.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
+		SessionID:  parent.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-task"},
+		CwdRelpath: "pkg",
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
+	}
+	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("task"),
+			WorktreePath:  canonicalWorktreeRoot,
+			WorkspaceRoot: workspace,
+			EffectiveCwd:  canonicalWorktreeSubdir,
+		},
+	}); err != nil {
+		t.Fatalf("SetWorktreeReminderState parent: %v", err)
+	}
+	if err := parent.SetWorktreeReminderState(nil); err != nil {
+		t.Fatalf("consume parent worktree reminder: %v", err)
+	}
+	if parent.Meta().WorktreeReminder != nil {
+		t.Fatalf("parent worktree reminder = %+v, want consumed reminder", parent.Meta().WorktreeReminder)
+	}
+
+	patchTarget := filepath.Join(canonicalWorktreeSubdir, "probe.txt")
+	patchArgs, err := json.Marshal(map[string]any{"patch": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: " + patchTarget,
+		"+inherited target",
+		"*** End Patch",
+		"",
+	}, "\n")})
+	if err != nil {
+		t.Fatalf("marshal patch arguments: %v", err)
+	}
+	patchOutput := make(chan string, 1)
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		switch providerCalls.Add(1) {
+		case 1:
+			writeRunPromptFunctionCallResponse(w, "fc-patch-target", "call-patch-target", toolspec.ToolPatch, patchArgs)
+		case 2:
+			defer r.Body.Close()
+			var payload map[string]any
+			if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+				t.Errorf("decode patch follow-up request: %v", decodeErr)
+			}
+			output, ok := findRunPromptFunctionCallOutput(payload)
+			if !ok {
+				t.Errorf("patch follow-up request has no function_call_output")
+			} else {
+				patchOutput <- output
+			}
+			modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+		default:
+			t.Errorf("unexpected provider request %d", providerCalls.Load())
+		}
+	}))
+	defer provider.Close()
+
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:               "gpt-5",
+			ThinkingLevel:       "medium",
+			OpenAIBaseURL:       provider.URL,
+			EnabledTools:        map[toolspec.ID]bool{toolspec.ToolPatch: true},
+			AllowNonCwdEdits:    true,
+			MaxSubagentDepth:    2,
+			Worktrees:           config.WorktreeSettings{BaseDir: managedBase},
+			ShellOutputMaxChars: 16_000,
+			Shell:               config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{
+		SessionLaunch: sessionlaunch.NewService(launch.Planner{
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
+		RuntimeAuthority:       authority,
+		PromptHistory:          meta,
+		ManagedWorktreeBaseDir: managedBase,
+	})
+	parentID := parent.Meta().SessionID
+	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "inherited-target-without-reminder",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
+		CallerSessionID: &parentID,
+		Prompt:          "verify the inherited execution target",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPrompt: %v", err)
+	}
+	if response.Result != "done" {
+		t.Fatalf("RunPrompt result = %q, want done", response.Result)
+	}
+	select {
+	case output := <-patchOutput:
+		var result map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("decode patch output %q: %v", output, err)
+		}
+		if warning, exists := result["warning"]; exists {
+			t.Fatalf("patch inside inherited current worktree emitted warning %s", warning)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for patch output")
+	}
+	if data, err := os.ReadFile(patchTarget); err != nil || string(data) != "inherited target\n" {
+		t.Fatalf("patch target data = %q, error = %v", data, err)
+	}
+
+	child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenByID child: %v", err)
+	}
+	if child.Meta().WorktreeReminder != nil {
+		t.Fatalf("child worktree reminder = %+v, want no reminder", child.Meta().WorktreeReminder)
+	}
+	target, err := meta.ResolveSessionExecutionTarget(ctx, response.SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget child: %v", err)
+	}
+	if target.Worktree == nil || target.Worktree.ID != "worktree-task" || target.EffectiveWorkdir != canonicalWorktreeSubdir {
+		t.Fatalf("child execution target = %+v, want worktree-task at %q", target, canonicalWorktreeSubdir)
+	}
+	records, err := sessiontest.CollectRecords(child)
+	if err != nil {
+		t.Fatalf("CollectRecords child: %v", err)
+	}
+	wantCWD := "\nCWD: " + canonicalWorktreeSubdir + "\n"
+	for _, record := range records {
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			t.Fatalf("read child event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok &&
+			message.MessageType != nil &&
+			*message.MessageType == session.MessageTypeEnvironment &&
+			message.Content != nil &&
+			strings.Contains(*message.Content, wantCWD) {
+			return
+		}
+	}
+	t.Fatalf("child environment did not use inherited CWD %q", canonicalWorktreeSubdir)
 }
 
 func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T) {
@@ -352,12 +746,10 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
-	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
 	if err := parent.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable parent: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, parent.Meta().SessionID)
 	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create ordinary caller: %v", err)
@@ -410,18 +802,22 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		CanonicalRoot:   worktreeRoot,
 		DisplayName:     filepath.Base(worktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
+	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, meta.AuthoritativeSessionStoreOptions()...)
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
-	})
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
+	}).WithRuntimeAuthority(authority)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: sessionLauncher,
+		SessionLaunch:    sessionLauncher,
+		RuntimeAuthority: authority,
 	})
 	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	role := "hidden"
@@ -468,6 +864,14 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("SetContinuationContext selected: %v", err)
 	}
 	selectedBefore := selected.Meta()
+	selectedEventLog, err := selected.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize selected event log: %v", err)
+	}
+	selectedRevisionBefore, err := selectedEventLog.Revision()
+	if err != nil {
+		t.Fatalf("read selected event log revision: %v", err)
+	}
 	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-selected-denial-1",
@@ -482,6 +886,14 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err != nil {
 		t.Fatalf("OpenByID selected: %v", err)
 	}
+	reopenedEventLog, err := reopenedSelected.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize reopened selected event log: %v", err)
+	}
+	reopenedRevision, err := reopenedEventLog.Revision()
+	if err != nil {
+		t.Fatalf("read reopened selected event log revision: %v", err)
+	}
 	if got := reopenedSelected.Meta(); got.Name != selectedBefore.Name ||
 		!reflect.DeepEqual(got.PreviousSessionID, selectedBefore.PreviousSessionID) ||
 		!reflect.DeepEqual(got.ParentAgentSessionID, selectedBefore.ParentAgentSessionID) ||
@@ -489,7 +901,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		got.Continuation.AgentRole == nil ||
 		*got.Continuation.AgentRole != role ||
 		got.ModelRequestCount != selectedBefore.ModelRequestCount ||
-		got.LastSequence != selectedBefore.LastSequence {
+		reopenedRevision != selectedRevisionBefore {
 		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
 	}
 	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
@@ -541,9 +953,10 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
-	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
+	if err := parent.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable parent: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, parent.Meta().SessionID)
 	parentID := parent.Meta().SessionID
 	ordinaryParent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -592,11 +1005,12 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
-			Config:            cfg,
-			ContainerDir:      containerDir,
-			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-			PersistedSessions: meta,
-		}).WithAuthStateReader(authManager),
+			Config:                   cfg,
+			ContainerDir:             containerDir,
+			StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        meta,
+			ProjectWorkspaceBoundary: meta,
+		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
 	})
@@ -707,9 +1121,10 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 
 func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -757,7 +1172,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}), nil, time.Now)
 
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
@@ -769,7 +1184,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	history := &recordingPromptHistoryStore{}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 		PromptHistory:    history,
 	})
@@ -1089,7 +1504,7 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, background, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 
@@ -1137,19 +1552,23 @@ func mustRunPromptPostprocessor(t *testing.T, mode config.ShellPostprocessingMod
 }
 
 func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessage) {
+	writeRunPromptFunctionCallResponse(w, "fc-runprompt-1", "call-runprompt-1", toolspec.ToolExecCommand, args)
+}
+
+func writeRunPromptFunctionCallResponse(w http.ResponseWriter, itemID string, callID string, toolID toolspec.ID, args json.RawMessage) {
 	writeSSEJSON(w, map[string]any{
 		"type": "response.output_item.added",
 		"item": map[string]any{
-			"id":        "fc-runprompt-1",
+			"id":        itemID,
 			"type":      "function_call",
-			"name":      string(toolspec.ToolExecCommand),
-			"call_id":   "call-runprompt-1",
+			"name":      string(toolID),
+			"call_id":   callID,
 			"arguments": "",
 		},
 	})
 	writeSSEJSON(w, map[string]any{
 		"type":    "response.function_call_arguments.delta",
-		"item_id": "fc-runprompt-1",
+		"item_id": itemID,
 		"delta":   string(args),
 	})
 	writeSSEJSON(w, map[string]any{
@@ -1163,9 +1582,9 @@ func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessa
 			"output": []any{
 				map[string]any{
 					"type":      "function_call",
-					"id":        "fc-runprompt-1",
-					"name":      string(toolspec.ToolExecCommand),
-					"call_id":   "call-runprompt-1",
+					"id":        itemID,
+					"name":      string(toolID),
+					"call_id":   callID,
 					"arguments": string(args),
 				},
 			},
@@ -1242,13 +1661,14 @@ func mustRunPromptSessionID(t *testing.T, raw string) runtimeids.SessionID {
 
 func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := store.SetGoal("ship feature", session.GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship feature", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	if err := store.EnsureDurable(); err != nil {
@@ -1256,12 +1676,14 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	}
 
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
+	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, nil, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, nil, authority, persistence),
+		RuntimeAuthority: authority,
 	})
 
 	_, err = client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -1276,9 +1698,10 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 
 func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) {
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1308,7 +1731,7 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
 	}), nil, time.Now)
 	cfg := config.App{
-		WorkspaceRoot:   "/tmp/workspace-a",
+		WorkspaceRoot:   workspace,
 		PersistenceRoot: root,
 		Settings: config.Settings{
 			Model:         "gpt-5",
@@ -1319,7 +1742,7 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 
@@ -1362,9 +1785,10 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	t.Setenv(config.PersistenceRootEnvName, home)
 
 	root := t.TempDir()
+	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	store, err := session.Create(containerDir, "workspace-a", workspace, sessioncontract.SessionCategorySubagent, persistence.Options()...)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -1394,7 +1818,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
 	}), nil, time.Now)
 
-	cfg, err := config.Load("/tmp/workspace-a", config.LoadOptions{})
+	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
@@ -1404,7 +1828,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 

@@ -148,38 +148,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.9
-        with:
-          version: 11.11.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2.9.1
-        with:
-          workspaces: tui-rs
-
-      - name: Build mocked Windows release asset
+      - name: Build mocked Windows release assets
         env:
           VERSION: 0.0.0
         run: |
           mkdir -p dist staging
-          GOOS=windows GOARCH=amd64 KENT_VERSION="$VERSION" \
-            bash scripts/build.sh --output "staging/kent_${VERSION}_windows_amd64.exe"
-          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/kent_${VERSION}_windows_amd64.exe' -DestinationPath 'dist/kent_${VERSION}_windows_amd64.zip' -Force"
-          checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/kent_${VERSION}_windows_amd64.zip').Hash.ToLowerInvariant()")
-          printf '%s  %s\n' "$checksum" "kent_${VERSION}_windows_amd64.zip" > dist/checksums.txt
+          : > dist/checksums.txt
+          for goarch in amd64 arm64; do
+            asset="kent_${VERSION}_windows_${goarch}"
+            GOOS=windows GOARCH="$goarch" KENT_VERSION="$VERSION" \
+              bash scripts/build.sh server --output "staging/${asset}.exe"
+            powershell -NoProfile -Command "Compress-Archive -LiteralPath 'staging/${asset}.exe' -DestinationPath 'dist/${asset}.zip' -Force"
+            checksum=$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/${asset}.zip').Hash.ToLowerInvariant()")
+            printf '%s  %s\n' "$checksum" "${asset}.zip" >> dist/checksums.txt
+          done
 
       - name: Smoke test installer
         env:
@@ -311,7 +293,7 @@ jobs:
         run: pnpm build
 
   gui-native:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -341,10 +323,10 @@ jobs:
       - name: Install GUI dependencies
         run: pnpm --dir apps install --frozen-lockfile
 
-      - name: Build macOS 15 desktop bundle
+      - name: Build macOS desktop bundle
         run: bash scripts/build-desktop.sh --skip-install -- --bundles dmg
 
-      - name: Smoke test macOS 15 desktop bundle
+      - name: Smoke test macOS desktop bundle
         run: |
           shopt -s nullglob
           dmgs=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
@@ -381,10 +363,10 @@ jobs:
           kill -TERM "$app_pid"
           wait "$app_pid" || true
 
-      - name: Upload macOS 15 desktop bundle
+      - name: Upload macOS desktop bundle
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: desktop-bundle-macos-15-arm64
+          name: desktop-bundle-macos-arm64
           path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 

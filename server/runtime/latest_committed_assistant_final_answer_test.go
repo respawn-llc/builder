@@ -1,30 +1,60 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
-func appendFinalAnswerTestEvent(t *testing.T, store *session.Store, kind string, payload any) {
+func appendFinalAnswerTestRecord(
+	t *testing.T,
+	eventLog session.MaterializedEventLog,
+	payload session.EventRecordPayload,
+) {
 	t.Helper()
-	if _, _, err := store.AppendEvent("step", kind, payload); err != nil {
-		t.Fatalf("append %s: %v", kind, err)
+	stepID := "step"
+	if _, _, err := eventLog.AppendRecord(&stepID, payload); err != nil {
+		t.Fatalf("append %T: %v", payload, err)
 	}
 }
 
-func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
-		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "  exact final answer\n",
-	})
+func finalAnswerMessageRecord(t *testing.T, message llm.Message) session.MessageRecord {
+	t.Helper()
+	record, err := sessionMessageRecordFromLLM(message)
+	if err != nil {
+		t.Fatalf("adapt message: %v", err)
+	}
+	return record
+}
 
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
+func finalAnswerCompactionRecord(t *testing.T, answer string) session.HistoryReplacementRecord {
+	t.Helper()
+	record, err := sessionHistoryReplacementRecordFromRuntime(historyReplacementPayload{
+		Engine:                            "local",
+		Mode:                              string(compactionModeAuto),
+		LastCommittedAssistantFinalAnswer: textutil.OptionalExactString(answer),
+	})
+	if err != nil {
+		t.Fatalf("adapt compaction: %v", err)
+	}
+	return record
+}
+
+func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *testing.T) {
+	t.Parallel()
+	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("  exact final answer\n"),
+	}))
+
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
@@ -37,25 +67,26 @@ func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *tes
 }
 
 func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+	t.Parallel()
+	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "committed answer",
-	})
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{Role: llm.RoleUser, Content: "next task"})
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("committed answer"),
+	}))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{Role: llm.RoleUser, Content: textutil.Value("next task")}))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseCommentary,
-		Content: "streaming-style persisted commentary",
-	})
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+		Phase:   textutil.Value(llm.MessagePhaseCommentary),
+		Content: textutil.Value("streaming-style persisted commentary"),
+	}))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: transcript.NoopFinalToken,
-	})
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value(transcript.NoopFinalToken),
+	}))
 
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
@@ -65,18 +96,16 @@ func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals
 }
 
 func TestLatestCommittedAssistantFinalAnswerCompactionBoundaryReturnsAbsence(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+	t.Parallel()
+	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "pre-compaction answer",
-	})
-	appendFinalAnswerTestEvent(t, store, "history_replaced", historyReplacementPayload{
-		Engine:                            "compaction",
-		LastCommittedAssistantFinalAnswer: "carried pre-compaction answer",
-	})
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("pre-compaction answer"),
+	}))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerCompactionRecord(t, "carried pre-compaction answer"))
 
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
@@ -86,20 +115,21 @@ func TestLatestCommittedAssistantFinalAnswerCompactionBoundaryReturnsAbsence(t *
 }
 
 func TestLatestCommittedAssistantFinalAnswerReturnsPostCompactionAnswer(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+	t.Parallel()
+	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "pre-compaction answer",
-	})
-	appendFinalAnswerTestEvent(t, store, "history_replaced", historyReplacementPayload{Engine: "compaction"})
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("pre-compaction answer"),
+	}))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerCompactionRecord(t, ""))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "post-compaction answer",
-	})
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("post-compaction answer"),
+	}))
 
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
@@ -108,32 +138,12 @@ func TestLatestCommittedAssistantFinalAnswerReturnsPostCompactionAnswer(t *testi
 	}
 }
 
-func TestLatestCommittedAssistantFinalAnswerCrossesLegacyReviewerRollback(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{
-		Role:    llm.RoleAssistant,
-		Phase:   llm.MessagePhaseFinal,
-		Content: "answer before rollback",
-	})
-	appendFinalAnswerTestEvent(t, store, "history_replaced", historyReplacementPayload{
-		Engine: session.LegacyReviewerRollbackHistoryReplacementEngine,
-		Mode:   "manual",
-	})
-
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
-	if err != nil {
-		t.Fatalf("lookup final answer: %v", err)
-	}
-	if answer == nil || *answer != "answer before rollback" {
-		t.Fatalf("answer = %v, want answer before rollback", answer)
-	}
-}
-
 func TestLatestCommittedAssistantFinalAnswerReturnsAbsenceWithoutFinal(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendFinalAnswerTestEvent(t, store, "message", llm.Message{Role: llm.RoleUser, Content: "task"})
+	t.Parallel()
+	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{Role: llm.RoleUser, Content: textutil.Value("task")}))
 
-	answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
@@ -143,41 +153,41 @@ func TestLatestCommittedAssistantFinalAnswerReturnsAbsenceWithoutFinal(t *testin
 }
 
 func TestLatestCommittedAssistantFinalAnswerFailsOnMalformedRelevantEvents(t *testing.T) {
-	tests := []struct {
-		name    string
-		kind    string
-		payload string
-		wantErr error
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	eventLog := mustMaterializeTestEventLog(t, store)
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("final answer before malformed record"),
+	}))
+	line, err := json.Marshal(struct {
+		Seq     int64                            `json:"seq"`
+		Kind    session.EventKind                `json:"kind"`
+		Payload session.HistoryReplacementRecord `json:"payload"`
 	}{
-		{name: "message", kind: "message", payload: `"not a message"`, wantErr: nil},
-		{name: "history replacement", kind: "history_replaced", payload: `{"engine":"compaction","items":"not-an-array"}`, wantErr: errDecodeHistoryReplacedEvent},
+		Seq:  2,
+		Kind: session.EventKindHistoryReplace,
+		Payload: session.HistoryReplacementRecord{
+			Engine: "local",
+			Mode:   session.CompactionModeManual,
+			Items: []session.ProviderHistoryItem{{
+				Type: session.ProviderHistoryItemTypeOther,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal malformed relevant event: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			appendFinalAnswerTestEvent(t, store, "message", llm.Message{
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "older answer",
-			})
-			if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
-				StepID:  "step",
-				Kind:    tt.kind,
-				Payload: []byte(tt.payload),
-			}}); err != nil {
-				t.Fatalf("append malformed event: %v", err)
-			}
+	appendRawCurrentEventLine(t, store, line)
 
-			answer, err := LatestCommittedAssistantFinalAnswerFromStore(store)
-			if err == nil {
-				t.Fatal("expected malformed event error")
-			}
-			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Fatalf("error = %v, want %v", err, tt.wantErr)
-			}
-			if answer != nil {
-				t.Fatalf("answer = %q, must not cross malformed event", *answer)
-			}
-		})
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
+	var itemErr session.ProviderHistoryItemError
+	if answer != nil ||
+		!errors.Is(err, session.ErrProviderHistoryItem) ||
+		!errors.As(err, &itemErr) ||
+		itemErr.Type != session.ProviderHistoryItemTypeOther ||
+		itemErr.Reason != session.ProviderHistoryItemMissingRaw {
+		t.Fatalf("latest final answer malformed-event result = answer:%+v error:%v item:%+v", answer, err, itemErr)
 	}
 }

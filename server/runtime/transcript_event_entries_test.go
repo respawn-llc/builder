@@ -3,6 +3,7 @@ package runtime
 import (
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 )
 
 func TestTranscriptEntriesFromEventBuildsToolCallFallbackWithoutPresentation(t *testing.T) {
+	t.Parallel()
 	entries := TranscriptEntriesFromEvent(Event{
 		Kind: EventToolCallStarted,
 		ToolCall: &llm.ToolCall{
@@ -38,6 +40,7 @@ func TestTranscriptEntriesFromEventBuildsToolCallFallbackWithoutPresentation(t *
 }
 
 func TestNormalizeToolCallForTranscriptRepairsMalformedPresentation(t *testing.T) {
+	t.Parallel()
 	normalized := normalizeToolCallForTranscript(llm.ToolCall{
 		ID:           "call-1",
 		Name:         string(toolspec.ToolExecCommand),
@@ -57,6 +60,7 @@ func TestNormalizeToolCallForTranscriptRepairsMalformedPresentation(t *testing.T
 }
 
 func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryAndTriggerHandoffTools(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name   string
 		result tools.Result
@@ -67,7 +71,7 @@ func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryA
 				CallID:        "call-shell-1",
 				Name:          toolspec.ToolExecCommand,
 				Output:        json.RawMessage(`{"output":"/tmp","exit_code":0,"truncated":false}`),
-				CondensedText: "compact shell result",
+				CondensedText: textutil.Value("compact shell result"),
 			},
 		},
 		{
@@ -96,20 +100,25 @@ func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryA
 			if entry.ToolCallID != tc.result.CallID {
 				t.Fatalf("entry tool call id = %q, want %q", entry.ToolCallID, tc.result.CallID)
 			}
-			if entry.CondensedText != strings.TrimSpace(tc.result.CondensedText) {
-				t.Fatalf("entry condensed text = %q, want %q", entry.CondensedText, tc.result.CondensedText)
+			expectedCondensedText := ""
+			if tc.result.CondensedText != nil {
+				expectedCondensedText = strings.TrimSpace(*tc.result.CondensedText)
+			}
+			if entry.CondensedText != expectedCondensedText {
+				t.Fatalf("entry condensed text = %q, want %v", entry.CondensedText, tc.result.CondensedText)
 			}
 		})
 	}
 }
 
 func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
+	t.Parallel()
 	msg := llm.Message{
 		Role:        llm.RoleTool,
-		MessageType: llm.MessageTypeCustomToolCallOutput,
-		ToolCallID:  "call-patch-1",
-		Name:        string(toolspec.ToolPatch),
-		Content:     `"patched"`,
+		MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput),
+		ToolCallID:  textutil.Value("call-patch-1"),
+		Name:        textutil.Value(string(toolspec.ToolPatch)),
+		Content:     textutil.Value(`"patched"`),
 	}
 
 	entries := VisibleChatEntriesFromMessage(msg)
@@ -120,12 +129,13 @@ func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
 	if entry.Role != "tool_result_ok" || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed {
 		t.Fatalf("custom tool output entry role/visibility = %q/%q, want regular collapsed tool result", entry.Role, entry.Visibility)
 	}
-	if entry.ToolCallID != msg.ToolCallID {
-		t.Fatalf("custom tool output call id = %q, want %q", entry.ToolCallID, msg.ToolCallID)
+	if msg.ToolCallID == nil || entry.ToolCallID != *msg.ToolCallID {
+		t.Fatalf("custom tool output call id = %q, want %v", entry.ToolCallID, msg.ToolCallID)
 	}
 }
 
 func TestTranscriptEntriesFromEventOmitsPrePersistCompactionStatusRows(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name string
 		evt  Event

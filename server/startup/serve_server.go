@@ -353,6 +353,9 @@ func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags 
 		ProcessOutput:          hasDependency(apicontract.DependencyProcessOutput),
 		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
 		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
+		PromptCommands: hasDependency(apicontract.DependencyPromptCommandCatalog) &&
+			hasDependency(apicontract.DependencyRuntimeControl) &&
+			hasMethod(protocol.MethodRuntimeSubmitUserTurn),
 	}
 }
 
@@ -554,6 +557,10 @@ func (d *startupGatewayDependencies) snapshotConfig() config.App {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.cfg
+}
+
+func (d *startupGatewayDependencies) DebugEnabled() bool {
+	return d.snapshotConfig().Settings.Debug
 }
 
 type startupServerStatusService struct {
@@ -762,6 +769,12 @@ func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx cont
 func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {
 		return c.RunPromptClientForProjectWorkspaceID(ctx, projectID, workspaceID)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) PromptCommandCatalogClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.PromptCommandCatalogService, error) {
+	if c := d.activeCore(); c != nil {
+		return c.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }

@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"time"
 
 	"core/shared/runtimeids"
@@ -10,22 +9,23 @@ import (
 )
 
 type LockedContract struct {
-	Model             string                     `json:"model"`
-	Temperature       float64                    `json:"temperature"`
-	MaxOutputToken    int                        `json:"max_output_token"`
-	SystemPrompt      string                     `json:"system_prompt"`
-	HasSystemPrompt   bool                       `json:"has_system_prompt,omitempty"`
-	ReviewerPrompt    string                     `json:"reviewer_prompt,omitempty"`
-	HasReviewerPrompt bool                       `json:"has_reviewer_prompt,omitempty"`
-	ContextWindow     int                        `json:"context_window,omitempty"`
-	ContextPercent    int                        `json:"context_percent,omitempty"`
-	EnabledTools      []string                   `json:"enabled_tools,omitempty"`
-	HasEnabledTools   bool                       `json:"has_enabled_tools,omitempty"`
-	WebSearchMode     string                     `json:"web_search_mode,omitempty"`
-	ToolPreambles     *bool                      `json:"tool_preambles,omitempty"`
-	ModelCapabilities LockedModelCapabilities    `json:"model_capabilities,omitempty"`
-	ProviderContract  LockedProviderCapabilities `json:"provider_contract,omitempty"`
-	LockedAt          time.Time                  `json:"locked_at"`
+	Model                  string                                  `json:"model"`
+	Temperature            float64                                 `json:"temperature"`
+	MaxOutputToken         int                                     `json:"max_output_token"`
+	SystemPrompt           string                                  `json:"system_prompt"`
+	HasSystemPrompt        bool                                    `json:"has_system_prompt,omitempty"`
+	ReviewerPrompt         string                                  `json:"reviewer_prompt,omitempty"`
+	HasReviewerPrompt      bool                                    `json:"has_reviewer_prompt,omitempty"`
+	ContextWindow          int                                     `json:"context_window,omitempty"`
+	ContextPercent         int                                     `json:"context_percent,omitempty"`
+	EnabledTools           []string                                `json:"enabled_tools,omitempty"`
+	HasEnabledTools        bool                                    `json:"has_enabled_tools,omitempty"`
+	WebSearchMode          string                                  `json:"web_search_mode,omitempty"`
+	ToolPreambles          *bool                                   `json:"tool_preambles,omitempty"`
+	WorkflowCompletionMode *sessioncontract.WorkflowCompletionMode `json:"workflow_completion_mode,omitempty"`
+	ModelCapabilities      LockedModelCapabilities                 `json:"model_capabilities,omitempty"`
+	ProviderContract       LockedProviderCapabilities              `json:"provider_contract,omitempty"`
+	LockedAt               time.Time                               `json:"locked_at"`
 }
 
 func (c LockedContract) WithPromptFacingSnapshotsStale() LockedContract {
@@ -59,6 +59,11 @@ func (c LockedContract) WithRequestShape(fields LockedRequestShapeBackfill) Lock
 	c.EnabledTools = append([]string(nil), fields.EnabledTools...)
 	c.HasEnabledTools = fields.HasEnabledTools
 	c.WebSearchMode = fields.WebSearchMode
+	return c
+}
+
+func (c LockedContract) WithWorkflowCompletionMode(mode sessioncontract.WorkflowCompletionMode) LockedContract {
+	c.WorkflowCompletionMode = &mode
 	return c
 }
 
@@ -186,23 +191,6 @@ type GoalState struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
-type GoalSetEvent struct {
-	Goal           GoalState `json:"goal"`
-	Actor          GoalActor `json:"actor"`
-	ReplacedGoalID string    `json:"replaced_goal_id,omitempty"`
-}
-
-type GoalStatusUpdatedEvent struct {
-	Goal           GoalState  `json:"goal"`
-	Actor          GoalActor  `json:"actor"`
-	PreviousStatus GoalStatus `json:"previous_status"`
-}
-
-type GoalClearedEvent struct {
-	Goal  GoalState `json:"goal"`
-	Actor GoalActor `json:"actor"`
-}
-
 type Meta struct {
 	SessionID                       string                           `json:"session_id"`
 	Category                        *sessioncontract.SessionCategory `json:"category,omitempty"`
@@ -229,7 +217,6 @@ type Meta struct {
 	WorktreeReminder                *WorktreeReminderState           `json:"worktree_reminder,omitempty"`
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`
-	WorkflowSession                 *WorkflowSessionState            `json:"workflow_session,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
 }
 
@@ -244,18 +231,4 @@ type PendingModelRecovery struct {
 type InputDraftRecoveryBuffer struct {
 	Kind string `json:"kind"`
 	Text string `json:"text,omitempty"`
-}
-
-type WorkflowSessionState struct {
-	RunID      string `json:"run_id,omitempty"`
-	TaskID     string `json:"task_id,omitempty"`
-	WorkflowID string `json:"workflow_id,omitempty"`
-}
-
-type Event struct {
-	Seq       int64           `json:"seq"`
-	Timestamp time.Time       `json:"timestamp"`
-	Kind      string          `json:"kind"`
-	StepID    string          `json:"step_id,omitempty"`
-	Payload   json.RawMessage `json:"payload"`
 }

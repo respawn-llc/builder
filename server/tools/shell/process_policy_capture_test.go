@@ -20,10 +20,11 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatalf("new execution correlation: %v", err)
 	}
 	events := make(chan Event, 2)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type == EventBackgrounded || event.Type == EventCompleted || event.Type == EventKilled {
 			events <- event
 		}
+		return true
 	})
 	tool := NewExecCommandToolWithConfig(workspace, 16_000, manager, "owner", ExecCommandToolConfig{
 		Postprocessor:        replacementRunner(t, "RUNTIME"),
@@ -31,9 +32,10 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	})
 
 	result := callExecCommand(t, tool, "correlated-background", map[string]any{
-		"cmd":           "sleep 0.2",
+		"cmd":           "read line; printf '%s' \"$line\"",
 		"shell":         "/bin/sh",
 		"login":         false,
+		"tty":           true,
 		"yield_time_ms": 50,
 	})
 	if result.IsError {
@@ -61,19 +63,31 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatal("background event reused snapshot execution correlation pointer")
 	}
 
-	select {
-	case terminal := <-events:
-		if terminal.Type != EventCompleted {
-			t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
-		}
-		assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
-		if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
-			t.Fatal("terminal event reused background event execution correlation pointer")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for correlated terminal event")
+	processID, err := strconv.Atoi(snapshots[0].ID)
+	if err != nil {
+		t.Fatalf("background process ID: %v", err)
 	}
-	waitForManagerCount(t, manager, 0, time.Second)
+	stdinTool := NewWriteStdinTool(16_000, manager)
+	completed := callWriteStdin(t, stdinTool, "correlated-release", map[string]any{
+		"session_id":    processID,
+		"chars":         "release\n",
+		"yield_time_ms": 1_000,
+	})
+	if completed.IsError {
+		t.Fatalf("complete correlated background process: %s", string(completed.Output))
+	}
+
+	terminal := <-events
+	if terminal.Type != EventCompleted {
+		t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
+	}
+	assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
+	if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
+		t.Fatal("terminal event reused background event execution correlation pointer")
+	}
+	if manager.Count() != 0 {
+		t.Fatalf("background process count after completion = %d, want 0", manager.Count())
+	}
 }
 
 func assertExecutionCorrelation(t *testing.T, got *runtimeids.ExecutionCorrelation, want runtimeids.ExecutionCorrelation, location string) {
@@ -166,7 +180,7 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 
 	pollA := callWriteStdin(t, pollTool, "a-poll", map[string]any{
 		"session_id":    processA,
-		"yield_time_ms": 1_000,
+		"yield_time_ms": 15_000,
 	})
 	if pollA.IsError {
 		t.Fatalf("runtime A polling error: %s", string(pollA.Output))
@@ -177,14 +191,15 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	waitForManagerCount(t, manager, 0, time.Second)
 
 	events := make(chan Event, 1)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type != EventCompleted && event.Type != EventKilled {
-			return
+			return true
 		}
 		select {
 		case events <- event:
 		default:
 		}
+		return true
 	})
 	autoA := callExecCommand(t, toolA, "a-auto", map[string]any{
 		"cmd":           "sleep 0.2; printf automatic",
@@ -231,17 +246,21 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 
 	background := callExecCommand(t, tool, "raw-background", map[string]any{
-		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.2; printf '\\033[32mlate\\033[0m'",
+		"cmd":           "printf '\\033[31mearly\\033[0m'; read trigger; printf '\\033[32mlate\\033[0m'",
 		"shell":         "/bin/sh",
 		"login":         false,
+		"tty":           true,
 		"raw":           true,
-		"yield_time_ms": 50,
+		"yield_time_ms": 1_000,
 	})
 	if background.IsError {
 		t.Fatalf("raw background error: %s", string(background.Output))
 	}
 	if got := decodeStringToolOutput(t, background); !strings.Contains(got, "\x1b[31mearly\x1b[0m") {
 		t.Fatalf("raw background transition output = %q, want original ANSI", got)
+	}
+	if background.PresentationDelta == nil || !background.PresentationDelta.MovedToBackground {
+		t.Fatalf("raw background result did not report a background transition: %+v", background)
 	}
 	snapshots := manager.List()
 	if len(snapshots) != 1 {
@@ -253,7 +272,8 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 	poll := callWriteStdin(t, pollTool, "raw-poll", map[string]any{
 		"session_id":    processID,
-		"yield_time_ms": 1_000,
+		"chars":         "continue\n",
+		"yield_time_ms": 15_000,
 	})
 	if poll.IsError {
 		t.Fatalf("raw polling error: %s", string(poll.Output))
@@ -271,11 +291,12 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 	toolB := NewExecCommandToolWithPostprocessor(workspace, 16_000, manager, "owner-b", replacementRunner(t, "RUNTIME_B"))
 	pollTool := NewWriteStdinTool(16_000, manager)
 	events := make(chan Event, 4)
-	manager.SetEventHandler(func(event Event) {
+	manager.SetEventHandler(func(event Event) bool {
 		if event.Type != EventCompleted && event.Type != EventKilled {
-			return
+			return true
 		}
 		events <- event
+		return true
 	})
 
 	for name, tool := range map[string]*ExecCommandTool{"RUNTIME_A": toolA, "RUNTIME_B": toolB} {
@@ -313,8 +334,7 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 	}
 
 	pollA := callWriteStdin(t, pollTool, "cross-runtime-poll", map[string]any{
-		"session_id":    idByOwner["owner-a"],
-		"yield_time_ms": 250,
+		"session_id": idByOwner["owner-a"],
 	})
 	if pollA.IsError {
 		t.Fatalf("cross-runtime polling error: %s", string(pollA.Output))

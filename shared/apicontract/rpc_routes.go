@@ -66,6 +66,7 @@ const (
 	DependencyAuthBootstrap         Dependency = "auth_bootstrap"
 	DependencyAuthStatus            Dependency = "auth_status"
 	DependencyCapabilityFacts       Dependency = "capability_facts"
+	DependencyPromptCommandCatalog  Dependency = "prompt_command_catalog"
 	DependencyOnboardingFinalize    Dependency = "onboarding_finalize"
 	DependencyProjectView           Dependency = "project_view"
 	DependencySessionLaunch         Dependency = "session_launch"
@@ -104,7 +105,10 @@ type Route struct {
 	ValidatesRequest   bool
 }
 
-const UpdateStatusDedicatedRequestID = "get-update-status"
+const (
+	UpdateStatusDedicatedRequestID = "get-update-status"
+	TaskSearchDedicatedRequestID   = "workflow-task-search"
+)
 
 func unary[Req any, Resp any](method string, auth AuthPolicy, scope ScopePolicy, connection ConnectionStrategy, dependency Dependency) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
@@ -189,6 +193,7 @@ var routeContracts = []Route{
 	unary[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](protocol.MethodAuthAcknowledgeNoAuth, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),
 	unary[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](protocol.MethodAuthGetStatus, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthStatus),
 	unary[serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](protocol.MethodCapabilityFactsGet, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyCapabilityFacts),
+	unary[serverapi.PromptCommandCatalogRequest, serverapi.PromptCommandCatalogResponse](protocol.MethodPromptCommandCatalogGet, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencyPromptCommandCatalog),
 	unary[serverapi.OnboardingFinalizeRequest, serverapi.OnboardingFinalizeResponse](protocol.MethodOnboardingFinalize, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyOnboardingFinalize),
 	unary[protocol.AttachProjectRequest, protocol.AttachResponse](protocol.MethodAttachProject, AuthPreServerAuth, ScopeAttachProject, ConnectionUnscoped, DependencyProtocolAttach),
 	unary[protocol.AttachSessionRequest, protocol.AttachResponse](protocol.MethodAttachSession, AuthPreServerAuth, ScopeAttachSession, ConnectionUnscoped, DependencyProtocolAttach),
@@ -233,15 +238,25 @@ var routeContracts = []Route{
 	unary[serverapi.WorkflowGraphDeriveWiringRequest, serverapi.WorkflowGraphDeriveWiringResponse](protocol.MethodWorkflowGraphDeriveWiring, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowGraphSavePreviewRequest, serverapi.WorkflowGraphSavePreviewResponse](protocol.MethodWorkflowGraphSavePreview, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowGraphSaveRequest, serverapi.WorkflowGraphSaveResponse](protocol.MethodWorkflowGraphSave, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowProjectLabelCreateRequest, serverapi.WorkflowProjectLabelCreateResponse](protocol.MethodWorkflowProjectLabelCreate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowProjectLabelCatalogRequest, serverapi.WorkflowProjectLabelCatalogResponse](protocol.MethodWorkflowProjectLabelList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowProjectLabelRenameRequest, serverapi.WorkflowProjectLabelRenameResponse](protocol.MethodWorkflowProjectLabelRename, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowProjectLabelDeleteRequest, serverapi.WorkflowProjectLabelDeleteResponse](protocol.MethodWorkflowProjectLabelDelete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowProjectLabelReorderRequest, serverapi.WorkflowProjectLabelReorderResponse](protocol.MethodWorkflowProjectLabelReorder, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskLabelsGetRequest, serverapi.WorkflowTaskLabelsGetResponse](protocol.MethodWorkflowTaskLabelsGet, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskLabelsUpdateRequest, serverapi.WorkflowTaskLabelsUpdateResponse](protocol.MethodWorkflowTaskLabelsUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskCreateRequest, serverapi.WorkflowTaskCreateResponse](protocol.MethodWorkflowTaskCreate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskDependencyAddRequest, serverapi.WorkflowTaskDependencyAddResponse](protocol.MethodWorkflowTaskDependencyAdd, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskDependencyRemoveRequest, serverapi.WorkflowTaskDependencyRemoveResponse](protocol.MethodWorkflowTaskDependencyRemove, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskDependencyListRequest, serverapi.WorkflowTaskDependencyListResponse](protocol.MethodWorkflowTaskDependencyList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskUpdateRequest, serverapi.WorkflowTaskUpdateResponse](protocol.MethodWorkflowTaskUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskStartRequest, serverapi.WorkflowTaskStartResponse](protocol.MethodWorkflowTaskStart, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskInterruptRequest, serverapi.WorkflowTaskInterruptResponse](protocol.MethodWorkflowTaskInterrupt, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskResumeRequest, serverapi.WorkflowTaskResumeResponse](protocol.MethodWorkflowTaskResume, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskApproveRequest, serverapi.WorkflowTaskApproveResponse](protocol.MethodWorkflowTaskApprove, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskMovePreviewRequest, serverapi.WorkflowTaskMovePreviewResponse](protocol.MethodWorkflowTaskMovePreview, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](protocol.MethodWorkflowTaskMove, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskCompleteRequest, serverapi.WorkflowTaskCompleteResponse](protocol.MethodWorkflowTaskComplete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
-	unary[serverapi.WorkflowTaskCancelRequest, struct{}](protocol.MethodWorkflowTaskCancel, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskDeleteRequest, struct{}](protocol.MethodWorkflowTaskDelete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowAttentionListRequest, serverapi.WorkflowAttentionListResponse](protocol.MethodWorkflowAttentionList, AuthServer, ScopeNone, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskAttentionListRequest, serverapi.WorkflowTaskAttentionListResponse](protocol.MethodWorkflowTaskAttentionList, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
@@ -252,9 +267,11 @@ var routeContracts = []Route{
 	unary[serverapi.WorkflowTaskCommentDeleteRequest, struct{}](protocol.MethodWorkflowTaskCommentDelete, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskActivityListRequest, serverapi.WorkflowTaskActivityListResponse](protocol.MethodWorkflowTaskActivityList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](protocol.MethodWorkflowTaskList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	dedicatedUnary[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](protocol.MethodWorkflowTaskSearch, TaskSearchDedicatedRequestID, ScopeNone, DependencyWorkflow),
 	unary[serverapi.WorkflowBoardRequest, serverapi.WorkflowBoardResponse](protocol.MethodWorkflowBoardGet, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowBoardNodeCardsListRequest, serverapi.WorkflowBoardNodeCardsListResponse](protocol.MethodWorkflowBoardNodeCardsList, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](protocol.MethodWorkflowTaskGet, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
+	unary[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](protocol.MethodWorkflowTaskObserve, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.SessionPlanRequest, serverapi.SessionPlanResponse](protocol.MethodSessionPlan, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencySessionLaunch),
 	unary[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](protocol.MethodSessionGetMainView, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](protocol.MethodSessionGetTranscriptPage, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
@@ -270,6 +287,7 @@ var routeContracts = []Route{
 	unary[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](protocol.MethodWorktreeList, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](protocol.MethodWorktreeWorkspaceList, AuthServer, ScopeProjectWorkspaceBinding, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](protocol.MethodWorktreeSelectorResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
+	unary[serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](protocol.MethodWorktreeDeletePreview, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](protocol.MethodWorktreeCreateTargetResolve, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](protocol.MethodWorktreeEnter, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
@@ -291,10 +309,10 @@ var routeContracts = []Route{
 	unary[serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](protocol.MethodRuntimeHasQueuedUserWork, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](protocol.MethodRuntimeSubmitQueuedUserMessages, "runtime-submit-queued-user-messages", ScopeSessionActiveProject, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](protocol.MethodRuntimeInterrupt, "runtime-interrupt", ScopeSessionActiveProject, DependencyRuntimeControl),
-	unary[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](protocol.MethodRuntimeQueueUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](protocol.MethodRuntimeLiveSteer, AuthServer, ScopeRuntimeLiveSessionRequired, ConnectionControl, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](protocol.MethodRuntimeLiveStop, "runtime-live-stop", ScopeRuntimeLiveSessionOptional, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](protocol.MethodRuntimeLiveWait, "runtime-live-wait", ScopeRuntimeLiveSessionRequired, DependencyRuntimeControl),
+	dedicatedUnary[serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](protocol.MethodRuntimeLiveWatch, "runtime-live-watch", ScopeRuntimeLiveSessionOptional, DependencyRuntimeControl),
 	unary[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](protocol.MethodRuntimeDiscardQueuedUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeRecordPromptHistoryRequest, struct{}](protocol.MethodRuntimeRecordPromptHistory, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalShow, AuthServer, ScopeGoalSession, ConnectionControl, DependencyRuntimeControl),
@@ -309,6 +327,7 @@ var routeContracts = []Route{
 	unary[serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](protocol.MethodProcessInlineOutput, AuthServer, ScopeProcessActiveProject, ConnectionControl, DependencyProcessControl),
 	unary[serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](protocol.MethodAskListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyAskView),
 	unary[serverapi.AskAnswerRequest, struct{}](protocol.MethodAskAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
+	unary[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](protocol.MethodPromptAnswerBatch, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	unary[serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](protocol.MethodApprovalListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyApprovalView),
 	unary[serverapi.ApprovalAnswerRequest, struct{}](protocol.MethodApprovalAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	progress[serverapi.RunPromptRequest, serverapi.RunPromptResponse, serverapi.RunPromptProgress](protocol.MethodRunPrompt, ScopeProjectWorkspace, DependencyRunPrompt, protocol.MethodRunPromptProgress),

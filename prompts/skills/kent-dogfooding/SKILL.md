@@ -1,6 +1,6 @@
 ---
 name: kent-dogfooding
-description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks you to use/manage a worktree, set a goal, change Kent config.toml/settings/behavior/hooks/subagents, or debug project/workspace/worktree/workflow errors.
+description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks you to use/manage a worktree, set a goal, change Kent config.toml/settings/behavior/hooks/subagents, or to debug project/workspace/worktree/workflow errors.
 ---
 
 Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI.
@@ -38,6 +38,10 @@ Worktree setup scripts prepare new checkouts with local files, credentials, syml
 
 ## Config Locations
 Global config (applies to all projects) `~/.kent/config.toml` (`%USERPROFILE%\.kent\` on Windows), local config is at `<workspace-root>/.kent/config.toml`. Workspace root is usually your cwd, or your worktree's main workspace cwd. Config schema and full notes at `https://kent.sh/config.md`. The database and session logs that kent uses are colocated with the config file. Session logs are `.json` files with a full history of events, split per-project. Careful: session logs are very long and can weigh gigabytes.
+
+- Do not write directly to the live metadata database for normal operations. Manual edits can bypass Kent's invariants and leave the database inconsistent; use first-party CLI, API, or store operations instead.
+- If Kent cannot perform an operation without direct database edits, file an issue. Carefully repairing an already-corrupted database is the only valid exception.
+- Treat workflow deletion as high impact because it cascades through the workflow's links, tasks, and graph. Review the deletion preview before confirming.
 
 Runtime logs live under the persistence root (default `~/.kent`; override with `$KENT_PERSISTENCE_ROOT`):
 
@@ -79,4 +83,3 @@ Every ticket must include this exact line:
 `Filed by Kent on behalf of the user`
 
 For suspected security vulnerabilities, follow the repository's `SECURITY.md` instead of filing a public issue.
-

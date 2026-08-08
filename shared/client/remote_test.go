@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,16 @@ type capturedRunPromptService struct {
 	request serverapi.RunPromptRequest
 }
 
+func TestNormalizeWorkflowTaskObservationRPCErrorClassifiesConnectionEOF(t *testing.T) {
+	err := normalizeWorkflowTaskObservationRPCError(io.EOF)
+	if !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("normalized error = %v, want stream failure", err)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("normalized error = %v, must not remain raw EOF", err)
+	}
+}
+
 func (s *capturedRunPromptService) RunPrompt(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	s.request = req
 	return serverapi.RunPromptResponse{SessionID: "session-1", Result: "done"}, nil
@@ -37,6 +48,382 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 	if llmerrors.UserFacingError(err) == "" {
 		t.Fatal("expected reconstructed stall error to map to a user-facing message")
 	}
+}
+
+func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code: protocol.ErrCodeWorktreeBlocked,
+	})
+	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
+	}
+}
+
+func TestProtocolErrorDecodesMalformedWorktreeCreateAsContractError(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorktreeCreate,
+		Message: "worktree creation failed",
+		Data:    json.RawMessage(`{"owner":"other","diagnostic":"bad owner"}`),
+	})
+	var contractErr *serverapi.WorktreeCreateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("decoded error = %T %v, want WorktreeCreateContractError", err, err)
+	}
+	var typed *serverapi.WorktreeCreateError
+	if errors.As(err, &typed) {
+		t.Fatalf("malformed wire data decoded as typed create error: %+v", typed)
+	}
+}
+
+func TestProtocolErrorMapsBlankWorktreeBlockedSentinel(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorktreeBlocked})
+	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
+	}
+}
+
+func TestProtocolErrorMapsWorkspaceNotRegisteredSentinel(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code: protocol.ErrCodeWorkspaceNotRegistered,
+	})
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("decoded error = %v, want workspace-not-registered sentinel", err)
+	}
+}
+
+func TestRemotePreviewWorktreeDeleteSendsRouteAndDecodesEveryCleanlinessVariant(t *testing.T) {
+	tests := []struct {
+		name  string
+		state clientui.WorktreeDirtyState
+	}{
+		{name: "clean", state: clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean}},
+		{
+			name: "dirty",
+			state: func() clientui.WorktreeDirtyState {
+				count := 3
+				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateDirty, DirtyFileCount: &count}
+			}(),
+		},
+		{
+			name: "unknown",
+			state: func() clientui.WorktreeDirtyState {
+				cause := "status inspection failed"
+				return clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateUnknown, UnknownCause: &cause}
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := serverapi.WorktreeTopologyEntry{
+				Variant: serverapi.WorktreeTopologyVariantRegistered,
+				Registered: &serverapi.WorktreeRegisteredFacts{
+					Git: serverapi.WorktreeGitFacts{
+						CanonicalRoot: "/repo/feature",
+						HeadObject:    "abc123",
+						PathAvailable: true,
+					},
+					Kent: serverapi.WorktreeKentFacts{
+						WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+						CanonicalRoot: "/repo/feature",
+						DisplayName:   "feature",
+					},
+				},
+			}
+			response := serverapi.WorktreeDeletePreviewResponse{
+				Worktree:         entry,
+				DeletionSelector: entry.Registered.Kent.WorktreeID,
+				Cleanliness:      test.state,
+			}
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive delete preview: %v", err)
+					return
+				}
+				if request.Method != protocol.MethodWorktreeDeletePreview {
+					t.Errorf("method = %q, want %q", request.Method, protocol.MethodWorktreeDeletePreview)
+					return
+				}
+				var params serverapi.WorktreeDeletePreviewRequest
+				if err := json.Unmarshal(request.Params, &params); err != nil {
+					t.Errorf("decode delete preview request: %v", err)
+					return
+				}
+				if err := params.Validate(); err != nil {
+					t.Errorf("delete preview request validation: %v", err)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+					t.Errorf("send delete preview response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+
+			got, err := remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
+				SessionID: "session-1",
+				Selector:  "feature",
+			})
+			if err != nil {
+				t.Fatalf("PreviewWorktreeDelete: %v", err)
+			}
+			if got.Cleanliness.Kind != test.state.Kind {
+				t.Fatalf("cleanliness kind = %q, want %q", got.Cleanliness.Kind, test.state.Kind)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("decoded response validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemotePreviewWorktreeDeleteRejectsMismatchedResponseSelector(t *testing.T) {
+	entry := serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantExternal,
+		External: &serverapi.WorktreeExternalFacts{
+			Git: serverapi.WorktreeGitFacts{
+				CanonicalRoot: "/repo/external",
+				HeadObject:    "abc123",
+				PathAvailable: true,
+			},
+		},
+	}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			t.Errorf("receive delete preview: %v", err)
+			return
+		}
+		response := serverapi.WorktreeDeletePreviewResponse{
+			Worktree:         entry,
+			DeletionSelector: "/repo/other",
+			Cleanliness:      clientui.WorktreeDirtyState{Kind: clientui.WorktreeDirtyStateClean},
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, response)); err != nil {
+			t.Errorf("send delete preview response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.PreviewWorktreeDelete(context.Background(), serverapi.WorktreeDeletePreviewRequest{
+		SessionID: "session-1",
+		Selector:  "external",
+	})
+	if err == nil {
+		t.Fatal("mismatched delete preview selector was accepted")
+	}
+}
+
+func TestRemoteProjectWorkspaceMutationDecodesTypedErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		source error
+		wantAs func(error) bool
+	}{
+		{
+			name:   "path identity",
+			source: serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("inaccessible")},
+			wantAs: func(err error) bool { var typed serverapi.WorkspacePathIdentityError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "detach conflict",
+			source: &serverapi.WorkspaceDetachConflictError{ProjectID: "project-1", WorkspaceID: "workspace-1"},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceDetachConflictError; return errors.As(err, &typed) },
+		},
+		{
+			name:   "post-resolution mutation",
+			source: &serverapi.WorkspaceMutationError{ProjectID: "project-1", WorkspaceID: "workspace-1", Cause: errors.New("write failed")},
+			wantAs: func(err error) bool { var typed *serverapi.WorkspaceMutationError; return errors.As(err, &typed) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive request: %v", err)
+					return
+				}
+				structured := test.source.(interface {
+					RPCErrorCode() int
+					RPCErrorData() json.RawMessage
+				})
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(request.ID, structured.RPCErrorCode(), test.source.Error(), structured.RPCErrorData())); err != nil {
+					t.Errorf("send typed error: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if test.name == "path identity" {
+				selector, err = serverapi.NewProjectWorkspaceSelectorForRoot("/missing")
+			}
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			_, err = remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+				ProjectID:                "project-1",
+				ProjectWorkspaceSelector: selector,
+			})
+			if !test.wantAs(err) {
+				t.Fatalf("remote error = %T %v, want typed error", err, err)
+			}
+		})
+	}
+}
+
+func remoteProjectHomeSummaryJSON(projectKey string) map[string]any {
+	return map[string]any{
+		"project_id":   "project-1",
+		"project_key":  projectKey,
+		"display_name": "Project",
+		"primary_workspace": map[string]any{
+			"workspace_id": "workspace-1",
+			"display_name": "Workspace",
+			"root_path":    "/workspace",
+			"availability": "available",
+		},
+	}
+}
+
+func TestRemoteProjectWorkspaceMutationsValidateSuccessResponses(t *testing.T) {
+	tests := []struct {
+		name    string
+		method  string
+		result  any
+		wantErr bool
+		call    func(*Remote, serverapi.ProjectWorkspaceSelector) error
+	}{
+		{
+			name:    "default workspace summary",
+			method:  protocol.MethodProjectSetDefaultWorkspace,
+			result:  map[string]any{"project": map[string]any{}},
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:    "default blank workflow ID",
+			method:  protocol.MethodProjectSetDefaultWorkspace,
+			result:  remoteDefaultBlankWorkflowIDResponse(),
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "unlink blocker",
+			method: protocol.MethodProjectUnlinkWorkspace,
+			result: map[string]any{
+				"project_id":   "project-1",
+				"workspace_id": "workspace-1",
+				"unlinked":     false,
+				"blockers":     []any{map[string]any{"message": "malformed"}},
+			},
+			wantErr: true,
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "default legacy empty project key",
+			method: protocol.MethodProjectSetDefaultWorkspace,
+			result: map[string]any{"project": remoteProjectHomeSummaryJSON("")},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.SetDefaultWorkspace(context.Background(), serverapi.ProjectDefaultWorkspaceSetRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+		{
+			name:   "unlink legacy empty project key",
+			method: protocol.MethodProjectUnlinkWorkspace,
+			result: map[string]any{
+				"project_id":   "project-1",
+				"workspace_id": "workspace-1",
+				"unlinked":     true,
+				"project":      remoteProjectHomeSummaryJSON(""),
+			},
+			call: func(remote *Remote, selector serverapi.ProjectWorkspaceSelector) error {
+				_, err := remote.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+					ProjectID:                "project-1",
+					ProjectWorkspaceSelector: selector,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive mutation request: %v", err)
+					return
+				}
+				if request.Method != test.method {
+					t.Errorf("method = %q, want %q", request.Method, test.method)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.result)); err != nil {
+					t.Errorf("send malformed mutation response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			selector, err := serverapi.NewProjectWorkspaceSelectorForID("workspace-1")
+			if err != nil {
+				t.Fatalf("workspace selector: %v", err)
+			}
+			err = test.call(remote, selector)
+			if test.wantErr && err == nil {
+				t.Fatal("malformed mutation response was accepted")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("valid mutation response rejected: %v", err)
+			}
+		})
+	}
+}
+
+func remoteDefaultBlankWorkflowIDResponse() map[string]any {
+	summary := remoteProjectHomeSummaryJSON("project")
+	summary["default_workflow_id"] = ""
+	summary["default_workflow_name"] = "Workflow"
+	summary["default_workflow_valid"] = true
+	return map[string]any{"project": summary}
 }
 
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
@@ -98,6 +485,42 @@ func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
+func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Errorf("receive live watch request: %v", err)
+			return
+		}
+		if request.Method != protocol.MethodRuntimeLiveWatch {
+			t.Errorf("method = %q, want %q", request.Method, protocol.MethodRuntimeLiveWatch)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.RuntimeLiveWatchResponse{
+			SessionID: "session-1",
+			Outcome: serverapi.RuntimeLiveWatchOutcome{
+				Kind: serverapi.RuntimeLiveWatchQuestion,
+			},
+		})); err != nil {
+			t.Errorf("send malformed live watch response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: "session-1"})
+	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") {
+		t.Fatalf("LiveWatch error = %v, want response validation error", err)
+	}
+}
+
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
@@ -116,6 +539,13 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	}
 	if req.Method != protocol.MethodHandshake {
 		t.Fatalf("handshake method = %q", req.Method)
+	}
+	var params protocol.HandshakeRequest
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("decode handshake params: %v", err)
+	}
+	if params.ClientCapabilities == nil || !params.ClientCapabilities.TranscriptLiveRunFinished {
+		t.Fatalf("handshake client capabilities = %+v", params.ClientCapabilities)
 	}
 	if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
 		t.Fatalf("send handshake response: %v", err)
@@ -372,7 +802,7 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 			request.ID,
 			source.RPCErrorCode(),
 			source.Error(),
-			source.RPCErrorData(),
+			mustRPCErrorData(t, source),
 		)); err != nil {
 			t.Fatalf("send typed policy error: %v", err)
 		}
@@ -498,14 +928,10 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
 			t.Fatalf("send subscribe response: %v", err)
 		}
-		event := protocol.SessionTranscriptEventParams{Message: clientui.TranscriptMessage{
-			Sequence: 2,
-			Kind:     clientui.TranscriptMessageOperationalDiagnostic,
-			Payload: clientui.TranscriptPayload{OperationalDiagnostic: &clientui.TranscriptOperationalDiagnostic{
-				Code:   clientui.OperationalDiagnosticSleepGuardFailed,
-				Detail: "sleep prevention failed",
-			}},
-		}}
+		event := protocol.SessionTranscriptEventParams{Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+			Code:   clientui.OperationalDiagnosticSleepGuardFailed,
+			Detail: "sleep prevention failed",
+		}))}
 		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodSessionTranscriptEvent, Params: mustJSON(t, event)}); err != nil {
 			t.Fatalf("send transcript event: %v", err)
 		}
@@ -527,7 +953,7 @@ func TestRemoteSessionTranscriptSubscriptionUsesSeparateRouteAndDecodesMessages(
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}
-	if message.Sequence != 2 || message.Kind != clientui.TranscriptMessageOperationalDiagnostic || message.Payload.OperationalDiagnostic == nil {
+	if message.Sequence != 2 || message.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
 		t.Fatalf("transcript message = %+v, want seq=2 operational diagnostic", message)
 	}
 }
@@ -582,6 +1008,89 @@ func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing
 	}
 }
 
+func newRemoteWorkflowProjectSubscriptionServer(t *testing.T, event protocol.WorkflowProjectEvent) *httptest.Server {
+	t.Helper()
+	return newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Fatalf("receive workflow project subscribe: %v", err)
+		}
+		if req.Method != protocol.MethodWorkflowSubscribeProject {
+			t.Fatalf("subscribe method = %q, want %q", req.Method, protocol.MethodWorkflowSubscribeProject)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
+			t.Fatalf("send subscribe response: %v", err)
+		}
+		params := protocol.WorkflowProjectEventParams{Event: event}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodWorkflowProjectEvent, Params: mustJSON(t, params)}); err != nil {
+			t.Fatalf("send workflow project event: %v", err)
+		}
+	})
+}
+
+func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
+	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
+		ProjectID:        remoteTestStringPointer("project-1"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
+		Resource:         protocol.WorkflowProjectEventResourceTask,
+		Action:           protocol.WorkflowProjectEventActionQuestionWaiting,
+		PrimaryEntityID:  "task-1",
+		RelatedIDs:       []string{"run-1", "ask-1"},
+		OccurredAtUnixMs: 1,
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	sub, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{ProjectID: "project-1"})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	event, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if event.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		event.Action != serverapi.WorkflowProjectEventActionQuestionWaiting ||
+		event.PrimaryEntityID != "task-1" ||
+		!reflect.DeepEqual(event.RelatedIDs, []string{"run-1", "ask-1"}) {
+		t.Fatalf("event = %+v, want typed task question event", event)
+	}
+}
+
+func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombination(t *testing.T) {
+	server := newRemoteWorkflowProjectSubscriptionServer(t, protocol.WorkflowProjectEvent{
+		ProjectID:        remoteTestStringPointer("project-1"),
+		WorkflowID:       remoteTestWorkflowIDPointer("11111111-1111-4111-8111-111111111111"),
+		Resource:         protocol.WorkflowProjectEventResourceTask,
+		Action:           protocol.WorkflowProjectEventActionLinked,
+		PrimaryEntityID:  "task-1",
+		OccurredAtUnixMs: 1,
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	sub, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{ProjectID: "project-1"})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("Next error = %v, want stream failure", err)
+	}
+}
+
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
@@ -622,8 +1131,10 @@ func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		OperationID:         operationID,
-		SessionID:           "session-1",
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: operationID,
+			SessionID:   "session-1",
+		},
 		Selector:            "wt-1",
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
 	})
@@ -1084,7 +1595,7 @@ func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 
 func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskListScopeError{
 		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
 		ProjectID:  &projectID,
@@ -1093,7 +1604,7 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskListScope,
 		Message: "scope resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskListScopeError
 	if !errors.As(err, &decoded) {
@@ -1104,8 +1615,29 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesTaskSearchError(t *testing.T) {
+	source := &serverapi.TaskSearchError{Reason: serverapi.TaskSearchErrorReasonNormalizedTooShort}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskSearch,
+		Message: source.Error(),
+		Data:    mustRPCErrorData(t, source),
+	})
+	var decoded *serverapi.TaskSearchError
+	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
+		t.Fatalf("decoded error = %T %v, want %+v", err, err, source)
+	}
+	malformed := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskSearch,
+		Message: "fallback",
+		Data:    json.RawMessage(`{"type":"task_search_error","reason":"other"}`),
+	})
+	if errors.As(malformed, &decoded) {
+		t.Fatalf("malformed task search error decoded as typed: %+v", decoded)
+	}
+}
+
 func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	workflowID := runtimeids.NewWorkflowID()
 	source := &serverapi.WorkflowTaskCreateSelectionError{
 		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
 		ProjectID:  "project-1",
@@ -1114,7 +1646,7 @@ func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
 		Message: "selection failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateSelectionError
 	if !errors.As(err, &decoded) {
@@ -1143,11 +1675,46 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateConflict,
 		Message: "task create conflicted",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateConflictError
 	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
 		t.Fatalf("decoded error = %T %v, want WorkflowTaskCreateConflictError", err, err)
+	}
+}
+
+func TestProtocolErrorDecodesWorkflowTaskMutationSelfTargetError(t *testing.T) {
+	source := &serverapi.WorkflowTaskMutationSelfTargetError{TaskID: "task-1"}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskMutationSelfTarget,
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowTaskMutationSelfTargetError
+	if !errors.As(err, &decoded) || decoded.TaskID != source.TaskID {
+		t.Fatalf("decoded error = %T %v, want self-target task %q", err, err, source.TaskID)
+	}
+}
+
+func TestProtocolErrorDecodesWorkflowLabelError(t *testing.T) {
+	projectID := "project-1"
+	labelID := "11111111-1111-4111-8111-111111111111"
+	source := &serverapi.WorkflowLabelError{
+		Reason:    serverapi.WorkflowLabelErrorReasonWrongProject,
+		ProjectID: &projectID,
+		LabelID:   &labelID,
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowLabel,
+		Message: "label does not belong to project",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowLabelError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowLabelError", err, err)
+	}
+	if !reflect.DeepEqual(decoded, source) {
+		t.Fatalf("decoded error = %+v, want %+v", decoded, source)
 	}
 }
 
@@ -1165,7 +1732,7 @@ func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeSessionRetarget,
 		Message: source.Error(),
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -1186,7 +1753,7 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive session retarget request: %v", err)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 			t.Fatalf("send session retarget error: %v", err)
 		}
 	})
@@ -1230,7 +1797,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 				if err := websocket.JSON.Receive(ws, &req); err != nil {
 					t.Fatalf("receive worktree request: %v", err)
 				}
-				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 					t.Fatalf("send structured worktree error: %v", err)
 				}
 			})
@@ -1282,10 +1849,17 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 			Diagnostic: "setup failed",
 		},
 		&serverapi.WorktreeDeletePreconditionError{
-			DirtyState: serverapi.WorktreeDirtyState{
-				Kind:           serverapi.WorktreeDirtyStateDirty,
+			DirtyState: clientui.WorktreeDirtyState{
+				Kind:           clientui.WorktreeDirtyStateDirty,
 				DirtyFileCount: remoteTestIntPointer(2),
 			},
+		},
+		&serverapi.WorktreeCreateError{
+			Owner: serverapi.WorktreeCreateErrorOwnerForm,
+			Diagnostic: errors.Join(
+				errors.New("worktree path already exists"),
+				errors.New("cleanup failed"),
+			).Error(),
 		},
 	}
 }
@@ -1318,6 +1892,11 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		if !errors.As(err, &decoded) || decoded.DirtyState.DirtyFileCount == nil || *decoded.DirtyState.DirtyFileCount != 2 {
 			t.Fatalf("decoded delete precondition = %+v (%v)", decoded, err)
 		}
+	case *serverapi.WorktreeCreateError:
+		var decoded *serverapi.WorktreeCreateError
+		if !errors.As(err, &decoded) || decoded.Owner != source.(*serverapi.WorktreeCreateError).Owner || decoded.Diagnostic != source.(*serverapi.WorktreeCreateError).Diagnostic {
+			t.Fatalf("decoded create error = %+v (%v)", decoded, err)
+		}
 	default:
 		t.Fatalf("unsupported structured worktree error %T", source)
 	}
@@ -1325,6 +1904,18 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 
 func remoteTestIntPointer(value int) *int {
 	return &value
+}
+
+func remoteTestStringPointer(value string) *string {
+	return &value
+}
+
+func remoteTestWorkflowIDPointer(value string) *runtimeids.WorkflowID {
+	id, err := runtimeids.ParseWorkflowID(value)
+	if err != nil {
+		panic(err)
+	}
+	return &id
 }
 
 func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T) {
@@ -1335,7 +1926,7 @@ func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowExecutionTargetResolution,
 		Message: "execution target resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowExecutionTargetResolutionError
 	if !errors.As(err, &decoded) {
@@ -1353,7 +1944,7 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowLockedExecutionTarget,
 		Message: "locked execution target is unavailable",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowLockedExecutionTargetError
 	if !errors.As(err, &decoded) {
@@ -1364,13 +1955,10 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorAvoidsDuplicatingRuntimeSentinelMessage(t *testing.T) {
+func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeNoActiveRun, Message: serverapi.ErrRuntimeNoActiveRun.Error()})
 	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
 		t.Fatalf("expected runtime no-active, got %v", err)
-	}
-	if err.Error() != serverapi.ErrRuntimeNoActiveRun.Error() {
-		t.Fatalf("runtime no-active error text = %q, want %q", err.Error(), serverapi.ErrRuntimeNoActiveRun.Error())
 	}
 }
 

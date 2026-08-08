@@ -9,6 +9,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 )
 
 func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossContracts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.WorkflowCompletionMode
@@ -40,7 +42,7 @@ func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossCont
 			if err != nil {
 				t.Fatalf("build before request: %v", err)
 			}
-			eng.cfg.WorkflowRun.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
+			eng.cfg.CurrentNodeExecution.Contract.Transitions[0].Parameters = []workflow.Parameter{{Key: "different", Description: "Changed transition output."}}
 			reqAfter, err := eng.buildRequest(context.Background(), "step-after", true)
 			if err != nil {
 				t.Fatalf("build after request: %v", err)
@@ -64,6 +66,7 @@ func TestWorkflowCacheFriendlyCompletionModesKeepRequestMetadataStableAcrossCont
 }
 
 func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
+	t.Parallel()
 	automatic := llm.Request{
 		Model:                 "gpt-5",
 		SystemPrompt:          "system",
@@ -72,7 +75,7 @@ func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
 		ToolChoiceMode:        llm.ToolChoiceModeAutomatic,
 		EnableNativeWebSearch: true,
 		Tools:                 []llm.Tool{{Name: "shell"}, {Name: "patch"}},
-		Items:                 []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}},
+		Items:                 []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}},
 	}
 	required := automatic
 	required.ToolChoiceMode = llm.ToolChoiceModeRequired
@@ -113,6 +116,7 @@ func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
 }
 
 func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.CacheWarningMode
@@ -152,6 +156,7 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 }
 
 func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
+	t.Parallel()
 	observerErr := errors.New("cache response observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -164,13 +169,13 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 		CacheKey:      "cache-key",
 		Scope:         transcript.CacheWarningScopeConversation,
 		ChunkCount:    1,
-		TerminalHash:  "terminal",
+		TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 	}}
 	gate.FailNext(observerErr)
 
 	err := eng.observePromptCacheResponse("step-1", prepared, llm.Usage{
-		HasCachedInputTokens: true,
-		CachedInputTokens:    7,
+
+		CachedInputTokens: textutil.Value(7),
 	})
 	if !errors.Is(err, observerErr) {
 		t.Fatalf("cache response error = %v, want observer error", err)
@@ -197,7 +202,8 @@ func newCacheWarningTestEngine(t *testing.T, client llm.Client, mode config.Cach
 }
 
 func TestGenerateWithRetryClient_PersistsExactNonPostfixCacheWarningInDefaultMode(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, HasCachedInputTokens: true, CachedInputTokens: 7}}, {Usage: llm.Usage{InputTokens: 12, HasCachedInputTokens: true, CachedInputTokens: 0}}}}
+	t.Parallel()
+	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(7)}}, {Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
@@ -217,15 +223,16 @@ func TestGenerateWithRetryClient_PersistsExactNonPostfixCacheWarningInDefaultMod
 	if warnings[0].Reason != transcript.CacheWarningReasonNonPostfix {
 		t.Fatalf("warning reason = %q, want %q", warnings[0].Reason, transcript.CacheWarningReasonNonPostfix)
 	}
-	if warnings[0].LostInputTokens != 7 {
+	if warnings[0].LostInputTokens == nil || *warnings[0].LostInputTokens != 7 {
 		t.Fatalf("warning lost input tokens = %d, want 7", warnings[0].LostInputTokens)
 	}
 }
 
 func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWhenProviderReuseIncreases(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
-		{Usage: llm.Usage{InputTokens: 10, HasCachedInputTokens: true, CachedInputTokens: 2_432}},
-		{Usage: llm.Usage{InputTokens: 12, HasCachedInputTokens: true, CachedInputTokens: 12_160}},
+		{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(2_432)}},
+		{Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(12_160)}},
 	}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
@@ -245,6 +252,7 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWhenProviderReu
 }
 
 func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWithoutProviderCacheMetadata(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
 		{Usage: llm.Usage{InputTokens: 10}},
 		{Usage: llm.Usage{InputTokens: 12}},
@@ -264,13 +272,15 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWithoutProvider
 }
 
 func TestNew_RejectsInvalidCacheWarningMode(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, err := New(store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
+	if _, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
 		t.Fatal("expected invalid cache_warning_mode to fail")
 	}
 }
 
 func TestGenerateWithRetryClient_OffModeSuppressesExactNonPostfixWarning(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeOff)
 
@@ -309,7 +319,8 @@ func TestGenerateWithRetryClient_FailedRequestDoesNotAdvanceLineage(t *testing.T
 }
 
 func TestGenerateWithRetryClient_PersistsVerboseReuseDropWarning(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, HasCachedInputTokens: true, CachedInputTokens: 4}}, {Usage: llm.Usage{InputTokens: 12, HasCachedInputTokens: true, CachedInputTokens: 0}}}}
+	t.Parallel()
+	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(4)}}, {Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
@@ -326,12 +337,13 @@ func TestGenerateWithRetryClient_PersistsVerboseReuseDropWarning(t *testing.T) {
 	if warnings[0].Reason != transcript.CacheWarningReasonReuseDropped {
 		t.Fatalf("warning reason = %q, want %q", warnings[0].Reason, transcript.CacheWarningReasonReuseDropped)
 	}
-	if warnings[0].LostInputTokens != 4 {
+	if warnings[0].LostInputTokens == nil || *warnings[0].LostInputTokens != 4 {
 		t.Fatalf("warning lost input tokens = %d, want 4", warnings[0].LostInputTokens)
 	}
 }
 
 func TestGenerateWithRetryClient_DoesNotWarnAcrossDistinctCacheKeys(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
@@ -349,10 +361,11 @@ func TestGenerateWithRetryClient_DoesNotWarnAcrossDistinctCacheKeys(t *testing.T
 }
 
 func TestBuildRequest_SkipsPromptCacheKeyForUnsupportedProvider(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}}, true)
+	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -365,10 +378,11 @@ func TestBuildRequest_SkipsPromptCacheKeyForUnsupportedProvider(t *testing.T) {
 }
 
 func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSupportsIt(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}}, true)
+	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -384,11 +398,12 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 }
 
 func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.compactionRuntimeState().SetCount(1)
-	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}}, true)
+	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -401,11 +416,12 @@ func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t
 }
 
 func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-compact", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeManual),
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
@@ -416,7 +432,7 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 	}
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
 	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"}}, true)
+	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -429,15 +445,20 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 }
 
 func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
-		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}}},
+		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolExecCommand}})
 	eng.compactionRuntimeState().SetCount(1)
-	input := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "alpha"}, {Role: llm.RoleAssistant, Content: "beta"}})
-	if _, err := eng.localCompactionSummary(context.Background(), input, compactionInstructions("keep API details"), compactionModeManual); err != nil {
+	input := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("alpha")}, {Role: llm.RoleAssistant, Content: textutil.Value("beta")}})
+	instructionsInput, err := newCompactionInstructionsInput("keep API details")
+	if err != nil {
+		t.Fatalf("build compaction instructions input: %v", err)
+	}
+	if _, err := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual); err != nil {
 		t.Fatalf("local compaction summary: %v", err)
 	}
 	if len(client.calls) != 1 {
@@ -476,6 +497,7 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 }
 
 func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConversationSupervisorAndReopen(t *testing.T) {
+	t.Parallel()
 	type capturedRequest struct {
 		path      string
 		sessionID string
@@ -505,6 +527,12 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	transport := llm.NewHTTPTransport(transportStaticAuth{})
 	transport.BaseURL = server.URL + "/v1"
 	transport.Client = server.Client()
+	transport.ProviderCapabilitiesOverride = &llm.ProviderCapabilities{
+		ProviderID:             "openai",
+		SupportsResponsesAPI:   true,
+		SupportsPromptCacheKey: true,
+		IsOpenAIFirstParty:     true,
+	}
 	openAIClient := llm.NewOpenAIClient(transport)
 
 	store := mustCreateTestSession(t)
@@ -522,7 +550,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		return capturedRequests[len(capturedRequests)-1]
 	}
 	userExtra := func(text string) []llm.ResponseItem {
-		return llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: text}})
+		return llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}})
 	}
 
 	mainBeforeReq, err := eng.buildRequestWithExtraItems(context.Background(), "", userExtra("before"), true)
@@ -577,10 +605,10 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("reviewer after prompt_cache_key = %q, want %q", got, want)
 	}
 
-	if _, _, err := store.AppendEvent("legacy-compact", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeManual),
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
@@ -615,9 +643,10 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 }
 
 func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
-	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}}}}
+	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}}}
 	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
@@ -637,11 +666,12 @@ func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testin
 }
 
 func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
 	reviewerClient := &fakeClient{
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
-		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}}},
+		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
 	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	eng.compactionRuntimeState().SetCount(1)
@@ -663,11 +693,12 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 }
 
 func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversationCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-compact", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeManual),
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
@@ -679,7 +710,7 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
 	reviewerClient := &fakeClient{
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
-		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}}},
+		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
 	eng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
@@ -697,11 +728,12 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 }
 
 func TestGenerateWithRetryClient_KeepsReviewerLineageIndependent(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{
-		{Usage: llm.Usage{InputTokens: 10, HasCachedInputTokens: true, CachedInputTokens: 8}},
-		{Usage: llm.Usage{InputTokens: 10, HasCachedInputTokens: true, CachedInputTokens: 6}},
-		{Usage: llm.Usage{InputTokens: 12, HasCachedInputTokens: true, CachedInputTokens: 10}},
-		{Usage: llm.Usage{InputTokens: 12, HasCachedInputTokens: true, CachedInputTokens: 0}},
+		{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(8)}},
+		{Usage: llm.Usage{InputTokens: 10, CachedInputTokens: textutil.Value(6)}},
+		{Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(10)}},
+		{Usage: llm.Usage{InputTokens: 12, CachedInputTokens: textutil.Value(0)}},
 	}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
@@ -731,13 +763,14 @@ func TestGenerateWithRetryClient_KeepsReviewerLineageIndependent(t *testing.T) {
 }
 
 func TestGenerateWithRetryClient_CompactionRotatesConversationCacheKeyWithoutWarning(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}, {Usage: llm.Usage{InputTokens: 12}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeDefault)
 
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if len(persistedCacheWarnings(t, store)) != 0 {
@@ -754,13 +787,14 @@ func TestGenerateWithRetryClient_CompactionRotatesConversationCacheKeyWithoutWar
 }
 
 func TestGenerateWithRetryClient_RestoreIgnoresRequestObservationWithoutResponse(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-request", sessionEventCacheRequestObserved, persistedCacheRequestObserved{
+	if _, _, err := appendTestEvent(t, store, "legacy-request", persistedCacheRequestObserved{
 		DigestVersion: requestCacheDigestVersion,
 		CacheKey:      "cache-key-1",
 		Scope:         transcript.CacheWarningScopeConversation,
 		ChunkCount:    1,
-		TerminalHash:  "failed-only-hash",
+		TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 	}); err != nil {
 		t.Fatalf("append request event: %v", err)
 	}
@@ -792,13 +826,14 @@ func (f *failingCacheClient) ProviderCapabilities(context.Context) (llm.Provider
 }
 
 func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarning(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 10}}}}
 	store, eng := newCacheWarningTestEngine(t, client, config.CacheWarningModeVerbose)
 
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha"), nil, nil, nil); err != nil {
 		t.Fatalf("first generate: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if err := eng.Close(); err != nil {

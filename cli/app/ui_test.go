@@ -290,6 +290,64 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	}
 }
 
+func TestAskQuestionRecommendedOptionIsSelectedAndSubmitted(t *testing.T) {
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "first", "second")
+	recommended := 2
+	event.prompt.RecommendedOptionIndex = &recommended
+
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	selectedRecommended := false
+	for _, line := range updated.askController().renderPriorityPromptLines() {
+		if line.Kind == askPromptLineKindOption && line.Selected && line.Recommended {
+			selectedRecommended = true
+		}
+	}
+	if !selectedRecommended {
+		t.Fatal("recommended option was not selected")
+	}
+
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != recommended {
+		t.Fatalf("selected option = %+v, want %d", request.SelectedOptionNumber, recommended)
+	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
+}
+
+func TestQueuedAskQuestionReceivesItsRecommendationWhenPromoted(t *testing.T) {
+	m, control := newProjectedPromptTestUIModel(t)
+	updated := updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent(
+		"ask-a",
+		"First question",
+		"first",
+		"second",
+	)})
+	queued := testQuestionAskEvent("ask-b", "Second question", "first", "second")
+	recommended := 2
+	queued.prompt.RecommendedOptionIndex = &recommended
+	updated = updateUIModel(t, updated, askEventMsg{event: queued})
+	if updated.ask.current == nil || updated.ask.current.prompt.PromptID != "ask-a" || updated.ask.cursor != 0 {
+		t.Fatalf("queued question changed active selection: current=%+v cursor=%d", updated.ask.current, updated.ask.cursor)
+	}
+
+	updated = updateUIModel(t, updated, askEventMsg{event: askEvent{resolvedPromptID: "ask-a"}})
+	selectedRecommended := false
+	for _, line := range updated.askController().renderPriorityPromptLines() {
+		if line.Kind == askPromptLineKindOption && line.Selected && line.Recommended {
+			selectedRecommended = true
+		}
+	}
+	if !selectedRecommended {
+		t.Fatal("promoted question did not select its recommendation")
+	}
+
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != recommended {
+		t.Fatalf("selected option = %+v, want %d", request.SelectedOptionNumber, recommended)
+	}
+	resolveAnsweredTestAskThroughTranscript(t, updated)
+}
+
 func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
@@ -590,7 +648,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	}
 	updated = runPromptDeliveryCommand(t, updated, cmd)
 	request := requireApprovalRequest(t, control)
-	if request.Decision != clientui.ApprovalDecisionDeny || request.Commentary != "blocked by policy" {
+	if request.Decision != clientui.ApprovalDecisionDeny || approvalCommentary(request) != "blocked by policy" {
 		t.Fatalf("unexpected approval request: %+v", request)
 	}
 	if len(updated.pendingInjected) != 0 {
@@ -599,6 +657,49 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
 		t.Fatal("approval ask remained active after transcript resolution")
+	}
+}
+
+func TestApprovalAskDefaultsToAllowOnceOrFirstDecision(t *testing.T) {
+	tests := []struct {
+		name      string
+		decisions []clientui.ApprovalDecision
+		want      clientui.ApprovalDecision
+	}{
+		{
+			name: "allow once is selected despite order",
+			decisions: []clientui.ApprovalDecision{
+				clientui.ApprovalDecisionDeny,
+				clientui.ApprovalDecisionAllowSession,
+				clientui.ApprovalDecisionAllowOnce,
+			},
+			want: clientui.ApprovalDecisionAllowOnce,
+		},
+		{
+			name: "first decision is selected without allow once",
+			decisions: []clientui.ApprovalDecision{
+				clientui.ApprovalDecisionAllowSession,
+				clientui.ApprovalDecisionDeny,
+			},
+			want: clientui.ApprovalDecisionAllowSession,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m, control := newProjectedPromptTestUIModel(t)
+			updated := updateUIModel(t, m, askEventMsg{event: testApprovalAskEvent(
+				"approval-1",
+				"Approve?",
+				test.decisions...,
+			)})
+
+			next, command := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			updated = runPromptDeliveryCommand(t, next.(*uiModel), command)
+			request := requireApprovalRequest(t, control)
+			if request.Decision != test.want {
+				t.Fatalf("approval decision = %q, want %q", request.Decision, test.want)
+			}
+		})
 	}
 }
 

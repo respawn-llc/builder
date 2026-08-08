@@ -13,6 +13,7 @@ const parserProjects = [
   "./tsconfig.app.json",
   "./tsconfig.node.json",
   "./packages/native-bridge/tsconfig.json",
+  "./packages/ui-kit/tsconfig.json",
 ];
 
 export default tseslint.config(

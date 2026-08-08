@@ -66,6 +66,28 @@ func defaultToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessa
 	}
 }
 
+func viewImageToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
+	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
+		var input struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return defaultToolCallMeta(toolID)(ctx, raw)
+		}
+		imagePath := strings.TrimSpace(input.Path)
+		if imagePath == "" {
+			return defaultToolCallMeta(toolID)(ctx, raw)
+		}
+		return transcript.ToolCallMeta{
+			ToolName: string(toolID),
+			RenderHint: &transcript.ToolRenderHint{
+				Kind: transcript.ToolRenderKindPlain,
+				Path: imagePath,
+			},
+		}
+	}
+}
+
 func shellToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
 		command, inlineMeta := formatToolInput(toolID, raw)
@@ -80,7 +102,7 @@ func shellToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 		return transcript.ToolCallMeta{
 			ToolName:           string(toolID),
 			IsShell:            true,
-			UserInitiated:      parseShellToolCallUserInitiated(raw),
+			UserInitiated:      ParseShellToolCallUserInitiated(raw),
 			Command:            command,
 			CompactText:        command,
 			InlineMeta:         inlineMeta,
@@ -114,11 +136,13 @@ func webSearchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMes
 		if err != nil {
 			return defaultToolCallMeta(toolID)(ctx, raw)
 		}
-		display := FormatWebSearchDisplayText(in.Query)
+		query := strings.TrimSpace(in.Query)
+		if query == "" {
+			return defaultToolCallMeta(toolID)(ctx, raw)
+		}
 		return transcript.ToolCallMeta{
-			ToolName:    string(toolID),
-			Command:     display,
-			CompactText: display,
+			ToolName: string(toolID),
+			Command:  query,
 		}
 	}
 }
@@ -383,7 +407,7 @@ func formatTriggerHandoffToolResult(result Result) string {
 	return ""
 }
 
-func parseShellToolCallUserInitiated(raw json.RawMessage) bool {
+func ParseShellToolCallUserInitiated(raw json.RawMessage) bool {
 	var in struct {
 		UserInitiated bool `json:"user_initiated"`
 	}
@@ -733,7 +757,7 @@ func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
 	if toolID == toolspec.ToolWriteStdin {
 		sessionID, _ := asInt(obj["session_id"])
 		chars, _ := asString(obj["chars"])
-		if strings.TrimSpace(chars) == "" {
+		if chars == "" {
 			if yieldTimeMS, ok := asInt(obj["yield_time_ms"]); ok && yieldTimeMS > 0 {
 				pollDuration := time.Duration(yieldTimeMS) * time.Millisecond
 				pollDurationText := "0s"
@@ -763,9 +787,9 @@ func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
 	}
 	if toolID == toolspec.ToolWebSearch {
 		if query, ok := asString(obj["query"]); ok {
-			return FormatWebSearchDisplayText(query), ""
+			return strings.TrimSpace(query), ""
 		}
-		return FormatWebSearchDisplayText(""), ""
+		return "", ""
 	}
 	if toolID == toolspec.ToolAskQuestion {
 		if question, ok := asString(obj["question"]); ok {

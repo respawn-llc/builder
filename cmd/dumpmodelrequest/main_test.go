@@ -1,184 +1,171 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
-	"core/server/auth"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/session"
-	"core/shared/config"
+	"core/shared/sessioncontract"
 )
 
-func TestWriteOutputUsesPrivatePermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "request.json")
-	if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
-		t.Fatalf("seed output: %v", err)
-	}
-	if _, err := writeOutput(path, capturedRequest{SessionID: "session"}); err != nil {
-		t.Fatalf("writeOutput: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat output: %v", err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("output permissions = %o, want 600", got)
-	}
+func TestCaptureSessionRequestLeavesSourceSessionUntouched(t *testing.T) {
+	fixture := newCaptureSessionFixture(t, false)
+	assertCapturedSessionHistory(t, fixture)
 }
 
-func TestResolveInspectionProviderCapabilitiesUsesRuntimeBaseURLResolution(t *testing.T) {
-	caps, forced, err := resolveInspectionProviderCapabilities(
-		auth.EmptyState(),
-		config.Settings{
-			Model:            "gpt-5.5",
-			ProviderOverride: "openai",
-			OpenAIBaseURL:    "https://example.invalid/v1",
-		},
-		nil,
-		"",
-	)
-	if err != nil {
-		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
-	}
-	if forced {
-		t.Fatal("runtime provider resolution unexpectedly forced a contract")
-	}
-	if got, want := caps.ProviderID, "openai-compatible"; got != want {
-		t.Fatalf("provider id = %q, want %q", got, want)
-	}
-}
-
-func TestResolveInspectionProviderCapabilitiesAcceptsProviderContractOverrides(t *testing.T) {
-	lockedVerbosity := true
-	locked := &session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
-		ProviderID:                "locked",
-		SupportsResponsesAPI:      true,
-		SupportsProviderVerbosity: &lockedVerbosity,
-	}}
-	for _, providerID := range []string{"openai", "openai-compatible", "chatgpt-codex"} {
-		t.Run(providerID, func(t *testing.T) {
-			caps, forced, err := resolveInspectionProviderCapabilities(auth.EmptyState(), config.Settings{OpenAIBaseURL: "https://example.invalid/v1"}, locked, providerID)
-			if err != nil {
-				t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
-			}
-			if !forced {
-				t.Fatal("provider override did not force its capability contract")
-			}
-			if got := caps.ProviderID; got != providerID {
-				t.Fatalf("provider id = %q, want %q", got, providerID)
-			}
-		})
-	}
-}
-
-func TestResolveInspectionProviderCapabilitiesPrefersLockedContractOverChangedConfiguration(t *testing.T) {
-	lockedVerbosity := true
-	caps, forced, err := resolveInspectionProviderCapabilities(
-		auth.EmptyState(),
-		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
-			ProviderID:                "configured",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: false,
-		}},
-		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:                "locked",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: &lockedVerbosity,
-		}},
-		"",
-	)
-	if err != nil {
-		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
-	}
-	if forced {
-		t.Fatal("locked contract unexpectedly forced an inspector override")
-	}
-	if got, want := caps.ProviderID, "locked"; got != want {
-		t.Fatalf("provider id = %q, want %q", got, want)
-	}
-	if !caps.SupportsProviderVerbosity {
-		t.Fatalf("locked provider verbosity support = false, want true")
-	}
-}
-
-func TestResolveInspectionProviderCapabilitiesUsesLockedContract(t *testing.T) {
-	caps, forced, err := resolveInspectionProviderCapabilities(
-		auth.EmptyState(),
-		config.Settings{OpenAIBaseURL: "https://api.openai.com/v1"},
-		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}},
-		"",
-	)
-	if err != nil {
-		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
-	}
-	if forced {
-		t.Fatal("locked contract unexpectedly forced an inspector override")
-	}
-	if got, want := caps.ProviderID, "openai-compatible"; got != want {
-		t.Fatalf("provider id = %q, want %q", got, want)
-	}
-}
-
-func TestResumedInspectionWirePayloadUsesLockedVerbosityAcrossConfigChanges(t *testing.T) {
-	lockedVerbosity := true
-	caps, _, err := resolveInspectionProviderCapabilities(
-		auth.EmptyState(),
-		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
-			ProviderID:                "configured",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: false,
-		}},
-		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:                "locked",
-			SupportsResponsesAPI:      true,
-			SupportsProviderVerbosity: &lockedVerbosity,
-		}},
-		"",
-	)
-	if err != nil {
-		t.Fatalf("resolve inspection provider capabilities: %v", err)
-	}
-	wire, err := llm.MarshalOpenAIWirePayload(
-		llm.OpenAIRequest{Model: "operator-alias", ToolChoiceMode: llm.ToolChoiceModeAutomatic},
+func TestCaptureSessionRequestRejectsLegacyHistoryWithoutMutatingSource(t *testing.T) {
+	fixture := newCaptureSessionFixture(t, true)
+	_, err := captureSessionRequest(
+		context.Background(),
+		fixture.persistenceRoot,
+		fixture.sessionID,
+		"openai-compatible",
 		false,
-		"high",
-		llm.OpenAIAuthMode{},
-		caps,
+	)
+	if !errors.Is(err, session.ErrDiagnosticLegacyEventLogUnsupported) {
+		t.Fatalf("capture legacy Session request error = %v, want %v", err, session.ErrDiagnosticLegacyEventLogUnsupported)
+	}
+	assertSourceSessionUntouched(t, fixture)
+}
+
+type captureSessionFixture struct {
+	persistenceRoot string
+	sessionID       string
+	eventsPath      string
+	content         string
+	beforeEvents    []byte
+	beforeInfo      os.FileInfo
+	beforeMeta      *session.Meta
+	metadataStore   *metadata.Store
+}
+
+func newCaptureSessionFixture(t *testing.T, legacy bool) captureSessionFixture {
+	t.Helper()
+	persistenceRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	metadataStore, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		t.Fatalf("open metadata: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := metadataStore.Close(); err != nil {
+			t.Errorf("close metadata: %v", err)
+		}
+	})
+	binding, err := metadataStore.RegisterWorkspaceBinding(t.Context(), workspaceRoot)
+	if err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	sessionDir := filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions")
+	store, err := session.Create(
+		sessionDir,
+		filepath.Base(sessionDir),
+		workspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
-		t.Fatalf("marshal wire payload: %v", err)
+		t.Fatalf("create Session: %v", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(wire, &payload); err != nil {
-		t.Fatalf("decode wire payload: %v", err)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("ensure durable Session: %v", err)
 	}
-	text, ok := payload["text"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected text config in wire payload, got %#v", payload)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
 	}
-	if got := text["verbosity"]; got != "high" {
-		t.Fatalf("text.verbosity = %#v, want high", got)
+	content := "diagnostic history"
+	if _, receipt, err := eventLog.AppendRecord(nil, session.MessageRecord{
+		Role:    session.MessageRoleUser,
+		Content: &content,
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append source history = %+v, %v; want committed", receipt, err)
+	}
+	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
+	if legacy {
+		legacyEvents := []byte(
+			`{"seq":1,"timestamp":"2026-07-20T00:00:00Z","kind":"message","payload":{"role":"user","content":"diagnostic history"}}` + "\n",
+		)
+		if err := os.WriteFile(eventsPath, legacyEvents, 0o644); err != nil {
+			t.Fatalf("write legacy source event log: %v", err)
+		}
+	}
+	beforeEvents, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read source events: %v", err)
+	}
+	beforeInfo, err := os.Stat(eventsPath)
+	if err != nil {
+		t.Fatalf("stat source events: %v", err)
+	}
+	beforeRecord, err := metadataStore.ResolvePersistedSession(t.Context(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("resolve source Session: %v", err)
+	}
+	return captureSessionFixture{
+		persistenceRoot: persistenceRoot,
+		sessionID:       store.Meta().SessionID,
+		eventsPath:      eventsPath,
+		content:         content,
+		beforeEvents:    beforeEvents,
+		beforeInfo:      beforeInfo,
+		beforeMeta:      beforeRecord.Meta,
+		metadataStore:   metadataStore,
 	}
 }
 
-func TestValidateOpenAIResponsesInspectionProviderRejectsUnsupportedProvider(t *testing.T) {
-	err := validateOpenAIResponsesInspectionProvider(llm.ProviderCapabilities{ProviderID: "anthropic"})
-	if err == nil {
-		t.Fatal("expected unsupported provider error")
+func assertCapturedSessionHistory(t *testing.T, fixture captureSessionFixture) {
+	t.Helper()
+	captured, err := captureSessionRequest(
+		context.Background(),
+		fixture.persistenceRoot,
+		fixture.sessionID,
+		"openai-compatible",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("capture Session request: %v", err)
 	}
+	found := false
+	for _, message := range llm.MessagesFromItems(captured.Request.Items) {
+		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == fixture.content {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("captured request omitted persisted user history")
+	}
+
+	assertSourceSessionUntouched(t, fixture)
 }
 
-func TestInspectionHeadlessModeIncludesPersistedHeadlessSessions(t *testing.T) {
-	if !inspectionHeadlessMode(true, false) {
-		t.Fatal("persisted headless session was not inspected as headless")
+func assertSourceSessionUntouched(t *testing.T, fixture captureSessionFixture) {
+	t.Helper()
+	afterEvents, err := os.ReadFile(fixture.eventsPath)
+	if err != nil {
+		t.Fatalf("read source events after capture: %v", err)
 	}
-	if !inspectionHeadlessMode(false, true) {
-		t.Fatal("workflow session was not inspected as headless")
+	afterInfo, err := os.Stat(fixture.eventsPath)
+	if err != nil {
+		t.Fatalf("stat source events after capture: %v", err)
 	}
-	if inspectionHeadlessMode(false, false) {
-		t.Fatal("interactive session was inspected as headless")
+	if string(afterEvents) != string(fixture.beforeEvents) ||
+		afterInfo.Size() != fixture.beforeInfo.Size() ||
+		!afterInfo.ModTime().Equal(fixture.beforeInfo.ModTime()) {
+		t.Fatal("request capture mutated the source event log")
+	}
+	afterRecord, err := fixture.metadataStore.ResolvePersistedSession(t.Context(), fixture.sessionID)
+	if err != nil {
+		t.Fatalf("resolve source Session after capture: %v", err)
+	}
+	if !reflect.DeepEqual(afterRecord.Meta, fixture.beforeMeta) {
+		t.Fatalf("request capture mutated source metadata: before=%+v after=%+v", fixture.beforeMeta, afterRecord.Meta)
 	}
 }

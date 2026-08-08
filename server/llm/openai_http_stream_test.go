@@ -2,13 +2,17 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"core/shared/textutil"
 )
 
 type staticAuthHeader struct{}
@@ -65,6 +69,137 @@ func joinedAssistantDeltas(deltas []AssistantDelta) string {
 		text.WriteString(delta.Text)
 	}
 	return text.String()
+}
+
+func TestGenerateStream_RejectsMalformedReasoningCoordinates(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "negative output index",
+			event: `{"type":"response.reasoning_summary_text.delta","output_index":-1,"summary_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+		{
+			name:  "missing output index",
+			event: `{"type":"response.reasoning_summary_text.delta","summary_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+		{
+			name:  "missing summary index",
+			event: `{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"reason_1","delta":"plan"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newOpenAIStreamTestTransport(t,
+				test.event,
+				`{"type":"response.completed","response":{"output":[]}}`,
+				`[DONE]`,
+			)
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("malformed reasoning coordinate was accepted")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider error code = %q, want provider contract", providerErr.Code)
+			}
+		})
+	}
+}
+
+func TestGenerateStream_RejectsConflictingReasoningIdentities(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []string
+	}{
+		{
+			name: "one identity aliases two coordinates",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"first"}`,
+				`{"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"item_id":"reason_1","delta":"second"}`,
+			},
+		},
+		{
+			name: "one coordinate receives two identities",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"first"}`,
+				`{"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":0,"item_id":"reason_2","text":"second"}`,
+			},
+		},
+		{
+			name: "completed identity conflicts with streamed identity",
+			events: []string{
+				`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"streamed"}`,
+				`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"reason_2","summary":[{"type":"summary_text","text":"completed"}]}]}}`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := append([]string(nil), test.events...)
+			if test.name != "completed identity conflicts with streamed identity" {
+				events = append(events, `{"type":"response.completed","response":{"output":[]}}`)
+			}
+			events = append(events, `[DONE]`)
+			transport := newOpenAIStreamTestTransport(t, events...)
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+			if err == nil {
+				t.Fatal("conflicting reasoning identity was accepted")
+			}
+			var providerErr *ProviderAPIError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+			}
+			if providerErr.Code != UnifiedErrorCodeProviderContract {
+				t.Fatalf("provider error code = %q, want provider contract", providerErr.Code)
+			}
+		})
+	}
+}
+
+func TestGenerateStreamPreservesDistinctReasoningTracesWithSameText(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"same"}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"item_id":"reason_2","delta":"same"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.Reasoning) != 2 {
+		t.Fatalf("reasoning traces = %+v, want two distinct traces", resp.Reasoning)
+	}
+	for index, entry := range resp.Reasoning {
+		if entry.Text != "same" || entry.SourceCoordinate == nil ||
+			entry.SourceCoordinate.OutputIndex == nil ||
+			*entry.SourceCoordinate.OutputIndex != int64(index) {
+			t.Fatalf("reasoning trace %d = %+v, want coordinate output=%d", index, entry, index)
+		}
+	}
+}
+
+func TestGenerateStreamCompletedReasoningTextOverridesStreamedPartial(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"item_id":"reason_1","delta":"streamed partial"}`,
+		`{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"reason_1","summary":[{"type":"summary_text","text":"completed final"}]}]}}`,
+		`[DONE]`,
+	)
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.Reasoning) != 1 {
+		t.Fatalf("reasoning traces = %+v, want one trace", resp.Reasoning)
+	}
+	if resp.Reasoning[0].Text != "completed final" {
+		t.Fatalf("reasoning text = %q, want completed final", resp.Reasoning[0].Text)
+	}
 }
 
 func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testing.T) {
@@ -327,17 +462,51 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
 	}
-	if !resp.Usage.HasCachedInputTokens || resp.Usage.CachedInputTokens != 4 {
+	if resp.Usage.CachedInputTokens == nil || *resp.Usage.CachedInputTokens != 4 {
 		t.Fatalf("unexpected cached usage details: %+v", resp.Usage)
 	}
-	if len(resp.Reasoning) != 1 || resp.Reasoning[0].Role != "reasoning" || resp.Reasoning[0].Text != "Plan" {
+	if len(resp.Reasoning) != 1 || resp.Reasoning[0].Role == nil || *resp.Reasoning[0].Role != "reasoning" || resp.Reasoning[0].Text != "Plan" {
 		t.Fatalf("unexpected reasoning summary entries: %+v", resp.Reasoning)
 	}
 	if len(resp.ReasoningItems) != 1 || resp.ReasoningItems[0].ID != "rs_1" || resp.ReasoningItems[0].EncryptedContent != "enc_1" {
 		t.Fatalf("unexpected reasoning items: %+v", resp.ReasoningItems)
 	}
-	if len(reasoning) != 1 || reasoning[0].Key == "" || reasoning[0].Role != "reasoning" || reasoning[0].Text != "Plan" {
+	if len(reasoning) != 1 || reasoning[0].SourceCoordinate == nil ||
+		reasoning[0].SourceCoordinate.OutputIndex == nil ||
+		reasoning[0].SourceCoordinate.PartIndex == nil ||
+		reasoning[0].Role != "reasoning" || reasoning[0].Text != "Plan" {
 		t.Fatalf("unexpected reasoning delta callbacks: %+v", reasoning)
+	}
+}
+
+func TestGenerateStream_PreservesWhitespaceOnlyFunctionArgumentDelta(t *testing.T) {
+	const inputPrefix = `{"session_id":1000,"chars":"`
+	const inputSuffix = `","yield_time_ms":9223372036854775807}`
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":""}}`,
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputPrefix),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, " "),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputSuffix),
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %+v", resp.ToolCalls)
+	}
+	var decodedInput struct {
+		Chars       string `json:"chars"`
+		YieldTimeMS int    `json:"yield_time_ms"`
+	}
+	if err := json.Unmarshal(resp.ToolCalls[0].Input, &decodedInput); err != nil {
+		t.Fatalf("decode streamed write_stdin input %q: %v", resp.ToolCalls[0].Input, err)
+	}
+	if decodedInput.Chars != " " || decodedInput.YieldTimeMS != math.MaxInt {
+		t.Fatalf("streamed write_stdin input = %+v", decodedInput)
 	}
 }
 
@@ -377,13 +546,50 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
-func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t *testing.T) {
+func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
-		`{"type":"response.output_text.delta","output_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"!"}`,
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}}`,
 		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
+	}
+
+	const streamed = "Hello!"
+	if got := joinedAssistantDeltas(deltas); got != streamed {
+		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+}
+
+func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":1,"content_index":0,"text":""}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+		`{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}]}}`,
 		`[DONE]`,
 	)
 
@@ -396,16 +602,162 @@ func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t 
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
+	if len(deltas) != 0 {
+		t.Fatalf("assistant deltas = %+v, want no semantic assistant output", deltas)
+	}
+	if resp.AssistantText != "" {
+		t.Fatalf("assistant text = %q, want empty", resp.AssistantText)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
+		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
+	}
+}
 
-	const streamed = "Hello\n\n"
-	if got := joinedAssistantDeltas(deltas); got != streamed {
-		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
+func TestGenerateStream_UsesFinalizedOutputTextWhenProviderOmitsDeltas(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":"Compaction summary"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != streamed {
-		t.Fatalf("assistant text = %q, want exact streamed text", resp.AssistantText)
+	if resp.AssistantText != "Compaction summary" {
+		t.Fatalf("assistant text = %q, want finalized output text", resp.AssistantText)
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content != streamed {
-		t.Fatalf("output items = %+v, want assistant content repaired to streamed text", resp.OutputItems)
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "Compaction summary" {
+		t.Fatalf("output items = %+v, want synthesized finalized assistant output", resp.OutputItems)
+	}
+}
+
+func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"I will run it.\n\n"}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will run it.\n\n"}]}}`,
+		`{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will run it."}]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "I will run it.\n\n" {
+		t.Fatalf("assistant deltas = %q, want exact streamed content", got)
+	}
+	if resp.AssistantText != "I will run it.\n\n" {
+		t.Fatalf("assistant text = %q, want exact streamed content", resp.AssistantText)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
+		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
+	}
+}
+
+func TestGenerateStream_IgnoresStructuredTrailingWhitespaceShimWithoutDeltaConsumer(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello\n\n"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello\n\n"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if resp.AssistantText != "Hello" {
+		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	}
+}
+
+func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"\n\nHello"}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}`,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":"\n\nHello world"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"\n\nHello world"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"\n\nHello world"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
+		t.Fatalf("assistant deltas = %q, want finalized content", got)
+	}
+	if resp.AssistantText != "Hello world" {
+		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	}
+}
+
+func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"\nfirst"}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"\nsecond"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":" continuation"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "firstsecond continuation" {
+		t.Fatalf("assistant deltas = %q, want resumed output whitespace preserved", got)
+	}
+}
+
+func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello "}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"world"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
+		t.Fatalf("assistant deltas = %q, want preserved interstitial whitespace", got)
+	}
+	if resp.AssistantText != "Hello world" {
+		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", resp.AssistantText)
 	}
 }
 
@@ -423,7 +775,9 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 	if resp.AssistantText != "AB" {
 		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
 	}
-	if len(resp.OutputItems) != 2 || resp.OutputItems[0].Content != "A" || resp.OutputItems[1].Content != "B" {
+	if len(resp.OutputItems) != 2 ||
+		resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "A" ||
+		resp.OutputItems[1].Content == nil || *resp.OutputItems[1].Content != "B" {
 		t.Fatalf("output items = %+v, want original assistant message segments", resp.OutputItems)
 	}
 }
@@ -515,24 +869,24 @@ func TestGenerateStream_ParsesCustomPatchToolCall(t *testing.T) {
 	if resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "patch" {
 		t.Fatalf("unexpected custom tool call: %+v", resp.ToolCalls[0])
 	}
-	if !resp.ToolCalls[0].Custom || resp.ToolCalls[0].CustomInput != patchInput {
+	if !resp.ToolCalls[0].Custom || resp.ToolCalls[0].CustomInput == nil || *resp.ToolCalls[0].CustomInput != patchInput {
 		t.Fatalf("unexpected custom patch tool call: %+v", resp.ToolCalls[0])
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Type != ResponseItemTypeCustomToolCall || resp.OutputItems[0].CustomInput != patchInput {
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Type != ResponseItemTypeCustomToolCall || resp.OutputItems[0].CustomInput == nil || *resp.OutputItems[0].CustomInput != patchInput {
 		t.Fatalf("unexpected custom output item: %+v", resp.OutputItems)
 	}
 }
 
 func TestToolCallAccumulatorMergesCompletedCustomInputWithoutJSONInput(t *testing.T) {
 	accumulator := newToolCallAccumulator()
-	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: "partial"}})
-	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: "complete"}})
+	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: textutil.Value("partial")}})
+	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: textutil.Value("complete")}})
 
 	calls := accumulator.ToToolCalls()
 	if len(calls) != 1 {
 		t.Fatalf("expected one call, got %+v", calls)
 	}
-	if !calls[0].Custom || calls[0].CustomInput != "complete" {
+	if !calls[0].Custom || calls[0].CustomInput == nil || *calls[0].CustomInput != "complete" {
 		t.Fatalf("expected completed custom input to replace partial input, got %+v", calls[0])
 	}
 }
@@ -661,7 +1015,7 @@ func TestGenerateStream_EmptyReasoningSnapshotClearsCurrentStatus(t *testing.T) 
 	}
 }
 
-func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpty(t *testing.T) {
+func TestGenerateStream_RejectsEmptyCompletedMessageAfterAssistantDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
 		`{"type":"response.output_text.delta","delta":"Hel"}`,
@@ -672,24 +1026,25 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 	)
 
 	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
-	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+}
 
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+func TestBuildOutputItemsFromStreamPreservesAbsentPhase(t *testing.T) {
+	items := buildOutputItemsFromStream("streamed text", "", nil, nil, nil)
+	if len(items) != 1 {
+		t.Fatalf("output items = %+v, want one assistant message", items)
 	}
-	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
-		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseCommentary)
-	}
-	if len(resp.OutputItems) != 2 {
-		t.Fatalf("expected 2 output items, got %+v", resp.OutputItems)
-	}
-	if resp.OutputItems[0].Type != ResponseItemTypeMessage || resp.OutputItems[0].Content != "Hello" {
-		t.Fatalf("unexpected assistant output item: %+v", resp.OutputItems[0])
-	}
-	if resp.OutputItems[0].Phase != MessagePhaseCommentary {
-		t.Fatalf("assistant output phase = %q, want %q", resp.OutputItems[0].Phase, MessagePhaseCommentary)
+	if items[0].Phase != nil {
+		t.Fatalf("assistant output phase = %v, want absent", items[0].Phase)
 	}
 }
 
@@ -714,8 +1069,8 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 	if len(resp.OutputItems) != 1 {
 		t.Fatalf("expected 1 output item, got %+v", resp.OutputItems)
 	}
-	if resp.OutputItems[0].Phase != MessagePhaseFinal {
-		t.Fatalf("assistant output phase = %q, want %q", resp.OutputItems[0].Phase, MessagePhaseFinal)
+	if resp.OutputItems[0].Phase == nil || *resp.OutputItems[0].Phase != MessagePhaseFinal {
+		t.Fatalf("assistant output phase = %v, want %q", resp.OutputItems[0].Phase, MessagePhaseFinal)
 	}
 }
 
@@ -763,7 +1118,7 @@ func TestGenerateStream_RepairsMissingAssistantOutputItemAtNonZeroOutputIndex(t 
 	if resp.OutputItems[1].Type != ResponseItemTypeFunctionCall || resp.OutputItems[1].OutputIndex != 1 {
 		t.Fatalf("expected tool call to stay second, got %+v", resp.OutputItems[1])
 	}
-	if resp.OutputItems[2].Type != ResponseItemTypeMessage || resp.OutputItems[2].OutputIndex != 2 || resp.OutputItems[2].Content != "Done" {
+	if resp.OutputItems[2].Type != ResponseItemTypeMessage || resp.OutputItems[2].OutputIndex != 2 || resp.OutputItems[2].Content == nil || *resp.OutputItems[2].Content != "Done" {
 		t.Fatalf("expected synthesized assistant item inserted at output_index=2, got %+v", resp.OutputItems[2])
 	}
 }
@@ -789,7 +1144,7 @@ func TestGenerateStream_PreservesHostedWebSearchOutputItemFromStream(t *testing.
 	foundAssistant := false
 	foundHosted := false
 	for _, item := range resp.OutputItems {
-		if item.Type == ResponseItemTypeMessage && item.Content == "Done" {
+		if item.Type == ResponseItemTypeMessage && item.Content != nil && *item.Content == "Done" {
 			foundAssistant = true
 		}
 		if item.Type != ResponseItemTypeOther {

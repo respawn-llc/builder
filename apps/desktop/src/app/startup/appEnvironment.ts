@@ -12,7 +12,7 @@ import {
   type RpcSubscription,
   type RpcTransport,
 } from "@/api/composition";
-import type { AppServices } from "@/app-facade";
+import type { AppServices, AppStorageNamespace } from "@/app-facade";
 import { readEffectiveTheme, type AppTheme } from "@/ui";
 import { createGuiLogger } from "../logging";
 
@@ -48,6 +48,7 @@ export async function createDefaultAppServices(): Promise<AppServices> {
       logger,
       nativeBridge,
       protocolVersion,
+      storageNamespace: null,
     };
   }
   applyConfiguredTheme(context.theme);
@@ -65,6 +66,7 @@ export async function createDefaultAppServices(): Promise<AppServices> {
       logger,
       nativeBridge,
       protocolVersion,
+      storageNamespace: null,
     };
   }
   const endpoint =
@@ -82,6 +84,32 @@ export async function createDefaultAppServices(): Promise<AppServices> {
     logger,
     nativeBridge,
     protocolVersion,
+    storageNamespace: resolveAppStorageNamespace(nativeBridge.capabilities.platform, {
+      endpoint,
+      persistenceRoot: context.persistenceRoot,
+    }),
+  };
+}
+
+export function resolveAppStorageNamespace(
+  platform: NativePlatform,
+  source: Readonly<{
+    endpoint: string;
+    persistenceRoot: string | null;
+  }>,
+): AppStorageNamespace | null {
+  if (platform === "browser") {
+    return {
+      kind: "browser-endpoint",
+      identity: source.endpoint,
+    };
+  }
+  if (source.persistenceRoot === null || source.persistenceRoot.trim().length === 0) {
+    return null;
+  }
+  return {
+    kind: "native-persistence-root",
+    identity: source.persistenceRoot,
   };
 }
 
@@ -206,6 +234,10 @@ class BootstrapErrorTransport implements RpcTransport {
   }
 
   async call(): Promise<unknown> {
+    throw this.#error;
+  }
+
+  async callDedicated(): Promise<unknown> {
     throw this.#error;
   }
 

@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestInitialInputPrefersPersistedDraft(t *testing.T) {
@@ -32,6 +33,54 @@ func TestPersistInputDraftNoOpForNilStore(t *testing.T) {
 	}
 }
 
+func TestResolveOpenSessionRestoresStoredDraftWhenInitialInputIsOmitted(t *testing.T) {
+	targetID := runtimeids.NewSessionID()
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Transition: sessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			TargetSessionID: targetID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve open Session: %v", err)
+	}
+	intent, preparation := requireSessionLifecycleLaunch(t, resolved)
+	resolvedTargetID, existing := intent.SessionID()
+	if !existing || resolvedTargetID != targetID {
+		t.Fatalf("open Session target = %q/%t, want %q", resolvedTargetID, existing, targetID)
+	}
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionRestoreStoredDraft {
+		t.Fatalf("open Session draft disposition = %q, want restore stored draft", disposition.Kind())
+	}
+	if text, present := disposition.OverrideText(); present {
+		t.Fatalf("open Session draft override = %q/%t, want absent", text, present)
+	}
+}
+
+func TestResolveOpenSessionPreservesIntentionalEmptyDraftOverride(t *testing.T) {
+	targetID := runtimeids.NewSessionID()
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Transition: sessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			InitialInput:    textutil.Value(""),
+			TargetSessionID: targetID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve open Session: %v", err)
+	}
+	_, preparation := requireSessionLifecycleLaunch(t, resolved)
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
+		t.Fatalf("open Session draft disposition = %q, want override stored draft", disposition.Kind())
+	}
+	text, present := disposition.OverrideText()
+	if !present || text != "" {
+		t.Fatalf("open Session draft override = %q/%t, want intentional empty override", text, present)
+	}
+}
+
 func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	root := t.TempDir()
 	persistence := sessiontest.NewPersistence()
@@ -42,26 +91,17 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if err := store.SetName("parent"); err != nil {
 		t.Fatalf("set session name: %v", err)
 	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	u2Evt, _, err := store.AppendEvent("s2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"})
-	if err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "s1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "s1", session.MessageRoleAssistant, "a1")
+	u2Evt := appendSessionMessage(t, store, "s2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "s2", session.MessageRoleAssistant, "a2")
 
 	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
 		Store: store,
 		Transition: sessionTransition{
 			Action:             serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:      "edited user message",
-			ForkUserMessageSeq: u2Evt.Seq,
+			ForkUserMessageSeq: u2Evt.Seq(),
 		},
 	})
 	if err != nil {
@@ -82,5 +122,42 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	}
 	if got := child.Meta().Name; got != "parent \u2192 edit u2" {
 		t.Fatalf("forked session name = %q", got)
+	}
+}
+
+func TestResolveForkRollbackPreservesIntentionalEmptyDraftOverride(t *testing.T) {
+	root := t.TempDir()
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(root, "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
+	if err != nil {
+		t.Fatalf("create session store: %v", err)
+	}
+	appendSessionMessage(t, store, "s1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "s1", session.MessageRoleAssistant, "a1")
+	u2Evt := appendSessionMessage(t, store, "s2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "s2", session.MessageRoleAssistant, "a2")
+
+	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
+		Store: store,
+		Transition: sessionTransition{
+			Action:             serverapi.SessionTransitionActionForkRollback,
+			InitialInput:       textutil.Value(""),
+			ForkUserMessageSeq: u2Evt.Seq(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve fork rollback: %v", err)
+	}
+	_, preparation := requireSessionLifecycleLaunch(t, resolved)
+	if _, present := preparation.InitialPrompt(); present {
+		t.Fatal("rollback fork must not submit the selected user message")
+	}
+	disposition := preparation.DraftDisposition()
+	if disposition.Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
+		t.Fatalf("rollback fork draft disposition = %q, want override stored draft", disposition.Kind())
+	}
+	text, present := disposition.OverrideText()
+	if !present || text != "" {
+		t.Fatalf("rollback fork draft = %q/%t, want intentional empty override", text, present)
 	}
 }

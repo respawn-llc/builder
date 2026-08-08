@@ -99,7 +99,7 @@ func FormatTranscriptRuntimeEventDiagnostic(sessionID string, evt runtime.Event)
 		"assistant_delta_chars": fmt.Sprintf("%d", len(evt.AssistantDelta)),
 	}
 	if evt.ReasoningDelta != nil {
-		fields["reasoning_key"] = strings.TrimSpace(evt.ReasoningDelta.Key)
+		fields["reasoning_role"] = strings.TrimSpace(evt.ReasoningDelta.Role)
 		fields["reasoning_chars"] = fmt.Sprintf("%d", len(evt.ReasoningDelta.Text))
 	}
 	return transcriptdiag.FormatLine("transcript.diag.server.runtime_event", fields)
@@ -114,7 +114,7 @@ func runtimeEventDigest(evt runtime.Event) string {
 		strings.Join(evt.UserMessageBatch, "\x1e"),
 	}
 	if evt.ReasoningDelta != nil {
-		parts = append(parts, evt.ReasoningDelta.Key, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
+		parts = append(parts, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
 	}
 	if evt.RunState != nil {
 		parts = append(
@@ -145,7 +145,11 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 	case runtime.EventAssistantDeltaReset:
 		return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, evt.StepID)
 	case runtime.EventAssistantMessage:
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, evt.StepID, len(evt.Message.Content))
+		messageChars := 0
+		if evt.Message.Content != nil {
+			messageChars = len(*evt.Message.Content)
+		}
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, evt.StepID, messageChars)
 	case runtime.EventModelResponse:
 		if evt.ModelResponse != nil {
 			return fmt.Sprintf(

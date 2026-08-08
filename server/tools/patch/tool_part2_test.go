@@ -2,6 +2,7 @@ package patch
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"core/server/tools"
 	"core/shared/toolspec"
 	"encoding/json"
@@ -67,8 +68,9 @@ func outsideUpdateApprovalError(
 }
 
 func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
+	commentary := "not allowed by policy"
 	errMessage, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: "not allowed by policy"}, nil
+		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: &commentary}, nil
 	})
 	want := "Patch failed: user denied the edit for " + target + ".\nUser said: not allowed by policy"
 	if errMessage != want {
@@ -234,40 +236,7 @@ func TestOutsideWorkspaceAddFilesRequestApprovalBeforeMissingPathChecksPerFile(t
 
 func outsideNonTempDir(t *testing.T) string {
 	t.Helper()
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		bases = append(bases, home)
-	}
-	for _, base := range bases {
-		dir, err := os.MkdirTemp(base, "kent-patch-outside-*")
-		if err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
-				t.Fatalf("cleanup outside directory after Abs failure: %v", cleanupErr)
-			}
-			continue
-		}
-		if IsPathInTemporaryDir(abs) {
-			if err := os.RemoveAll(dir); err != nil {
-				t.Fatalf("cleanup temporary outside-directory candidate: %v", err)
-			}
-			continue
-		}
-		t.Cleanup(func() {
-			if err := os.RemoveAll(dir); err != nil {
-				t.Errorf("cleanup outside directory %q: %v", dir, err)
-			}
-		})
-		return abs
-	}
-	t.Skip("unable to create non-temporary outside directory for test")
-	panic("unreachable after testing.T.Skip")
+	return testsetup.NonTemporaryDirectory(t, "kent-patch-outside-", IsPathInTemporaryDir)
 }
 
 func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
@@ -295,6 +264,20 @@ func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
 
 	assertAlias("/tmp", "/private/tmp")
 	assertAlias("/var/tmp", "/private/var/tmp")
+}
+
+func TestExistingPathAliasesIgnoreMissingOrNonDirectoryRoots(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if aliases := existingPathAliases(missing); len(aliases) != 0 {
+		t.Fatalf("missing path aliases = %v, want none", aliases)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a root"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if aliases := existingPathAliases(file); len(aliases) != 0 {
+		t.Fatalf("file path aliases = %v, want none", aliases)
+	}
 }
 
 func findCaseVariantExistingAlias(path string) (string, bool) {
@@ -422,13 +405,13 @@ func toolError(t *testing.T, result tools.Result) string {
 }
 
 type toolFailureErrorPayload struct {
-	Error      string `json:"error"`
-	Kind       string `json:"kind,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	NearLine   bool   `json:"near_line,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	Commentary string `json:"commentary,omitempty"`
+	Error      string  `json:"error"`
+	Kind       string  `json:"kind,omitempty"`
+	Path       string  `json:"path,omitempty"`
+	Line       int     `json:"line,omitempty"`
+	NearLine   bool    `json:"near_line,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Commentary *string `json:"commentary,omitempty"`
 }
 
 func toolFailurePayload(t *testing.T, result tools.Result) toolFailureErrorPayload {

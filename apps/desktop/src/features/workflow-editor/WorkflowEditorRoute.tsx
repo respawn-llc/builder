@@ -11,13 +11,11 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
-import { useSidebar } from "@/app-facade";
-import type {
-  SidebarDestination,
-  WorkflowInspectorInitialFocus,
-  WorkflowInspectorSelection,
-} from "@/app-facade";
+import { errorMessage, isProjectMissingError } from "@/api";
+import type { SidebarPageNavigator } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import { ErrorState, LoadingState } from "@/ui";
@@ -52,6 +50,7 @@ import type { WorkflowEditorDraftAction } from "./workflowEditorDraft";
 
 export type WorkflowEditorRouteProps = Readonly<{
   projectID: string;
+  navigator?: SidebarPageNavigator | undefined;
   surface?: "route" | "sidebar" | undefined;
   workflowID: string;
 }>;
@@ -79,11 +78,32 @@ type WorkflowEditorReadyViewProps = Readonly<{
   workflowID: string;
 }>;
 
-export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }: WorkflowEditorRouteProps) {
+export function WorkflowEditorRoute(props: WorkflowEditorRouteProps) {
+  if (props.surface === "sidebar") {
+    return <WorkflowEditorRouteContent {...props} openSidebar={null} />;
+  }
+  return <SidebarRootOwner><OwnedWorkflowEditorRoute {...props} /></SidebarRootOwner>;
+}
+
+function OwnedWorkflowEditorRoute(props: WorkflowEditorRouteProps) {
+  const { open } = useOwnedSidebarRoots();
+  return <WorkflowEditorRouteContent {...props} openSidebar={open} />;
+}
+
+function WorkflowEditorRouteContent({
+  openSidebar,
+  navigator,
+  projectID,
+  surface = "route",
+  workflowID,
+}: WorkflowEditorRouteProps & Readonly<{ openSidebar: SidebarRootController["open"] | null }>) {
   const { t } = useTranslation();
-  const { activeDestination, closeSidebar, openSidebar } = useSidebar();
   const { push: pushStatus } = useStatusController();
   const data = useWorkflowEditorData(projectID, workflowID);
+  useSidebarBackWhen(
+    data.linksQuery.isError && isProjectMissingError(data.linksQuery.error),
+    navigator,
+  );
   const workflow = data.workflowQuery.data?.workflow;
   const [draftState, dispatch] = useReducer(workflowEditorDraftStateReducer, null);
   const dirty = useMemo(
@@ -121,14 +141,8 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
       ) {
         setEmbeddedInspectorSelection(null);
       }
-      if (
-        surface === "route" &&
-        overlayDestinationMatchesNode(activeDestination, workflowID, selection.nodeID)
-      ) {
-        closeSidebar("closed");
-      }
     },
-    [activeDestination, closeSidebar, embeddedInspectorSelection, surface, workflowID],
+    [embeddedInspectorSelection, surface, workflowID],
   );
 
   useWorkflowEditorDraftSync({ data, dirty: dirty.dirty, dispatch, draftState });
@@ -233,7 +247,7 @@ function useWorkflowGraphInspector({
   surface,
   workflowID,
 }: Readonly<{
-  openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+  openSidebar: SidebarRootController["open"] | null;
   setEmbeddedInspectorSelection: Dispatch<SetStateAction<WorkflowEditorEmbeddedInspectorSelection | null>>;
   surface: "route" | "sidebar";
   workflowID: string;
@@ -244,7 +258,10 @@ function useWorkflowGraphInspector({
         setEmbeddedInspectorSelection({ initialFocus, selection, workflowID });
         return;
       }
-      void openSidebar({ initialFocus, kind: "workflowInspect", mode: "overlay", selection, workflowID });
+      if (openSidebar === null) {
+        throw new Error("Route Workflow inspection requires a sidebar root owner.");
+      }
+      openSidebar({ initialFocus, kind: "workflowInspect", mode: "overlay", selection, workflowID });
     },
     [openSidebar, setEmbeddedInspectorSelection, surface, workflowID],
   );
@@ -335,19 +352,6 @@ function embeddedSelectionMatchesNode(
     embedded?.workflowID === workflowID &&
     embedded.selection.kind === "node" &&
     embedded.selection.nodeID === nodeID
-  );
-}
-
-function overlayDestinationMatchesNode(
-  destination: SidebarDestination | null,
-  workflowID: string,
-  nodeID: string,
-): boolean {
-  return (
-    destination?.kind === "workflowInspect" &&
-    destination.workflowID === workflowID &&
-    destination.selection.kind === "node" &&
-    destination.selection.nodeID === nodeID
   );
 }
 

@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
-import { errorMessage } from "@/api";
+import { errorMessage, isProjectMissingError } from "@/api";
 import { queryKeys } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import type { SidebarPageNavigator } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
 import { WorkflowActionsContextMenu, useWorkflowPages } from "@/shared/workflow-library";
 import {
   Button,
@@ -24,13 +25,15 @@ export function LinkWorkflowSidebar({
   onCreated,
   onLinked,
   projectID,
+  navigator,
   selectedWorkflowID,
 }: Readonly<{
   creating: boolean;
   onCreated: (workflowID: string) => void;
   onLinked: (workflowID: string) => void;
   projectID: string;
-  selectedWorkflowID: string;
+  navigator?: SidebarPageNavigator | undefined;
+  selectedWorkflowID?: string | undefined;
 }>) {
   const { t } = useTranslation();
   if (creating) {
@@ -39,6 +42,7 @@ export function LinkWorkflowSidebar({
         onCreated={(result) => {
           onCreated(result.workflow.id);
         }}
+        onProjectMissing={navigator?.back}
         projectID={projectID}
       />
     );
@@ -47,6 +51,7 @@ export function LinkWorkflowSidebar({
     <LinkWorkflowPicker
       onLinked={onLinked}
       projectID={projectID}
+      navigator={navigator}
       selectedWorkflowID={selectedWorkflowID}
       title={t("workflowLibrary.linkWorkflow")}
     />
@@ -56,12 +61,14 @@ export function LinkWorkflowSidebar({
 function LinkWorkflowPicker({
   onLinked,
   projectID,
+  navigator,
   selectedWorkflowID,
   title,
 }: Readonly<{
   onLinked: (workflowID: string) => void;
   projectID: string;
-  selectedWorkflowID: string;
+  navigator?: SidebarPageNavigator | undefined;
+  selectedWorkflowID?: string | undefined;
   title: string;
 }>) {
   const { t } = useTranslation();
@@ -96,6 +103,8 @@ function LinkWorkflowPicker({
       onLinked(link.workflowID);
     },
   });
+  const projectMissing = [linksQuery.error, linkMutation.error].some(isProjectMissingError);
+  useSidebarBackWhen(projectMissing, navigator);
 
   if (workflowsQuery.isPending || linksQuery.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} title={title} />;
@@ -146,6 +155,7 @@ function LinkWorkflowPicker({
           linking={linkMutation.isPending}
           onLink={() => void linkMutation.mutateAsync(workflow.id)}
           projectID={projectID}
+          navigator={navigator}
           selected={workflow.id === selectedWorkflowID}
           workflow={workflow}
         />
@@ -173,6 +183,7 @@ function WorkflowLinkRow({
   linking,
   onLink,
   projectID,
+  navigator,
   selected,
   workflow,
 }: Readonly<{
@@ -180,11 +191,11 @@ function WorkflowLinkRow({
   linking: boolean;
   onLink: () => void;
   projectID: string;
+  navigator?: SidebarPageNavigator | undefined;
   selected: boolean;
   workflow: WorkflowRecord;
 }>) {
   const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
   const row = (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-[var(--space-2)] rounded-md border border-[var(--color-outline)] bg-[var(--color-island-1)] px-[var(--space-3)] py-[var(--space-3)]">
       <ItemContent>
@@ -207,7 +218,7 @@ function WorkflowLinkRow({
   return (
     <WorkflowActionsContextMenu
       onEdit={() => {
-        void openSidebar({ kind: "workflowEditor", mode: "overlay", projectID, workflowID: workflow.id });
+        navigator?.replace({ kind: "workflowEditor", mode: "overlay", projectID, workflowID: workflow.id });
       }}
       workflowID={workflow.id}
     >

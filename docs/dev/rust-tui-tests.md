@@ -1,5 +1,8 @@
 # Rust TUI Tests
 
+> [!CAUTION]
+> Rust work is frozen. This procedure is inactive and does not authorize building or testing `tui-rs/` unless Rust work is explicitly reactivated.
+
 Run the Rust TUI suite from `/tui-rs`:
 
 ```sh
@@ -11,7 +14,6 @@ Packages with root-level integration tests use one generated `integration` harne
 Run a single test through the generated harness by naming its module path:
 
 ```sh
-cargo test -p rpc-client --test integration <module>::<test_name>
 ```
 
 Direct `tests/*.rs` filenames must be valid Rust module identifiers, such as `path_reference_search_controller.rs`. Nested support files under `tests/support/` are regular modules and are not generated as root integration tests.

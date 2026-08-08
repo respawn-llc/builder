@@ -1,4 +1,4 @@
-import { createBrowserNativeBridge } from "@app/native-bridge";
+import { createBrowserNativeBridge, type NativePlatform } from "@app/native-bridge";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, useMemo, type ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -7,6 +7,7 @@ import { ApiClient, protocolVersion } from "@/api/composition";
 import {
   AppServicesProvider,
   StatusProvider,
+  TaskSearchMemoryProvider,
   WindowChromeTitleProvider,
   type AppLogger,
   type AppLogLevel,
@@ -39,6 +40,7 @@ export type TestAppServices = Omit<AppServices, "logger"> &
 export type CreateTestServicesOptions = Readonly<{
   debugThemeOverrideEnabled?: boolean | undefined;
   homePath?: string | undefined;
+  platform?: NativePlatform | undefined;
 }>;
 
 export function TestAppProviders({
@@ -67,7 +69,9 @@ export function TestAppProviders({
       createElement(AppServicesProvider, {
         services,
         children: createElement(WindowChromeTitleProvider, {
-          children: createElement(StatusProvider, { children }),
+          children: createElement(StatusProvider, {
+            children: createElement(TaskSearchMemoryProvider, { children }),
+          }),
         }),
       }),
     ),
@@ -76,18 +80,25 @@ export function TestAppProviders({
 
 export function createTestServices(
   routes: readonly FakeRoute[],
-  nativeBridge = createBrowserNativeBridge(),
+  nativeBridge?: ReturnType<typeof createBrowserNativeBridge>,
   options: CreateTestServicesOptions = {},
 ): TestAppServices {
   const transport = new FakeRpcTransport(routes);
+  const resolvedNativeBridge =
+    nativeBridge ??
+    createBrowserNativeBridge(options.platform === undefined ? {} : { platform: options.platform });
   return {
     api: new ApiClient(transport),
     debugThemeOverrideEnabled: options.debugThemeOverrideEnabled ?? false,
     endpoint: "ws://127.0.0.1:53082/rpc",
     homePath: options.homePath ?? "",
     logger: createTestLogger(),
-    nativeBridge,
+    nativeBridge: resolvedNativeBridge,
     protocolVersion,
+    storageNamespace: {
+      kind: "browser-endpoint",
+      identity: "ws://127.0.0.1:53082/rpc",
+    },
     transport,
   };
 }
@@ -140,6 +151,15 @@ export const startupRoutes: readonly FakeRoute[] = [
     result: {
       comments: [],
       next_page_token: "",
+    },
+  },
+  {
+    method: "workflow.project.label.list",
+    result: {
+      catalog: {
+        project_id: "project-1",
+        labels: [],
+      },
     },
   },
 ];

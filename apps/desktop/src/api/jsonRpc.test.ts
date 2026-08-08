@@ -1,5 +1,5 @@
 import { createJsonRpcTransport } from "./jsonRpc";
-import { ProtocolMismatchError, ServerRootMismatchError } from "./errors";
+import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
 import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { z } from "zod";
 
@@ -94,11 +94,147 @@ describe("JsonRpcWebSocketTransport", () => {
 
     socket.open();
     await waitForSent(socket, 1);
-    errorAck(socket, 0, protocolVersionMismatchErrorCode, "unsupported protocol version");
+    errorAck(socket, 0, {
+      code: protocolVersionMismatchErrorCode,
+      message: "unsupported protocol version",
+    });
 
     await expect(readiness).rejects.toBeInstanceOf(ProtocolMismatchError);
     expect(socket.sent).toHaveLength(1);
     expect(frame(socket, 0)).toMatchObject({ method: "protocol.handshake" });
+  });
+
+  it("preserves structured JSON-RPC error data on control calls", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const request = transport.call("workflow.project.label.create", {
+      project_id: "project-1",
+      name: "Priority",
+    });
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    errorAck(socket, 1, {
+      code: -32031,
+      message: "label name already exists",
+      data: {
+        type: "workflow_label_error",
+        reason: "name_conflict",
+        project_id: "project-1",
+      },
+    });
+
+    const error = await request.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RpcError);
+    expect(error).toMatchObject({
+      code: -32031,
+      method: "workflow.project.label.create",
+      data: {
+        type: "workflow_label_error",
+        reason: "name_conflict",
+        project_id: "project-1",
+      },
+    });
+    expect(decodeWorkflowLabelError(error)).toMatchObject({
+      reason: "name_conflict",
+      projectID: "project-1",
+    });
+  });
+
+  it("runs dedicated calls on a one-use socket without disturbing the control socket", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const readiness = transport.call("server.readiness.get", {});
+    const controlSocket = sockets[0] ?? failTest("control socket missing");
+    controlSocket.open();
+    await waitForSent(controlSocket, 1);
+    ack(controlSocket, 0);
+    await waitForSent(controlSocket, 2);
+    ack(controlSocket, 1);
+    await expect(readiness).resolves.toEqual({});
+
+    const search = transport.callDedicated("workflow.task.search", { query: "needle" });
+    const dedicatedSocket = sockets[1] ?? failTest("dedicated socket missing");
+    dedicatedSocket.open();
+    await waitForSent(dedicatedSocket, 1);
+    ack(dedicatedSocket, 0);
+    await waitForSent(dedicatedSocket, 2);
+    expect(frame(dedicatedSocket, 1)).toMatchObject({ method: "workflow.task.search" });
+    ack(dedicatedSocket, 1);
+
+    await expect(search).resolves.toEqual({});
+    expect(dedicatedSocket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(controlSocket.readyState).toBe(MockWebSocket.OPEN);
+  });
+
+  it("cancels a dedicated call by closing only its socket", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const controller = new AbortController();
+    const search = transport.callDedicated(
+      "workflow.task.search",
+      { query: "needle" },
+      { signal: controller.signal },
+    );
+    const socket = sockets[0] ?? failTest("dedicated socket missing");
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+
+    controller.abort();
+
+    await expect(search).rejects.toThrow("canceled");
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
+  it("falls back to a generic RPC error when error data is missing", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const request = transport.call("workflow.project.label.create", {
+      project_id: "project-1",
+      name: "Priority",
+    });
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    errorAck(socket, 1, { code: -32031, message: "label request failed" });
+
+    const error = await request.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RpcError);
+    expect(error).toMatchObject({
+      code: -32031,
+      method: "workflow.project.label.create",
+      data: undefined,
+    });
+  });
+
+  it("falls back to a generic RPC error when error data is not valid JSON", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const request = transport.call("workflow.project.label.create", {
+      project_id: "project-1",
+      name: "Priority",
+    });
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    const sent = frame(socket, 1);
+    socket.receive(
+      `{"jsonrpc":"2.0","id":${JSON.stringify(sent.id)},"error":{"code":-32031,"message":"label request failed","data":{"limit":1e400}}}`,
+    );
+
+    const error = await request.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RpcError);
+    expect(error).toMatchObject({
+      code: -32031,
+      method: "workflow.project.label.create",
+      data: undefined,
+    });
   });
 
   it("rejects control calls when the server serves a different persistence root", async () => {
@@ -238,7 +374,10 @@ describe("JsonRpcWebSocketTransport", () => {
 
     socket.open();
     await waitForSent(socket, 1);
-    errorAck(socket, 0, protocolVersionMismatchErrorCode, "unsupported protocol version");
+    errorAck(socket, 0, {
+      code: protocolVersionMismatchErrorCode,
+      message: "unsupported protocol version",
+    });
 
     await vi.waitFor(() => {
       expect(errors[0]).toBeInstanceOf(ProtocolMismatchError);
@@ -493,9 +632,13 @@ function ack(socket: MockWebSocket, sentIndex: number): void {
   socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result: {} }));
 }
 
-function errorAck(socket: MockWebSocket, sentIndex: number, code: number, message: string): void {
+function errorAck(
+  socket: MockWebSocket,
+  sentIndex: number,
+  error: Readonly<{ code: number; message: string; data?: unknown }>,
+): void {
   const sent = frame(socket, sentIndex);
-  socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, error: { code, message } }));
+  socket.receive(JSON.stringify({ jsonrpc: "2.0", id: sent.id, error }));
 }
 
 function ackHandshakeRoot(socket: MockWebSocket, sentIndex: number, rootId: string): void {

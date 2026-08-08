@@ -9,14 +9,21 @@ import (
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 func TestClientStreamsDeltasFinalResponseAndReasoning(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Steps: []scriptedllm.Step{{
-			StreamDeltas:    []llm.AssistantDelta{{Text: "hel", Phase: llm.MessagePhaseCommentary}, {Text: "lo", Phase: llm.MessagePhaseFinal}},
-			ReasoningDeltas: []llm.ReasoningSummaryDelta{{Key: "r", Role: "assistant", Text: "because"}},
-			Response:        scriptedllm.FinalAnswer("hello").Response,
+			StreamDeltas: []llm.AssistantDelta{{Text: "hel", Phase: llm.MessagePhaseCommentary}, {Text: "lo", Phase: llm.MessagePhaseFinal}},
+			ReasoningDeltas: []llm.ReasoningSummaryDelta{{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{
+					OutputIndex: func() *int64 { value := int64(0); return &value }(),
+					PartIndex:   func() *int64 { value := int64(0); return &value }(),
+				},
+				Role: "assistant", Text: "because",
+			}},
+			Response: scriptedllm.FinalAnswer("hello").Response,
 		}},
 	})
 
@@ -29,8 +36,8 @@ func TestClientStreamsDeltasFinalResponseAndReasoning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStreamWithEvents: %v", err)
 	}
-	if resp.Assistant.Content != "hello" {
-		t.Fatalf("final assistant = %q, want %q", resp.Assistant.Content, "hello")
+	if resp.Assistant.Content == nil || *resp.Assistant.Content != "hello" {
+		t.Fatalf("final assistant = %#v, want %q", resp.Assistant.Content, "hello")
 	}
 	if len(assistant) != 2 || assistant[0].Text != "hel" || assistant[1].Text != "lo" {
 		t.Fatalf("assistant deltas = %#v", assistant)
@@ -70,7 +77,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 	})
 	_, err = successValidator.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "m",
-		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: "call_1", Name: "exec_command"}},
+		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call_1"), Name: textutil.Value("exec_command")}},
 	})
 	if err != nil {
 		t.Fatalf("Generate with expected tool result: %v", err)
@@ -87,7 +94,7 @@ func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 		InputTokenCount:     &tokens,
 		ContextWindowTokens: &window,
 		Compactions: []llm.CompactionResponse{{
-			OutputItems:       []llm.ResponseItem{{Type: llm.ResponseItemTypeCompaction, Content: "summary"}},
+			OutputItems:       []llm.ResponseItem{{Type: llm.ResponseItemTypeCompaction, Content: textutil.Value("summary")}},
 			TrimmedItemsCount: &trimmed,
 		}},
 	})

@@ -136,9 +136,7 @@ func TestAskProjectionUpdateHydrationReplacementRejectsOldCompletion(t *testing.
 	<-gate.started
 
 	promptB := testQuestionPrompt("ask-b", "Question B", "b")
-	hydration := ongoingHydrationMessage(1)
-	hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity = runtimeTupleTestRunningActivity()
-	hydration.Payload.Hydration.PendingPrompts = []clientui.TranscriptPrompt{promptB}
+	hydration := questionHydrationMessage(promptB)
 	model, hydrationCommand := updateQuestionProjection(model, ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage, Message: hydration,
 	})
@@ -166,9 +164,7 @@ func TestAskProjectionUpdateHydrationReplacementRejectsOldCompletion(t *testing.
 	refreshed.Suggestions = []string{"new b", "other"}
 	recommended := 1
 	refreshed.RecommendedOptionIndex = &recommended
-	hydration = ongoingHydrationMessage(1)
-	hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity = runtimeTupleTestRunningActivity()
-	hydration.Payload.Hydration.PendingPrompts = []clientui.TranscriptPrompt{refreshed}
+	hydration = questionHydrationMessage(refreshed)
 	model, command = updateQuestionProjection(model, ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage, Message: hydration,
 	})
@@ -209,6 +205,100 @@ func TestAskProjectionUpdateSameIdentityRefreshUsesLatestControls(t *testing.T) 
 		model.ask.current.prompt.RecommendedOptionIndex == nil ||
 		*model.ask.current.prompt.RecommendedOptionIndex != recommended {
 		t.Fatal("same-identity completion did not use the latest controls")
+	}
+}
+
+func TestAskProjectionUpdateSameIDActiveReplacementPreservesPromptLocalState(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	initial := testQuestionAskEvent("ask-1", "Same question", "one", "two")
+	testSetActiveAsk(model, &initial)
+	model.ask.cursor = 1
+	model.ask.freeform = true
+	testSetAskInputAtRuneCursor(model, "draft text", 5)
+	currentToken := model.ask.currentToken
+	activeProjection := model.ask.activeProjection
+
+	replacement := testQuestionAskEvent("ask-1", "Same question", "new one", "new two", "new three")
+	recommended := 3
+	replacement.prompt.RecommendedOptionIndex = &recommended
+	model, command := updateQuestionProjection(model, askEventMsg{event: replacement})
+
+	if command != nil {
+		t.Fatal("same-identity active replacement scheduled redundant projection")
+	}
+	if model.ask.currentToken != currentToken || model.ask.activeProjection != activeProjection {
+		t.Fatal("same-ID replacement changed current or projection ownership")
+	}
+	if !slices.Equal(model.ask.current.prompt.Suggestions, replacement.prompt.Suggestions) ||
+		model.ask.current.prompt.RecommendedOptionIndex == nil ||
+		*model.ask.current.prompt.RecommendedOptionIndex != recommended {
+		t.Fatalf("same-ID replacement did not install the latest payload immediately: %+v", model.ask.current.prompt)
+	}
+	if model.ask.cursor != 1 || !model.ask.freeform ||
+		model.ask.editor.Text() != "draft text" || model.ask.editor.Cursor() != 5 {
+		t.Fatalf(
+			"same-ID replacement changed prompt-local state: cursor=%d freeform=%t editor=%q/%d",
+			model.ask.cursor,
+			model.ask.freeform,
+			model.ask.editor.Text(),
+			model.ask.editor.Cursor(),
+		)
+	}
+}
+
+func TestAskProjectionUpdateUnrelatedMessagesDoNotScheduleRendering(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	renderCount := 0
+	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
+		renderCount++
+		return questionRenderResultMsg{request: request, rows: []string{"rendered"}}
+	}
+	model, command := updateQuestionProjection(
+		model,
+		askEventMsg{event: testQuestionAskEvent("ask-1", "Question?", "yes", "no")},
+	)
+	model, _ = updateQuestionProjection(model, requireQuestionRenderResult(t, command))
+
+	messages := []tea.Msg{
+		tea.WindowSizeMsg{Width: 64, Height: 24},
+		tea.KeyMsg{Type: tea.KeyDown},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")},
+		tea.KeyMsg{Type: tea.KeyLeft},
+		spinnerTickMsg{},
+		clearTransientStatusMsg{},
+	}
+	for _, message := range messages {
+		model, command = updateQuestionProjection(model, message)
+		if command != nil || model.ask.inFlightProjection != nil {
+			t.Fatalf("message %T scheduled question rendering", message)
+		}
+	}
+	if renderCount != 1 {
+		t.Fatalf("render count = %d, want only the initial projection", renderCount)
+	}
+}
+
+func TestAskProjectionUpdateLiveTranscriptAdmissionReturnsProjectionCommand(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	renderCount := 0
+	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
+		renderCount++
+		return questionRenderResultMsg{request: request, rows: []string{"rendered"}}
+	}
+	prompt := testQuestionPrompt("ask-1", "Live question", "yes")
+	message := clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(prompt))
+
+	command := model.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{})
+	if command == nil {
+		t.Fatal("live prompt admission dropped the projection command")
+	}
+	if renderCount != 0 {
+		t.Fatal("live prompt admission rendered Markdown on the UI thread")
+	}
+	model, _ = updateQuestionProjection(model, command())
+	if renderCount != 1 || model.ask.activeProjection == nil {
+		t.Fatal("live prompt projection did not install through its command result")
 	}
 }
 
@@ -322,4 +412,12 @@ func requireQuestionRenderResult(t *testing.T, command tea.Cmd) questionRenderRe
 		t.Fatal("expected question projection command")
 	}
 	return command().(questionRenderResultMsg)
+}
+
+func questionHydrationMessage(prompt clientui.TranscriptPrompt) clientui.TranscriptMessage {
+	message := ongoingHydrationMessage(1)
+	hydration := message.Payload().(clientui.TranscriptHydration)
+	hydration.RuntimeReadModelUpdate.Activity = runtimeTupleTestRunningActivity()
+	hydration.PendingPrompts = []clientui.TranscriptPrompt{prompt}
+	return clientui.NewTranscriptMessage(message.Sequence, clientui.NewTranscriptEvent(hydration))
 }

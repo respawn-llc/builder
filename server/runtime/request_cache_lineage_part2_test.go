@@ -2,65 +2,38 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
-func TestGenerateWithRetryClient_RestoreSkipsDigestVersionMismatch(t *testing.T) {
+func TestCurrentEventLogRejectsUnsupportedCacheDigestVersion(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	legacyRequest := persistedCacheRequestObserved{
+	_, _, err := appendTestEvent(t, store, "legacy-request", persistedCacheRequestObserved{
 		DigestVersion: 999,
 		CacheKey:      "cache-key-1",
 		Scope:         transcript.CacheWarningScopeConversation,
 		ChunkCount:    1,
-		TerminalHash:  "legacy-hash",
-	}
-	legacyResponse := persistedCacheResponseObserved{
-		DigestVersion:        999,
-		CacheKey:             "cache-key-1",
-		Scope:                transcript.CacheWarningScopeConversation,
-		ChunkCount:           1,
-		TerminalHash:         "legacy-hash",
-		HasCachedInputTokens: true,
-		CachedInputTokens:    42,
-	}
-	if _, _, err := store.AppendEvent("legacy-request", sessionEventCacheRequestObserved, legacyRequest); err != nil {
-		t.Fatalf("append legacy request: %v", err)
-	}
-	if _, _, err := store.AppendEvent("legacy-response", sessionEventCacheResponseObserved, legacyResponse); err != nil {
-		t.Fatalf("append legacy response: %v", err)
-	}
-
-	reopened, err := runtimeTestSessionPersistence.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeDefault})
-
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "beta"), nil, nil, nil); err != nil {
-		t.Fatalf("generate after reopen: %v", err)
-	}
-
-	warnings := persistedCacheWarnings(t, reopened)
-	if len(warnings) != 0 {
-		t.Fatalf("warning count = %d, want 0", len(warnings))
+		TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if err == nil {
+		t.Fatal("unsupported cache digest version was accepted by the strict v1 contract")
 	}
 }
 
 func TestGenerateWithRetryClient_DoesNotInventCompactionCauseWithoutPriorLineageOnReopen(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-compact", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "legacy-compact", historyReplacementPayload{
 		Engine: "local",
 		Mode:   string(compactionModeManual),
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
@@ -85,7 +58,7 @@ func TestGenerateWithRetryClient_DoesNotInventCompactionCauseWithoutPriorLineage
 func testPromptCacheRequest(cacheKey string, messages ...string) llm.Request {
 	items := make([]llm.ResponseItem, 0, len(messages))
 	for _, message := range messages {
-		items = append(items, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: message}})...)
+		items = append(items, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(message)}})...)
 	}
 	return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:            "gpt-5",
@@ -111,7 +84,7 @@ func stringValue(value any) string {
 
 func persistedCacheWarnings(t *testing.T, store *session.Store) []transcript.CacheWarning {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -120,10 +93,11 @@ func persistedCacheWarnings(t *testing.T, store *session.Store) []transcript.Cac
 		if evt.Kind != sessionEventCacheWarning {
 			continue
 		}
-		var warning transcript.CacheWarning
-		if err := json.Unmarshal(evt.Payload, &warning); err != nil {
-			t.Fatalf("decode warning: %v", err)
+		record, ok := mustSessionEventPayload(evt.Record).(session.CacheWarningRecord)
+		if !ok {
+			t.Fatalf("warning payload type = %T", mustSessionEventPayload(evt.Record))
 		}
+		warning := cacheWarningFromSessionRecord(record)
 		warnings = append(warnings, warning)
 	}
 	return warnings
@@ -131,7 +105,7 @@ func persistedCacheWarnings(t *testing.T, store *session.Store) []transcript.Cac
 
 func persistedCacheWarningEventCount(t *testing.T, store *session.Store) int {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}

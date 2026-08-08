@@ -54,6 +54,34 @@ func TestPTYCheckpointModelEmitsInputAppliedAfterInnerUpdate(t *testing.T) {
 	}
 }
 
+func TestPTYCheckpointModelEmitsPromptReadyOnInteractiveTransition(t *testing.T) {
+	var out bytes.Buffer
+	writer := analyzer.NewWriter(&out)
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	wrapped := newPTYCheckpointModel(
+		model,
+		writer,
+		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
+	)
+
+	_, projection := wrapped.Update(askEventMsg{
+		event: testQuestionAskEvent("ask-ready", "Choose.", "continue"),
+	})
+	if projection == nil {
+		t.Fatal("pending prompt did not schedule its projection")
+	}
+	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
+		t.Fatalf("prompt emitted readiness before projection: %#v", events)
+	}
+
+	wrapped.Update(projection())
+
+	events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents
+	if len(events) != 1 || events[0].Phase != analyzer.PhasePromptReady {
+		t.Fatalf("checkpoint events = %#v, want one prompt-ready event", events)
+	}
+}
+
 func TestPTYCheckpointModelQueuesInitialDetailApplicationBeforeRendererWrite(t *testing.T) {
 	var out bytes.Buffer
 	writer := analyzer.NewWriter(&out)
@@ -146,23 +174,18 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 	wrapped := newPTYCheckpointModel(model, writer, scenario)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.TranscriptMessage{
-			Sequence: 2,
-			Kind:     clientui.TranscriptMessageCommittedRow,
-			Payload: clientui.TranscriptPayload{
-				CommittedRow: &clientui.TranscriptCommittedRow{
-					Visibility: clientui.EntryVisibilityOngoing,
-					Integrity:  transcript.RowIntegrityValid,
-					Kind:       clientui.TranscriptRowAssistant,
-					Assistant: &clientui.TranscriptAssistantRow{
-						StepID:   ptyCheckpointStepID(),
-						StreamID: ptyCheckpointAssistantStreamID(),
-						Text:     "final response",
-						Phase:    transcript.AssistantPhaseFinal,
-					},
-				},
+		Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+			Visibility: clientui.EntryVisibilityOngoing,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       clientui.TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+			Assistant: &clientui.TranscriptAssistantRow{
+				StepID:   ptyCheckpointStepID(),
+				StreamID: ptyCheckpointAssistantStreamID(),
+				Text:     "final response",
+				Phase:    transcript.AssistantPhaseFinal,
 			},
-		},
+		})),
 	}))
 
 	analysis := analyzeCheckpointBytes(t, out.Bytes())
@@ -193,17 +216,11 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 	)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.TranscriptMessage{
-			Sequence: 3,
-			Kind:     clientui.TranscriptMessageToolStart,
-			Payload: clientui.TranscriptPayload{
-				ToolStart: &clientui.TranscriptToolStart{
-					StepID:     ptyCheckpointStepID(),
-					ToolCallID: "66666666-6666-4666-8666-666666666666",
-					ToolName:   "exec_command",
-				},
-			},
-		},
+		Message: clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+			StepID:     ptyCheckpointStepID(),
+			ToolCallID: "66666666-6666-4666-8666-666666666666",
+			ToolName:   "exec_command",
+		})),
 	}))
 	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
 		t.Fatalf("rejected tool start emitted checkpoint events: %#v", events)
@@ -218,31 +235,19 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 	)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.TranscriptMessage{
-			Sequence: 2,
-			Kind:     clientui.TranscriptMessageToolStart,
-			Payload: clientui.TranscriptPayload{
-				ToolStart: &clientui.TranscriptToolStart{
-					StepID:     ptyCheckpointStepID(),
-					ToolCallID: "77777777-7777-4777-8777-777777777777",
-					ToolName:   "exec_command",
-				},
-			},
-		},
+		Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+			StepID:     ptyCheckpointStepID(),
+			ToolCallID: "77777777-7777-4777-8777-777777777777",
+			ToolName:   "exec_command",
+		})),
 	}))
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.TranscriptMessage{
-			Sequence: 3,
-			Kind:     clientui.TranscriptMessageToolStart,
-			Payload: clientui.TranscriptPayload{
-				ToolStart: &clientui.TranscriptToolStart{
-					StepID:     ptyCheckpointStepID(),
-					ToolCallID: "88888888-8888-4888-8888-888888888888",
-					ToolName:   "exec_command",
-				},
-			},
-		},
+		Message: clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptToolStart{
+			StepID:     ptyCheckpointStepID(),
+			ToolCallID: "88888888-8888-4888-8888-888888888888",
+			ToolName:   "exec_command",
+		})),
 	}))
 
 	analysis := analyzeCheckpointBytes(t, out.Bytes())
@@ -252,6 +257,17 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 	}
 	if model.ongoingTranscript.lastSequence != 3 {
 		t.Fatalf("accepted transcript sequence = %d, want 3", model.ongoingTranscript.lastSequence)
+	}
+}
+
+func TestPTYCheckpointModelIgnoresUninitializedToolStartMessage(t *testing.T) {
+	message := dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+	})
+
+	got := ongoingToolStartCandidate(nil, message)
+	if got.valid {
+		t.Fatalf("uninitialized transcript message produced a tool-start candidate: %+v", got)
 	}
 }
 
@@ -357,23 +373,18 @@ func ptyLastTerminalOperationEnd(analysis analyzer.Analysis) int64 {
 func applyPTYCheckpointAssistantFinal(model *ptyCheckpointModel, sequence uint64, text string) {
 	model.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.TranscriptMessage{
-			Sequence: sequence,
-			Kind:     clientui.TranscriptMessageCommittedRow,
-			Payload: clientui.TranscriptPayload{
-				CommittedRow: &clientui.TranscriptCommittedRow{
-					Visibility: clientui.EntryVisibilityOngoing,
-					Integrity:  transcript.RowIntegrityValid,
-					Kind:       clientui.TranscriptRowAssistant,
-					Assistant: &clientui.TranscriptAssistantRow{
-						StepID:   ptyCheckpointStepID(),
-						StreamID: ptyCheckpointAssistantStreamID(),
-						Text:     text,
-						Phase:    transcript.AssistantPhaseFinal,
-					},
-				},
+		Message: clientui.NewTranscriptMessage(sequence, clientui.NewTranscriptEvent(clientui.TranscriptCommittedRow{
+			Visibility: clientui.EntryVisibilityOngoing,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       clientui.TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: int64(sequence), RowOrdinal: 1},
+			Assistant: &clientui.TranscriptAssistantRow{
+				StepID:   ptyCheckpointStepID(),
+				StreamID: ptyCheckpointAssistantStreamID(),
+				Text:     text,
+				Phase:    transcript.AssistantPhaseFinal,
 			},
-		},
+		})),
 	}))
 }
 

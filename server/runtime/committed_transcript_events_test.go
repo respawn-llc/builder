@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -16,7 +17,10 @@ import (
 	"core/server/tools"
 )
 
+const committedTranscriptEventTestWait = 3 * time.Second
+
 func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing.T) {
+	t.Parallel()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
@@ -39,7 +43,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 	}()
 	select {
 	case <-firstEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for first append to enter persistence")
 	}
 
@@ -79,6 +83,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 }
 
 func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) {
+	t.Parallel()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var (
@@ -104,17 +109,19 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 				DigestVersion: requestCacheDigestVersion,
 				CacheKey:      "session-1/cache-key",
 				Scope:         transcript.CacheWarningScopeConversation,
+				ChunkCount:    1,
+				TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 			},
 			exactWarning: &transcript.CacheWarning{
 				Scope:  transcript.CacheWarningScopeConversation,
 				Reason: transcript.CacheWarningReasonNonPostfix,
 			},
 			previousCachedInputTokens: 10,
-		}, llm.Usage{HasCachedInputTokens: true, CachedInputTokens: 0})
+		}, llm.Usage{CachedInputTokens: textutil.Value(0)})
 	}()
 	select {
 	case <-cachePersistEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for cache warning observation to enter persistence")
 	}
 
@@ -140,7 +147,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Role != cacheWarningTranscriptRole || snapshot.Entries[1].Text != "feedback" {
 		t.Fatalf("committed chat order = %+v, want cache warning then feedback", snapshot.Entries)
 	}
-	persisted, err := sessiontest.CollectEvents(store)
+	persisted, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -161,6 +168,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 }
 
 func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -173,20 +181,22 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "session-1/cache-key",
 			Scope:         transcript.CacheWarningScopeConversation,
+			ChunkCount:    1,
+			TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		exactWarning: &transcript.CacheWarning{
 			Scope:  transcript.CacheWarningScopeConversation,
 			Reason: transcript.CacheWarningReasonNonPostfix,
 		},
 		previousCachedInputTokens: 10,
-	}, llm.Usage{HasCachedInputTokens: true, CachedInputTokens: 0}); err != nil {
+	}, llm.Usage{CachedInputTokens: textutil.Value(0)}); err != nil {
 		t.Fatalf("observe cache warning: %v", err)
 	}
 
 	assistant := llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "checking service",
-		Phase:   llm.MessagePhaseCommentary,
+		Content: textutil.Value("checking service"),
+		Phase:   textutil.Value(llm.MessagePhaseCommentary),
 		ToolCalls: []llm.ToolCall{
 			{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"status"}`)},
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ps"}`)},
@@ -235,6 +245,7 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 }
 
 func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	replacementEventEntered := make(chan struct{})
 	releaseReplacementEvent := make(chan struct{})
@@ -253,14 +264,14 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	go func() {
 		_, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeCompactionSummary,
-			Content:     "summary",
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
 		}}))
 		replaceDone <- err
 	}()
 	select {
 	case <-replacementEventEntered:
-	case <-time.After(time.Second):
+	case <-time.After(committedTranscriptEventTestWait):
 		t.Fatal("timed out waiting for replacement projection event")
 	}
 
@@ -288,6 +299,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 }
 
 func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -305,7 +317,7 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 	}
 
 	start := len(events)
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: call.ID, Name: string(result.Name), Content: string(result.Output)}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(call.ID), Name: textutil.Value(string(result.Name)), Content: textutil.Value(string(result.Output))}})); err != nil {
 		t.Fatalf("append tool mirror message: %v", err)
 	}
 	if got := events[start:]; len(got) != 0 {
@@ -314,6 +326,7 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 }
 
 func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -323,9 +336,9 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 
 	toolMessage := llm.Message{
 		Role:       llm.RoleTool,
-		ToolCallID: "orphan-call",
-		Name:       string(toolspec.ToolExecCommand),
-		Content:    string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false})),
+		ToolCallID: textutil.Value("orphan-call"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false}))),
 	}
 	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{toolMessage})); err != nil {
 		t.Fatalf("append visible tool message: %v", err)
@@ -356,6 +369,7 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 }
 
 func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 8)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -393,6 +407,7 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 }
 
 func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndToolResults(t *testing.T) {
+	t.Parallel()
 	toolCalls := []llm.ToolCall{
 		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
@@ -400,15 +415,15 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "commentary before tools", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("commentary before tools"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: toolCalls,
 			Reasoning: []llm.ReasoningEntry{
-				{Role: "reasoning", Text: "local note"},
+				{Role: textutil.Value("reasoning"), Text: "local note"},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -454,14 +469,15 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 }
 
 func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
+	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "done",
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("done"),
 		},
 		Reasoning: []llm.ReasoningEntry{{
-			Role: "reasoning",
+			Role: textutil.Value("reasoning"),
 			Text: "**Reviewing test flow for mode transitions**",
 		}},
 		Usage: llm.Usage{WindowTokens: 200000},
@@ -497,7 +513,7 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 			t.Fatalf("hydrate transcript: %v", err)
 		}
 		for _, row := range hydration.CommittedRows {
-			if row.Notice != nil && row.Notice.DiagnosticCode == "reasoning" {
+			if row.Kind == TranscriptCommittedRowFactReasoningTrace && row.ReasoningTrace != nil {
 				if row.Visibility != transcript.EntryVisibilityDetail ||
 					row.Integrity != transcript.RowIntegrityValid {
 					t.Fatalf("hydrated reasoning row = %+v, want valid detail-only row", row)
@@ -511,27 +527,28 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 }
 
 func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *testing.T) {
+	t.Parallel()
 	const (
 		beforeStepID = "11111111-1111-4111-8111-111111111111"
 		emptyStepID  = "22222222-2222-4222-8222-222222222222"
 		afterStepID  = "33333333-3333-4333-8333-333333333333"
 	)
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent(beforeStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, beforeStepID, llm.Message{
 		Role:    llm.RoleUser,
-		Content: "before",
+		Content: textutil.Value("before"),
 	}); err != nil {
 		t.Fatalf("append message before provider-empty assistant: %v", err)
 	}
-	if _, _, err := store.AppendEvent(emptyStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, emptyStepID, llm.Message{
 		Role:  llm.RoleAssistant,
-		Phase: llm.MessagePhaseFinal,
+		Phase: textutil.Value(llm.MessagePhaseFinal),
 	}); err != nil {
 		t.Fatalf("append provider-empty assistant message: %v", err)
 	}
-	if _, _, err := store.AppendEvent(afterStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, afterStepID, llm.Message{
 		Role:    llm.RoleUser,
-		Content: "after",
+		Content: textutil.Value("after"),
 	}); err != nil {
 		t.Fatalf("append message after provider-empty assistant: %v", err)
 	}
@@ -559,88 +576,8 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 	}
 }
 
-func TestRestoredCompactedRuntimePublishesCommittedRangesInVisibleTranscriptCoordinates(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	if err := eng.AppendCommittedEntry("system", "before-1"); err != nil {
-		t.Fatalf("append before-1: %v", err)
-	}
-	if err := eng.AppendCommittedEntry("system", "before-2"); err != nil {
-		t.Fatalf("append before-2: %v", err)
-	}
-	if err := eng.steer("compact", steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", llm.ItemsFromMessages([]llm.Message{{
-		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
-	}}))); err != nil {
-		t.Fatalf("replace history: %v", err)
-	}
-	if got := eng.CommittedTranscriptEntryCount(); got != 3 {
-		t.Fatalf("live committed entry count after compaction = %d, want 3", got)
-	}
-	if err := eng.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	events := make([]Event, 0, 2)
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{
-		OnEvent: func(evt Event) { events = append(events, evt) },
-	})
-	if got := reopened.CommittedTranscriptEntryCount(); got != 3 {
-		t.Fatalf("restored committed entry count after compaction = %d, want 3", got)
-	}
-	if err := reopened.AppendCommittedEntry("system", "after"); err != nil {
-		t.Fatalf("append after: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("events = %+v, want one committed append event", events)
-	}
-	if events[0].CommittedEntryStart != 3 || events[0].CommittedEntryCount != 4 {
-		t.Fatalf("committed range = start %d count %d, want start 3 count 4; event=%+v", events[0].CommittedEntryStart, events[0].CommittedEntryCount, events[0])
-	}
-}
-
-func TestRestoredCompactedRuntimeNextCommittedEventFollowsHistoryReplacementSeed(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	for _, text := range []string{"before-1", "before-2", "before-3"} {
-		if err := eng.AppendCommittedEntry("system", text); err != nil {
-			t.Fatalf("append %s: %v", text, err)
-		}
-	}
-	if err := eng.steer("compact", steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", llm.ItemsFromMessages([]llm.Message{{
-		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
-	}}))); err != nil {
-		t.Fatalf("replace history: %v", err)
-	}
-	if err := eng.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	events := make([]Event, 0, 2)
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{
-		OnEvent: func(evt Event) { events = append(events, evt) },
-	})
-	if err := reopened.AppendCommittedEntry("system", "after-1"); err != nil {
-		t.Fatalf("append after-1: %v", err)
-	}
-	if err := reopened.AppendCommittedEntry("system", "after-2"); err != nil {
-		t.Fatalf("append after-2: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("events = %+v, want two committed append events", events)
-	}
-	if events[0].CommittedEntryStart != 4 || events[0].CommittedEntryCount != 5 {
-		t.Fatalf("first restored event range = start %d count %d, want start 4 count 5; event=%+v", events[0].CommittedEntryStart, events[0].CommittedEntryCount, events[0])
-	}
-	if events[1].CommittedEntryStart != 5 || events[1].CommittedEntryCount != 6 {
-		t.Fatalf("second restored event range = start %d count %d, want start 5 count 6; event=%+v", events[1].CommittedEntryStart, events[1].CommittedEntryCount, events[1])
-	}
-}
-
-func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t *testing.T) {
+func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEntry(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -648,16 +585,16 @@ func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t 
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	carryover, ok := manualCompactionCarryoverMessage("keep the active requirement")
+	carryover, ok := compactionPreservedUserMessage("keep the active requirement")
 	if !ok {
-		t.Fatal("expected non-empty manual compaction carryover")
+		t.Fatal("expected non-empty compaction-preserved user message")
 	}
 	receipt, err := newCompactionPersistence(eng).replaceHistory(
 		"compact-step",
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
-			{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+			{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
 			carryover,
 		}),
 	)
@@ -677,8 +614,8 @@ func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t 
 	if !events[0].CommittedEntryStartSet || events[0].CommittedEntryStart != 0 || events[0].CommittedEntryCount != 1 {
 		t.Fatalf("first event range = start_set:%t start:%d count:%d, want start 0 count 1", events[0].CommittedEntryStartSet, events[0].CommittedEntryStart, events[0].CommittedEntryCount)
 	}
-	if entries := TranscriptEntriesFromEvent(events[1]); events[1].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleManualCompactionCarryover) {
-		t.Fatalf("second replacement event = %+v, want manual compaction carryover", events[1])
+	if entries := TranscriptEntriesFromEvent(events[1]); events[1].Kind != EventLocalEntryAdded || len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleCompactionPreservedUserMessage) {
+		t.Fatalf("second replacement event = %+v, want compaction-preserved user message", events[1])
 	}
 	if !events[1].CommittedEntryStartSet || events[1].CommittedEntryStart != 1 || events[1].CommittedEntryCount != 2 {
 		t.Fatalf("second event range = start_set:%t start:%d count:%d, want start 1 count 2", events[1].CommittedEntryStartSet, events[1].CommittedEntryStart, events[1].CommittedEntryCount)

@@ -161,6 +161,54 @@ func TestDiscoverWorkspaceLocalTargetsDoNotSkipGlobalImports(t *testing.T) {
 	}
 }
 
+func TestDiscoverCommandsCountsFollowedRegularMarkdownFiles(t *testing.T) {
+	configRoot := t.TempDir()
+	home := t.TempDir()
+	writeProviderCommand(t, home, ProviderCodex, "prompts", "regular.md")
+	root := filepath.Join(home, ".codex", "prompts")
+	if err := os.WriteFile(filepath.Join(root, "blank.md"), []byte(" \n\t"), 0o644); err != nil {
+		t.Fatalf("write blank command: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "---.md"), []byte("invalid command name"), 0o644); err != nil {
+		t.Fatalf("write invalid-name command: %v", err)
+	}
+	targetDir := filepath.Join(t.TempDir(), "command-directory")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir command target directory: %v", err)
+	}
+	if err := os.Symlink(targetDir, filepath.Join(root, "directory.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	targetFile := filepath.Join(t.TempDir(), "linked.md")
+	if err := os.WriteFile(targetFile, []byte("linked command"), 0o644); err != nil {
+		t.Fatalf("write linked command: %v", err)
+	}
+	if err := os.Symlink(targetFile, filepath.Join(root, "linked.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(result.Commands.Items) != 3 {
+		t.Fatalf("command items = %+v, want regular files and regular-file symlinks regardless of content", result.Commands.Items)
+	}
+	foundBlank := false
+	for _, item := range result.Commands.Items {
+		if item.Ref.TargetName == "directory.md" {
+			t.Fatalf("directory symlink counted as command: %+v", item)
+		}
+		if item.Ref.TargetName == "---.md" {
+			t.Fatalf("unnormalizable command filename counted as command: %+v", item)
+		}
+		foundBlank = foundBlank || item.Ref.TargetName == "blank.md"
+	}
+	if !foundBlank {
+		t.Fatalf("blank regular Markdown file was not counted: %+v", result.Commands.Items)
+	}
+}
+
 func TestDiscoverReportsTargetProbeErrorsAndKeepsGeneratedSkills(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()

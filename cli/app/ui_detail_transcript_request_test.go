@@ -235,12 +235,14 @@ func TestDetailTranscriptMalformedToolRowsRemainLoadable(t *testing.T) {
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityRecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Tool:       &clientui.TranscriptToolRow{},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityUnrecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 2},
 			Tool:       &clientui.TranscriptToolRow{},
 		},
 	}
@@ -473,13 +475,10 @@ func applyDetailTestSessionReplacement(t *testing.T, model *uiModel, rawSessionI
 	if err != nil {
 		t.Fatalf("parse replacement session ID: %v", err)
 	}
-	return model.applyAdmittedTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageSessionIdentity,
-		Payload: clientui.TranscriptPayload{SessionIdentity: &clientui.TranscriptSessionIdentity{
-			SessionID:             sessionID,
-			ConversationFreshness: clientui.ConversationFreshnessEstablished,
-		}},
-	}, runtimeTupleMergeResult{})
+	return model.applyAdmittedTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptSessionIdentity{
+		SessionID:             sessionID,
+		ConversationFreshness: clientui.ConversationFreshnessEstablished,
+	})), runtimeTupleMergeResult{})
 }
 
 func newDetailTranscriptRequestTestModel(sessionViews *controlledTranscriptPageClient) *uiModel {

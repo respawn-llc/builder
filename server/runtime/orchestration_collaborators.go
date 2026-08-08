@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflowruntime"
 )
 
 type exclusiveStepOptions struct {
@@ -18,7 +19,10 @@ type exclusiveStepReservationKind uint8
 
 const exclusiveStepReservationManualCompaction exclusiveStepReservationKind = 1
 
-type exclusiveStepReservation = struct{ Kind exclusiveStepReservationKind }
+type exclusiveStepReservation = struct {
+	Kind      exclusiveStepReservationKind
+	queueable bool
+}
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
@@ -31,12 +35,17 @@ type exclusiveStepLifecycle interface {
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
+	DrainAgentStepBoundary(ctx context.Context) error
+	EndAgentStepBoundary()
 }
 
 type backgroundNoticeScheduler interface {
 	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
+	RecordBackgroundShellUpdate(BackgroundShellEvent) error
+	QueueBackgroundShellContinuation(BackgroundShellEvent)
+	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
 	QueueDeveloperNotice(msg llm.Message)
-	DrainPendingNotices() []steeringIntent
+	flushPendingNotices(stepID string) (int, error)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
 	ScheduleIfIdle()
@@ -44,6 +53,8 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
+	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
+	CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult
 	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -54,14 +65,54 @@ type stepLoopOptions struct {
 	ReviewerFrequency              string
 	ReviewerClient                 llm.Client
 	RefreshReviewerConfigOnResolve bool
-	PendingUserInjectionIDs        map[string]struct{}
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
 
+func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
+	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
+		options.OnQueuedUserFlushCommitted(receipt)
+	}
+}
+
+type userInjectionSelection interface {
+	userInjectionSelection()
+}
+
+type steerUserInjectionSelection struct {
+	queueItemIDs map[string]struct{}
+}
+
+func (steerUserInjectionSelection) userInjectionSelection() {}
+
+type allPendingUserInjectionSelection struct{}
+
+func (allPendingUserInjectionSelection) userInjectionSelection() {}
+
+type userInjectionFlushDisposition uint8
+
+const (
+	userInjectionFlushContinue userInjectionFlushDisposition = iota
+	userInjectionFlushStopped
+)
+
+type userInjectionCommitResult struct {
+	flushed      int
+	receipt      session.CommitReceipt
+	queueItemIDs map[string]struct{}
+	disposition  userInjectionFlushDisposition
+}
+
+type queuedUserFlushStoppedError struct{}
+
+func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
+
+func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
+	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
+}
+
 type stepLoopResult struct {
-	Message                    llm.Message
+	FinalAnswer                *llm.Message
 	ExecutedToolCall           bool
-	NoopFinalAnswer            bool
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
 }
@@ -80,11 +131,14 @@ type toolExecutor interface {
 
 type messageLifecycle interface {
 	RestoreMessages() error
-	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error)
+	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
+	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
-	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
-	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
+	PendingUserMessages() []QueuedUserMessage
+	RestorePendingUserInjections(items []queuedUserMessage)
+	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }
@@ -120,7 +174,9 @@ type phaseProtocolEnforcer interface {
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
 		if e.liveRun == nil {
-			e.liveRun = newLiveRunCoordinator()
+			e.liveRun = newLiveRunCoordinator(func(result LiveRunResult) {
+				e.publishLiveRunFinished(result)
+			})
 		}
 		if e.stepLifecycle == nil {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}

@@ -95,7 +95,30 @@ type TerminalResizePolicy uint8
 const (
 	TerminalResizeSemanticPrompt TerminalResizePolicy = iota + 1
 	TerminalResizeWidthRehydration
+	TerminalResizeTmuxWidthRehydration
 )
+
+func (p TerminalResizePolicy) usesWidthRehydration() bool {
+	switch p {
+	case TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
+
+func (p TerminalResizePolicy) bottomAnchorsVerticalExpansion() bool {
+	switch p {
+	case TerminalResizeTmuxWidthRehydration:
+		return true
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+		return false
+	default:
+		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", p))
+	}
+}
 
 type Surface struct {
 	writer             io.Writer
@@ -144,7 +167,7 @@ func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 		writer = io.Discard
 	}
 	switch options.TerminalResize {
-	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration:
+	case TerminalResizeSemanticPrompt, TerminalResizeWidthRehydration, TerminalResizeTmuxWidthRehydration:
 	default:
 		panic(fmt.Sprintf("ongoing surface received invalid terminal resize policy %d", options.TerminalResize))
 	}
@@ -160,17 +183,20 @@ func NewSurfaceWithOptions(writer io.Writer, options SurfaceOptions) *Surface {
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "apply_terminal_message")
-	if message.Kind == clientui.TranscriptMessageHydration {
+	if message.Kind() == clientui.TranscriptMessageHydration {
 		return s.applyHydration(message, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.Payload.AssistantDelta != nil {
-		return s.applyAssistantDelta(message.Payload.AssistantDelta.StreamID, message.Payload.AssistantDelta.Delta, message.Payload.AssistantDelta.Phase, frame)
+	if message.Kind() == clientui.TranscriptMessageAssistantDelta {
+		payload := message.Payload().(clientui.TranscriptAssistantDelta)
+		return s.applyAssistantDelta(payload.StreamID, payload.Delta, payload.Phase, frame)
 	}
-	if message.Kind == clientui.TranscriptMessageAssistantStreamAbort && message.Payload.AssistantStreamAbort != nil {
-		return s.abortAssistantStream(message.Payload.AssistantStreamAbort.StreamID, frame)
+	if message.Kind() == clientui.TranscriptMessageAssistantStreamAbort {
+		payload := message.Payload().(clientui.TranscriptAssistantStreamAbort)
+		return s.abortAssistantStream(payload.StreamID, frame)
 	}
 	if isAssistantFinalization(message) {
-		return s.finalizeAssistantStream(*message.Payload.CommittedRow.Assistant.StreamID, message.Payload.CommittedRow.Assistant.Text, frame)
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		return s.finalizeAssistantStream(*row.Assistant.StreamID, row.Assistant.Text, frame)
 	}
 	lines := s.immutableLines(message, frame.Size.Width, frame.Theme)
 	if len(lines) == 0 {
@@ -180,11 +206,9 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 }
 
 func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
-	if message.Payload.Hydration == nil {
-		return Result{}, nil
-	}
-	lines := s.hydrationImmutableLines(*message.Payload.Hydration, frame.Size.Width, frame.Theme)
-	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Payload.Hydration.ActiveAssistant)
+	hydration := message.Payload().(clientui.TranscriptHydration)
+	lines := s.hydrationImmutableLines(hydration, frame.Size.Width, frame.Theme)
+	activeStreamHydrated := s.hydrateActiveAssistantStream(hydration.ActiveAssistant)
 	if activeStreamHydrated && !s.activeAssistantPromotionDeferred() {
 		projection := newMarkdownProjector(nil, frame.Theme, s.markdownLinks).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
@@ -328,10 +352,11 @@ func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame Fra
 }
 
 func isAssistantFinalization(message clientui.TranscriptMessage) bool {
-	return message.Kind == clientui.TranscriptMessageCommittedRow &&
-		message.Payload.CommittedRow != nil &&
-		message.Payload.CommittedRow.Assistant != nil &&
-		message.Payload.CommittedRow.Assistant.StreamID != nil
+	if message.Kind() != clientui.TranscriptMessageCommittedRow {
+		return false
+	}
+	row := message.Payload().(clientui.TranscriptCommittedRow)
+	return row.Assistant != nil && row.Assistant.StreamID != nil
 }
 
 func (s *Surface) Render(frame FrameInput) (Result, error) {
@@ -356,7 +381,7 @@ func (s *Surface) ObserveResize(size Size) Result {
 }
 
 func (s *Surface) observeResize(size Size) Result {
-	if s.terminalResize != TerminalResizeWidthRehydration {
+	if !s.terminalResize.usesWidthRehydration() {
 		return Result{}
 	}
 	if s.lastPaintedSize != nil &&
@@ -374,10 +399,16 @@ func (s *Surface) immutableScrollbackProduced() bool {
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
-	linesToErase := s.physicalPreviousBandHeight(frame.Size)
+	previousMutableBand := s.visiblePreviousMutableBand(frame.Size)
+	linesToErase := s.previousMutableBandHeightAtBottom(frame.Size)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
+	if s.terminalResize.usesWidthRehydration() &&
+		s.terminalHeightExpanded(frame.Size) &&
+		previousMutableBand != nil {
+		writeMutableRowsErase(&transaction, previousMutableBand.start, previousMutableBand.end)
+	}
 	writeMutableBandErase(&transaction, frame.Size.Height, linesToErase)
 	writeCursor(&transaction, Cursor{})
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
@@ -392,20 +423,15 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 }
 
 func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, themeName string) []string {
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
-		if message.Payload.Hydration == nil {
-			return nil
-		}
-		return s.hydrationImmutableLines(*message.Payload.Hydration, width, themeName)
+		return s.hydrationImmutableLines(message.Payload().(clientui.TranscriptHydration), width, themeName)
 	case clientui.TranscriptMessageCommittedRow:
-		if message.Payload.CommittedRow == nil {
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		if !committedRowVisibleInOngoing(row) {
 			return nil
 		}
-		if !committedRowVisibleInOngoing(*message.Payload.CommittedRow) {
-			return nil
-		}
-		return s.renderCommittedRow(*message.Payload.CommittedRow, width, themeName)
+		return s.renderCommittedRow(row, width, themeName)
 	default:
 		return nil
 	}
@@ -449,9 +475,13 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // ongoingRenderMode selects the renderer mode for a committed row in the
 // ongoing surface. O rows render their full ongoing preview; OC rows render
 // the collapsed/short ongoing form per tui-transcript.md visibility rules.
-// Answered questions are the typed multi-line exception. D and X rows never
-// reach this path.
+// Verbose supervisor suggestions are an O-row exception: their complete
+// typed suggestion list belongs in native scrollback. Answered questions are
+// the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if isFullOngoingNoticeRow(row) {
+		return transcriptrender.ModeOngoingFull
+	}
 	switch row.Visibility {
 	case clientui.EntryVisibilityOngoingCollapsed:
 		return transcriptrender.ModeOngoingCollapsed
@@ -460,6 +490,16 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	default:
 		panic(fmt.Sprintf("ongoing render received non-ongoing visibility %q", row.Visibility))
 	}
+}
+
+func isFullOngoingNoticeRow(row clientui.TranscriptCommittedRow) bool {
+	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
+		return false
+	}
+	if row.Notice.MessageType != nil && *row.Notice.MessageType == clientui.TranscriptMessageAgentSteer {
+		return true
+	}
+	return transcript.EntryRole(row.Notice.Diagnostic.Code) == transcript.EntryRoleReviewerSuggestions
 }
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
@@ -520,7 +560,7 @@ func committedRowLines(
 	linkPresentation transcriptrender.MarkdownLinkPresentation,
 ) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
-	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
+	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice, clientui.TranscriptRowReviewerFeedback, clientui.TranscriptRowReviewerError:
 		rendered := transcriptrender.RenderCommittedRowWithLinkPresentation(
 			row,
 			width,

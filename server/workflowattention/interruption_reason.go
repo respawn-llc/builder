@@ -1,17 +1,7 @@
 package workflowattention
 
-import "strings"
+import "core/server/workflow"
 
-const (
-	InterruptionReasonUserInterrupt   = "user_interrupt"
-	InterruptionReasonRuntimeCanceled = "workflow_runtime_canceled"
-)
-
-func ShouldNotifyInterruptedRun(reason string) bool {
-	switch strings.TrimSpace(reason) {
-	case "", InterruptionReasonUserInterrupt, InterruptionReasonRuntimeCanceled:
-		return false
-	default:
-		return true
-	}
+func ShouldNotifyInterruptedCurrentNode(reason workflow.CurrentNodeInterruptionReason) bool {
+	return workflow.IsActionableCurrentNodeInterruptionReason(reason)
 }

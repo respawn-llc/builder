@@ -32,6 +32,14 @@ type appendRecoveryEvents struct {
 	SHA256        string `json:"sha256"`
 }
 
+type appendRecoverySuffixConflictError struct {
+	message string
+}
+
+func (e *appendRecoverySuffixConflictError) Error() string {
+	return e.message
+}
+
 type appendRecoveryMeta struct {
 	Meta   Meta   `json:"meta"`
 	SHA256 string `json:"sha256"`
@@ -201,7 +209,14 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 	}
 	size := info.Size()
 	if size < events.StartOffset || size > events.EndOffset {
-		return false, fmt.Errorf("events file size %d is outside recovery range [%d,%d]", size, events.StartOffset, events.EndOffset)
+		return false, &appendRecoverySuffixConflictError{
+			message: fmt.Sprintf(
+				"events file size %d is outside recovery range [%d,%d]",
+				size,
+				events.StartOffset,
+				events.EndOffset,
+			),
+		}
 	}
 	if size != events.EndOffset || phase == appendRecoveryPrepared {
 		return size == events.EndOffset, nil
@@ -215,23 +230,29 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 	firstSequence := int64(0)
 	lastSequence := int64(0)
 	for {
-		var event Event
-		err := decoder.Decode(&event)
+		var encoded json.RawMessage
+		err := decoder.Decode(&encoded)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return false, fmt.Errorf("parse committed event suffix: %w", err)
 		}
+		event, err := decodeEventRecordV1(encoded)
+		if err != nil {
+			return false, fmt.Errorf("parse committed typed event suffix: %w", err)
+		}
 		count++
 		if count == 1 {
-			firstSequence = event.Seq
+			firstSequence = event.Seq()
 		}
-		lastSequence = event.Seq
+		lastSequence = event.Seq()
 	}
 	if count != events.EventCount || firstSequence != events.FirstSequence || lastSequence != events.LastSequence ||
 		fmt.Sprintf("%x", hash.Sum(nil)) != events.SHA256 {
-		return false, errors.New("committed event suffix identity is invalid")
+		return false, &appendRecoverySuffixConflictError{
+			message: "committed event suffix identity is invalid",
+		}
 	}
 	return true, nil
 }
@@ -247,7 +268,7 @@ func truncateAppendRecoverySuffix(path string, offset int64) error {
 	return syncAndClose(fp, fp.Truncate(offset))
 }
 
-func (s *Store) recoverAppendTransaction() error {
+func (s *Store) recoverAppendTransactionWithEventLogLockHeld() error {
 	record, err := s.readAppendRecoveryRecord()
 	if err != nil {
 		return s.recoveryError("read recovery record", err)
@@ -256,13 +277,37 @@ func (s *Store) recoverAppendTransaction() error {
 		return nil
 	}
 	currentDigest, err := digestMeta(s.meta)
-	if err != nil || currentDigest != record.Pre.SHA256 && currentDigest != record.Post.SHA256 {
-		return s.recoveryError("validate metadata state", errors.Join(err, errors.New("persisted metadata matches neither recovery snapshot")))
+	if err != nil {
+		return s.recoveryError(
+			"validate metadata state",
+			errors.Join(err, errors.New("persisted metadata matches neither recovery snapshot")),
+		)
+	}
+	if currentDigest != record.Pre.SHA256 && currentDigest != record.Post.SHA256 {
+		return s.irreconcilableRecoveryError(
+			"validate metadata state",
+			IrreconcilableRecoveryConflictMetadataState,
+			*record,
+			currentDigest,
+			nil,
+			errors.New("persisted metadata matches neither recovery snapshot"),
+		)
 	}
 	selected := record.Post.Meta
 	if record.Events != nil {
 		exact, err := inspectAppendRecoverySuffix(s.eventsFP, *record.Events, record.Phase)
 		if err != nil {
+			var conflict *appendRecoverySuffixConflictError
+			if record.Phase == appendRecoveryCommitted && errors.As(err, &conflict) {
+				return s.irreconcilableRecoveryError(
+					"inspect event suffix",
+					IrreconcilableRecoveryConflictCommittedSuffix,
+					*record,
+					currentDigest,
+					record.Events,
+					err,
+				)
+			}
 			return s.recoveryError("inspect event suffix", err)
 		}
 		if record.Phase == appendRecoveryPrepared || !exact {
@@ -273,5 +318,40 @@ func (s *Store) recoverAppendTransaction() error {
 		}
 	}
 	s.meta = cloneMeta(selected)
-	return s.observePersistence(&persistenceObservation{snapshot: s.persistenceSnapshotLocked()})
+	return s.observePersistenceAndClearAppendRecovery(
+		&persistenceObservation{snapshot: s.persistenceSnapshotLocked()},
+	)
+}
+
+func (s *Store) irreconcilableRecoveryError(
+	operation string,
+	conflict IrreconcilableRecoveryConflict,
+	record appendRecoveryRecord,
+	currentDigest string,
+	suffix *appendRecoveryEvents,
+	cause error,
+) error {
+	detail := &IrreconcilableRecoveryDetail{
+		SessionID:             s.meta.SessionID,
+		Operation:             operation,
+		RecoveryPath:          filepath.Join(s.sessionDir, appendRecoveryFile),
+		EventsPath:            s.eventsFP,
+		CurrentMetadataSHA256: currentDigest,
+		PreMetadataSHA256:     record.Pre.SHA256,
+		PostMetadataSHA256:    record.Post.SHA256,
+		Phase:                 string(record.Phase),
+		Conflict:              conflict,
+		cause:                 cause,
+	}
+	if suffix != nil {
+		detail.Suffix = &IrreconcilableRecoverySuffixIdentity{
+			StartOffset:   suffix.StartOffset,
+			EndOffset:     suffix.EndOffset,
+			EventCount:    suffix.EventCount,
+			FirstSequence: suffix.FirstSequence,
+			LastSequence:  suffix.LastSequence,
+			SHA256:        suffix.SHA256,
+		}
+	}
+	return detail
 }

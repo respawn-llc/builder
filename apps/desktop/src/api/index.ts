@@ -1,9 +1,14 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
+  BoardNodeCardsInput,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
+  TaskResumeInput,
   TaskMutationInput,
+  TaskStartInput,
+  TaskDependencyCreateIntent,
+  TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -30,27 +35,46 @@ export {
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
 } from "./models";
+export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
   ContractError,
   ProtocolMismatchError,
   RpcError,
+  WorkflowLabelError,
+  WorkflowTaskDependencyError,
+  TaskSearchError,
+  decodeTaskSearchError,
+  decodeWorkflowLabelError,
+  decodeWorkflowTaskDependencyError,
+  isProjectMissingError,
+  isTaskMissingError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,
   errorMessage,
 } from "./errors";
+export type { WorkflowLabelErrorReason } from "./errors";
+export type { WorkflowTaskDependencyErrorReason } from "./errors";
+export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
+export { workflowIDSchema } from "./schemas/workflowID";
 export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
+export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
+export type {
+  ApprovalAttentionItem,
+  AttentionItem,
+  InterruptedCurrentNodeAttentionItem,
+  QuestionAttentionItem,
+} from "./attention";
 export type {
   ActivityItem,
   ActivityPage,
   ApprovalDecision,
-  AttentionItem,
   AttentionPage,
   BoardCard,
   BoardColumn,
@@ -68,17 +92,34 @@ export type {
   ServerReadiness,
   TaskComment,
   TaskAttention,
+  TaskCommentAuthorKind,
   TaskDetail,
+  TaskDependencies,
+  TaskDependencyAddAvailability,
+  TaskDependencyDirection,
+  TaskDependencyDirectionProjection,
+  TaskDependencyItem,
+  TaskDependencyListResponse,
+  TaskDependencyMutationResponse,
+  TaskDependencyProgress,
+  TaskDependencySatisfaction,
   TaskApproveApplied,
   TaskApproveResponse,
   TaskMoveApplied,
+  TaskMoveNoOp,
   TaskMoveResponse,
+  TaskMovePreviewBlocker,
+  TaskMovePreviewChoice,
+  TaskMovePreviewResponse,
+  TaskMoveRequiredValue,
+  TaskResumeApplied,
+  TaskResumeResponse,
+  ApprovalSnapshot,
   TaskStartApplied,
   TaskStartResponse,
-  TaskRun,
+  TaskCurrentNode,
   TaskStatus,
   TaskStatusKind,
-  TaskTransition,
   WorkflowBoard,
   WorkflowContextSource,
   WorkflowDefinition,
@@ -96,8 +137,6 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
-  WorkflowExecutionTargetWorktree,
-  WorkflowExecutionTargetWorktreeAvailability,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,
@@ -107,7 +146,6 @@ export type {
   WorkflowGraphSavePreview,
   WorkflowGraphValidateDraftResult,
   WorkflowGraphValidationResults,
-  WorkflowInputField,
   WorkflowInputBinding,
   WorkflowJoinInputProvider,
   WorkflowNode,
@@ -127,3 +165,49 @@ export type {
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";
+export type {
+  WorkflowEdgeSelectionMode,
+  WorkflowParameterPurpose,
+  WorkflowSelectorApplicability,
+  WorkflowSelectorApplicabilityReason,
+} from "./workflowSelectionModels";
+export type {
+  BoardNodeCardsSort,
+  WorkflowTaskListSort,
+  WorkflowTaskListSortDirection,
+  WorkflowTaskListSortField,
+} from "./boardNodeCardsSorting";
+export type {
+  CanonicalTaskLabelFilter,
+  ProjectLabel,
+  ProjectLabelCatalog,
+  TaskLabelAssignment,
+  TaskLabelFilter,
+  TaskListItem,
+  TaskListPage,
+} from "./workflowLabels";
+export type { BoardDependencyFilter, BoardFilter, BoardFilterInput } from "./workflowBoardFilters";
+export type {
+  TaskSearchFTS5Hit,
+  TaskSearchGroup,
+  TaskSearchHit,
+  TaskSearchInput,
+  TaskSearchLiteralHit,
+  TaskSearchLiteralMatch,
+  TaskSearchMode,
+  TaskSearchResponse,
+  TaskSearchSource,
+} from "./taskSearch";
+export {
+  canonicalTaskLabelFilter,
+  labelIDListsEqual,
+  noTaskLabelFilter,
+  taskLabelFilterConditionCount,
+  taskLabelFiltersEqual,
+} from "./workflowLabels";
+export {
+  boardFilterWithDependencyFilter,
+  boardFilterWithLabelFilter,
+  boardFiltersEqual,
+  canonicalBoardFilter,
+} from "./workflowBoardFilters";

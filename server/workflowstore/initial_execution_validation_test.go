@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/toolspec"
 )
@@ -24,24 +25,31 @@ func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 	if !errors.As(err, &validationErr) || !validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
 		t.Fatalf("StartTask error = %v, want workflow validation error", err)
 	}
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil || len(placements) != 1 || placements[0].State != "active" {
-		t.Fatalf("placements after rejected start = %+v, want active Start only", placements)
-	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
+	definition, _, err := store.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GetDefinition: %v", err)
 	}
-	runs, err := store.ListRuns(ctx, task.ID)
+	start := nodeByKind(t, definition, workflow.NodeKindStart)
+	backlog, err := workflow.NewCurrentNodeReference(task.ID, workflow.NodeIDOf(start), nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after rejected start: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		!currentNodes[0].Reference.Equal(backlog) ||
+		currentNodes[0].Scheduling != nil ||
+		currentNodes[0].SessionID != nil {
+		t.Fatalf("current nodes after rejected start = %+v, want one unbound backlog node", currentNodes)
 	}
 	target, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(transitions) != 0 || len(runs) != 0 || target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != "" {
-		t.Fatalf("rejected start mutated task: transitions=%+v runs=%+v task=%+v", transitions, runs, target.Task)
+	if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != "" {
+		t.Fatalf("rejected start mutated task: task=%+v", target.Task)
 	}
 }
 
@@ -60,5 +68,31 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("repeated StartTask error = %v, want no active Start placement", err)
+	}
+}
+
+func TestTaskSourceResolutionRetainsPrimaryWorkspaceOutsideCollectionLimit(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+	}
+
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if task.SourceWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("created task source workspace = %q, want primary %q", task.SourceWorkspaceID, binding.WorkspaceID)
+	}
+
+	if _, err := store.db.ExecContext(ctx, "UPDATE tasks SET source_workspace_id = NULL WHERE id = ?", task.ID); err != nil {
+		t.Fatalf("clear task source workspace: %v", err)
+	}
+	target, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if target.SourceWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("execution target source workspace = %q, want primary %q", target.SourceWorkspaceID, binding.WorkspaceID)
 	}
 }

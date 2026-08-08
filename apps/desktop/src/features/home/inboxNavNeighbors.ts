@@ -1,7 +1,3 @@
-export type InboxNavItem = Readonly<{
-  taskID: string;
-}>;
-
 export type InboxNavNeighbors = Readonly<{
   previousTaskID: string | null;
   nextTaskID: string | null;
@@ -9,20 +5,18 @@ export type InboxNavNeighbors = Readonly<{
 }>;
 
 /**
- * Collapses the live inbox feed into the ordered, de-duplicated list of task IDs
- * used for Previous/Next navigation. Items without a task (e.g. workflow-only
- * attention) and repeated tasks (a task may raise multiple attention rows) are
- * dropped so each task appears at a single, stable position.
+ * Collapses the live Inbox task IDs into their ordered, de-duplicated navigation
+ * sequence. A task may raise multiple attention rows but occupies one position.
  */
-export function orderedInboxTaskIDs(items: readonly InboxNavItem[]): readonly string[] {
+export function orderedInboxTaskIDs(taskIDs: readonly string[]): readonly string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
-  for (const item of items) {
-    if (item.taskID.length === 0 || seen.has(item.taskID)) {
+  for (const taskID of taskIDs) {
+    if (seen.has(taskID)) {
       continue;
     }
-    seen.add(item.taskID);
-    ordered.push(item.taskID);
+    seen.add(taskID);
+    ordered.push(taskID);
   }
   return ordered;
 }

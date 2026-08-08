@@ -30,19 +30,24 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | `/back` | none | Return to the parent session, if present, with the child’s latest durable final answer prefilled. |
 | `/review <what to review>` | optional free-form text | Trigger Kent's native code review. It reuses an empty session; otherwise it starts a fresh child session. |
 | `/init <instructions>` | optional free-form text | Run repository initialization. It reuses an empty session; otherwise it starts a fresh child session. |
-| `/prompt:<name>` | optional free-form text | Run a custom Markdown prompt (see [prompts](../prompts/)). |
+| `/prompt:<name>` | optional trailing arguments | Run a server-owned custom prompt command. |
 
 
-Kent supports markdown file-backed custom prompt commands.
+Kent discovers Markdown prompt commands on the server that owns the attached Project Workspace. Remote clients do not read server paths or receive prompt bodies in the command catalog.
 
-- If the prompt body contains the exact token `$ARGUMENTS`, Kent replaces every occurrence with the trailing input.
-- Otherwise, if trailing input was provided, Kent appends it to the end of the prompt body.
-
-To add a custom prompt, create a Markdown file in one of these directories (descending priority):
+The effective roots, in descending precedence, are:
 
 - `<workspace>/.kent/prompts`
 - `<workspace>/.kent/commands`
-- `~/.kent/prompts`
-- `~/.kent/commands`
+- `<persistence-root>/prompts`
+- `<persistence-root>/commands`
+- `<persistence-root>/.generated/prompts`
+- `<persistence-root>/.generated/commands`
 
-The command id is derived from the filename as `prompt:<normalized_base_name>`. Duplicate command ids are deduplicated by first match, so repo-scoped commands override global commands.
+Discovery is non-recursive and includes non-blank `.md` files. The first valid file for each normalized basename wins. IDs lowercase letters, preserve digits, convert whitespace and underscores to one underscore, and discard other characters.
+
+The picker shows a one-line preview made from the first 256 Unicode characters after collapsing whitespace. Markdown punctuation remains unchanged. Prompt bodies are resolved by the server when the command is invoked.
+
+If the exact `$ARGUMENTS` token appears in the body, Kent replaces every occurrence with trimmed trailing arguments. Otherwise, Kent appends non-empty trailing arguments after one blank line.
+
+First-time setup can import slash-command directories from supported providers. An unavailable or unknown `/prompt:` command reports an error and is never sent to the model as plain text. Other unknown slash commands retain their normal behavior.

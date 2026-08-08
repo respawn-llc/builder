@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +10,12 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/tools"
+	"core/shared/textutil"
+	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type blockingBackgroundStepLifecycle struct {
@@ -52,8 +59,13 @@ func (s *blockingBackgroundStepLifecycle) WithActiveStep(func(stepID string) err
 func (s *blockingBackgroundStepLifecycle) ApplyForActiveStep(string, func() error) error {
 	return ErrActiveStepInactive
 }
+func (s *blockingBackgroundStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+	return nil
+}
+func (s *blockingBackgroundStepLifecycle) EndAgentStepBoundary() {}
 
 func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *testing.T) {
+	t.Parallel()
 	steps := &blockingBackgroundStepLifecycle{
 		started: make(chan struct{}, 1),
 		stopped: make(chan error, 1),
@@ -61,7 +73,7 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	eng := &Engine{}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
 
-	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued background notice"})
+	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
 
 	select {
 	case <-steps.started:
@@ -88,6 +100,26 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	case <-closeDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("engine close did not wait for queued background continuation")
+	}
+}
+
+func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	if err := engine.SteerBackgroundContinuationFailure(errors.New("provider unavailable")); err != nil {
+		t.Fatalf("steer background continuation failure: %v", err)
+	}
+	entries := engine.ChatSnapshot().Entries
+	if len(entries) != 1 ||
+		entries[0].Role != string(transcript.EntryRoleDeveloperErrorFeedback) ||
+		entries[0].Text == "" {
+		t.Fatalf("background failure entries = %+v, want one developer error feedback entry", entries)
+	}
+
+	mustBlockTestEventLogAppends(t, store)
+	if err := engine.SteerBackgroundContinuationFailure(errors.New("retry failed")); err == nil {
+		t.Fatal("background continuation failure steering swallowed persistence error")
 	}
 }
 
@@ -119,10 +151,10 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		}
 
 		runSafe(func() {
-			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued background notice"})
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
 		})
 		runSafe(func() {
-			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued schedule-if-idle"})
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued schedule-if-idle")})
 			scheduler.ScheduleIfIdle()
 		})
 		runSafe(func() {
@@ -156,5 +188,127 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		case <-time.After(2 * time.Second):
 			t.Fatalf("iteration %d: close remained blocked after race", i)
 		}
+	}
+}
+
+func TestBackgroundNoticeSchedulerPreservesNoticeWhenMetaContextPreparationFails(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	mustBlockTestEventLogAppends(t, store)
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+
+	scheduler.QueueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	})
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice preparation unexpectedly succeeded")
+	}
+	if !scheduler.HasPendingNotices() {
+		t.Fatal("background notice was lost after meta-context preparation failed")
+	}
+}
+
+func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		block       bool
+		wantPending bool
+	}{
+		{name: "committed"},
+		{name: "uncommitted append failure", block: true, wantPending: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			steps := &stubExclusiveStepLifecycle{busy: true}
+			scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+			engine.stepLifecycle = steps
+			engine.backgroundFlow = scheduler
+
+			scheduler.QueueDeveloperNotice(llm.Message{
+				Role:    llm.RoleDeveloper,
+				Name:    textutil.Value("42"),
+				Content: textutil.Value("queued background notice"),
+			})
+			if tt.block {
+				mustBlockTestEventLogAppends(t, store)
+			}
+
+			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{ToolName: string(toolspec.ToolWriteStdin)})
+			receipt, _, err := engine.persistToolCompletionRaw("step", tools.Result{
+				CallID:       "write-stdin-call",
+				Name:         toolspec.ToolWriteStdin,
+				Output:       json.RawMessage(`{"background_session_id":42,"background_running":false,"backgrounded":true}`),
+				Presentation: &presentation,
+			})
+			if receipt.Committed == tt.wantPending {
+				t.Fatalf("completion receipt = %+v, want committed=%t", receipt, !tt.wantPending)
+			}
+			if tt.wantPending && err == nil {
+				t.Fatal("uncommitted completion did not surface append failure")
+			}
+			if !tt.wantPending && err != nil {
+				t.Fatalf("persist committed completion: %v", err)
+			}
+			if got := scheduler.HasPendingNotices(); got != tt.wantPending {
+				t.Fatalf("pending notice after completion = %t, want %t", got, tt.wantPending)
+			}
+		})
+	}
+}
+
+func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	if err := engine.ensureMetaContextForRequest(context.Background(), "seed"); err != nil {
+		t.Fatalf("prepare meta context: %v", err)
+	}
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
+	}
+	mustBlockTestEventLogAppends(t, store)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); err == nil {
+		t.Fatal("background notice steer unexpectedly succeeded")
+	}
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 2 || pending[0].sessionID != "first" || pending[1].sessionID != "second" {
+		t.Fatalf("restored pending notices = %+v", pending)
+	}
+}
+
+func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserverFailure(t *testing.T) {
+	observerErr := errors.New("background notice observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steps := &stubExclusiveStepLifecycle{busy: true}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
+	for _, sessionID := range []string{"first", "second"} {
+		scheduler.QueueDeveloperNotice(llm.Message{
+			Role:    llm.RoleDeveloper,
+			Name:    textutil.Value(sessionID),
+			Content: textutil.Value(sessionID + " notice"),
+		})
+	}
+	gate.FailNext(observerErr)
+
+	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("flush error = %v, want observer failure", err)
+	}
+	pending := scheduler.pendingSnapshot()
+	if len(pending) != 1 || pending[0].sessionID != "second" {
+		t.Fatalf("pending notices after committed failure = %+v", pending)
 	}
 }

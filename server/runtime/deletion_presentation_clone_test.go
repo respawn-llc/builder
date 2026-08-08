@@ -8,6 +8,7 @@ import (
 )
 
 func TestRuntimeToolPresentationCloneBoundariesOwnDeletionMetadata(t *testing.T) {
+	t.Parallel()
 	source := deletionCloneTestMeta()
 	clones := map[string]*transcript.ToolCallMeta{
 		"live tool":      cloneTranscriptToolCallMeta(source),

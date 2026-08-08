@@ -15,12 +15,6 @@ import (
 	"core/shared/sessioncontract"
 )
 
-//go:embed testdata/home_sort_task_run.sql
-var homeSortTaskRunSQL string
-
-//go:embed testdata/home_sort_task_transition.sql
-var homeSortTaskTransitionSQL string
-
 //go:embed testdata/home_sort_task_comment.sql
 var homeSortTaskCommentSQL string
 
@@ -46,11 +40,11 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	workflow, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Activity Board"})
+	workflowRecord, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Activity Board"})
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	if _, err := workflowStore.LinkWorkflow(ctx, older.ProjectID, workflow.ID, true); err != nil {
+	if _, err := workflowStore.LinkWorkflow(ctx, older.ProjectID, workflowRecord.ID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: older.ProjectID, Title: "Recent task", Body: "Body"}); err != nil {
@@ -106,38 +100,6 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 		touch func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture)
 	}{
 		{
-			name: "task_node_placements",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				if _, err := fixture.store.DB().ExecContext(ctx, `UPDATE task_node_placements SET updated_at_unix_ms = ? WHERE task_id = ?`, fixture.highUnixMs, string(fixture.task.ID)); err != nil {
-					t.Fatalf("touch placement activity: %v", err)
-				}
-			},
-		},
-		{
-			name: "task_runs",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				placementID, _ := taskPlacement(t, ctx, fixture.store, string(fixture.task.ID))
-				if _, err := fixture.store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-					"run-home-sort", placementID, fixture.highUnixMs, fixture.highUnixMs, fixture.highUnixMs,
-				); err != nil {
-					t.Fatalf("insert run activity: %v", err)
-				}
-			},
-		},
-		{
-			name: "task_transitions",
-			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
-				t.Helper()
-				if _, err := fixture.store.DB().ExecContext(ctx, homeSortTaskTransitionSQL,
-					"transition-home-sort", string(fixture.task.ID), fixture.highUnixMs-1, fixture.highUnixMs,
-				); err != nil {
-					t.Fatalf("insert transition activity: %v", err)
-				}
-			},
-		},
-		{
 			name: "task_comments",
 			touch: func(t *testing.T, ctx context.Context, fixture projectHomeActivityFixture) {
 				t.Helper()
@@ -161,6 +123,25 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 				t.Fatalf("latest activity timestamp = %d, want %d", home.Projects[0].UpdatedAtUnixMs, fixture.highUnixMs)
 			}
 		})
+	}
+}
+
+func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
+	ctx := context.Background()
+	fixture := newProjectHomeActivityFixture(t, ctx)
+	assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.newer.Binding.ProjectID, fixture.older.ProjectID})
+
+	fixture.setNow(fixture.highUnixMs)
+	if _, err := fixture.store.DB().ExecContext(ctx,
+		`UPDATE tasks SET updated_at_unix_ms = ? WHERE id = ?`,
+		fixture.highUnixMs, string(fixture.task.ID),
+	); err != nil {
+		t.Fatalf("touch task activity: %v", err)
+	}
+
+	home := assertProjectHomeOrder(t, ctx, fixture.svc, []string{fixture.older.ProjectID, fixture.newer.Binding.ProjectID})
+	if home.Projects[0].UpdatedAtUnixMs != fixture.highUnixMs {
+		t.Fatalf("Current Node mutation activity timestamp = %d, want %d", home.Projects[0].UpdatedAtUnixMs, fixture.highUnixMs)
 	}
 }
 
@@ -205,18 +186,6 @@ func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 			if _, err := workflowStore.AddComment(ctx, task.ID, "Comment", "user", "bench"); err != nil {
 				b.Fatalf("AddComment %d/%d: %v", projectIndex, taskIndex, err)
 			}
-			placementID, _ := taskPlacement(b, ctx, store, string(task.ID))
-			timestamp := int64(projectIndex*10 + taskIndex + 1)
-			if _, err := store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-				fmt.Sprintf("bench-run-%d-%d", projectIndex, taskIndex), placementID, timestamp, timestamp, timestamp,
-			); err != nil {
-				b.Fatalf("insert run %d/%d: %v", projectIndex, taskIndex, err)
-			}
-			if _, err := store.DB().ExecContext(ctx, homeSortTaskTransitionSQL,
-				fmt.Sprintf("bench-transition-%d-%d", projectIndex, taskIndex), string(task.ID), timestamp, timestamp,
-			); err != nil {
-				b.Fatalf("insert transition %d/%d: %v", projectIndex, taskIndex, err)
-			}
 		}
 	}
 
@@ -230,12 +199,14 @@ func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 }
 
 type projectHomeActivityFixture struct {
-	store      *metadata.Store
-	svc        *Service
-	older      metadata.Binding
-	newer      serverapi.ProjectCreateResponse
-	task       workflowstore.TaskRecord
-	highUnixMs int64
+	store         *metadata.Store
+	svc           *Service
+	older         metadata.Binding
+	newer         serverapi.ProjectCreateResponse
+	task          workflowstore.TaskRecord
+	workflowStore *workflowstore.Store
+	setNow        func(int64)
+	highUnixMs    int64
 }
 
 func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHomeActivityFixture {
@@ -253,8 +224,9 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
+	nowUnixMs := int64(1)
 	workflowStore, err := workflowstore.New(store, workflowstore.WithNow(func() time.Time {
-		return time.UnixMilli(1)
+		return time.UnixMilli(nowUnixMs)
 	}))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
@@ -271,12 +243,14 @@ func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHom
 		t.Fatalf("CreateTask: %v", err)
 	}
 	return projectHomeActivityFixture{
-		store:      store,
-		svc:        svc,
-		older:      older,
-		newer:      newer,
-		task:       task,
-		highUnixMs: time.Now().UTC().UnixMilli() + 10_000,
+		store:         store,
+		svc:           svc,
+		older:         older,
+		newer:         newer,
+		task:          task,
+		workflowStore: workflowStore,
+		setNow:        func(value int64) { nowUnixMs = value },
+		highUnixMs:    time.Now().UTC().UnixMilli() + 10_000,
 	}
 }
 
@@ -296,16 +270,6 @@ func assertProjectHomeOrder(t testing.TB, ctx context.Context, svc *Service, wan
 		}
 	}
 	return home
-}
-
-func taskPlacement(t testing.TB, ctx context.Context, store *metadata.Store, taskID string) (string, string) {
-	t.Helper()
-	var placementID string
-	var nodeID string
-	if err := store.DB().QueryRowContext(ctx, `SELECT id, node_id FROM task_node_placements WHERE task_id = ? LIMIT 1`, taskID).Scan(&placementID, &nodeID); err != nil {
-		t.Fatalf("get task placement: %v", err)
-	}
-	return placementID, nodeID
 }
 
 func projectHomeIDs(projects []serverapi.ProjectHomeSummary) []string {

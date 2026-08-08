@@ -1,248 +1,324 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
-	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
-func TestPrepareExecutorToolCallsAssignsAskQuestionBatchMetadata(t *testing.T) {
-	engine := &Engine{registry: tools.NewRegistry(tools.HandlerRegistration{
-		ID:      toolspec.ToolAskQuestion,
-		Handler: tools.NewAskQuestionTool(tools.NewAskQuestionBroker(), func() bool { return true }),
-	})}
-	calls := []llm.ToolCall{
-		{ID: "ask-1", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "one?")},
-		{ID: "shell-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
-		{ID: "ask-2", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "two?")},
-	}
+func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *testing.T) {
+	t.Parallel()
+	probe := &toolExecutionProbe{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: probe,
+		}),
+		Config{Model: "gpt-5"},
+	)
 
-	prepared, err := prepareExecutorToolCalls(engine, "step-1", "run-1", true, calls)
-	if err != nil {
-		t.Fatalf("prepare executor tool calls: %v", err)
-	}
-
-	first := prepared[0].askQuestionBatch
-	second := prepared[2].askQuestionBatch
-	if first == nil || second == nil {
-		t.Fatalf("ask batch metadata missing: first=%+v second=%+v", first, second)
-	}
-	if first.BatchID == "" || first.BatchID != second.BatchID {
-		t.Fatalf("batch ids = %q, %q", first.BatchID, second.BatchID)
-	}
-	if first.Origin != tools.AskQuestionOriginModelTool || first.RunID != "run-1" || first.StepID != "step-1" {
-		t.Fatalf("first metadata = %+v", first)
-	}
-	if got := first.BatchPromptIDs; len(got) != 2 || got[0] != "ask-1" || got[1] != "ask-2" {
-		t.Fatalf("batch prompt ids = %+v", got)
-	}
-	if first.CandidateOrdinal != 0 || second.CandidateOrdinal != 1 || second.PreparedPromptCount != 2 {
-		t.Fatalf("ordinals/count = %+v / %+v", first, second)
-	}
-	if prepared[1].askQuestionBatch != nil {
-		t.Fatalf("non-ask tool received batch metadata: %+v", prepared[1].askQuestionBatch)
-	}
-}
-
-func TestPrepareExecutorToolCallsExcludesInvalidAndDisabledAsks(t *testing.T) {
-	enabledEngine := &Engine{registry: tools.NewRegistry(tools.HandlerRegistration{
-		ID:      toolspec.ToolAskQuestion,
-		Handler: tools.NewAskQuestionTool(tools.NewAskQuestionBroker(), func() bool { return true }),
-	})}
-	calls := []llm.ToolCall{
-		{ID: "invalid-first", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"suggestions":["A"]}`)},
-		{ID: "valid-middle", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "middle?")},
-		{ID: "invalid-later", Name: string(toolspec.ToolAskQuestion), Input: json.RawMessage(`{"question":"bad","approval":true}`)},
-		{ID: "valid-later", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "later?")},
-	}
-
-	prepared, err := prepareExecutorToolCalls(enabledEngine, "step-1", "run-1", true, calls)
-	if err != nil {
-		t.Fatalf("prepare enabled executor tool calls: %v", err)
-	}
-	if prepared[0].askQuestionBatch != nil || prepared[2].askQuestionBatch != nil {
-		t.Fatalf("invalid asks received metadata: first=%+v later=%+v", prepared[0].askQuestionBatch, prepared[2].askQuestionBatch)
-	}
-	if got := prepared[1].askQuestionBatch.BatchPromptIDs; len(got) != 2 || got[0] != "valid-middle" || got[1] != "valid-later" {
-		t.Fatalf("valid batch prompt ids = %+v", got)
-	}
-
-	disabledEngine := &Engine{registry: tools.NewRegistry(tools.HandlerRegistration{
-		ID:      toolspec.ToolAskQuestion,
-		Handler: tools.NewAskQuestionTool(tools.NewAskQuestionBroker(), func() bool { return false }),
-	})}
-	disabled, err := prepareExecutorToolCalls(disabledEngine, "step-1", "run-1", true, calls)
-	if err != nil {
-		t.Fatalf("prepare disabled executor tool calls: %v", err)
-	}
-	for index, call := range disabled {
-		if call.askQuestionBatch != nil {
-			t.Fatalf("disabled ask %d received metadata: %+v", index, call.askQuestionBatch)
-		}
-	}
-}
-
-func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
-	prepared, err := prepareExecutorToolCalls(&Engine{}, "step-1", "run-1", true, []llm.ToolCall{{
+	_, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 		Name: string(toolspec.ToolExecCommand),
 	}})
-	if err == nil {
-		t.Fatal("prepare executor tool calls accepted missing provider call id")
-	}
 	if !errors.Is(err, ErrMissingProviderToolCallID) {
-		t.Fatalf("error = %v, want ErrMissingProviderToolCallID", err)
+		t.Fatalf("execute tool calls error = %v, want missing provider call ID", err)
 	}
-	if len(prepared) != 0 {
-		t.Fatalf("prepared calls = %+v, want none", prepared)
+	if probe.calls.Load() != 0 {
+		t.Fatal("missing provider call ID reached a local tool handler")
 	}
 }
 
-func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
-	nonZeroExitCode := 7
-	tests := []struct {
-		name                  string
-		call                  llm.ToolCall
-		delta                 *transcript.ToolResultPresentationDelta
-		wantCommand           string
-		wantPatch             bool
-		wantRaw               bool
-		wantTruncated         bool
-		wantMovedToBackground bool
-		wantShellExitCode     *int
-	}{
-		{
-			name:        "shell command",
-			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23901", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			wantCommand: "pwd",
-		},
-		{
-			name:        "raw shell command",
-			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23902", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
-			delta:       &transcript.ToolResultPresentationDelta{RawOutputRequested: true},
-			wantCommand: "printf raw",
-			wantRaw:     true,
-		},
-		{
-			name:          "truncated shell command",
-			call:          llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23903", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
-			delta:         &transcript.ToolResultPresentationDelta{OutputTruncated: true},
-			wantCommand:   "cat large.log",
-			wantTruncated: true,
-		},
-		{
-			name:                  "backgrounded shell command",
-			call:                  llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23907", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"sleep 20"}`)},
-			delta:                 &transcript.ToolResultPresentationDelta{MovedToBackground: true},
-			wantCommand:           "sleep 20",
-			wantMovedToBackground: true,
-		},
-		{
-			name:              "failed shell command",
-			call:              llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23908", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"exit 7"}`)},
-			delta:             &transcript.ToolResultPresentationDelta{ShellExitCode: &nonZeroExitCode},
-			wantCommand:       "exit 7",
-			wantShellExitCode: &nonZeroExitCode,
-		},
-		{
-			name: "patch input",
-			call: llm.ToolCall{
-				ID:          "0f63b1c2-6b29-4dc0-9b0f-405a92a23904",
-				Name:        string(toolspec.ToolPatch),
-				Custom:      true,
-				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",
-			},
-			wantPatch: true,
-		},
-		{
-			name: "edit input",
-			call: llm.ToolCall{
-				ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23906",
-				Name:  string(toolspec.ToolEdit),
-				Input: json.RawMessage(`{"path":"a.txt","old_string":"hello","new_string":"goodbye"}`),
-			},
-			wantPatch: true,
-		},
+func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	handler := &toolExecutionProbe{
+		warnings: []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()},
 	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolPatch,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, mismatch := toolResultWithTranscriptPresentation(tools.Result{
-				CallID:            tt.call.ID,
-				Name:              toolspec.ID(tt.call.Name),
-				IsError:           true,
-				Summary:           "failed",
-				PresentationDelta: tt.delta,
-			}, tt.call, t.TempDir())
-			if mismatch != nil {
-				t.Fatalf("tool presentation mismatch: %+v", mismatch)
+	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+		ID:    "warned-patch",
+		Name:  string(toolspec.ToolPatch),
+		Input: json.RawMessage(`{}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute warned tool: %v", err)
+	}
+	if len(results) != 1 || len(results[0].ModelWarnings) != 0 {
+		t.Fatalf("materialized result = %+v", results)
+	}
+	var output map[string]json.RawMessage
+	if err := json.Unmarshal(results[0].Output, &output); err != nil {
+		t.Fatalf("decode materialized output: %v", err)
+	}
+	if _, ok := output["ok"]; !ok {
+		t.Fatalf("materialized output lost success: %s", results[0].Output)
+	}
+	if _, ok := output["warning"]; !ok {
+		t.Fatalf("materialized output lost warning: %s", results[0].Output)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+	if err != nil {
+		t.Fatalf("read persisted records: %v", err)
+	}
+	for _, record := range window.Records {
+		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+		if !ok || completion.CallID != "warned-patch" {
+			continue
+		}
+		var persisted map[string]json.RawMessage
+		if err := json.Unmarshal(completion.Output, &persisted); err != nil {
+			t.Fatalf("decode persisted output: %v", err)
+		}
+		if _, ok := persisted["warning"]; ok {
+			return
+		}
+	}
+	t.Fatal("persisted completion omitted model warning")
+}
+
+func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		callID string
+		input  json.RawMessage
+	}{
+		{name: "whitespace query", callID: "web-search-whitespace", input: json.RawMessage(`{"query":"   "}`)},
+		{name: "hallucinated query", callID: "web-search-hallucinated", input: json.RawMessage(`{"query":"web search"}`)},
+	}
+	probe := &webSearchExecutionProbe{}
+	var completionMu sync.Mutex
+	var completionEvents []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolWebSearch,
+			Handler: probe,
+		}),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if event.Kind != EventToolCallCompleted || event.ToolResult == nil {
+					return
+				}
+				result := *event.ToolResult
+				completionMu.Lock()
+				completionEvents = append(completionEvents, Event{
+					Kind:                       event.Kind,
+					CommittedTranscriptChanged: event.CommittedTranscriptChanged,
+					ToolResult:                 &result,
+				})
+				completionMu.Unlock()
+			},
+		},
+	)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handlerCallsBefore := probe.calls.Load()
+			completionMu.Lock()
+			completionsBefore := len(completionEvents)
+			completionMu.Unlock()
+
+			results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+				ID:    test.callID,
+				Name:  string(toolspec.ToolWebSearch),
+				Input: test.input,
+			}})
+			if err != nil {
+				t.Fatalf("execute invalid web search tool call: %v", err)
+			}
+			if got := probe.calls.Load(); got != handlerCallsBefore {
+				t.Fatalf("invalid web search reached handler: calls = %d, want %d", got, handlerCallsBefore)
+			}
+			if len(results) != 1 {
+				t.Fatalf("invalid web search results = %+v, want one", results)
+			}
+			if result := results[0]; result.CallID != test.callID ||
+				result.Name != toolspec.ToolWebSearch ||
+				!result.IsError {
+				t.Fatalf("invalid web search result = %+v", result)
+			}
+			var output map[string]string
+			if err := json.Unmarshal(results[0].Output, &output); err != nil {
+				t.Fatalf("decode invalid web search output: %v", err)
+			}
+			if got := output["error"]; got != tools.InvalidWebSearchQueryMessage {
+				t.Fatalf("invalid web search error = %q, want %q", got, tools.InvalidWebSearchQueryMessage)
+			}
+			completion, found := engine.transcriptRuntimeState().ToolCompletionSnapshot(test.callID)
+			if !found || !completion.IsError {
+				t.Fatalf("invalid web search runtime completion = %+v, found=%t", completion, found)
 			}
 
-			if result.Presentation == nil {
-				t.Fatal("tool result presentation is nil")
+			completionMu.Lock()
+			defer completionMu.Unlock()
+			newCompletions := completionEvents[completionsBefore:]
+			if len(newCompletions) != 1 {
+				t.Fatalf("persisted invalid web search completions = %+v, want one new completion", newCompletions)
 			}
-			if result.PresentationDelta != nil {
-				t.Fatalf("tool result presentation delta was not consumed: %+v", result.PresentationDelta)
-			}
-			if tt.wantCommand != "" && result.Presentation.Command != tt.wantCommand {
-				t.Fatalf("presentation command = %q, want %q", result.Presentation.Command, tt.wantCommand)
-			}
-			if tt.wantPatch && result.Presentation.PatchRender == nil {
-				t.Fatal("patch result presentation has no structured patch")
-			}
-			if result.Presentation.RawOutputRequested != tt.wantRaw {
-				t.Fatalf("raw output requested = %t, want %t", result.Presentation.RawOutputRequested, tt.wantRaw)
-			}
-			if result.Presentation.OutputTruncated != tt.wantTruncated {
-				t.Fatalf("output truncated = %t, want %t", result.Presentation.OutputTruncated, tt.wantTruncated)
-			}
-			if result.Presentation.MovedToBackground != tt.wantMovedToBackground {
-				t.Fatalf("backgrounded = %t, want %t", result.Presentation.MovedToBackground, tt.wantMovedToBackground)
-			}
-			if !textutil.EqualOptional(result.Presentation.ShellExitCode, tt.wantShellExitCode) {
-				t.Fatalf("shell exit code = %v, want %v", result.Presentation.ShellExitCode, tt.wantShellExitCode)
+			completionEvent := newCompletions[0]
+			if !completionEvent.CommittedTranscriptChanged ||
+				completionEvent.ToolResult == nil ||
+				completionEvent.ToolResult.CallID != test.callID ||
+				completionEvent.ToolResult.Name != toolspec.ToolWebSearch ||
+				!completionEvent.ToolResult.IsError {
+				t.Fatalf("persisted invalid web search completion = %+v", completionEvent)
 			}
 		})
 	}
 }
 
-func TestLiveToolCompletionBoundaryRejectsHandlerFinalizedPresentation(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected handler-owned finalized presentation to violate the finalization invariant")
-		}
-	}()
+func TestExecuteToolCallsAppliesNormalCompletionOnlyAfterCommit(t *testing.T) {
+	t.Parallel()
+	t.Run("uncommitted append", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		probe := &toolExecutionProbe{}
+		engine := mustNewTestEngine(
+			t,
+			store,
+			&fakeClient{},
+			tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: probe,
+			}),
+			Config{Model: "gpt-5"},
+		)
+		blocker := mustBlockTestEventLogAppends(t, store)
 
-	call := llm.ToolCall{
-		ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23905",
-		Name:  string(toolspec.ToolExecCommand),
-		Input: json.RawMessage(`{"command":"pwd"}`),
-	}
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if err := engine.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{call},
-	}})); err != nil {
-		t.Fatalf("persist assistant tool call: %v", err)
-	}
-	engine.finalizeLiveToolCompletion(tools.Result{
-		CallID:       call.ID,
-		Name:         toolspec.ToolExecCommand,
-		Presentation: &transcript.ToolCallMeta{Command: "handler override"},
+		results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "uncommitted-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}})
+		if !errors.Is(err, errPersistToolCompletion) {
+			t.Fatalf("uncommitted tool completion error = %v", err)
+		}
+		if got := probe.calls.Load(); got != 1 {
+			t.Fatalf("uncommitted tool handler calls = %d, want one", got)
+		}
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("uncommitted tool results = %+v, want successful execution result", results)
+		}
+		if err := blocker.Restore(); err != nil {
+			t.Fatalf("restore event-log append blocker: %v", err)
+		}
+
+		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+		if err != nil {
+			t.Fatalf("read bounded uncommitted tool records: %v", err)
+		}
+		for _, record := range window.Records {
+			completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+			if ok && completion.CallID == "uncommitted-tool" {
+				t.Fatalf("uncommitted tool completion persisted: %+v", completion)
+			}
+		}
+	})
+
+	t.Run("committed observer failure", func(t *testing.T) {
+		observerErr := errors.New("tool completion observer failure")
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateTestSessionAt(
+			t,
+			t.TempDir(),
+			session.WithPersistenceObserver(gate),
+		)
+		probe := &toolExecutionProbe{}
+		engine := mustNewTestEngine(
+			t,
+			store,
+			&fakeClient{},
+			tools.NewRegistry(tools.HandlerRegistration{
+				ID:      toolspec.ToolExecCommand,
+				Handler: probe,
+			}),
+			Config{Model: "gpt-5"},
+		)
+		gate.FailNext(observerErr)
+
+		results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "committed-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}})
+		if !errors.Is(err, errPersistToolCompletion) || !errors.Is(err, observerErr) {
+			t.Fatalf("committed tool completion error = %v", err)
+		}
+		if got := probe.calls.Load(); got != 1 {
+			t.Fatalf("committed tool handler calls = %d, want one", got)
+		}
+		if len(results) != 1 || results[0].IsError {
+			t.Fatalf("committed tool results = %+v, want successful execution result", results)
+		}
+
+		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+		if err != nil {
+			t.Fatalf("read bounded committed tool records: %v", err)
+		}
+		completions := 0
+		for _, record := range window.Records {
+			completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+			if !ok || completion.CallID != "committed-tool" {
+				continue
+			}
+			completions++
+			if completion.Name != string(toolspec.ToolExecCommand) || completion.IsError {
+				t.Fatalf("committed tool completion = %+v", completion)
+			}
+		}
+		if completions != 1 {
+			t.Fatalf("committed tool completions = %d, want one", completions)
+		}
 	})
 }
 
-func askQuestionInput(t *testing.T, question string) json.RawMessage {
-	t.Helper()
-	encoded, err := json.Marshal(map[string]string{"question": question})
-	if err != nil {
-		t.Fatalf("marshal ask question input: %v", err)
-	}
-	return encoded
+type toolExecutionProbe struct {
+	called   bool
+	calls    atomic.Int32
+	warnings []tools.ModelWarning
+}
+
+func (p *toolExecutionProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	p.called = true
+	p.calls.Add(1)
+	return tools.Result{
+		CallID:        call.ID,
+		Name:          call.Name,
+		Output:        json.RawMessage(`{"ok":true}`),
+		ModelWarnings: append([]tools.ModelWarning(nil), p.warnings...),
+	}, nil
+}
+
+type webSearchExecutionProbe struct {
+	calls atomic.Int32
+}
+
+func (p *webSearchExecutionProbe) Call(context.Context, tools.Call) (tools.Result, error) {
+	p.calls.Add(1)
+	return tools.Result{}, nil
 }

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type KeyboardEventHandler } from "react";
 import { useTranslation } from "react-i18next";
 import { Link2Off, Star, Unlink } from "lucide-react";
 
@@ -30,11 +30,13 @@ export function ProjectNameField({
   disabled,
   nameDraft,
   nameErrors,
+  onKeyDown,
   onNameChange,
 }: Readonly<{
   disabled: boolean;
   nameDraft: string;
   nameErrors: readonly string[];
+  onKeyDown: KeyboardEventHandler<HTMLInputElement>;
   onNameChange: (value: string) => void;
 }>) {
   const { t } = useTranslation();
@@ -52,6 +54,7 @@ export function ProjectNameField({
         onChange={(event) => {
           onNameChange(event.target.value);
         }}
+        onKeyDown={onKeyDown}
         value={nameDraft}
       />
       <span
@@ -76,11 +79,13 @@ export function ProjectKeyField({
   disabled,
   keyDraft,
   keyErrors,
+  onKeyDown,
   onKeyChange,
 }: Readonly<{
   disabled: boolean;
   keyDraft: string;
   keyErrors: readonly string[];
+  onKeyDown: KeyboardEventHandler<HTMLInputElement>;
   onKeyChange: (value: string) => void;
 }>) {
   const { t } = useTranslation();
@@ -99,6 +104,7 @@ export function ProjectKeyField({
         onChange={(event) => {
           onKeyChange(event.target.value.toUpperCase());
         }}
+        onKeyDown={onKeyDown}
         spellCheck={false}
         value={keyDraft}
       />
@@ -318,7 +324,7 @@ async function confirmNativeWorkspaceUnlink(
 ): Promise<void> {
   try {
     const response = await api.unlinkWorkspace(target.projectID, target.workspaceID);
-    if (!response.unlinked) {
+    if (response.blockers.length > 0) {
       callbacks.onBlocked(response.blockers.map((blocker) => blocker.message).join("\n"));
       return;
     }

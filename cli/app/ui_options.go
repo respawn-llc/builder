@@ -22,7 +22,7 @@ type UITransition struct {
 	Exit                         bool
 	InitialPrompt                string
 	InitialPromptHistoryRecorded bool
-	InitialInput                 string
+	InitialInput                 *string
 	TargetSessionID              string
 	ForkRollbackTargetID         string
 	PreviousSessionID            *runtimeids.SessionID
@@ -128,6 +128,18 @@ func WithUICommandRegistry(registry *commands.Registry) UIOption {
 	}
 }
 
+func WithUIPromptCommandCatalog(catalog apicontract.PromptCommandCatalogService) UIOption {
+	return func(m *uiModelConstruction) {
+		m.promptCatalog = catalog
+	}
+}
+
+func WithUIPromptCommandCatalogEntries(entries []commands.PromptCommandCatalogEntry) UIOption {
+	return func(m *uiModelConstruction) {
+		m.promptCatalogEntries = append([]commands.PromptCommandCatalogEntry(nil), entries...)
+	}
+}
+
 func WithUIStartupSubmit(text string) UIOption {
 	return func(m *uiModelConstruction) {
 		m.startupSubmit = text
@@ -180,7 +192,7 @@ func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
 	}
 }
 
-func WithUITurnQueueHook(hook *bellHooks) UIOption {
+func WithUITurnQueueHook(hook turnQueueHook) UIOption {
 	return func(m *uiModelConstruction) {
 		m.turnQueueHook = hook
 	}

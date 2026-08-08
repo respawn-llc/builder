@@ -39,7 +39,7 @@ func TestInitializeRepositoryPinsInitialBranch(t *testing.T) {
 	t.Setenv("HOME", home)
 	if err := os.WriteFile(
 		filepath.Join(home, ".gitconfig"),
-		[]byte("[init]\n\tdefaultBranch = environment-default\n"),
+		[]byte("[init]\n\tdefaultBranch = environment-default\n[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = missing-kent-test-gpg\n"),
 		0o600,
 	); err != nil {
 		t.Fatalf("write test Git config: %v", err)
@@ -50,6 +50,21 @@ func TestInitializeRepositoryPinsInitialBranch(t *testing.T) {
 	}
 	if branch := RunGit(t, root, "branch", "--show-current"); branch != "main" {
 		t.Fatalf("initial branch = %q, want main", branch)
+	}
+}
+
+func TestInitializeRepositoryDisablesConfiguredCommitSigning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(
+		filepath.Join(home, ".gitconfig"),
+		[]byte("[commit]\n\tgpgsign = true\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write test Git config: %v", err)
+	}
+	if err := initializeRepository(t.TempDir()); err != nil {
+		t.Fatalf("initializeRepository with configured commit signing: %v", err)
 	}
 }
 

@@ -46,6 +46,36 @@ type staticExecutionTargetResolver struct {
 	target clientui.SessionExecutionTarget
 }
 
+func TestValidateSessionTranscriptPageResponseUsesInvariantFailurePolicy(t *testing.T) {
+	response := serverapi.SessionTranscriptPageResponse{
+		Transcript: clientui.TranscriptPage{
+			SessionID: "12345678-1234-4234-8234-123456789012",
+			Entries: []clientui.TranscriptCommittedRow{{
+				Visibility: transcript.EntryVisibilityOngoing,
+				Kind:       clientui.TranscriptRowUser,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 0, RowOrdinal: 1},
+				User:       &clientui.TranscriptUserRow{Text: "malformed"},
+			}},
+		},
+	}
+
+	t.Run("diagnostic mode returns contract error", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+		if err := validateSessionTranscriptPageResponse(response); err == nil {
+			t.Fatal("malformed transcript page returned nil error")
+		}
+	})
+	t.Run("panic mode fails fast with diagnostic", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "panic")
+		defer func() {
+			if recover() == nil {
+				t.Fatal("malformed transcript page did not panic in invariant panic mode")
+			}
+		}()
+		_ = validateSessionTranscriptPageResponse(response)
+	})
+}
+
 func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error) {
 	return r.target, nil
 }
@@ -64,8 +94,10 @@ func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request) (llm.R
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	case <-c.release:
+		content := "done"
+		phase := llm.MessagePhaseFinal
 		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: &content, Phase: &phase},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		}, nil
 	}
@@ -122,15 +154,15 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("set continuation context: %v", err)
+	}
+	if _, _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "hello", nil, nil)
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleAssistant, "final answer", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -138,6 +170,9 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
+	}
+	if resp.MainView.Session.AgentRole == nil || *resp.MainView.Session.AgentRole != role {
+		t.Fatalf("dormant session agent role = %v, want %q", resp.MainView.Session.AgentRole, role)
 	}
 	if resp.MainView.Status.ParentAgentSessionID == nil || resp.MainView.Status.ParentAgentSessionID.String() != parentSessionID ||
 		resp.MainView.Status.NavigationTargetSessionID == nil || resp.MainView.Status.NavigationTargetSessionID.String() != parentSessionID ||
@@ -149,48 +184,6 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
-	}
-}
-
-func TestServiceGetSessionMainViewFallsBackToDurableWorkflowSessionState(t *testing.T) {
-	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	if resp.MainView.Status.WorkflowSession == nil {
-		t.Fatalf("workflow session = nil, status=%+v", resp.MainView.Status)
-	}
-	if resp.MainView.Status.WorkflowActive {
-		t.Fatalf("workflow active = true, want false for reopened non-workflow runtime")
-	}
-	if resp.MainView.Status.WorkflowSession.RunID != "run-1" || resp.MainView.Status.WorkflowSession.TaskID != "task-1" || resp.MainView.Status.WorkflowSession.WorkflowID != "workflow-1" {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", resp.MainView.Status.WorkflowSession)
-	}
-}
-
-func TestServiceGetSessionMainViewMergesDurableWorkflowSessionStateIntoLiveRuntime(t *testing.T) {
-	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	svc := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	if resp.MainView.Status.WorkflowSession == nil {
-		t.Fatalf("workflow session = nil, status=%+v", resp.MainView.Status)
-	}
-	if resp.MainView.Status.WorkflowSession.RunID != "run-1" || resp.MainView.Status.WorkflowSession.TaskID != "task-1" || resp.MainView.Status.WorkflowSession.WorkflowID != "workflow-1" {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", resp.MainView.Status.WorkflowSession)
 	}
 }
 
@@ -254,9 +247,10 @@ func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
 func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
-	if _, _, err := store.AppendEvent("step-1", "cache_warning", transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix}); err != nil {
-		t.Fatalf("append cache warning: %v", err)
-	}
+	appendSessionViewRecord(t, store, "step-1", session.CacheWarningRecord{
+		Scope:  session.CacheScopeConversation,
+		Reason: session.CacheWarningReasonNonPostfix,
+	})
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
@@ -280,9 +274,7 @@ func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) 
 func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
-	if _, _, err := store.AppendEvent("11111111-1111-4111-8111-111111111111", "message", llm.Message{Role: llm.RoleAssistant, Content: "line 0", Phase: llm.MessagePhaseFinal}); err != nil {
-		t.Fatalf("append first message: %v", err)
-	}
+	appendSessionViewMessage(t, store, "11111111-1111-4111-8111-111111111111", session.MessageRoleAssistant, "line 0", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
@@ -293,9 +285,7 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 		t.Fatalf("first entry count = %d, want 1", got)
 	}
 
-	if _, _, err := store.AppendEvent("22222222-2222-4222-8222-222222222222", "message", llm.Message{Role: llm.RoleAssistant, Content: "line 1", Phase: llm.MessagePhaseFinal}); err != nil {
-		t.Fatalf("append second message: %v", err)
-	}
+	appendSessionViewMessage(t, store, "22222222-2222-4222-8222-222222222222", session.MessageRoleAssistant, "line 1", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
 	second, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get second transcript tail entries: %v", err)
@@ -305,24 +295,16 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 	}
 }
 
-func TestServiceDormantReviewerRollbackIsIgnoredOnRead(t *testing.T) {
+func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "rolled back final", Phase: llm.MessagePhaseFinal}); err != nil {
-		t.Fatalf("append assistant final: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "history_replaced", map[string]any{
-		"engine": "reviewer_rollback",
-		"items":  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "u1"}}),
-	}); err != nil {
-		t.Fatalf("append reviewer rollback: %v", err)
-	}
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "u1", nil, nil)
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleAssistant, "rolled back final", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "u2", nil, nil)
+	appendSessionViewHistoryReplacement(t, store, "step-1", session.HistoryReplacementRecord{
+		Engine: "local",
+		Mode:   session.CompactionModeAuto,
+	})
 
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
@@ -330,17 +312,8 @@ func TestServiceDormantReviewerRollbackIsIgnoredOnRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session transcript tail entries: %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("entry count = %d, want 3", len(entries))
-	}
-	if got := entries[0].Text; got != "u1" {
-		t.Fatalf("first visible transcript entry = %+v, want u1", entries)
-	}
-	if got := entries[1].Text; got != "rolled back final" {
-		t.Fatalf("second visible transcript entry = %+v, want rolled back final", entries)
-	}
-	if got := entries[2].Text; got != "u2" {
-		t.Fatalf("third visible transcript entry = %+v, want u2", entries)
+	if len(entries) != 0 {
+		t.Fatalf("entry count = %d, want empty active segment", len(entries))
 	}
 
 	mainViewResp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
@@ -352,42 +325,34 @@ func TestServiceDormantReviewerRollbackIsIgnoredOnRead(t *testing.T) {
 	}
 }
 
-func TestServiceSessionTranscriptTailEntriesKeepsDormantCompactionSummaryAndCarryover(t *testing.T) {
+func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSummaryAndCarryover(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "history_replaced", map[string]any{
-		"engine": "local",
-		"mode":   "manual",
-		"items":  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "condensed provider summary", MessageType: llm.MessageTypeCompactionSummary}}),
-	}); err != nil {
-		t.Fatalf("append history replacement: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "local_entry", map[string]any{"role": "compaction_summary", "text": "condensed summary"}); err != nil {
-		t.Fatalf("append compaction summary entry: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeManualCompactionCarryover, Content: "Last user message before handoff\n\ncarry this forward"}); err != nil {
-		t.Fatalf("append manual carryover: %v", err)
-	}
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "before compaction", nil, nil)
+	appendSessionViewHistoryReplacement(t, store, "step-1", session.HistoryReplacementRecord{
+		Engine: "local",
+		Mode:   session.CompactionModeManual,
+	})
+	appendSessionViewRecord(t, store, "step-1", session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityAuto,
+		Role:       "compaction_summary",
+		Text:       "condensed summary",
+	})
+	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeCompactionPreservedUserMessage))
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get session transcript tail entries: %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("entries = %d, want 3 (%+v)", len(entries), entries)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (%+v)", len(entries), entries)
 	}
-	if entries[0].Role != "compaction_summary" || entries[0].Text != "condensed provider summary" {
-		t.Fatalf("expected projected provider compaction summary entry, got %+v", entries[0])
+	if entries[0].Role != "compaction_summary" || entries[0].Text != "condensed summary" {
+		t.Fatalf("expected persisted compaction summary entry, got %+v", entries[0])
 	}
-	if entries[1].Role != "compaction_summary" || entries[1].Text != "condensed summary" {
-		t.Fatalf("expected persisted compaction summary entry, got %+v", entries[1])
-	}
-	if entries[2].Role != "manual_compaction_carryover" {
-		t.Fatalf("expected manual carryover entry, got %+v", entries[2])
+	if entries[1].Role != "manual_compaction_carryover" {
+		t.Fatalf("expected legacy compaction-preserved user entry, got %+v", entries[1])
 	}
 }
 
@@ -395,15 +360,20 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	const stepID = "11111111-1111-4111-8111-111111111111"
-	if _, _, err := store.AppendEvent(stepID, "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
+	appendSessionViewMessage(t, store, stepID, session.MessageRoleUser, "hello", nil, nil)
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: stepID, Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("set pending recovery: %v", err)
 	}
 
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
-	beforeSequence := store.Meta().LastSequence
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	beforeSequence, err := eventLog.Revision()
+	if err != nil {
+		t.Fatalf("read event-log revision before: %v", err)
+	}
 	beforeEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read events file before: %v", err)
@@ -431,7 +401,11 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 	if string(beforeEvents) != string(afterEvents) {
 		t.Fatalf("events file mutated during read\nbefore=%s\nafter=%s", string(beforeEvents), string(afterEvents))
 	}
-	if got := store.Meta().LastSequence; got != beforeSequence {
-		t.Fatalf("session sequence mutated during read: got %d want %d", got, beforeSequence)
+	afterSequence, err := eventLog.Revision()
+	if err != nil {
+		t.Fatalf("read event-log revision after: %v", err)
+	}
+	if afterSequence != beforeSequence {
+		t.Fatalf("event-log revision mutated during read: got %d want %d", afterSequence, beforeSequence)
 	}
 }

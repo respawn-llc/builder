@@ -34,6 +34,7 @@ type runtimeControlFakeClient struct {
 	appendedRole           string
 	appendedText           string
 	submitText             string
+	submitCalls            int
 	submitOperationRef     clientui.RuntimeOperationRef
 	preSubmitOperationRef  clientui.RuntimeOperationRef
 	submitResult           string
@@ -45,11 +46,7 @@ type runtimeControlFakeClient struct {
 	interruptCalls         int
 	interruptPendingRefs   []clientui.RuntimeOperationRef
 	interruptTargetRef     *clientui.RuntimeOperationRef
-	queuedText             string
-	queuedClientRequestID  string
-	queueUserMessageCalls  int
-	queueUserMessageErr    error
-	queueUserMessageID     string
+	submitQueuedID         string
 	discardQueuedID        string
 	discardQueuedCalls     int
 	discardQueuedResult    bool
@@ -70,7 +67,7 @@ func (timeoutNetError) Timeout() bool   { return true }
 func (timeoutNetError) Temporary() bool { return false }
 
 func (f *runtimeControlFakeClient) MainView() clientui.RuntimeMainView {
-	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.Activity.State != "" || f.mainView.Status.WorkflowSession != nil || f.mainView.Status.WorkflowActive {
+	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.Activity.State != "" || f.mainView.Status.WorkflowSession != nil {
 		return f.mainView
 	}
 	return clientui.RuntimeMainView{Status: f.status, Session: f.sessionView}
@@ -172,9 +169,19 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 	return result, f.err
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
+	f.submitCalls++
 	f.submitOperationRef = req.OperationRef
 	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
-	return f.submitUserMessage(ctx, req.Text)
+	text := runtimeSubmitInputText(req)
+	submission, err := f.submitUserMessage(ctx, text)
+	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
+		submission.Queued = clientui.QueuedUserMessage{
+			ID:              strings.TrimSpace(f.submitQueuedID),
+			Text:            text,
+			ClientRequestID: req.OperationRef.ClientRequestID.String(),
+		}
+	}
+	return submission, err
 }
 func (f *runtimeControlFakeClient) submitUserShellCommand(_ context.Context, command string) error {
 	return f.err
@@ -228,22 +235,6 @@ func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOp
 		return f.interruptErr
 	}
 	return f.err
-}
-func (f *runtimeControlFakeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
-	if err := req.Validate(); err != nil {
-		return clientui.QueuedUserMessage{}, err
-	}
-	f.queueUserMessageCalls++
-	f.queuedText = req.Text
-	f.queuedClientRequestID = req.OperationRef.ClientRequestID.String()
-	if f.queueUserMessageErr != nil {
-		return clientui.QueuedUserMessage{}, f.queueUserMessageErr
-	}
-	id := strings.TrimSpace(f.queueUserMessageID)
-	if id == "" {
-		id = "queue-1"
-	}
-	return clientui.QueuedUserMessage{ID: id, Text: req.Text, ClientRequestID: f.queuedClientRequestID}, nil
 }
 func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
@@ -458,11 +449,7 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	if err := m.interruptRuntime(); err != nil {
 		t.Fatalf("interrupt runtime without client: %v", err)
 	}
-	queued, err := m.queueRuntimeUserMessage("queued text")
-	if err != nil || queued.ID == "" || queued.Text != "queued text" {
-		t.Fatalf("queue runtime user message without client = (%+v, %v), want generated item", queued, err)
-	}
-	if discarded := m.discardQueuedRuntimeUserMessage(queued.ID); discarded {
+	if discarded := m.discardQueuedRuntimeUserMessage("queue-1"); discarded {
 		t.Fatal("did not expect queued runtime user message discarded without client")
 	}
 	if err := m.recordRuntimePromptHistory("prompt history"); err != nil {

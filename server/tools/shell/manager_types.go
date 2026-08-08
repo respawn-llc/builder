@@ -59,6 +59,21 @@ type completionOutput struct {
 	removed int
 }
 
+type terminalEventCache struct {
+	eventType        EventType
+	snapshot         Snapshot
+	noticeSuppressed bool
+	completion       *terminalCompletionCache
+	err              error
+}
+
+type terminalCompletionCache struct {
+	source     completionOutputSource
+	outputPath *string
+	warning    postprocess.Warning
+	removed    int
+}
+
 func newBackgroundedEvent(snapshot Snapshot) Event {
 	return Event{Type: EventBackgrounded, Snapshot: snapshotWithExecutionCorrelationCopy(snapshot)}
 }
@@ -249,7 +264,8 @@ type processEntry struct {
 	notify               chan struct{}
 	done                 chan struct{}
 	killRequested        bool
-	noticeConsumed       bool
+	terminalEvent        *terminalEventCache
+	terminalDelivered    bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
 }
@@ -393,21 +409,6 @@ func (p *processEntry) finalizeClosedExit() {
 	defer p.mu.Unlock()
 	p.running = false
 	p.signal()
-}
-
-func (p *processEntry) markCompletionNoticeConsumed() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.backgrounded || p.exitCode == nil {
-		return
-	}
-	p.noticeConsumed = true
-}
-
-func (p *processEntry) completionNoticeConsumed() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.noticeConsumed
 }
 
 func (p *processEntry) snapshot() Snapshot {

@@ -7,6 +7,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/worktreecontract"
 
 	"github.com/google/uuid"
 )
@@ -77,6 +78,28 @@ type WorktreeTopologyEntry struct {
 	Missing    *WorktreeMissingFacts    `json:"missing,omitempty"`
 }
 
+func (entry WorktreeTopologyEntry) DeletionSelector() (string, error) {
+	if err := entry.Validate(); err != nil {
+		return "", err
+	}
+	switch entry.Variant {
+	case WorktreeTopologyVariantRegistered:
+		if entry.Registered.Git.IsMain {
+			return "", ErrWorktreeBlocked
+		}
+		return entry.Registered.Kent.WorktreeID, nil
+	case WorktreeTopologyVariantExternal:
+		if entry.External.Git.IsMain {
+			return "", ErrWorktreeBlocked
+		}
+		return entry.External.Git.CanonicalRoot, nil
+	case WorktreeTopologyVariantMissing:
+		return entry.Missing.Kent.WorktreeID, nil
+	default:
+		return "", errors.New("worktree topology variant is invalid")
+	}
+}
+
 type WorktreeListProjection struct {
 	Selector  string `json:"selector"`
 	IsCurrent bool   `json:"is_current"`
@@ -129,6 +152,7 @@ const (
 	WorktreeBranchCleanupModeRetain            WorktreeBranchCleanupMode = "retain"
 	WorktreeBranchCleanupModeAutoIfKentCreated WorktreeBranchCleanupMode = "auto_if_kent_created"
 	WorktreeBranchCleanupModeDeleteSafe        WorktreeBranchCleanupMode = "delete_safe"
+	WorktreeBranchCleanupModeDeleteForce       WorktreeBranchCleanupMode = "delete_force"
 )
 
 type WorktreeBranchCleanupOutcomeKind string
@@ -166,10 +190,22 @@ type WorktreeSelectorPreviewResponse struct {
 	Selector string                `json:"selector"`
 }
 
-type WorktreeEnterRequest struct {
+type WorktreeDeletePreviewRequest struct {
+	SessionID string `json:"session_id"`
+	Selector  string `json:"selector"`
+}
+
+type WorktreeDeletePreviewResponse struct {
+	Worktree         WorktreeTopologyEntry       `json:"worktree"`
+	DeletionSelector string                      `json:"deletion_selector"`
+	Cleanliness      clientui.WorktreeDirtyState `json:"cleanliness"`
+}
+
+// WorktreeTransitionHeader is the shared execution identity for every
+// operation that may switch a Session's worktree target.
+type WorktreeTransitionHeader struct {
 	OperationID WorktreeOperationID `json:"operation_id"`
 	SessionID   string              `json:"session_id"`
-	Selector    string              `json:"selector"`
 	Origin      *RuntimeStepOrigin  `json:"origin,omitempty"`
 }
 
@@ -178,14 +214,17 @@ type RuntimeStepOrigin struct {
 	StepID string `json:"step_id"`
 }
 
+type WorktreeEnterRequest struct {
+	WorktreeTransitionHeader
+	Selector string `json:"selector"`
+}
+
 type WorktreeLeaveRequest struct {
-	OperationID WorktreeOperationID `json:"operation_id"`
-	SessionID   string              `json:"session_id"`
+	WorktreeTransitionHeader
 }
 
 type WorktreeDeleteRequest struct {
-	OperationID         WorktreeOperationID       `json:"operation_id"`
-	SessionID           string                    `json:"session_id"`
+	WorktreeTransitionHeader
 	Selector            string                    `json:"selector"`
 	ForceFolderRemoval  bool                      `json:"force_folder_removal"`
 	BranchCleanupPolicy WorktreeBranchCleanupMode `json:"branch_cleanup_policy"`
@@ -362,7 +401,8 @@ func (policy WorktreeBranchCleanupMode) Validate() error {
 	switch policy {
 	case WorktreeBranchCleanupModeRetain,
 		WorktreeBranchCleanupModeAutoIfKentCreated,
-		WorktreeBranchCleanupModeDeleteSafe:
+		WorktreeBranchCleanupModeDeleteSafe,
+		WorktreeBranchCleanupModeDeleteForce:
 		return nil
 	default:
 		return errors.New("worktree branch cleanup policy is invalid")
@@ -393,27 +433,57 @@ func (outcome WorktreeBranchCleanupOutcome) Validate() error {
 }
 
 func (request WorktreeSelectorPreviewRequest) Validate() error {
-	if err := validateRequiredSessionID(request.SessionID); err != nil {
+	return validateWorktreeSelectorPreview(request.SessionID, request.Selector)
+}
+
+func (request WorktreeDeletePreviewRequest) Validate() error {
+	return validateWorktreeSelectorPreview(request.SessionID, request.Selector)
+}
+
+func validateWorktreeSelectorPreview(sessionID string, selector string) error {
+	if err := validateRequiredSessionID(sessionID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(request.Selector) == "" {
+	if strings.TrimSpace(selector) == "" {
 		return errors.New("selector is required")
 	}
 	return nil
 }
 
-func (request WorktreeEnterRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+func (response WorktreeDeletePreviewResponse) Validate() error {
+	deletionSelector, err := response.Worktree.DeletionSelector()
+	if err != nil {
 		return err
 	}
-	if err := (WorktreeSelectorPreviewRequest{
-		SessionID: request.SessionID,
-		Selector:  request.Selector,
-	}).Validate(); err != nil {
+	if strings.TrimSpace(response.DeletionSelector) == "" {
+		return errors.New("deletion_selector is required")
+	}
+	if response.DeletionSelector != deletionSelector {
+		return errors.New("deletion_selector does not match worktree")
+	}
+	if err := worktreecontract.ValidateDirtyState(
+		response.Cleanliness.Kind,
+		response.Cleanliness.DirtyFileCount,
+		response.Cleanliness.UnknownCause,
+	); err != nil {
 		return err
 	}
-	if request.Origin != nil {
-		return request.Origin.Validate()
+	if response.Worktree.Variant == WorktreeTopologyVariantMissing &&
+		response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
+		return errors.New("missing worktree deletion preview must be clean")
+	}
+	return nil
+}
+
+func (header WorktreeTransitionHeader) Validate() error {
+	if err := header.OperationID.Validate(); err != nil {
+		return err
+	}
+	if err := validateRequiredSessionID(header.SessionID); err != nil {
+		return err
+	}
+	if header.Origin != nil {
+		return header.Origin.Validate()
 	}
 	return nil
 }
@@ -425,22 +495,26 @@ func (origin RuntimeStepOrigin) Validate() error {
 	return runtimeids.ValidateUUIDv4(origin.StepID, "step_id")
 }
 
-func (request WorktreeLeaveRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+func (request WorktreeEnterRequest) Validate() error {
+	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
 		return err
 	}
-	return validateRequiredSessionID(request.SessionID)
+	if strings.TrimSpace(request.Selector) == "" {
+		return errors.New("selector is required")
+	}
+	return nil
+}
+
+func (request WorktreeLeaveRequest) Validate() error {
+	return request.WorktreeTransitionHeader.Validate()
 }
 
 func (request WorktreeDeleteRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
+	if err := request.WorktreeTransitionHeader.Validate(); err != nil {
 		return err
 	}
-	if err := (WorktreeSelectorPreviewRequest{
-		SessionID: request.SessionID,
-		Selector:  request.Selector,
-	}).Validate(); err != nil {
-		return err
+	if strings.TrimSpace(request.Selector) == "" {
+		return errors.New("selector is required")
 	}
 	return request.BranchCleanupPolicy.Validate()
 }
@@ -593,28 +667,18 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 
 func (r WorktreeCreateRequest) Validate() error {
 	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
 	if err := r.SetupOperationID.Validate(); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
-		return err
+		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
-	if r.CreateBranch {
-		if strings.TrimSpace(r.BaseRef) == "" {
-			return errors.New("base_ref is required when create_branch=true")
-		}
-		if strings.TrimSpace(r.BranchName) == "" {
-			return errors.New("branch_name is required when create_branch=true")
-		}
+	specErr := ValidateWorktreeCreateSpec(r.BaseRef, r.CreateBranch, r.BranchName)
+	if specErr == nil {
 		return nil
 	}
-	if strings.TrimSpace(r.BaseRef) == "" {
-		return errors.New("base_ref is required when create_branch=false")
-	}
-	if strings.TrimSpace(r.BranchName) != "" {
-		return errors.New("branch_name must be empty when create_branch=false")
-	}
-	return nil
+	owner := ProjectWorktreeCreateValidationOwner(specErr, r.CreateBranch)
+	return NewWorktreeCreateError(owner, specErr.Error(), specErr)
 }

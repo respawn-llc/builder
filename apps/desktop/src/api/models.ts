@@ -1,13 +1,23 @@
+import type { AttentionItem } from "./attention";
+
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
+import type { WorkflowEdgeSelectionMode, WorkflowParameterPurpose, WorkflowSelectorApplicability } from "./workflowSelectionModels";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 export type {
   TaskApproveApplied,
   TaskApproveResponse,
   TaskMoveApplied,
+  TaskMoveNoOp,
   TaskMoveResponse,
+  TaskMovePreviewBlocker,
+  TaskMovePreviewChoice,
+  TaskMovePreviewResponse,
+  TaskMoveRequiredValue,
   TaskStartApplied,
   TaskStartResponse,
+  TaskResumeApplied,
+  TaskResumeResponse,
   WorkflowExecutionTargetActionResponse,
   WorkflowExecutionTarget,
   WorkflowExecutionTargetMode,
@@ -17,8 +27,6 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
-  WorkflowExecutionTargetWorktree,
-  WorkflowExecutionTargetWorktreeAvailability,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
 } from "./workflowExecutionTarget";
@@ -64,7 +72,7 @@ export type ProjectSummary = Readonly<{
   key: string;
   name: string;
   primaryWorkspace: WorkspaceSummary;
-  defaultWorkflowID: string;
+  defaultWorkflowID: string | null;
   defaultWorkflowName: string;
   defaultWorkflowValid: boolean;
   updatedAt: number;
@@ -108,7 +116,6 @@ export type WorkspaceUnlinkBlocker = Readonly<{
 export type WorkspaceUnlinkResponse = Readonly<{
   projectID: string;
   workspaceID: string;
-  unlinked: boolean;
   blockers: readonly WorkspaceUnlinkBlocker[];
   project: ProjectSummary | null;
 }>;
@@ -146,7 +153,7 @@ export type PendingAsk = Readonly<{
   sessionID: string;
   question: string;
   suggestions: readonly string[];
-  recommendedOptionIndex: number;
+  recommendedOptionIndex: number | null;
   createdAt: string;
 }>;
 
@@ -155,7 +162,7 @@ export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
 export type OrdinaryQuestionPrompt = Readonly<{
   kind: "ordinary";
   suggestions: readonly string[];
-  recommendedOptionIndex: number;
+  recommendedOptionIndex: number | null;
 }>;
 
 export type ApprovalQuestionPrompt = Readonly<{
@@ -168,7 +175,7 @@ export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionP
 export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
-  workflowID: string;
+  workflowID: string | null;
   nodeID: string;
   transitionGroupID: string;
   edgeID: string;
@@ -196,10 +203,7 @@ export type WorkflowInputField = Readonly<{
   description: string;
 }>;
 
-export type WorkflowParameter = Readonly<{
-  key: string;
-  description: string;
-}>;
+export type WorkflowParameter = Readonly<{ key: string; description: string; purpose: WorkflowParameterPurpose }>;
 
 export type WorkflowJoinInputProvider = Readonly<{
   inputName: string;
@@ -216,7 +220,7 @@ export type WorkflowRecord = Readonly<{
 
 export type WorkflowPage = Readonly<{
   workflows: readonly WorkflowRecord[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
 export type WorkflowNodeGroup = Readonly<{
@@ -240,12 +244,9 @@ export type WorkflowNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
-  outputFields: readonly WorkflowOutputField[];
 }>;
 
 export type WorkflowInputBinding = Readonly<{
@@ -281,6 +282,8 @@ export type WorkflowDerivedEdgeWiring = Readonly<{
   inputBindings: readonly WorkflowInputBinding[];
   requiredProvisionFields: readonly WorkflowOutputField[];
   requiredProviderFields: readonly WorkflowOutputField[];
+  assigneeSelectionApplicability: WorkflowSelectorApplicability;
+  thinkingSelectionApplicability: WorkflowSelectorApplicability;
 }>;
 
 export const emptyWorkflowDerivedWiring: WorkflowDerivedWiring = {
@@ -310,6 +313,8 @@ export type WorkflowEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -349,10 +354,8 @@ export type WorkflowGraphDraftNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
 }>;
 
@@ -369,6 +372,8 @@ export type WorkflowGraphDraftEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -404,10 +409,8 @@ export type WorkflowGraphSaveImpact = Readonly<{
   removedEdgeCount: number;
   nodeTaskReferenceCount: number;
   edgeTaskReferenceCount: number;
-  activeNodePlacementCount: number;
+  activeCurrentNodeCount: number;
   pendingApprovalCount: number;
-  activeRunCount: number;
-  runnableRunCount: number;
   startNodeChangeCount: number;
   lastTerminalChangeCount: number;
   taskReferencedNodeKindChangeCount: number;
@@ -449,8 +452,8 @@ export type WorkflowDeleteImpact = Readonly<{
   linkCount: number;
   defaultReplacementProjectCount: number;
   taskCount: number;
-  activeRunCount: number;
-  runnableRunCount: number;
+  currentNodeCount: number;
+  pendingApprovalCount: number;
   blockedTaskCount: number;
 }>;
 
@@ -484,7 +487,6 @@ export type WorkflowPickerItem = Readonly<{
 }>;
 
 export type TaskStatusKind =
-  | "canceled"
   | "done"
   | "waiting_question"
   | "waiting_approval"
@@ -498,7 +500,6 @@ export type TaskStatus = Readonly<{
   kind: TaskStatusKind;
   nativeState: string;
   nodeIDs: readonly string[];
-  runIDs: readonly string[];
   attentionTypes: readonly string[];
 }>;
 
@@ -506,8 +507,7 @@ export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;
   canResume: boolean;
-  canCancel: boolean;
-  manualMoveTargetNodeIDs: readonly string[];
+  canDelete: boolean;
 }>;
 
 export type MarkdownPreview = Readonly<{
@@ -525,7 +525,62 @@ export type BoardCard = Readonly<{
   sourceWorkspace: WorkspaceSummary;
   status: TaskStatus;
   actions: TaskActions;
+  labelIDs: readonly string[];
+  dependencyProgress: TaskDependencyProgress | null;
   updatedAt: number;
+}>;
+
+export type TaskDependencyProgress = Readonly<{
+  satisfiedCount: number;
+  totalCount: number;
+}>;
+
+export type TaskDependencyDirection = "blocked-by" | "blocks";
+export type TaskDependencySatisfaction = "satisfied" | "unsatisfied";
+
+export type TaskDependencyAddAvailability =
+  Readonly<{ kind: "available"; remainingCapacity: number }> | Readonly<{ kind: "limit_reached" }>;
+
+export type TaskDependencyItem = Readonly<{
+  taskID: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
+  status: TaskStatus;
+  satisfaction: TaskDependencySatisfaction | null;
+}>;
+
+export type TaskDependencyDirectionProjection = Readonly<{
+  direction: TaskDependencyDirection;
+  totalCount: number;
+  unsatisfiedCount: number | null;
+  items: readonly TaskDependencyItem[];
+  addAvailability: TaskDependencyAddAvailability;
+}>;
+
+export type TaskDependencies = Readonly<{
+  blockerCount: number;
+  unsatisfiedBlockerCount: number;
+  directlyBlockedTaskCount: number;
+  directions: readonly TaskDependencyDirectionProjection[];
+}>;
+
+export type TaskDependencyMutationOutcome = "added" | "already_present" | "removed" | "already_absent";
+
+export type TaskDependencyMutationResponse = Readonly<{
+  outcome: TaskDependencyMutationOutcome;
+  blockerTaskID: string;
+  blockerShortID: string;
+  blockedTaskID: string;
+  blockedShortID: string;
+}>;
+
+export type TaskDependencyListDirection = Omit<TaskDependencyDirectionProjection, "addAvailability">;
+
+export type TaskDependencyListResponse = Readonly<{
+  taskID: string;
+  shortID: string;
+  directions: readonly TaskDependencyListDirection[];
 }>;
 
 export type BoardColumn = Readonly<{
@@ -535,7 +590,6 @@ export type BoardColumn = Readonly<{
   name: string;
   assigneeRole: string;
   outputFields: readonly WorkflowOutputField[];
-  transitionOutputFields: readonly WorkflowOutputField[];
   groupID: string;
   sortOrder: number;
   isBacklog: boolean;
@@ -576,29 +630,16 @@ export type BoardNodeCardsPage = Readonly<{
   workflowID: string;
   nodeID: string;
   cards: readonly BoardCard[];
-  previousPageToken: string | null;
-  nextPageToken: string | null;
+  nextOffset: number | null;
   generatedAt: number;
 }>;
 
-export type AttentionItem = Readonly<{
-  id: string;
-  kind: string;
-  projectID: string;
-  workflowID: string;
-  taskID: string;
-  taskShortID: string;
-  taskTitle: string;
-  runID: string;
-  sessionID: string;
-  askID: string;
-  taskTransitionID: string;
-  message: string;
-  detailJSON: string;
-  suggestions: readonly string[];
-  recommendedOptionIndex: number;
-  question: AttentionQuestionPrompt | null;
-  occurredAt: number;
+export type ApprovalSnapshot = Readonly<{
+  sourceNodeName: string;
+  targets: readonly Readonly<{ displayName: string }>[];
+  commentary: string;
+  outputValues: Readonly<Record<string, string>>;
+  version: number;
 }>;
 
 export type AttentionPage = Readonly<{
@@ -612,61 +653,35 @@ export type TaskAttention = Readonly<{
   generatedAt: number;
 }>;
 
+export type TaskCommentAuthorKind = "agent" | "user";
+
 export type TaskComment = Readonly<{
   id: string;
   taskID: string;
   body: string;
-  author: string;
+  authorKind: TaskCommentAuthorKind;
+  authorID: string | null;
   createdAt: number;
   updatedAt: number;
 }>;
 
 export type CommentPage = Readonly<{
   comments: readonly TaskComment[];
-  nextPageToken: string;
+  nextOffset: number | null;
 }>;
 
-export type TaskRun = Readonly<{
-  id: string;
-  taskID: string;
-  placementID: string;
+export type TaskCurrentNode = Readonly<{
   nodeID: string;
-  nodeKind: string;
-  scriptPath: string;
-  sessionID: string;
-  sessionName: string;
-  role: string;
-  status: string;
-  generation: number;
-  waitingAskID: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-  interruptedAt: number | null;
-  interruptionReason: string | null;
-  interruptionDetail: string;
+  transitionBranchKey: string | null;
+  sessionID: string | null;
+  effectiveAssignee: string | null;
+  effectiveThinking: string | null;
 }>;
 
-export type TaskTransition = Readonly<{
-  id: string;
-  transitionID: string;
-  transitionName: string;
-  sourceNodeName: string;
-  state: string;
-  commentary: string;
-  outputValues: Readonly<Record<string, string>>;
-  edges: readonly TransitionEdge[];
-  version: number;
-  createdAt: number;
-  appliedAt: number | null;
-}>;
-
-export type TransitionEdge = Readonly<{
-  id: string;
-  edgeKey: string;
-  targetNodeName: string;
-  state: string;
-  requiresApproval: boolean;
-  outputRequirements: readonly string[];
+export type TaskScriptCurrentNode = Readonly<{
+  nodeID: string;
+  transitionBranchKey: string | null;
+  sessionID: null;
 }>;
 
 export type TaskDetail = Readonly<{
@@ -683,31 +698,40 @@ export type TaskDetail = Readonly<{
   sourceWorkspace: WorkspaceSummary;
   status: TaskStatus;
   actions: TaskActions;
+  labelIDs: readonly string[];
   attentionCount: number;
-  comments: readonly TaskComment[];
-  runs: readonly TaskRun[];
-  transitions: readonly TaskTransition[];
+  dependencies: TaskDependencies;
   executionTarget: WorkflowExecutionTarget | null;
+  worktreePath: string | null;
+  currentNodes: readonly TaskCurrentNode[];
+  liveSessionIDs: readonly string[];
+  currentScripts: readonly Readonly<{ currentNode: TaskScriptCurrentNode; path: string }>[];
+  retainedSessionCount: number;
   createdAt: number;
   updatedAt: number;
   done: boolean;
-  canceledAt: number | null;
-  cancelReason: string | null;
 }>;
 
-export type ActivityItem = Readonly<{
+export type CommentActivityItem = Readonly<{
   id: string;
-  type: string;
+  type: "comment";
   taskID: string;
   occurredAt: number;
   updatedAt: number;
-  actor: string;
-  summary: string;
-  comment: TaskComment | null;
-  transition: TaskTransition | null;
-  run: TaskRun | null;
-  attention: AttentionItem | null;
+  comment: TaskComment;
 }>;
+
+export type SessionStartedActivityItem = Readonly<{
+  id: string;
+  type: "session_started";
+  taskID: string;
+  occurredAt: number;
+  updatedAt: number;
+  sessionID: string;
+  sessionName: string;
+}>;
+
+export type ActivityItem = CommentActivityItem | SessionStartedActivityItem;
 
 export type ActivityPage = Readonly<{
   items: readonly ActivityItem[];

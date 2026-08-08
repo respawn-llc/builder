@@ -26,16 +26,7 @@ func publishPendingPrompt(
 		return
 	}
 	prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
-	message := clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessagePromptPending,
-		Payload: clientui.TranscriptPayload{PromptPending: &prompt},
-	}
-	if eventType == pendingPromptEventResolved {
-		message.Kind = clientui.TranscriptMessagePromptResolved
-		message.Payload.PromptPending = nil
-		message.Payload.PromptResolved = &prompt
-	}
-	feed.Publish([]clientui.TranscriptMessage{message})
+	feed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(prompt)})
 }
 
 func transcriptPendingPromptFromSnapshot(
@@ -43,9 +34,9 @@ func transcriptPendingPromptFromSnapshot(
 	snapshot PendingPromptSnapshot,
 	eventType pendingPromptEventType,
 ) clientui.TranscriptPrompt {
-	state := clientui.TranscriptPromptStatePending
+	state := clientui.TranscriptPromptStatusPending
 	if eventType == pendingPromptEventResolved {
-		state = clientui.TranscriptPromptStateResolved
+		state = clientui.TranscriptPromptStatusResolved
 	}
 	kind := clientui.TranscriptPromptKindQuestion
 	if snapshot.Request.Approval {
@@ -53,7 +44,7 @@ func transcriptPendingPromptFromSnapshot(
 	}
 	prompt := clientui.TranscriptPrompt{
 		Kind:        kind,
-		State:       state,
+		Status:      state,
 		PromptID:    clientui.PromptID(strings.TrimSpace(snapshot.Request.ID)),
 		SessionID:   mustPromptSessionID(sessionID),
 		StepID:      mustPromptStepID(snapshot.Request.StepID),

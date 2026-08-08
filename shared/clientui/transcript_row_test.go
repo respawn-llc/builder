@@ -3,6 +3,7 @@ package clientui
 import (
 	"testing"
 
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -11,6 +12,7 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       TranscriptRowAssistant,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Assistant: &TranscriptAssistantRow{
 			StepID: transcriptTestStepID(t),
 			Text:   "Done",
@@ -22,11 +24,32 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 }
 
+func TestTranscriptCommittedRowValidateStructureOwnsPayloadDiscriminator(t *testing.T) {
+	row := TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityDetail,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       TranscriptRowReasoningTrace,
+		ReasoningTrace: &TranscriptReasoningTraceRow{
+			StepID:      transcriptTestStepID(t),
+			CompactText: "Planning",
+			Text:        "Planning\nDetails",
+		},
+	}
+	if err := row.ValidateStructure(); err != nil {
+		t.Fatalf("validate committed reasoning row structure: %v", err)
+	}
+	row.ReasoningTrace = nil
+	if err := row.ValidateStructure(); err == nil {
+		t.Fatal("accepted committed reasoning row without its payload")
+	}
+}
+
 func TestTranscriptCommittedRowRejectsImplicitVisibilityAndMismatchedPayload(t *testing.T) {
 	base := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       TranscriptRowAssistant,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Assistant: &TranscriptAssistantRow{
 			StepID: transcriptTestStepID(t),
 			Text:   "Done",
@@ -77,12 +100,47 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 		CacheWarning: &TranscriptCacheWarning{
 			Scope:           "conversation",
 			Reason:          "cache_miss",
-			LostInputTokens: 100,
+			LostInputTokens: textutil.Value(100),
 			Visibility:      transcript.EntryVisibilityOngoing,
 		},
 	}
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed cache-warning notice: %v", err)
+	}
+}
+
+func TestTranscriptNoticeRowCarriesTypedCompactionFacts(t *testing.T) {
+	messageType := TranscriptMessageCompactionSummary
+	notice := TranscriptNoticeRow{
+		Reason:      TranscriptNoticeCompaction,
+		Severity:    TranscriptNoticeInfo,
+		MessageType: &messageType,
+		Compaction: &TranscriptCompactionNotice{
+			Count:  textutil.Value(2),
+			Detail: textutil.Value("provider summary"),
+		},
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("validate typed compaction notice: %v", err)
+	}
+	notice.Compaction.Count = textutil.Value(0)
+	if err := notice.Validate(); err == nil {
+		t.Fatal("accepted present zero compaction count")
+	}
+}
+
+func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
+	warning := TranscriptCacheWarning{
+		Scope:      "conversation",
+		Reason:     "cache_miss",
+		Visibility: transcript.EntryVisibilityOngoing,
+	}
+	if err := warning.Validate(); err != nil {
+		t.Fatalf("validate absent token loss: %v", err)
+	}
+	warning.LostInputTokens = textutil.Value(0)
+	if err := warning.Validate(); err == nil {
+		t.Fatal("accepted present zero token loss")
 	}
 }
 
@@ -96,6 +154,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
 			Severity: TranscriptNoticeError,
+		},
+		{
+			Reason:   TranscriptNoticeCompaction,
+			Severity: TranscriptNoticeInfo,
 		},
 		{
 			Reason:   TranscriptNoticeLegacyUntypedNotice,

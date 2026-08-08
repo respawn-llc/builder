@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/server/auth"
 	"core/server/authservice"
@@ -112,10 +111,6 @@ func (s *testEmbeddedServer) workspaceRetargetContext() *sessionWorkspaceRetarge
 }
 
 func (s *testEmbeddedServer) PresentationTheme() string { return "dark" }
-
-func (s *testEmbeddedServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
-	return commands.NewClientPromptRoots()
-}
 
 func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {
@@ -313,11 +308,12 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 	}
 	if metadataStore, binding, ok := s.metadataBinding(); ok {
 		service := sessionlaunch.NewService(launch.Planner{
-			Config:            s.cfg,
-			ContainerDir:      filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-			StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
-			PersistedSessions: metadataStore,
-		})
+			Config:                   s.cfg,
+			ContainerDir:             filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
+			StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+			PersistedSessions:        metadataStore,
+			ProjectWorkspaceBoundary: metadataStore,
+		}).WithRuntimeAuthority(s.sessionAuthority(metadataStore.AuthoritativeSessionStoreOptions()...))
 		return service
 	}
 	var storeOptions []session.StoreOption
@@ -325,12 +321,23 @@ func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchServ
 		storeOptions = s.sessionPersistence.Options()
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:            s.cfg,
-		ContainerDir:      s.containerDir,
-		StoreOptions:      storeOptions,
-		PersistedSessions: s.sessionPersistence,
-	})
+		Config:                   s.cfg,
+		ContainerDir:             s.containerDir,
+		StoreOptions:             storeOptions,
+		PersistedSessions:        s.sessionPersistence,
+		ProjectWorkspaceBoundary: appTestProjectBoundaryResolver{root: s.cfg.WorkspaceRoot},
+	}).WithRuntimeAuthority(s.sessionAuthority(storeOptions...))
 	return service
+}
+
+type appTestProjectBoundaryResolver struct{ root string }
+
+func (r appTestProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{ProjectID: "project-test", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
+}
+
+func (r appTestProjectBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
+	return nil, nil
 }
 
 func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecycleService {

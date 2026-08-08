@@ -2,16 +2,20 @@ package sessionlaunch
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/requestmemo"
+	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/subagentpolicy"
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type authStateReader interface {
@@ -26,8 +30,11 @@ type Service struct {
 	planner       launch.Planner
 	authStates    authStateReader
 	promptHistory promptHistoryReader
+	runtime       *sessionruntime.Authority
 	plans         *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
 }
+
+var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")
 
 type PlanResult struct {
 	Plan     launch.SessionPlan
@@ -61,12 +68,24 @@ func (s *Service) WithPromptHistoryReader(reader promptHistoryReader) *Service {
 	return s
 }
 
+func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
+	if s == nil {
+		return nil
+	}
+	s.runtime = authority
+	return s
+}
+
 func (s *Service) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 	result, err := s.PlanLaunchSession(ctx, req)
 	if err != nil {
 		return serverapi.SessionPlanResponse{}, err
 	}
-	return sessionPlanResponseFromResult(result), nil
+	response := sessionPlanResponseFromResult(result)
+	if err := response.Plan.Validate(); err != nil {
+		return serverapi.SessionPlanResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
@@ -135,24 +154,6 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if err := subagentpolicy.Authorize(planner.Config.Settings, caller, target); err != nil {
 			return PlanResult{}, err
 		}
-		if req.Mode == serverapi.SessionLaunchModeHeadless && selectedSessionID != nil && !roleOverride.Present {
-			persistedRole, roleErr := planner.SelectedSessionContinuationAgentRole(*selectedSessionID)
-			if roleErr != nil {
-				return PlanResult{}, roleErr
-			}
-			if persistedRole != nil && caller != nil {
-				lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
-				if lookup.Status == config.SubagentRoleLookupPresent {
-					persistedOverride, overrideErr := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
-					if overrideErr != nil {
-						return PlanResult{}, overrideErr
-					}
-					if err := subagentpolicy.Authorize(planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
-						return PlanResult{}, err
-					}
-				}
-			}
-		}
 		authState := auth.EmptyState()
 		if req.Overrides.NeedsAuthState() && s.authStates != nil {
 			var authErr error
@@ -161,62 +162,155 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				return PlanResult{}, authErr
 			}
 		}
-		preparation := launch.RunPromptPreparationContext{}
 		if selectedSessionID != nil {
-			selectedLocked, selectedErr := planner.SelectedSessionLockedContract(*selectedSessionID)
-			if selectedErr != nil {
-				return PlanResult{}, selectedErr
-			}
-			preparation.ModelLock = selectedLocked
-			preparation.ToolLock = selectedLocked
-			if !roleOverride.Present {
-				target, targetErr := planner.SelectedSessionPromptFacingTarget(*selectedSessionID)
-				if targetErr != nil {
-					return PlanResult{}, targetErr
-				}
-				preparation.OmittedTarget = &target
-			}
+			return s.planExistingSession(ctx, planner, req, *selectedSessionID, roleOverride, caller, authState)
 		}
+		preparation := launch.RunPromptPreparationContext{}
 		preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
 		if err != nil {
 			return PlanResult{}, err
 		}
-		var preparedPromptFacingTarget *launch.PreparedBaseTarget
-		if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.BaseTarget != nil {
-			target := *preparedOverrides.BaseTarget
-			preparedPromptFacingTarget = &target
-		} else if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.NamedTarget != nil {
-			preparedPromptFacingTarget = &launch.PreparedBaseTarget{
-				Settings:     preparedOverrides.NamedTarget.Settings,
-				Source:       preparedOverrides.NamedTarget.Source,
-				EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
+		preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
+		return s.finalizeLaunchPlan(
+			ctx,
+			func() (launch.SessionPlan, []string, error) {
+				return planner.PlanNewSessionWithPreparedOverrides(ctx, launch.SessionRequest{
+					Mode:                                launch.Mode(req.Mode),
+					Intent:                              req.Intent,
+					SkipContinuationAgentRoleValidation: roleOverride.Default,
+					PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+				}, req.Overrides, preparedOverrides)
+			},
+		)
+	})
+}
+
+func (s *Service) planExistingSession(
+	ctx context.Context,
+	planner launch.Planner,
+	req serverapi.SessionPlanRequest,
+	sessionID runtimeids.SessionID,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	caller *subagentpolicy.Caller,
+	authState auth.State,
+) (result PlanResult, resultErr error) {
+	if s.runtime == nil {
+		return PlanResult{}, ErrExistingSessionAuthorityRequired
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, planner.ContainerDir)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	callback := func(ctx context.Context, store *session.Store) error {
+		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store)
+		return resultErr
+	}
+	resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
+	return result, resultErr
+}
+
+func (s *Service) planExistingSessionWithStore(
+	ctx context.Context,
+	planner launch.Planner,
+	req serverapi.SessionPlanRequest,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	caller *subagentpolicy.Caller,
+	authState auth.State,
+	store *session.Store,
+) (PlanResult, error) {
+	if req.Mode == serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
+		persistedRole, err := planner.SelectedSessionContinuationAgentRoleWithStore(store)
+		if err != nil {
+			return PlanResult{}, err
+		}
+		if persistedRole != nil && caller != nil {
+			lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
+			if lookup.Status == config.SubagentRoleLookupPresent {
+				persistedOverride, err := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
+				if err != nil {
+					return PlanResult{}, err
+				}
+				if err := subagentpolicy.Authorize(planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
+					return PlanResult{}, err
+				}
 			}
 		}
-		if req.Mode != serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
+	}
+	locked, err := planner.SelectedSessionLockedContractWithStore(store)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	preparation := launch.RunPromptPreparationContext{ModelLock: locked, ToolLock: locked}
+	if !roleOverride.Present {
+		target, targetErr := planner.SelectedSessionPromptFacingTargetWithStore(store)
+		if targetErr != nil {
+			return PlanResult{}, targetErr
+		}
+		preparation.OmittedTarget = &target
+	}
+	preparedOverrides, err := launch.PrepareRunPromptOverridesWithContext(planner.Config, req.Overrides, authState, preparation)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
+	return s.finalizeLaunchPlan(
+		ctx,
+		func() (launch.SessionPlan, []string, error) {
+			plan, err := planner.PlanSessionWithStore(ctx, launch.SessionRequest{
+				Mode:                                launch.Mode(req.Mode),
+				Intent:                              req.Intent,
+				SkipContinuationAgentRoleValidation: roleOverride.Default,
+				PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+			}, store)
+			if err != nil {
+				return launch.SessionPlan{}, nil, err
+			}
+			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{})
+		},
+	)
+}
+
+func preparePromptFacingTarget(
+	mode serverapi.SessionLaunchMode,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	preparedOverrides *launch.PreparedRunPromptOverrides,
+) *launch.PreparedBaseTarget {
+	if mode != serverapi.SessionLaunchModeHeadless {
+		if !roleOverride.Present {
 			preparedOverrides.BaseTarget = nil
 		}
-		plan, err := planner.PlanSession(ctx, launch.SessionRequest{
-			Mode:                                launch.Mode(req.Mode),
-			Intent:                              req.Intent,
-			SkipContinuationAgentRoleValidation: roleOverride.Default,
-			PreparedPromptFacingTarget:          preparedPromptFacingTarget,
-		})
+		return nil
+	}
+	if preparedOverrides.BaseTarget != nil {
+		target := *preparedOverrides.BaseTarget
+		return &target
+	}
+	if preparedOverrides.NamedTarget == nil {
+		return nil
+	}
+	return &launch.PreparedBaseTarget{
+		Settings:     preparedOverrides.NamedTarget.Settings,
+		Source:       preparedOverrides.NamedTarget.Source,
+		EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
+	}
+}
+
+func (s *Service) finalizeLaunchPlan(
+	ctx context.Context,
+	resolvePlan func() (launch.SessionPlan, []string, error),
+) (PlanResult, error) {
+	plan, warnings, err := resolvePlan()
+	if err != nil {
+		return PlanResult{}, err
+	}
+	if s.promptHistory != nil {
+		history, err := s.promptHistory.ReadPromptHistory(ctx, plan.Descriptor.SessionID().String())
 		if err != nil {
 			return PlanResult{}, err
 		}
-		plan, warnings, err := planner.ApplyPreparedRunPromptOverrides(plan, req.Overrides, preparedOverrides)
-		if err != nil {
-			return PlanResult{}, err
-		}
-		if s.promptHistory != nil {
-			history, err := s.promptHistory.ReadPromptHistory(ctx, plan.Descriptor.SessionID().String())
-			if err != nil {
-				return PlanResult{}, err
-			}
-			plan.PromptHistory = history
-		}
-		return PlanResult{Plan: plan, Warnings: warnings}, nil
-	})
+		plan.PromptHistory = history
+	}
+	return PlanResult{Plan: plan, Warnings: warnings}, nil
 }
 
 func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanResponse {
@@ -229,7 +323,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ActiveSettings:      result.Plan.ActiveSettings,
 		EnabledToolIDs:      enabledToolIDs,
 		ConfiguredModelName: result.Plan.ConfiguredModelName,
-		SessionName:         result.Plan.SessionName,
+		SessionName:         textutil.Pointer(result.Plan.SessionName),
 		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
 		ModelContractLocked: result.Plan.ModelContractLocked,
 		Source:              result.Plan.Source,

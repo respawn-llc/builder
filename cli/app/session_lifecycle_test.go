@@ -17,6 +17,8 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -24,6 +26,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,7 +60,13 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 		},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			_, _, _, err := runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
-				WorkspaceRoot:       plan.ExecutionTarget.EffectiveWorkdir,
+				FilesystemContext: tools.FilesystemContext{
+					Access: tools.FileAccessScope{
+						WorkingDirectory:    tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
+						ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: plan.ExecutionTarget.EffectiveWorkdir, RealPath: plan.ExecutionTarget.EffectiveWorkdir},
+						ProjectWorkspace:    tools.ProjectWorkspaceScope{ProjectID: "project-1"},
+					},
+				},
 				OwnerSessionID:      plan.SessionID,
 				Enabled:             []toolspec.ID{toolspec.ToolPatch},
 				MinimumExecToBgTime: 15 * time.Second,
@@ -155,12 +164,22 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
-	service := sessionlaunch.NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: metadataStore,
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	service := sessionlaunch.NewService(launch.Planner{
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        metadataStore,
+		ProjectWorkspaceBoundary: metadataStore,
+	}).WithRuntimeAuthority(authority)
 	server := &testEmbeddedServer{
 		cfg:               cfg,
 		projectID:         binding.ProjectID,
@@ -288,7 +307,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
 	}
@@ -398,7 +417,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		if pickerCalls == 1 {
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
@@ -486,7 +505,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(_ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(_ context.Context, _ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		switch pickerCalls {
 		case 1:
@@ -973,6 +992,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     filepath.Base(canonicalWorktreeRoot),
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
@@ -1039,7 +1059,7 @@ func TestResolveSessionActionOpenSessionRequiresCurrentSession(t *testing.T) {
 		&testEmbeddedServer{},
 		nil,
 		"",
-		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: "draft reply"},
+		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: textutil.Value("draft reply")},
 	)
 	if err == nil {
 		t.Fatal("open-session navigation without a current session unexpectedly succeeded")

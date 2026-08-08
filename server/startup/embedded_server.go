@@ -16,6 +16,11 @@ type EmbeddedServer struct {
 
 	rpcMu sync.Mutex
 	rpc   *runningRPC
+
+	failures chan error
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (s *EmbeddedServer) Config() config.App {
@@ -91,6 +96,29 @@ func (s *EmbeddedServer) ServeBackground() error {
 	return nil
 }
 
+func (s *EmbeddedServer) Failures() <-chan error {
+	if s == nil {
+		return nil
+	}
+	s.rpcMu.Lock()
+	defer s.rpcMu.Unlock()
+	if s.failures == nil {
+		s.failures = make(chan error, 1)
+	}
+	return s.failures
+}
+
+func (s *EmbeddedServer) closeUnderlying() error {
+	s.closeOnce.Do(func() {
+		if s.Core != nil {
+			s.closeErr = s.Core.Close()
+		} else if s.deps != nil {
+			s.closeErr = s.deps.Close()
+		}
+	})
+	return s.closeErr
+}
+
 // Close stops the background control endpoints (if ServeBackground was called)
 // and then closes the underlying Core.
 func (s *EmbeddedServer) Close() error {
@@ -105,11 +133,6 @@ func (s *EmbeddedServer) Close() error {
 		rpc.shutdown()
 		rpc.wait()
 	}
-	if s.Core == nil {
-		if s.deps != nil {
-			return s.deps.Close()
-		}
-		return nil
-	}
-	return s.Core.Close()
+	closeErr := s.closeUnderlying()
+	return closeErr
 }

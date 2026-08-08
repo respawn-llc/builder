@@ -28,8 +28,10 @@ func (m *Model) toggleSelectedDetailEntry() {
 	if !m.detailProjection.entries[selected].presentation().Expandable {
 		return
 	}
+	previousScroll := m.detailScroll
 	m.expanded = maps.Clone(m.expanded)
-	if _, ok := m.expanded[selected]; ok {
+	_, wasExpanded := m.expanded[selected]
+	if wasExpanded {
 		delete(m.expanded, selected)
 	} else {
 		if m.expanded == nil {
@@ -38,6 +40,10 @@ func (m *Model) toggleSelectedDetailEntry() {
 		m.expanded[selected] = struct{}{}
 	}
 	m.detailProjection.rebuildLines(m.detailContentWidth(), m.expanded)
+	if !wasExpanded {
+		m.detailScroll = clampInt(previousScroll, 0, m.maxDetailScroll())
+		return
+	}
 	m.scrollSelectedDetailEntryIntoView()
 }
 

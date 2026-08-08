@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -52,12 +51,4 @@ func ValidateWebSearchInput(raw json.RawMessage) error {
 		return ErrInvalidWebSearchQuery
 	}
 	return ValidateWebSearchQuery(in.Query)
-}
-
-func FormatWebSearchDisplayText(query string) string {
-	trimmed := normalizeWebSearchQuery(query)
-	if !isValidWebSearchQuery(trimmed) {
-		return "web search: invalid query"
-	}
-	return fmt.Sprintf("web search: %q", trimmed)
 }

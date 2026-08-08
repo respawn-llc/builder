@@ -10,11 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -44,11 +46,25 @@ func sessionLaunchStringPtr(value string) *string {
 
 func newSessionLaunchTestService(cfg config.App, containerDir string) *Service {
 	return NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      serviceTestPersistence.Options(),
-		PersistedSessions: serviceTestPersistence,
-	})
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             serviceTestPersistence.Options(),
+		PersistedSessions:        serviceTestPersistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: cfg.WorkspaceRoot},
+	}).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    serviceTestPersistence.Options(),
+	}))
+}
+
+type sessionLaunchBoundaryResolver struct{ root string }
+
+func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{ProjectID: "test-project", Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}}}, nil
+}
+
+func (r sessionLaunchBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
+	return nil, nil
 }
 
 func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
@@ -75,8 +91,16 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if _, _, err := store.AppendEvent("", "prompt_history", map[string]any{"text": "json-history"}); err != nil {
-		t.Fatalf("append legacy prompt history event: %v", err)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, receipt, err := eventLog.AppendRecord(nil, session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityHidden,
+		Role:       "system",
+		Text:       "event-log history must not become prompt history",
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}
 	if _, _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: store.Meta().SessionID,
@@ -86,11 +110,15 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 		t.Fatalf("record metadata prompt history: %v", err)
 	}
 	service := NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
-	}).WithPromptHistoryReader(meta)
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
+	}).WithPromptHistoryReader(meta).WithRuntimeAuthority(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    meta.AuthoritativeSessionStoreOptions(),
+	}))
 
 	resp, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-1",
@@ -102,6 +130,47 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resp.Plan.PromptHistory, []string{"db-history"}) {
 		t.Fatalf("prompt history = %+v, want metadata only", resp.Plan.PromptHistory)
+	}
+}
+
+func TestServicePlanSessionProjectsTypedOptionalSessionName(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	containerDir := filepath.Join(root, "sessions")
+	store := createLaunchTestSession(t, containerDir, "initial", workspace)
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, containerDir)
+	request := serverapi.SessionPlanRequest{
+		ClientRequestID: "typed-session-name",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	}
+
+	if err := store.SetName(""); err != nil {
+		t.Fatalf("clear session name: %v", err)
+	}
+	absent, err := service.PlanSession(t.Context(), request)
+	if err != nil {
+		t.Fatalf("PlanSession absent name: %v", err)
+	}
+	if absent.Plan.SessionName != nil {
+		t.Fatalf("absent session name = %v, want nil", absent.Plan.SessionName)
+	}
+
+	title := "Incident triage"
+	if err := store.SetName(title); err != nil {
+		t.Fatalf("set session name: %v", err)
+	}
+	request.ClientRequestID = "typed-session-name-present"
+	present, err := service.PlanSession(t.Context(), request)
+	if err != nil {
+		t.Fatalf("PlanSession present name: %v", err)
+	}
+	if present.Plan.SessionName == nil || *present.Plan.SessionName != title {
+		t.Fatalf("present session name = %v, want %q", present.Plan.SessionName, title)
 	}
 }
 
@@ -186,9 +255,10 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 	}
 	reloads := 0
 	service := NewService(launch.Planner{
-		Config:       snapshot,
-		ContainerDir: t.TempDir(),
-		StoreOptions: serviceTestPersistence.Options(),
+		Config:                   snapshot,
+		ContainerDir:             t.TempDir(),
+		StoreOptions:             serviceTestPersistence.Options(),
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: snapshot.WorkspaceRoot},
 		ReloadConfig: func() (config.App, error) {
 			reloads++
 			if reloads != 1 {
@@ -321,9 +391,10 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create workflow caller: %v", err)
 	}
-	if err := workflowCaller.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
+	if err := workflowCaller.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable workflow caller: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, workflowCaller.Meta().SessionID)
 	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create ordinary caller: %v", err)
@@ -342,10 +413,11 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		},
 	}
 	service := NewService(launch.Planner{
-		Config:            cfg,
-		ContainerDir:      containerDir,
-		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
-		PersistedSessions: meta,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ProjectWorkspaceBoundary: meta,
 	})
 	worker := "worker"
 	workflowCallerID := workflowCaller.Meta().SessionID

@@ -1,27 +1,13 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
 import { GripVertical, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { z } from "zod";
 
+import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 import type { WorkflowDefinition, WorkflowParameter } from "@/api";
 import {
   Button,
   identifierInputAttributes,
+  InteractiveChip,
   IslandSurface,
   SelectField,
   Tooltip,
@@ -38,9 +24,8 @@ import {
   workflowPromptTemplatePlaceholders,
   type PromptTemplatePlaceholder,
 } from "./workflowPromptTemplatePlaceholders";
+import { isProtectedWorkflowParameter, visibleWorkflowEdgeParameters } from "./workflowEditorEdgeSelection";
 import { derivedNodeWiring, joinProviderOptions } from "./workflowInspectorWiring";
-
-const sortableRowIDSchema = z.string();
 
 export function PromptTemplateEditor({
   onPromptChange,
@@ -135,14 +120,10 @@ function PromptPlaceholderChip({
 }>) {
   const { t } = useTranslation();
   const [infoOpen, setInfoOpen] = useState(false);
-  const className = cx(
-    promptPlaceholderChipBaseClassName,
-    promptPlaceholderChipToneClassNames[placeholder.tone],
-  );
+  const tone = placeholder.tone === "primary" ? "primary" : "neutral";
   if (placeholder.kind === "insert") {
     return (
-      <button
-        className={className}
+      <InteractiveChip
         data-placeholder-tone={placeholder.tone}
         onClick={() => {
           onInsert(placeholder.value);
@@ -150,18 +131,18 @@ function PromptPlaceholderChip({
         onPointerDown={(event) => {
           event.preventDefault();
         }}
-        type="button"
+        size="compact"
+        tone={tone}
       >
         {placeholder.label}
-      </button>
+      </InteractiveChip>
     );
   }
   return (
     <Tooltip onOpenChange={setInfoOpen} open={infoOpen}>
       <TooltipTrigger asChild>
-        <button
+        <InteractiveChip
           aria-label={placeholder.label}
-          className={className}
           data-placeholder-tone={placeholder.tone}
           onBlur={() => {
             setInfoOpen(false);
@@ -181,10 +162,11 @@ function PromptPlaceholderChip({
           onPointerLeave={() => {
             setInfoOpen(false);
           }}
-          type="button"
+          size="compact"
+          tone={tone}
         >
           {placeholder.label}
-        </button>
+        </InteractiveChip>
       </TooltipTrigger>
       <TooltipContent
         className="grid max-w-[24rem] gap-[var(--space-1)] whitespace-normal text-left"
@@ -203,32 +185,23 @@ function PromptPlaceholderChip({
   );
 }
 
-const promptPlaceholderChipBaseClassName =
-  "rounded-full border px-[var(--space-1)] py-px text-[11px] font-semibold leading-4 transition-colors focus-visible:outline-none focus-visible:ring-[2px]";
-
-const promptPlaceholderChipToneClassNames = {
-  muted:
-    "border-[var(--color-outline)] bg-[color-mix(in_srgb,var(--color-on-background)_5%,transparent)] text-[var(--color-muted)] hover:bg-[color-mix(in_srgb,var(--color-on-background)_8%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-muted)_35%,transparent)]",
-  primary:
-    "border-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)]",
-} satisfies Record<PromptTemplatePlaceholder["tone"], string>;
-
 export function EditableEdgeParameters({
   controller,
   edge,
+  protectedParameterVisibility,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
   edge: DraftWorkflowEdge;
+  protectedParameterVisibility?: Readonly<{
+    target_assignee?: boolean;
+    target_thinking?: boolean;
+  }>;
 }>) {
   const { t } = useTranslation();
-  const parameters = edge.parameters.map((parameter, index) => ({
+  const parameters = visibleWorkflowEdgeParameters(edge, protectedParameterVisibility).map((parameter, index) => ({
     ...parameter,
     rowID: parameter.rowID ?? [edge.id, "parameter", "fallback", index.toString()].join(":"),
   }));
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
   return (
     <DetailSection title={t("workflowEditor.parameters")} titleHelp={t("workflowEditor.parametersHelp")}>
       <div className="grid gap-[var(--space-3)]">
@@ -240,32 +213,35 @@ export function EditableEdgeParameters({
         >
           {t("workflowEditor.addParameter")}
         </Button>
-        {edge.parameters.length === 0 ? (
+        {parameters.length === 0 ? (
           <p className="m-0 text-sm text-[var(--color-muted)]">{t("workflowEditor.none")}</p>
         ) : null}
-        <DndContext
-          collisionDetection={closestCenter}
-          onDragEnd={(event) => {
-            reorderEdgeParameter(controller, edge.id, event);
-          }}
-          sensors={sensors}
-        >
-          <SortableContext
-            items={parameters.map((parameter) => parameter.rowID)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="grid gap-[var(--space-3)]">
-              {parameters.map((parameter) => (
-                <SortableEdgeParameter
-                  controller={controller}
-                  edgeID={edge.id}
-                  key={parameter.rowID}
-                  parameter={parameter}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+        <div className="grid gap-[var(--space-3)]">
+          <ReorderableList
+            getItemID={(parameter) => parameter.rowID}
+            items={parameters}
+            onCommit={({ activeID, destinationID }) => {
+              if (activeID === destinationID) {
+                return;
+              }
+              controller.dispatch({
+                activeRowID: activeID,
+                edgeID: edge.id,
+                overRowID: destinationID,
+                type: "reorderEdgeParameter",
+              });
+            }}
+            renderItem={(parameter, sortable) => (
+              <SortableEdgeParameter
+                controller={controller}
+                edgeID={edge.id}
+                key={parameter.rowID}
+                parameter={parameter}
+                sortable={sortable}
+              />
+            )}
+          />
+        </div>
       </div>
     </DetailSection>
   );
@@ -275,24 +251,29 @@ function SortableEdgeParameter({
   controller,
   edgeID,
   parameter,
+  sortable,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
   edgeID: string;
   parameter: WorkflowParameter & Readonly<{ rowID: string }>;
+  sortable: ReorderableListItemRenderProps;
 }>) {
   const { t } = useTranslation();
   const keyID = useId();
   const descriptionID = useId();
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
-    id: parameter.rowID,
-  });
-  const style = {
-    transform:
-      transform === null
-        ? undefined
-        : `translate3d(${transform.x.toString()}px, ${transform.y.toString()}px, 0)`,
-    transition,
-  };
+  const itemRef = useCallback(
+    (element: HTMLElement | null) => {
+      sortable.itemRef(element);
+    },
+    [sortable],
+  );
+  const activatorRef = useCallback(
+    (element: HTMLElement | null) => {
+      sortable.activatorRef(element);
+    },
+    [sortable],
+  );
+  const { activatorAttributes, activatorListeners, style } = sortable;
   return (
     <IslandSurface
       as="div"
@@ -300,15 +281,15 @@ function SortableEdgeParameter({
       data-parameter-key={parameter.key}
       data-testid="workflow-parameter"
       level={1}
-      ref={setNodeRef}
+      ref={itemRef}
       style={style}
     >
       <div
         aria-label={t("workflowEditor.reorderParameter")}
         className="absolute inset-0 cursor-grab rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)] active:cursor-grabbing"
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
+        ref={activatorRef}
+        {...activatorAttributes}
+        {...activatorListeners}
       />
       <div className="pointer-events-none relative grid gap-[var(--space-2)]">
         <div className="flex min-w-0 items-center gap-[var(--space-2)]">
@@ -340,16 +321,18 @@ function SortableEdgeParameter({
               value={parameter.key}
             />
           </div>
-          <Button
-            aria-label={t("workflowEditor.deleteParameter")}
-            className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full !border-transparent !bg-transparent !p-0"
-            onClick={() => {
-              controller.dispatch({ edgeID, parameterRowID: parameter.rowID, type: "deleteEdgeParameter" });
-            }}
-            variant="danger"
-          >
-            <Trash2 aria-hidden="true" size={17} strokeWidth={1.9} />
-          </Button>
+          {isProtectedWorkflowParameter(parameter) ? null : (
+            <Button
+              aria-label={t("workflowEditor.deleteParameter")}
+              className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full !border-transparent !bg-transparent !p-0"
+              onClick={() => {
+                controller.dispatch({ edgeID, parameterRowID: parameter.rowID, type: "deleteEdgeParameter" });
+              }}
+              variant="danger"
+            >
+              <Trash2 aria-hidden="true" size={17} strokeWidth={1.9} />
+            </Button>
+          )}
         </div>
         <div className="pointer-events-auto">
           <label className="sr-only" htmlFor={descriptionID}>
@@ -373,28 +356,6 @@ function SortableEdgeParameter({
       </div>
     </IslandSurface>
   );
-}
-
-function reorderEdgeParameter(
-  controller: WorkflowEditorDraftController,
-  edgeID: string,
-  event: DragEndEvent,
-): void {
-  const overID = event.over?.id;
-  if (overID === undefined || event.active.id === overID) {
-    return;
-  }
-  const activeRowID = sortableRowIDSchema.safeParse(event.active.id);
-  const overRowID = sortableRowIDSchema.safeParse(overID);
-  if (!activeRowID.success || !overRowID.success) {
-    return;
-  }
-  controller.dispatch({
-    activeRowID: activeRowID.data,
-    edgeID,
-    overRowID: overRowID.data,
-    type: "reorderEdgeParameter",
-  });
 }
 
 export function EditableJoinProviders({

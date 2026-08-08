@@ -147,6 +147,7 @@ export function workflowEdge(
   }>,
 ): WorkflowEdge {
   return {
+    assigneeSelection: "configured",
     contextMode: "new_session",
     contextSource: { kind: "immediate_source", nodeKey: "" },
     id: input.id,
@@ -157,6 +158,7 @@ export function workflowEdge(
     promptTemplate: "",
     requiresApproval: false,
     targetNodeID: input.targetNodeID,
+    thinkingSelection: "configured",
     transitionGroupID: input.transitionGroupID,
     workflowID: input.workflowID,
   };

@@ -42,6 +42,7 @@ import (
 	"core/server/workflowrunner"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/server/workflowview"
 	"core/shared/config"
 )
 
@@ -103,22 +104,27 @@ type capturedRequest struct {
 // captureSessionRequest reproduces the production request-prep path for a session
 // and returns the prepared provider-agnostic request plus semantically equivalent
 // OpenAI payload JSON. No model turn runs and no HTTP is performed.
-func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, providerOverride string, allowTools bool) (capturedRequest, error) {
+func captureSessionRequest(
+	ctx context.Context,
+	persistenceRoot,
+	sessionID,
+	providerOverride string,
+	allowTools bool,
+) (_ capturedRequest, resultErr error) {
 	md, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open metadata: %w", err)
 	}
 	defer func() { _ = md.Close() }()
 
-	store, err := session.OpenByID(
-		persistenceRoot,
-		sessionID,
-		session.WithPersistedSessionResolver(md),
-		session.WithFilelessEventPersistence(),
-	)
+	diagnosticCopy, err := session.OpenDiagnosticSessionCopy(ctx, md, sessionID)
 	if err != nil {
-		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
+		return capturedRequest{}, fmt.Errorf("open isolated diagnostic Session copy: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, diagnosticCopy.Close())
+	}()
+	store := diagnosticCopy.Store()
 	meta := store.Meta()
 	bootstrap, err := launch.ResolveBootstrapPlan(persistenceRoot, launch.BootstrapRequest{SessionID: sessionID})
 	if err != nil {
@@ -132,22 +138,32 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
 	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("materialize session event log: %w", err)
+	}
 	activeSettings := resolved.ActiveSettings
 	activeToolIDs := resolved.EnabledTools
 	activeSources := resolved.Source.Sources
 	workingDirectory := ""
-	var workflowConfig *workflowruntime.Config
-	if store.Meta().WorkflowSession != nil {
+	var workflowPrompt *workflowruntime.PromptContract
+	workflowOwned, err := md.SessionHasWorkflowTask(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve workflow session ownership: %w", err)
+	}
+	if workflowOwned {
 		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
-		if workflowErr != nil {
+		if workflowErr != nil && !errors.Is(workflowErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
 			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)
 		}
-		resolved = workflowInspection.Plan
-		workflowConfig = workflowInspection.Runtime
-		workingDirectory = workflowInspection.ExecutionRoot
-		activeSettings = resolved.ActiveSettings
-		activeToolIDs = resolved.EnabledTools
-		activeSources = resolved.Source.Sources
+		if workflowErr == nil {
+			resolved = workflowInspection.Plan
+			workflowPrompt = workflowInspection.Prompt
+			workingDirectory = workflowInspection.ExecutionRoot
+			activeSettings = resolved.ActiveSettings
+			activeToolIDs = resolved.EnabledTools
+			activeSources = resolved.Source.Sources
+		}
 	}
 	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
@@ -166,7 +182,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, err
 	}
 	mode := llm.OpenAIAuthModeForAuthState(authState)
-	if workflowConfig == nil {
+	if workflowPrompt == nil {
 		target, targetErr := md.ResolveSessionExecutionTarget(ctx, sessionID)
 		if targetErr != nil {
 			return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", targetErr)
@@ -177,15 +193,24 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if forceProviderContract {
 		providerCapabilitiesOverride = &caps
 	}
-	headless := meta.HeadlessActive || workflowConfig != nil
+	projectWorkspaceBoundary, err := md.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve session project workspace boundary: %w", err)
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(workingDirectory, workingDirectory, projectWorkspaceBoundary)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("prepare filesystem context: %w", err)
+	}
+	headless := meta.HeadlessActive || workflowPrompt != nil
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
+		eventLog,
 		activeSettings,
 		activeToolIDs,
-		workingDirectory,
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
+			FilesystemContext:                   filesystemContext,
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},
 			Headless:                            headless,
@@ -193,17 +218,38 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 			SkipContinuationAgentRoleValidation: resolved.SkipContinuationAgentRoleValidation,
 			ProviderCapabilitiesOverride:        providerCapabilitiesOverride,
 			GlobalConfigDir:                     persistenceRoot,
-			WorkflowRun:                         workflowConfig,
+			WorkflowPrompt:                      workflowPrompt,
 		},
 	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("construct runtime wiring: %w", err)
 	}
 	defer func() {
-		_ = wiring.Close()
-		if wiring.Background != nil {
-			_ = wiring.Background.Close()
+		var closeErr error
+		if err := wiring.Close(); err != nil {
+			closeErr = errors.Join(
+				closeErr,
+				fmt.Errorf("close diagnostic runtime wiring: %w", err),
+			)
 		}
+		if wiring.Background != nil {
+			tempDir := wiring.Background.TempDir()
+			if err := wiring.Background.Close(); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("close diagnostic background shell manager: %w", err),
+				)
+			} else if err := os.RemoveAll(tempDir); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("remove diagnostic background shell artifacts: %w", err),
+				)
+			}
+		}
+		resultErr = errors.Join(
+			resultErr,
+			closeErr,
+		)
 	}()
 
 	req, err := runtime.PrepareInspectionRequest(ctx, wiring.Engine, allowTools)
@@ -214,7 +260,13 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	openAIReq := llm.RequestAsOpenAI(req)
 	storeFlag := activeSettings.Store
 	modelVerbosity := string(activeSettings.ModelVerbosity)
-	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, caps)
+	wireBytes, err := llm.MarshalOpenAIWirePayload(
+		openAIReq,
+		storeFlag,
+		modelVerbosity,
+		mode,
+		caps,
+	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("marshal wire payload: %w", err)
 	}
@@ -253,7 +305,15 @@ func resolvePersistedWorkflowInspection(ctx context.Context, app config.App, met
 	if err != nil {
 		return workflowrunner.PersistedWorkflowInspection{}, err
 	}
-	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore)
+	dependencies, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		return workflowrunner.PersistedWorkflowInspection{}, err
+	}
+	awareness, err := workflowrunner.NewTaskAwarenessSource(workflowStore, dependencies)
+	if err != nil {
+		return workflowrunner.PersistedWorkflowInspection{}, err
+	}
+	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore, awareness)
 }
 
 func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {

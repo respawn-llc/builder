@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/commands"
 	"core/cli/app/internal/startupconfig"
 	"core/shared/client"
 	"core/shared/config"
@@ -15,14 +14,11 @@ import (
 )
 
 func startSessionServer(ctx context.Context, opts Options, interactor authInteractor, interactive bool) (server interactiveSessionServer, returnErr error) {
-	promptRoots, err := commands.NewClientPromptRoots()
+	resolved, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
-	if err != nil {
-		return nil, err
-	}
+	cfg := resolved.Config
 	remote, err := attachConfiguredStartupRemote(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -33,7 +29,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 			returnErr = errors.Join(returnErr, remote.Close())
 		}
 	}()
-	remoteServer := newRemoteAppServerWithAuthAndPromptRoots(remote, cfg, remote.Close, false, promptRoots)
+	remoteServer := newRemoteAppServerWithAuth(remote, cfg, remote.Close, false)
 	server = remoteServer
 	if err := server.EnsureAuthReady(ctx, interactor, interactive); err != nil {
 		return nil, err
@@ -60,6 +56,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 		}
 	}
 	closeRemote = false
+	remoteServer.clientSettings = resolved.Client
 	return server, nil
 }
 

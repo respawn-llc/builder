@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { WorkflowRecord } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { WorkflowCard, useWorkflowPages } from "@/shared/workflow-library";
 import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
@@ -13,8 +13,12 @@ import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList }
 const workflowLibraryItemMaxWidthClassName = "[&>*]:max-w-[1280px]";
 
 export function WorkflowLibraryRoute() {
+  return <SidebarRootOwner><WorkflowLibraryContent /></SidebarRootOwner>;
+}
+
+function WorkflowLibraryContent() {
   const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const connection = useConnectionSnapshot();
   const workflowsQuery = useWorkflowPages();
   const createDisabled = connection.phase !== "connected";
@@ -23,7 +27,7 @@ export function WorkflowLibraryRoute() {
     [workflowsQuery.data],
   );
   const openCreateWorkflow = () => {
-    void openSidebar({ kind: "workflowCreate", mode: "overlay" });
+    open({ kind: "workflowCreate", mode: "overlay" });
   };
 
   if (workflowsQuery.isPending) {
@@ -80,13 +84,13 @@ export function WorkflowLibraryRoute() {
 
 function WorkflowLibraryCard({ workflow }: Readonly<{ workflow: WorkflowRecord }>) {
   const navigation = useAppNavigation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
 
   return (
     <WorkflowCard
       contextActions={{
         onEdit: () => {
-          void openSidebar({ kind: "workflowEditor", mode: "overlay", workflowID: workflow.id });
+          open({ kind: "workflowEditor", mode: "overlay", workflowID: workflow.id });
         },
       }}
       onOpen={() => {

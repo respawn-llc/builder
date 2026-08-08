@@ -4,11 +4,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/testsetup"
 )
 
 func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
@@ -26,6 +27,9 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
 		},
 		"server/runtime/engine.go:submitUserMessage": {
+			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
+		},
+		"server/runtime/engine.go:SubmitAgentSteerWithHooks": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
 		"server/runtime/engine.go:SubmitWorkflowTurn": {
@@ -107,6 +111,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 }
 
 func TestRunWhenIdleHelpersRequireExplicitActiveKind(t *testing.T) {
+	t.Parallel()
 	file := parseRuntimeSource(t, "server/runtime/engine_queue_submission.go")
 	for _, name := range []string{"RunWhenIdle", "RunWhenIdleBeforeQueuedUserWork"} {
 		fn := findRuntimeFunc(t, file, name)
@@ -177,19 +182,5 @@ func findRuntimeFunc(t *testing.T, file *ast.File, name string) *ast.FuncDecl {
 }
 
 func runtimePackageRepoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("repo root not found")
-		}
-		dir = parent
-	}
+	return testsetup.RepositoryRoot(t)
 }

@@ -36,6 +36,21 @@ type requestCanceledError struct {
 	message string
 }
 
+type worktreeBlockedError struct {
+	diagnostic *string
+}
+
+func (e worktreeBlockedError) Error() string {
+	if e.diagnostic == nil {
+		return serverapi.ErrWorktreeBlocked.Error()
+	}
+	return *e.diagnostic
+}
+
+func (e worktreeBlockedError) Unwrap() error {
+	return serverapi.ErrWorktreeBlocked
+}
+
 func (e requestCanceledError) normalized() bool {
 	message := strings.TrimSpace(e.message)
 	return message == "" || message == context.Canceled.Error()
@@ -386,7 +401,12 @@ func validateIdentityRoot(expectedRootID string, identity protocol.ServerIdentit
 
 func handshakeRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdentity, error) {
 	var resp protocol.HandshakeResponse
-	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &resp); err != nil {
+	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{
+		ProtocolVersion: protocol.Version,
+		ClientCapabilities: &protocol.ClientCapabilities{
+			TranscriptLiveRunFinished: true,
+		},
+	}, &resp); err != nil {
 		return protocol.ServerIdentity{}, err
 	}
 	return resp.Identity, nil
@@ -501,6 +521,14 @@ func protocolError(resp *protocol.ResponseError) error {
 		return nil
 	}
 	message := strings.TrimSpace(resp.Message)
+	switch resp.Code {
+	case protocol.ErrCodeWorkspacePathIdentity:
+		return serverapi.DecodeWorkspacePathIdentityError(resp.Data, message)
+	case protocol.ErrCodeWorkspaceDetachConflict:
+		return serverapi.DecodeWorkspaceDetachConflictError(resp.Data, message)
+	case protocol.ErrCodeWorkspaceMutationFailed:
+		return serverapi.DecodeWorkspaceMutationError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeOnboardingFinalizeFailed && len(resp.Data) > 0 {
 		return serverapi.DecodeOnboardingFinalizeError(resp.Data, message)
 	}
@@ -510,17 +538,36 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskListScope && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskListScopeError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskSearch && len(resp.Data) > 0 {
+		return serverapi.DecodeTaskSearchError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskCreateSelection && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskCreateSelectionError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskCreateConflict && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskCreateConflictError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskMutationSelfTarget && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskMutationSelfTargetError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorkflowLabel && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowLabelError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeSubagentLaunchDenied && len(resp.Data) > 0 {
 		return serverapi.DecodeSubagentLaunchDeniedError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeSubagentLaunchPolicy {
 		return protocol.DecodeSubagentLaunchPolicyError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorktreeBlocked {
+		diagnostic := resp.Message
+		return worktreeBlockedError{diagnostic: &diagnostic}
+	}
+	if resp.Code == protocol.ErrCodeWorktreeCreate {
+		return serverapi.DecodeWorktreeCreateError(resp.Data, message)
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,
@@ -540,6 +587,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	if resp.Code == protocol.ErrCodeSessionRetarget && len(resp.Data) > 0 {
 		return serverapi.DecodeSessionRetargetError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodePromptCommands && len(resp.Data) > 0 {
+		return serverapi.DecodePromptCommandError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
@@ -568,11 +618,17 @@ func protocolError(resp *protocol.ResponseError) error {
 	case protocol.ErrCodeProjectUnavailable:
 		return errors.Join(serverapi.ErrProjectUnavailable, errors.New(message))
 	case protocol.ErrCodeRuntimeUnavailable:
-		return protocolSentinelError(serverapi.ErrRuntimeUnavailable, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeUnavailable, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeRuntimeNoActiveRun:
-		return protocolSentinelError(serverapi.ErrRuntimeNoActiveRun, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoActiveRun, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
-		return protocolSentinelError(serverapi.ErrRuntimeNoFinalAnswer, message)
+		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoFinalAnswer, message, protocol.SentinelErrorJoined)
+	case protocol.ErrCodeManualCompactionTooSoon:
+		return serverapi.ErrManualCompactionTooSoon
+	case protocol.ErrCodeManualCompactionDisabled:
+		return serverapi.ErrManualCompactionDisabled
+	case protocol.ErrCodeManualCompactionActive:
+		return serverapi.ErrManualCompactionActive
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -592,14 +648,4 @@ func protocolError(resp *protocol.ResponseError) error {
 	default:
 		return errors.New(message)
 	}
-}
-
-func protocolSentinelError(sentinel error, message string) error {
-	if sentinel == nil {
-		return errors.New(message)
-	}
-	if strings.TrimSpace(message) == "" || message == sentinel.Error() {
-		return sentinel
-	}
-	return errors.Join(sentinel, errors.New(message))
 }

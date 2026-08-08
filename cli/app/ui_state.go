@@ -103,6 +103,9 @@ type uiInputFeatureState struct {
 	spinnerGeneration         uint64
 	spinnerTickToken          uint64
 	commandRegistry           *commands.Registry
+	promptCatalog             apicontract.PromptCommandCatalogService
+	promptCatalogEntries      []commands.PromptCommandCatalogEntry
+	promptCatalogRefreshToken *uuid.UUID
 	finalAnswerOperation      *uiFinalAnswerOperation
 	finalAnswerOperationToken uint64
 	authSlashCommand          authSlashCommandKind
@@ -147,7 +150,7 @@ type uiConversationFeatureState struct {
 	ask                                uiAskState
 	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
-	promptAttention                    *bellHooks
+	promptAttention                    promptAttentionSink
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -156,7 +159,7 @@ type uiSessionTransitionFeatureState struct {
 	exitAction                              UIAction
 	nextSessionInitialPrompt                string
 	nextSessionInitialPromptHistoryRecorded bool
-	nextSessionInitialInput                 string
+	nextSessionInitialInput                 *string
 	nextSessionID                           string
 	nextForkRollbackTargetID                string
 	nextPreviousSessionID                   *runtimeids.SessionID
@@ -168,7 +171,7 @@ type uiSessionTransitionFeatureState struct {
 type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
-	turnQueueHook               *bellHooks
+	turnQueueHook               turnQueueHook
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository

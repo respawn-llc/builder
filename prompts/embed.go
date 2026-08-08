@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"text/template/parse"
 
+	"core/shared/runtimeids"
 	"core/shared/workflowkey"
 )
 
@@ -174,22 +175,31 @@ type systemPromptTemplateData struct {
 }
 
 type WorkflowNodeContextArgs struct {
-	TaskId               string
-	TaskShortId          string
-	TaskTitle            string
-	TaskBody             string
-	WorkflowId           string
-	WorkflowShortId      string
-	NodeId               string
-	NodeKey              string
-	NodeDisplayName      string
-	ContextMode          string
-	SourceSessionID      string
-	CompletionMode       string
-	TaskNumberOfComments int64
-	Transitions          []WorkflowTransition
-	NodePrompt           string
+	TaskId                         string
+	TaskShortId                    string
+	TaskTitle                      string
+	TaskBody                       string
+	WorkflowID                     runtimeids.WorkflowID
+	WorkflowName                   string
+	NodeId                         string
+	NodeKey                        string
+	NodeDisplayName                string
+	ContextMode                    string
+	SourceSessionID                string
+	CompletionMode                 string
+	TaskNumberOfComments           int64
+	TaskUnsatisfiedDependencyCount int64
+	Transitions                    []WorkflowTransition
+	TransitionPrompt               string
 }
+
+type WorkflowTaskPromptKind uint8
+
+const (
+	WorkflowTaskPromptInitialAssignment WorkflowTaskPromptKind = iota
+	WorkflowTaskPromptReassignment
+	WorkflowTaskPromptCompactionReminder
+)
 
 type WorkflowOutputField struct {
 	Name        string
@@ -203,8 +213,8 @@ type WorkflowTransition struct {
 }
 
 type WorkflowCompletionInstructionsArgs struct {
-	WorkflowShortID string
-	Contract        WorkflowCompletionContract
+	WorkflowID runtimeids.WorkflowID
+	Contract   WorkflowCompletionContract
 }
 
 type WorkflowCompletionContract struct {
@@ -230,11 +240,14 @@ type WorkflowInputValue struct {
 
 type workflowTaskInstructionsTemplateData struct {
 	WorkflowNodeContextArgs
-	LaunchCommand              string
-	NodeCompletionInstructions string
-	ShowTaskCommentsReminder   bool
-	TaskCommentsLabel          string
-	TaskCommentListCommand     string
+	LaunchCommand                string
+	NodeCompletionInstructions   string
+	ShowTaskCommentsReminder     bool
+	TaskCommentsLabel            string
+	TaskCommentListCommand       string
+	ShowTaskDependenciesReminder bool
+	TaskDependenciesLabel        string
+	TaskShowCommand              string
 }
 
 type workflowNudgeTemplateData struct {
@@ -287,6 +300,8 @@ var (
 	HeadlessModePrompt                               = mustPrompt("headless_mode_prompt.md")
 	HeadlessModeExitPrompt                           = mustPrompt("headless_mode_exit_prompt.md")
 	WorkflowTaskInstructionsPrompt                   = mustPrompt("workflow/workflow_task_instructions.md")
+	WorkflowTaskReassignmentPrompt                   = mustPrompt("workflow/workflow_task_reassignment.md")
+	WorkflowTaskCompactionReminderPrompt             = mustPrompt("workflow/workflow_task_compaction_reminder.md")
 	WorkflowNudgePrompt                              = mustPrompt("workflow/nudge.md")
 	WorkflowToolCompletionInstructionsPrompt         = mustPrompt("workflow/tool_completion_instructions.md")
 	WorkflowStructuredCompletionInstructionsPrompt   = mustPrompt("workflow/structured_completion_instructions.md")
@@ -295,6 +310,7 @@ var (
 	WorkflowFinalAnswerNudgePrompt                   = mustPrompt("workflow/final_answer_nudge.md")
 	WorkflowHumanOnlyTaskActionDeniedPrompt          = mustPrompt("workflow/human_only_task_action_denied.md")
 	WorkflowLiveControlSelfTargetDeniedPrompt        = mustPrompt("workflow/live_control_self_target_denied.md")
+	WorkflowTaskMutationSelfTargetDeniedPrompt       = mustPrompt("workflow/task_mutation_self_target_denied.md")
 	WorkflowTaskCompleteAgentOwnershipErrorPrompt    = strings.TrimSpace(mustPrompt("workflow/task_complete_agent_ownership_error.md"))
 	WorkflowTaskCompleteHumanSafetyWarningPrompt     = strings.TrimSpace(mustPrompt("workflow/task_complete_human_safety_warning.md"))
 	WorktreeModePrompt                               = mustPrompt("worktree_mode_prompt.md")
@@ -491,8 +507,25 @@ func RenderWorktreeModeExitPrompt(branch, cwd, worktreePath, workspaceRoot strin
 	})
 }
 
-func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
-	return renderNamedTemplate("workflow task instructions", WorkflowTaskInstructionsPrompt, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+func RenderWorkflowTaskInstructions(kind WorkflowTaskPromptKind, args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
+	name, text, err := workflowTaskPromptTemplate(kind)
+	if err != nil {
+		return "", err
+	}
+	return renderNamedTemplate(name, text, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+}
+
+func workflowTaskPromptTemplate(kind WorkflowTaskPromptKind) (string, string, error) {
+	switch kind {
+	case WorkflowTaskPromptInitialAssignment:
+		return "workflow task initial assignment", WorkflowTaskInstructionsPrompt, nil
+	case WorkflowTaskPromptReassignment:
+		return "workflow task reassignment", WorkflowTaskReassignmentPrompt, nil
+	case WorkflowTaskPromptCompactionReminder:
+		return "workflow task compaction reminder", WorkflowTaskCompactionReminderPrompt, nil
+	default:
+		return "", "", fmt.Errorf("render workflow task instructions: unknown prompt kind %d", kind)
+	}
 }
 
 func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalText, goalReminder string) (string, error) {
@@ -515,12 +548,15 @@ func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goal
 
 func newWorkflowTaskInstructionsTemplateData(args WorkflowNodeContextArgs, nodeCompletionInstructions string) workflowTaskInstructionsTemplateData {
 	return workflowTaskInstructionsTemplateData{
-		WorkflowNodeContextArgs:    args,
-		LaunchCommand:              LaunchCommand(),
-		NodeCompletionInstructions: strings.TrimSpace(nodeCompletionInstructions),
-		ShowTaskCommentsReminder:   args.TaskNumberOfComments > 0,
-		TaskCommentsLabel:          taskCommentsLabel(args.TaskNumberOfComments),
-		TaskCommentListCommand:     strings.Join([]string{LaunchCommand(), "task", "comment", "list", strings.TrimSpace(args.TaskShortId)}, " "),
+		WorkflowNodeContextArgs:      args,
+		LaunchCommand:                LaunchCommand(),
+		NodeCompletionInstructions:   strings.TrimSpace(nodeCompletionInstructions),
+		ShowTaskCommentsReminder:     args.TaskNumberOfComments > 0,
+		TaskCommentsLabel:            taskCommentsLabel(args.TaskNumberOfComments),
+		TaskCommentListCommand:       strings.Join([]string{LaunchCommand(), "task", "comment", "list", strings.TrimSpace(args.TaskShortId)}, " "),
+		ShowTaskDependenciesReminder: args.TaskUnsatisfiedDependencyCount > 0,
+		TaskDependenciesLabel:        taskDependenciesLabel(args.TaskUnsatisfiedDependencyCount),
+		TaskShowCommand:              strings.Join([]string{LaunchCommand(), "task", "show", strings.TrimSpace(args.TaskShortId)}, " "),
 	}
 }
 
@@ -531,29 +567,36 @@ func taskCommentsLabel(numberOfComments int64) string {
 	return fmt.Sprintf("%d comments", numberOfComments)
 }
 
-func RenderWorkflowToolCompletionInstructions(workflowShortId string) (string, error) {
+func taskDependenciesLabel(count int64) string {
+	if count == 1 {
+		return "1 unsatisfied dependency"
+	}
+	return fmt.Sprintf("%d unsatisfied dependencies", count)
+}
+
+func RenderWorkflowToolCompletionInstructions(workflowID runtimeids.WorkflowID) (string, error) {
 	return renderNamedTemplate("workflow tool completion instructions", WorkflowToolCompletionInstructionsPrompt, struct {
-		LaunchCommand   string
-		WorkflowShortId string
+		LaunchCommand string
+		WorkflowID    runtimeids.WorkflowID
 	}{
-		LaunchCommand:   LaunchCommand(),
-		WorkflowShortId: strings.TrimSpace(workflowShortId),
+		LaunchCommand: LaunchCommand(),
+		WorkflowID:    workflowID,
 	})
 }
 
-func RenderWorkflowStructuredCompletionInstructions(workflowShortId string) (string, error) {
+func RenderWorkflowStructuredCompletionInstructions(workflowID runtimeids.WorkflowID) (string, error) {
 	return renderNamedTemplate("workflow structured completion instructions", WorkflowStructuredCompletionInstructionsPrompt, struct {
-		LaunchCommand   string
-		WorkflowShortId string
+		LaunchCommand string
+		WorkflowID    runtimeids.WorkflowID
 	}{
-		LaunchCommand:   LaunchCommand(),
-		WorkflowShortId: strings.TrimSpace(workflowShortId),
+		LaunchCommand: LaunchCommand(),
+		WorkflowID:    workflowID,
 	})
 }
 
 type workflowCompletionInstructionsTemplateData struct {
 	LaunchCommand       string
-	WorkflowShortID     string
+	WorkflowID          runtimeids.WorkflowID
 	MultipleTransitions bool
 	Examples            []workflowCompletionExample
 }
@@ -585,7 +628,7 @@ func workflowCompletionInstructionsTemplateDataFor(args WorkflowCompletionInstru
 	examples := workflowCompletionExamples(args)
 	return workflowCompletionInstructionsTemplateData{
 		LaunchCommand:       LaunchCommand(),
-		WorkflowShortID:     strings.TrimSpace(args.WorkflowShortID),
+		WorkflowID:          args.WorkflowID,
 		MultipleTransitions: len(examples) > 1,
 		Examples:            examples,
 	}

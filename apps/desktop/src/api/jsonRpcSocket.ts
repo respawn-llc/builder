@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
-import type { JsonValue } from "./json";
+import { jsonValueSchema, type JsonValue } from "./json";
 import type { RpcEventHandler } from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
@@ -17,6 +17,7 @@ export const responseSchema = z.object({
     .object({
       code: z.number(),
       message: z.string(),
+      data: jsonValueSchema.optional().catch(undefined),
     })
     .optional(),
 });
@@ -28,8 +29,16 @@ const notificationSchema = z.object({
 });
 const textFrameSchema = z.string();
 
-export async function openSocket(endpoint: string, timeoutMilliseconds: number): Promise<WebSocket> {
+export async function openSocket(
+  endpoint: string,
+  timeoutMilliseconds: number,
+  signal?: AbortSignal,
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(new TransportError(`Connection to ${endpoint} was canceled.`));
+      return;
+    }
     const socket = new WebSocket(endpoint);
     const timeout = setTimeout(() => {
       fail(new TransportError(`Connection to ${endpoint} timed out.`));
@@ -39,6 +48,7 @@ export async function openSocket(endpoint: string, timeoutMilliseconds: number):
       socket.removeEventListener("open", open);
       socket.removeEventListener("error", error);
       socket.removeEventListener("close", close);
+      signal?.removeEventListener("abort", abort);
     };
     const fail = (cause: Error) => {
       cleanup();
@@ -55,9 +65,13 @@ export async function openSocket(endpoint: string, timeoutMilliseconds: number):
     const close = () => {
       fail(new TransportError(`Connection to ${endpoint} closed before opening.`));
     };
+    const abort = () => {
+      fail(new TransportError(`Connection to ${endpoint} was canceled.`));
+    };
     socket.addEventListener("open", open, { once: true });
     socket.addEventListener("error", error, { once: true });
     socket.addEventListener("close", close, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
   });
 }
 
@@ -99,12 +113,14 @@ export async function handshakeSubscription(
   socket: WebSocket,
   timeoutMilliseconds: number,
   expectedRootId: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  const options = signal === undefined ? { timeoutMilliseconds } : { timeoutMilliseconds, signal };
   const result = await sendSocketRequest(
     socket,
     handshakeMethod,
     { protocol_version: protocolVersion },
-    timeoutMilliseconds,
+    options,
   );
   assertHandshakeRoot(result, expectedRootId);
 }
@@ -113,18 +129,32 @@ export async function sendSocketRequest(
   socket: WebSocket,
   method: string,
   params: JsonValue,
-  timeoutMilliseconds: number,
+  options: Readonly<{
+    timeoutMilliseconds: number | null;
+    signal?: AbortSignal;
+  }>,
 ): Promise<unknown> {
+  const { signal, timeoutMilliseconds } = options;
   const id = `${method}-${Date.now().toString()}`;
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      fail(new TransportError(`${method} request timed out.`));
-    }, timeoutMilliseconds);
+    if (signal?.aborted === true) {
+      reject(new TransportError(`${method} request was canceled.`));
+      return;
+    }
+    const timeout =
+      timeoutMilliseconds === null
+        ? null
+        : setTimeout(() => {
+            fail(new TransportError(`${method} request timed out.`));
+          }, timeoutMilliseconds);
     const cleanup = () => {
-      clearTimeout(timeout);
+      if (timeout !== null) {
+        clearTimeout(timeout);
+      }
       socket.removeEventListener("message", listener);
       socket.removeEventListener("close", close);
       socket.removeEventListener("error", error);
+      signal?.removeEventListener("abort", abort);
     };
     const fail = (cause: Error) => {
       cleanup();
@@ -152,9 +182,13 @@ export async function sendSocketRequest(
     const error = () => {
       fail(new TransportError(`${method} request failed before response.`));
     };
+    const abort = () => {
+      fail(new TransportError(`${method} request was canceled.`));
+    };
     socket.addEventListener("message", listener);
     socket.addEventListener("close", close, { once: true });
     socket.addEventListener("error", error, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
     try {
       socket.send(JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params }));
     } catch (cause) {
@@ -165,12 +199,12 @@ export async function sendSocketRequest(
 
 export function socketRequestError(
   method: string,
-  error: Readonly<{ code: number; message: string }>,
+  error: Readonly<{ code: number; message: string; data?: JsonValue | undefined }>,
 ): Error {
   if (method === handshakeMethod && error.code === protocolVersionMismatchErrorCode) {
     return new ProtocolMismatchError(error.message);
   }
-  return new RpcError({ code: error.code, message: error.message, method });
+  return new RpcError({ code: error.code, message: error.message, method, data: error.data });
 }
 
 export async function waitForSubscriptionEnd(socket: WebSocket, signal: AbortSignal): Promise<void> {

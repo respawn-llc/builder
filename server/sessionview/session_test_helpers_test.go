@@ -8,11 +8,14 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -62,8 +65,14 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Meta().WorkspaceRoot,
-		Client:   client,
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -125,6 +134,90 @@ func newSessionViewStore(t *testing.T, containerDir, containerName, workspaceRoo
 		t.Fatalf("create store: %v", err)
 	}
 	return store
+}
+
+func appendSessionViewRecord(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload session.EventRecordPayload,
+) session.EventRecord {
+	t.Helper()
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("ensure session is durable: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	record, receipt, err := eventLog.AppendRecord(&step, payload)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed event: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
+func appendSessionViewRecordWithCursor(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload session.EventRecordPayload,
+) session.EventRecordAppendResult {
+	t.Helper()
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("ensure session is durable: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	result, err := eventLog.AppendRecordWithEndByteCursor(&step, payload)
+	if err != nil || !result.Committed {
+		t.Fatalf("append typed event with cursor: result=%+v error=%v", result, err)
+	}
+	return result
+}
+
+func appendSessionViewMessage(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	role session.MessageRole,
+	content string,
+	phase *session.MessagePhase,
+	messageType *session.MessageType,
+) session.EventRecord {
+	t.Helper()
+	return appendSessionViewRecord(t, store, stepID, session.MessageRecord{
+		Role:        role,
+		Content:     &content,
+		Phase:       phase,
+		MessageType: messageType,
+	})
+}
+
+func appendSessionViewHistoryReplacement(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	record session.HistoryReplacementRecord,
+) session.EventRecord {
+	t.Helper()
+	return appendSessionViewRecord(t, store, stepID, record)
+}
+
+func sessionViewStringPointer(value string) *string {
+	return &value
+}
+
+func sessionViewMessageTypePointer(value session.MessageType) *session.MessageType {
+	return &value
+}
+
+func sessionViewMessagePhasePointer(value session.MessagePhase) *session.MessagePhase {
+	return &value
 }
 
 func newSessionViewParentAgentChild(t *testing.T, containerDir, containerName, workspaceRoot string) (*session.Store, string) {

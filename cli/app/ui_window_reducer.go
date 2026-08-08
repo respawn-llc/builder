@@ -16,6 +16,7 @@ func (m *uiModel) reduceWindowMessage(msg tea.Msg) uiFeatureUpdateResult {
 		} else {
 			m.terminalGeometry = terminalGeometryUnknown()
 		}
+		m.syncRendererOutputGate()
 		m.layout().syncViewport()
 		desiredOngoing := m.ongoingSurface != nil &&
 			desiredOngoingOwnership(m.terminalGeometry, terminalDestinationForSurface(m.surface()))

@@ -1,11 +1,10 @@
-import { useState, type SyntheticEvent } from "react";
+import { useEffect, useState, type SyntheticEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
-import { errorMessage } from "@/api";
-import { queryKeys } from "@/app-facade";
-import { useAppServices } from "@/app-facade";
+import { errorMessage, isProjectMissingError } from "@/api";
+import { queryKeys, useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, ErrorState, TextArea, TextInput } from "@/ui";
 
 export type WorkflowCreateResult = Readonly<{
@@ -15,9 +14,11 @@ export type WorkflowCreateResult = Readonly<{
 
 export function WorkflowCreateForm({
   onCreated,
+  onProjectMissing,
   projectID = "",
 }: Readonly<{
   onCreated: (result: WorkflowCreateResult) => void;
+  onProjectMissing?: (() => void) | undefined;
   projectID?: string | undefined;
 }>) {
   const { t } = useTranslation();
@@ -43,17 +44,25 @@ export function WorkflowCreateForm({
       onCreated(result);
     },
   });
+  useEffect(() => {
+    if (create.isError && isProjectMissingError(create.error)) onProjectMissing?.();
+  }, [create.error, create.isError, onProjectMissing]);
+  const canSubmit = name.trim().length > 0 && !create.isPending;
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
 
   function submit(event: SyntheticEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (name.trim().length === 0 || create.isPending) {
+    if (!canSubmit) {
       return;
     }
     void create.mutateAsync();
   }
 
   return (
-    <form className="grid gap-[var(--space-4)]" onSubmit={submit}>
+    <form className="grid gap-[var(--space-4)]" onKeyDown={formShortcut} onSubmit={submit}>
       {create.isError ? (
         <ErrorState
           body={errorMessage(create.error)}
@@ -80,7 +89,7 @@ export function WorkflowCreateForm({
         value={description}
       />
       <div className="flex justify-end gap-[var(--space-2)]">
-        <Button disabled={name.trim().length === 0 || create.isPending} type="submit" variant="primary">
+        <Button disabled={!canSubmit} type="submit" variant="primary">
           {create.isPending ? t("workflowLibrary.creating") : t("workflowLibrary.createWorkflow")}
         </Button>
       </div>

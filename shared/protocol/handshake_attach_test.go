@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+func TestHandshakeRequestClientCapabilitiesRoundTrip(t *testing.T) {
+	request := HandshakeRequest{
+		ProtocolVersion: Version,
+		ClientCapabilities: &ClientCapabilities{
+			TranscriptLiveRunFinished: true,
+		},
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded HandshakeRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if decoded.ClientCapabilities == nil || !decoded.ClientCapabilities.TranscriptLiveRunFinished {
+		t.Fatalf("client capabilities = %+v", decoded.ClientCapabilities)
+	}
+}
+
+func TestHandshakeRequestRejectsExplicitEmptyClientCapabilities(t *testing.T) {
+	request := HandshakeRequest{
+		ProtocolVersion:    Version,
+		ClientCapabilities: &ClientCapabilities{},
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("Validate succeeded with explicitly empty client capabilities")
+	}
+}
+
 func TestAttachProjectRequestStrictWorkspaceSelectionRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

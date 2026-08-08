@@ -13,11 +13,13 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
 func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
@@ -66,7 +68,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 	if len(result.Subagents) != 1 {
 		t.Fatalf("subagent messages = %d, want 1", len(result.Subagents))
 	}
-	content := result.Subagents[0].Content
+	content := messageContent(result.Subagents[0])
 	for _, want := range []string{
 		"Available subagent roles:",
 		"- `default`: not specifying any role will invoke the default general-purpose agent",
@@ -86,6 +88,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 }
 
 func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:               "gpt-5.6-sol",
 		ThinkingLevel:       "medium",
@@ -118,7 +121,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if len(result.Subagents) != 1 || !strings.Contains(result.Subagents[0].Content, "- `worker`: gpt-5.4-mini, thinking high, fast mode on, can edit, can call shell") {
+	if len(result.Subagents) != 1 || !strings.Contains(messageContent(result.Subagents[0]), "- `worker`: gpt-5.4-mini, thinking high, fast mode on, can edit, can call shell") {
 		t.Fatalf("unexpected fallback content: %+v", result.Subagents)
 	}
 
@@ -137,6 +140,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 }
 
 func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
@@ -179,6 +183,7 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 }
 
 func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
+	t.Parallel()
 	baseSettings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
 			Model:         "gpt-5.5",
@@ -238,6 +243,7 @@ func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 }
 
 func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T) {
+	t.Parallel()
 	settings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
 			Model:         "gpt-5.5",
@@ -275,7 +281,7 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 				SubagentCatalogSettings: tt.settings,
 			}
 			if tt.workflow {
-				cfg.WorkflowRun = testWorkflowConfig(nil, config.WorkflowCompletionModeTool)
+				cfg.CurrentNodeExecution = testWorkflowConfig(nil, config.WorkflowCompletionModeTool)
 			}
 			eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
@@ -347,6 +353,7 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 }
 
 func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	current := "current"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &current}); err != nil {
@@ -405,20 +412,14 @@ func runtimeCatalogStoreForPath(t *testing.T, path string) *session.Store {
 	case "new", "review":
 		return mustCreateCatalogDerivedStore(t, root, source, session.SessionCreationSourcePreviousSession)
 	case "rollback-fork":
-		target, _, err := source.AppendEvent("step", "message", map[string]any{
-			"role":    "user",
-			"content": "fork target",
-		})
-		if err != nil {
-			t.Fatalf("append rollback target: %v", err)
-		}
-		forked, _, err := session.ForkAtUserMessage(source, target.Seq, "rollback fork", sessioncontract.SessionCategoryMain)
+		target := mustAppendTestEvent(t, source, "step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("fork target")})
+		forked, _, err := session.ForkAtUserMessage(mustMaterializeTestEventLog(t, source), target.Seq(), "rollback fork", sessioncontract.SessionCategoryMain)
 		if err != nil {
 			t.Fatalf("ForkAtUserMessage: %v", err)
 		}
 		return forked
 	case "workflow-fan-out-clone":
-		cloned, err := session.CloneSession(source, "workflow clone", sessioncontract.SessionCategorySubagent)
+		cloned, err := session.CloneSession(mustMaterializeTestEventLog(t, source), "workflow clone", sessioncontract.SessionCategorySubagent)
 		if err != nil {
 			t.Fatalf("CloneSession: %v", err)
 		}
@@ -572,14 +573,15 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 		SubagentCatalogSettings: settings,
 	}
 	client := &fakeCompactionClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 		Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
+	completeManualEligibilityAgentStep(t, eng)
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
@@ -598,13 +600,14 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 }
 
 func TestSplitMetaContextMessagesTreatsSubagentsAsMeta(t *testing.T) {
-	subagents := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: "Available subagent roles:"}
+	t.Parallel()
+	subagents := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:")}
 	messages := []llm.Message{
 		subagents,
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 	meta, transcript := splitMetaContextMessages(messages)
-	if len(meta) != 1 || meta[0].MessageType != llm.MessageTypeSubagents {
+	if len(meta) != 1 || meta[0].MessageType == nil || *meta[0].MessageType != llm.MessageTypeSubagents {
 		t.Fatalf("expected subagents meta message, got %+v", meta)
 	}
 	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser {
@@ -613,10 +616,11 @@ func TestSplitMetaContextMessagesTreatsSubagentsAsMeta(t *testing.T) {
 }
 
 func TestSubagentsMetaContextVisibilityIsDetailOnly(t *testing.T) {
+	t.Parallel()
 	entry, ok := visibleDeveloperChatEntry(llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeSubagents,
-		Content:     "Available subagent roles:",
+		MessageType: textutil.Value(llm.MessageTypeSubagents),
+		Content:     textutil.Value("Available subagent roles:"),
 	})
 
 	if !ok {
@@ -629,20 +633,11 @@ func TestSubagentsMetaContextVisibilityIsDetailOnly(t *testing.T) {
 
 func hasSubagentMetaMessage(messages []llm.Message) bool {
 	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeSubagents {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeSubagents {
 			return true
 		}
 	}
 	return false
-}
-
-func skillMessageContent(messages []llm.Message) (string, bool) {
-	for _, message := range messages {
-		if message.MessageType == llm.MessageTypeSkills {
-			return message.Content, true
-		}
-	}
-	return "", false
 }
 
 func skillInspectionMatches(inspections []skillcatalog.Inspection, name string, disabled bool) bool {
@@ -664,16 +659,17 @@ func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) b
 }
 
 func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
+	t.Parallel()
 	messages := []llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: "Available subagent roles:\n- worker: specialist"},
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:\n- worker: specialist")},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 	got, err := buildReviewerRequestMessagesWithBuilder(messages, newMetaContextBuilder(t.TempDir(), "gpt-5.6-sol", "medium", config.SkillPolicy{}, time.Unix(0, 0)), false)
 	if err != nil {
 		t.Fatalf("buildReviewerRequestMessagesWithBuilder: %v", err)
 	}
 	for _, message := range got {
-		if message.MessageType == llm.MessageTypeSubagents || strings.Contains(message.Content, "Available subagent roles") {
+		if (message.MessageType != nil && *message.MessageType == llm.MessageTypeSubagents) || strings.Contains(messageContent(message), "Available subagent roles") {
 			t.Fatalf("reviewer messages leaked subagent context: %+v", got)
 		}
 	}

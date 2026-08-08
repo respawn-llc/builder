@@ -1,15 +1,29 @@
-import { useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { z } from "zod";
 
-import type { TaskDetail } from "@/api";
-import type { TaskDetailInitialFocus } from "@/app-facade";
-import { useConnectionSnapshot } from "@/app-facade";
+import {
+  errorMessage,
+  type TaskDependencyDirection,
+  type TaskDetail,
+} from "@/api";
+import type {
+  SidebarPageNavigator,
+  SidebarMode,
+  SidebarRootController,
+  SidebarDestination,
+  TaskDetailInitialFocus,
+} from "@/app-facade";
+import { useAppNavigation, useConnectionSnapshot, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
+import { createVirtualizedPixelOffsetRequest } from "@/ui";
 import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,
 } from "./TaskDetailDescriptionPresentation";
 import { TaskDetailList } from "./TaskDetailList";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
+import { TaskResumeProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -32,7 +46,10 @@ export function TaskDetailContent({
   detail,
   initialFocus,
   onMutated,
-  openLink,
+  navigator,
+  retainedState,
+  sidebarMode,
+  openSidebar,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   attention: ReturnType<typeof useTaskAttention>;
@@ -40,20 +57,35 @@ export function TaskDetailContent({
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
-  openLink: (url: string) => void;
+  navigator?: SidebarPageNavigator | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
+  retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
 }>) {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
+  const navigation = useAppNavigation();
+  const relationshipNavigationAvailable = hasRelationshipNavigation(navigator, openSidebar);
+  const restored = decodeTaskDetailRetainedState(retainedState);
+  const restorationKey = useId();
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const pixelOffsetRequest = useMemo(
+    () =>
+      restored === undefined
+        ? undefined
+        : createVirtualizedPixelOffsetRequest(restorationKey, restored.scrollOffsetPx),
+    [restorationKey, restored],
+  );
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     taskID: detail.id,
-    base: serverDraft,
-    draft: serverDraft,
+    base: restored?.base ?? serverDraft,
+    draft: restored?.draft ?? serverDraft,
   }));
-  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(null);
-  const [newCommentBody, setNewCommentBody] = useState("");
-  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(
-    initialDescriptionPresentationState,
-  );
-  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">("comments");
+  const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(restored?.editingComment ?? null);
+  const [newCommentBody, setNewCommentBody] = useState(restored?.newCommentBody ?? "");
+  const [descriptionPresentation, setDescriptionPresentation] = useState<DescriptionPresentationState>(restored?.descriptionPresentation ?? initialDescriptionPresentationState);
+  const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(restored?.selectedTab ?? "comments");
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
@@ -70,10 +102,41 @@ export function TaskDetailContent({
     setDescriptionPresentation(initialDescriptionPresentationState);
     setQuestionSelections(new Map());
   }
-  const update = useUpdateTask(detail.id);
-  const mutations = useTaskMutations(detail.id, onMutated);
+  const update = useUpdateTask(detail.id, detail.projectID);
+  useTaskDetailRetainedCapture({
+    base: draftState.base,
+    descriptionPresentation,
+    draft: draftState.draft,
+    editingComment,
+    navigator,
+    newCommentBody,
+    scrollElement,
+    selectedTab,
+  });
+  const reportActionError = useCallback(
+    (action: "dependency_remove" | "interrupt", error: unknown) => {
+      const notice =
+        action === "interrupt"
+          ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
+          : {
+              id: "task-dependency-remove-error",
+              title: t("task.dependenciesRemoveFailed"),
+            };
+      push({
+        ...notice,
+        body: errorMessage(error),
+        durationMs: action === "dependency_remove" ? 5000 : Infinity,
+        tone: "danger",
+      });
+    },
+    [push, t],
+  );
+  const mutations = useTaskMutations(detail.id, detail.projectID, {
+    onActionError: reportActionError,
+    onChanged: onMutated,
+  });
   const connection = useConnectionSnapshot();
-  useTaskDetailLiveRefresh(detail.id, detail.projectID, true);
+  useTaskDetailLiveRefresh(detail, true);
 
   // Reconcile the draft with the latest server snapshot during render (the
   // React "adjust state on prop change" pattern). Switching tasks resets to the
@@ -97,7 +160,8 @@ export function TaskDetailContent({
   }
 
   return (
-    <TaskDetailList
+    <TaskResumeProvider key={detail.id} onApplied={mutations.refresh} taskID={detail.id}>
+      <TaskDetailList
       activity={activity}
       attention={attention}
       comments={comments}
@@ -106,27 +170,159 @@ export function TaskDetailContent({
       draft={draft}
       descriptionPresentation={descriptionPresentation}
       editingComment={editingComment}
-      initialFocus={initialFocus}
+      initialFocus={restored === undefined ? initialFocus : undefined}
       mutations={mutations}
       newCommentBody={newCommentBody}
+      relationshipNavigationAvailable={relationshipNavigationAvailable}
       onDraftChange={(nextDraft) => {
         setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
       }}
       onDescriptionPresentationChange={setDescriptionPresentation}
+      onAddDependency={(direction) => {
+        openRelatedTaskCreation({ detail, direction, navigator, openSidebar });
+      }}
+      onRemoveDependency={(pair) => {
+        mutations.removeDependency.mutate(pair);
+      }}
+      onSelectDependencyTask={(taskID) => {
+        if (navigator !== undefined) {
+          navigator.push(dependencyDestination(taskID, sidebarMode, onMutated));
+          return;
+        }
+        void navigation.replaceTask(taskID);
+      }}
       onNewCommentBodyChange={setNewCommentBody}
       onEditingCommentChange={setEditingComment}
       onQuestionSelectionChange={(askID, selection) => {
         setQuestionSelections((previous) => new Map(previous).set(askID, selection));
       }}
+      onScrollElementChange={setScrollElement}
       onSaveDraft={saveDraft}
-      openLink={openLink}
+      pixelOffsetRequest={pixelOffsetRequest}
       questionSelections={questionSelections}
       selectedTab={selectedTab}
       setTab={setSelectedTab}
       updateError={update.error}
-      updatePending={update.isPending}
-    />
+        updatePending={update.isPending}
+      />
+    </TaskResumeProvider>
   );
+}
+
+function dependencyDestination(
+  taskID: string,
+  mode: SidebarMode | undefined,
+  onMutated: (() => void) | undefined,
+): Extract<SidebarDestination, { kind: "taskDetail" }> {
+  return {
+    kind: "taskDetail",
+    taskID,
+    ...(mode === undefined ? {} : { mode }),
+    ...(onMutated === undefined ? {} : { onMutated }),
+  };
+}
+
+function openRelatedTaskCreation({
+  detail,
+  direction,
+  navigator,
+  openSidebar,
+}: Readonly<{
+  detail: TaskDetail;
+  direction: TaskDependencyDirection;
+  navigator?: SidebarPageNavigator | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
+}>) {
+  const destination = {
+    boardQueryWorkflowID: detail.workflowID,
+    initialSourceWorkspaceID: detail.sourceWorkspace.id,
+    kind: "newTask" as const,
+    mode: "overlay" as const,
+    pendingRelationship: {
+      originTaskID: detail.id,
+      newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
+    },
+    projectID: detail.projectID,
+    workflowID: detail.workflowID,
+  };
+  if (navigator !== undefined) {
+    navigator.push(destination);
+    return;
+  }
+  openSidebar?.(destination);
+}
+
+function hasRelationshipNavigation(
+  navigator: SidebarPageNavigator | undefined,
+  openSidebar: SidebarRootController["open"] | undefined,
+): boolean {
+  return navigator !== undefined || openSidebar !== undefined;
+}
+
+function useTaskDetailRetainedCapture({
+  base,
+  descriptionPresentation,
+  draft,
+  editingComment,
+  navigator,
+  newCommentBody,
+  scrollElement,
+  selectedTab,
+}: Readonly<{
+  base: TaskDraft;
+  descriptionPresentation: DescriptionPresentationState;
+  draft: TaskDraft;
+  editingComment: Readonly<{ id: string; body: string }> | null;
+  navigator?: SidebarPageNavigator | undefined;
+  newCommentBody: string;
+  scrollElement: HTMLDivElement | null;
+  selectedTab: "comments" | "activity";
+}>) {
+  useEffect(() => {
+    if (navigator === undefined || scrollElement === null) return;
+    return navigator.registerCapture(() => ({
+      base,
+      descriptionPresentation,
+      draft,
+      editingComment,
+      newCommentBody,
+      scrollOffsetPx: scrollElement.scrollTop,
+      selectedTab,
+    }));
+  }, [
+    base,
+    descriptionPresentation,
+    draft,
+    editingComment,
+    navigator,
+    newCommentBody,
+    scrollElement,
+    selectedTab,
+  ]);
+}
+
+type TaskDetailRetainedState = Readonly<{
+  base: TaskDraft;
+  descriptionPresentation: DescriptionPresentationState;
+  draft: TaskDraft;
+  editingComment: Readonly<{ id: string; body: string }> | null;
+  newCommentBody: string;
+  scrollOffsetPx: number;
+  selectedTab: "comments" | "activity";
+}>;
+
+const taskDetailRetainedStateSchema = z.object({
+  base: z.object({ body: z.string(), title: z.string() }),
+  descriptionPresentation: z.object({ editing: z.boolean(), expanded: z.boolean() }),
+  draft: z.object({ body: z.string(), title: z.string() }),
+  editingComment: z.object({ body: z.string(), id: z.string() }).nullable(),
+  newCommentBody: z.string(),
+  scrollOffsetPx: z.number().nonnegative(),
+  selectedTab: z.enum(["comments", "activity"]),
+});
+
+function decodeTaskDetailRetainedState(state: unknown): TaskDetailRetainedState | undefined {
+  return taskDetailRetainedStateSchema.safeParse(state).data;
 }
 
 function taskDraft(detail: TaskDetail): TaskDraft {

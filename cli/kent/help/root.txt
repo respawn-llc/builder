@@ -10,11 +10,14 @@ Commands:
   service     Manage the Kent's system service.
   session-id  Print the session ID of the current agent session.
   goal        Show or change a session goal.
+  question    Show or answer another session's pending question.
   workflow    Create workflows and link them to projects.
   task        Create and operate workflow tasks.
   project     Find, list, or create projects.
   attach      Attach another workspace to a project.
+  detach      Detach one workspace from one project.
   rebind      Move a session to another workspace.
+  worktree    Create, manage git worktrees and teleport into them.
 
 Examples:
   kent

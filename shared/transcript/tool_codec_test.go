@@ -81,7 +81,7 @@ func TestEncodeDecodeToolCallMetaPreservesDeletionDispositionPresence(t *testing
 				PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
 				Removed:       0,
 			},
-			wantRemoved: textutil.Int(0),
+			wantRemoved: textutil.Value(0),
 		},
 		{
 			name: "present positive",
@@ -89,7 +89,7 @@ func TestEncodeDecodeToolCallMetaPreservesDeletionDispositionPresence(t *testing
 				PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
 				Removed:       8,
 			},
-			wantRemoved: textutil.Int(8),
+			wantRemoved: textutil.Value(8),
 		},
 	}
 

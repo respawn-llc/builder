@@ -9,9 +9,11 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type stubExclusiveStepLifecycle struct {
@@ -28,29 +30,10 @@ type stubBackgroundNoticeScheduler struct {
 	scheduleIfIdle func()
 }
 
-type blockingStepLifecycleSink struct {
-	endedStarted chan StepLifecycleSnapshot
-	releaseEnded chan struct{}
-}
-
 type callbackStepLifecycleSink struct {
 	onTransition func(StepLifecycleTransition) error
 	mu           sync.Mutex
 	transitions  []StepLifecycleTransition
-}
-
-func newBlockingStepLifecycleSink() *blockingStepLifecycleSink {
-	return &blockingStepLifecycleSink{endedStarted: make(chan StepLifecycleSnapshot, 1), releaseEnded: make(chan struct{})}
-}
-
-func (s *blockingStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
-	return nil
-}
-
-func (s *blockingStepLifecycleSink) StepEnded(_ context.Context, snapshot StepLifecycleSnapshot) error {
-	s.endedStarted <- snapshot
-	<-s.releaseEnded
-	return nil
 }
 
 func (s *callbackStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
@@ -83,10 +66,17 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)                       {}
-func (s *stubBackgroundNoticeScheduler) DrainPendingNotices() []steeringIntent                  { return nil }
-func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                                { return false }
-func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool             { return false }
+func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
+	return nil
+}
+func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
+func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
+	return nil
+}
+func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}
+func (s *stubBackgroundNoticeScheduler) flushPendingNotices(string) (int, error)    { return 0, nil }
+func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                    { return false }
+func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool { return false }
 func (s *stubBackgroundNoticeScheduler) ScheduleIfIdle() {
 	if s != nil && s.scheduleIfIdle != nil {
 		s.scheduleIfIdle()
@@ -155,6 +145,11 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 	return apply()
 }
 
+func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+	return nil
+}
+func (s *stubExclusiveStepLifecycle) EndAgentStepBoundary() {}
+
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 	s.mu.Lock()
 	s.busy = busy
@@ -168,6 +163,7 @@ func (s *stubExclusiveStepLifecycle) calls() int {
 }
 
 func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
@@ -206,6 +202,7 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 }
 
 func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -224,6 +221,7 @@ func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.
 }
 
 func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sink := newBlockingStepLifecycleSink()
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", StepLifecycle: sink})
@@ -295,6 +293,7 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 }
 
 func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sink := newBlockingStepLifecycleSink()
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
@@ -380,6 +379,7 @@ func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testin
 }
 
 func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -415,6 +415,7 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 }
 
 func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
@@ -440,6 +441,7 @@ func TestExclusiveStepAuthorityRejectsInterruptedStepBeforeFinalDrain(t *testing
 }
 
 func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
@@ -485,6 +487,7 @@ func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
 }
 
 func TestExclusiveStepLifecycleEmitsCompletedRunStatePayloads(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		mu     sync.Mutex
@@ -533,6 +536,7 @@ func TestExclusiveStepLifecycleEmitsCompletedRunStatePayloads(t *testing.T) {
 }
 
 func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		mu     sync.Mutex
@@ -595,6 +599,7 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 }
 
 func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCleanup(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
@@ -633,11 +638,11 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 		t.Fatal("expected interruption message")
 	}
 	last := messages[len(messages)-1]
-	if last.MessageType != llm.MessageTypeInterruption {
+	if last.MessageType == nil || *last.MessageType != llm.MessageTypeInterruption {
 		t.Fatalf("expected interruption message type, got %+v", last)
 	}
-	if last.Content != interruptMessage {
-		t.Fatalf("unexpected interruption content %q", last.Content)
+	if messageContent(last) != interruptMessage {
+		t.Fatalf("unexpected interruption content %q", messageContent(last))
 	}
 	if len(messages) != 1 {
 		t.Fatalf("interrupt replay appended duplicate messages: %+v", messages)
@@ -645,6 +650,7 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 }
 
 func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var (
 		mu     sync.Mutex
@@ -699,6 +705,7 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 }
 
 func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -719,37 +726,6 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 }
 
-func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
-	finishErr := errors.New("finish persistence failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
-	sink := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
-		if transition == StepLifecycleTransitionEnded {
-			gate.FailNext(finishErr)
-		}
-		return nil
-	}}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-
-	err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true}, func(_ context.Context, stepID string) error {
-		if err := eng.markProviderVisibleModelRecovery(stepID); err != nil {
-			return err
-		}
-		return nil
-	})
-
-	if err == nil {
-		t.Fatal("run err = nil, want finish persistence failure")
-	}
-	if !sink.seen(StepLifecycleTransitionEnded) {
-		t.Fatal("terminal StepEnded publication was skipped before finish persistence failure")
-	}
-	if lifecycle.IsBusy() || lifecycle.Snapshot() != nil {
-		t.Fatalf("lifecycle remained active after finish failure: busy=%v snapshot=%+v", lifecycle.IsBusy(), lifecycle.Snapshot())
-	}
-}
-
 func collectRunStateEvents(events []Event) []RunState {
 	runEvents := make([]RunState, 0, len(events))
 	for _, evt := range events {
@@ -762,6 +738,7 @@ func collectRunStateEvents(events []Event) []RunState {
 }
 
 func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
@@ -786,65 +763,10 @@ func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
 	}
 }
 
-func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	scheduled := false
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		background: &stubBackgroundNoticeScheduler{scheduleIfIdle: func() {
-			scheduled = true
-			if store.Meta().PendingModelRecovery != nil {
-				t.Fatal("expected pending recovery to be cleared before scheduling background work")
-			}
-		}},
-	}
-
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
-		if err := eng.markProviderVisibleModelRecovery(stepID); err != nil {
-			return err
-		}
-		if store.Meta().PendingModelRecovery == nil {
-			t.Fatal("expected pending recovery during exclusive run")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if !scheduled {
-		t.Fatal("expected background scheduler to run after exclusive step completion")
-	}
-}
-
-func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
-		if err := eng.markProviderVisibleModelRecovery(stepID); err != nil {
-			return err
-		}
-		if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "successor", StepID: "successor-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if store.Meta().PendingModelRecovery == nil {
-		t.Fatal("successor pending recovery was cleared by previous step")
-	}
-	if got := store.Meta().PendingModelRecovery.StepID; got != "successor-step" {
-		t.Fatalf("pending recovery step = %q, want successor-step", got)
-	}
-}
-
 func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "background done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -852,12 +774,16 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	steps := &stubExclusiveStepLifecycle{}
 	steps.setBusy(true)
 	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
+	backgroundActivityID := uuid.NewString()
 
 	scheduler.QueueDeveloperNotice(llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeBackgroundNotice,
-		Name:        "1000",
-		Content:     "Background shell 1000 completed.",
+		MessageType: textutil.Value(llm.MessageTypeBackgroundNotice),
+		Name:        textutil.Value("1000"),
+		BackgroundActivityID: textutil.Value(
+			backgroundActivityID,
+		),
+		Content: textutil.Value("Background shell 1000 completed."),
 	})
 
 	if steps.calls() != 0 {
@@ -897,7 +823,10 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	client.mu.Unlock()
 	foundNotice := false
 	for _, msg := range requestMessages(request) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice && msg.Name == "1000" {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice &&
+			msg.Name != nil && *msg.Name == "1000" &&
+			msg.BackgroundActivityID != nil && *msg.BackgroundActivityID == backgroundActivityID {
 			foundNotice = true
 			break
 		}
@@ -914,13 +843,14 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 }
 
 func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

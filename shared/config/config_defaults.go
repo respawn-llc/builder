@@ -27,6 +27,7 @@ const (
 	defaultWorkflowCompletionMode        = WorkflowCompletionModeAuto
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
+	defaultWorkflowUseRequiredToolCalls  = true
 	defaultWorkflowSubagents             = false
 	defaultMaxSubagentDepth              = 2
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100
@@ -93,6 +94,11 @@ func settingsTOMLWithRenderingOptions(settings Settings, includeToolSection bool
 	if len(shellLines) > 0 {
 		out.WriteString("\n[shell]\n")
 		writeDefaultLines(&out, shellLines)
+	}
+	clientHookLines := annotateRenderedLines(filterDefaultLines(lines, "hooks.client"), filterDefaultLines(defaultLines, "hooks.client"), nil)
+	if len(clientHookLines) > 0 {
+		out.WriteString("\n[hooks.client]\n")
+		writeDefaultLines(&out, clientHookLines)
 	}
 	if len(worktreeLines) > 0 {
 		out.WriteString("\n[worktrees]\n")

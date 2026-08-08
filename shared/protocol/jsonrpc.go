@@ -54,6 +54,19 @@ const (
 	ErrCodeSubagentLaunchPolicy              = -32044
 	ErrCodeWorkflowTaskCreateSelection       = -32045
 	ErrCodeWorkflowTaskCreateConflict        = -32046
+	ErrCodeWorkflowLabel                     = -32047
+	ErrCodeWorktreeBlocked                   = -32048
+	ErrCodeWorkspacePathIdentity             = -32049
+	ErrCodeWorkspaceDetachConflict           = -32050
+	ErrCodeWorkspaceMutationFailed           = -32051
+	ErrCodeWorkflowTaskSearch                = -32052
+	ErrCodeWorkflowTaskDependency            = -32053
+	ErrCodeManualCompactionTooSoon           = -32054
+	ErrCodeManualCompactionDisabled          = -32055
+	ErrCodeManualCompactionActive            = -32056
+	ErrCodeWorkflowTaskMutationSelfTarget    = -32057
+	ErrCodeWorktreeCreate                    = -32058
+	ErrCodePromptCommands                    = -32059
 )
 
 type Request struct {

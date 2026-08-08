@@ -1,0 +1,23 @@
+{
+  "version": "kent-label-casefold-v1",
+  "fold": [
+    { "input": "Priority", "expected": "priority" },
+    { "input": "Straße", "expected": "strasse" },
+    { "input": "Μάϊος", "expected": "μάϊοσ" },
+    { "input": "İstanbul", "expected": "i̇stanbul" },
+    { "input": "Café", "expected": "café" },
+    { "input": "ﬃ", "expected": "ffi" }
+  ],
+  "contains": [
+    { "value": "Straße", "query": "STRASS", "expected": true },
+    { "value": "İstanbul", "query": "i̇ST", "expected": true },
+    { "value": "Μάϊος", "query": "ΜΆΪ", "expected": true },
+    { "value": "runtime", "query": "time", "expected": true },
+    { "value": "runtime", "query": "task", "expected": false }
+  ],
+  "order": [
+    { "left": "apple", "right": "Banana", "expected": -1 },
+    { "left": "Priority", "right": "priority", "expected": 0 },
+    { "left": "Zulu", "right": "alpha", "expected": 1 }
+  ]
+}

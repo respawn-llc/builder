@@ -6,17 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"core/server/auth"
 	"core/server/metadata"
 	"core/shared/apicontract"
+	"core/shared/invariant"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -34,6 +39,7 @@ const canceledByClientMessage = "request canceled by client"
 type Gateway struct {
 	deps     GatewayDependencies
 	identity protocol.ServerIdentity
+	debug    bool
 }
 
 type GatewayDependencies interface {
@@ -45,6 +51,7 @@ type GatewayDependencies interface {
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
+	GatewayPromptCommandDependencies
 	GatewayProcessDependencies
 	GatewayWorktreeDependencies
 }
@@ -104,6 +111,10 @@ type GatewayPromptDependencies interface {
 	AttentionNotificationClient() apicontract.AttentionNotificationService
 }
 
+type GatewayPromptCommandDependencies interface {
+	PromptCommandCatalogClientForProjectWorkspace(context.Context, string, string) (apicontract.PromptCommandCatalogService, error)
+}
+
 type GatewayProcessDependencies interface {
 	ProcessViewClient() apicontract.ProcessViewService
 	ProcessControlClient() apicontract.ProcessControlService
@@ -126,6 +137,42 @@ var gatewayProgressHandlerEntries = map[string]gatewayProgressHandler{
 
 type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request) bool
 
+type gatewayRequestScheduleKind uint8
+
+const (
+	gatewayRequestScheduleOrdinary gatewayRequestScheduleKind = iota
+	gatewayRequestScheduleExclusive
+	gatewayRequestScheduleProgress
+	gatewayRequestScheduleSubscription
+)
+
+type gatewayRequestSchedule struct {
+	kind          gatewayRequestScheduleKind
+	progress      gatewayProgressHandler
+	progressRoute apicontract.Route
+}
+
+const gatewayOrdinaryRequestOperation = "gateway.ordinary_request"
+
+type gatewayRequestPanicDiagnostic struct {
+	Operation string
+	Method    string
+	RequestID string
+	Cause     any
+	Stack     string
+}
+
+func (p gatewayRequestPanicDiagnostic) Error() string {
+	return fmt.Sprintf(
+		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
+		p.Operation,
+		p.Method,
+		p.RequestID,
+		p.Cause,
+		p.Stack,
+	)
+}
+
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
 func RuntimeLiveControlRoutesExecutable() bool {
@@ -133,6 +180,7 @@ func RuntimeLiveControlRoutesExecutable() bool {
 		protocol.MethodRuntimeLiveSteer,
 		protocol.MethodRuntimeLiveStop,
 		protocol.MethodRuntimeLiveWait,
+		protocol.MethodRuntimeLiveWatch,
 	} {
 		if _, ok := gatewayUnaryHandlers[method]; !ok {
 			return false
@@ -152,12 +200,14 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
+	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
 	attachedWorkspaceRoot string
-	attachedSession       string
+	attachedSession       *runtimeids.SessionID
 	runtimeOwnerID        string
+	ownedRuntimesMu       sync.Mutex
 	ownedRuntimes         map[serverapi.SessionRuntimeAttachment]struct{}
 }
 
@@ -206,7 +256,11 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if strings.TrimSpace(identity.ProtocolVersion) == "" {
 		return nil, errors.New("server identity is required")
 	}
-	return &Gateway{deps: deps, identity: identity}, nil
+	debugMode := invariant.NewPolicy().Mode() == invariant.ModePanic
+	if debugDeps, ok := deps.(interface{ DebugEnabled() bool }); ok {
+		debugMode = debugMode || debugDeps.DebugEnabled()
+	}
+	return &Gateway{deps: deps, identity: identity, debug: debugMode}, nil
 }
 
 func isNilGatewayDependencies(deps GatewayDependencies) bool {
@@ -227,38 +281,150 @@ func (g *Gateway) Handler() http.Handler {
 }
 
 func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
-	defer func() { _ = conn.Close() }()
 	connCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			_ = conn.Close()
+		})
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
+			stop()
 		case <-conn.Closed():
+			stop()
 		}
-		cancel()
 	}()
 	state := &connectionState{runtimeOwnerID: uuid.NewString()}
-	defer g.cleanupConnectionRuntimes(state)
+	const ordinaryAdmissionLimit = 16
+	admission := make(chan struct{}, ordinaryAdmissionLimit)
+	var ordinary sync.WaitGroup
+	defer func() {
+		stop()
+		ordinary.Wait()
+		g.cleanupConnectionRuntimes(state)
+	}()
 	for {
-		req, err := receiveRequest(connCtx, conn)
-		if err != nil {
-			return
-		}
-		if handler, route, ok := gatewayProgressHandlerForMethod(req.Method); ok {
-			if !handler(g, conn, connCtx, state, route, req) {
+		if !state.handshakeDone {
+			req, err := receiveRequest(connCtx, conn)
+			if err != nil {
+				return
+			}
+			if !g.serveGatewayRequest(conn, connCtx, state, req, gatewayRequestScheduleFor(req)) {
 				return
 			}
 			continue
 		}
-		if _, ok := gatewaySubscriptionMethods[strings.TrimSpace(req.Method)]; ok {
-			g.serveSubscription(conn, connCtx, state, req)
+
+		select {
+		case admission <- struct{}{}:
+		case <-connCtx.Done():
 			return
 		}
-		resp := g.dispatch(connCtx, state, req)
-		if !sendResponse(connCtx, conn, resp) {
+
+		req, err := receiveRequest(connCtx, conn)
+		if err != nil {
+			<-admission
 			return
+		}
+		schedule := gatewayRequestScheduleFor(req)
+		if schedule.kind != gatewayRequestScheduleOrdinary {
+			<-admission
+			ordinary.Wait()
+			if !g.serveGatewayRequest(conn, connCtx, state, req, schedule) {
+				stop()
+				return
+			}
+			continue
+		}
+
+		ordinary.Add(1)
+		go func(req protocol.Request, schedule gatewayRequestSchedule) {
+			defer ordinary.Done()
+			defer func() { <-admission }()
+			g.serveOrdinaryGatewayRequest(conn, connCtx, state, req, schedule, stop)
+		}(req, schedule)
+	}
+}
+
+func gatewayRequestScheduleFor(req protocol.Request) gatewayRequestSchedule {
+	if handler, route, ok := gatewayProgressHandlerForMethod(req.Method); ok {
+		return gatewayRequestSchedule{
+			kind:          gatewayRequestScheduleProgress,
+			progress:      handler,
+			progressRoute: route,
 		}
 	}
+	if _, ok := gatewaySubscriptionMethods[strings.TrimSpace(req.Method)]; ok {
+		return gatewayRequestSchedule{kind: gatewayRequestScheduleSubscription}
+	}
+	if isGatewayExclusiveRequest(req) {
+		return gatewayRequestSchedule{kind: gatewayRequestScheduleExclusive}
+	}
+	return gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary}
+}
+
+func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule) bool {
+	switch schedule.kind {
+	case gatewayRequestScheduleProgress:
+		return schedule.progress(g, conn, ctx, state, schedule.progressRoute, req)
+	case gatewayRequestScheduleSubscription:
+		g.serveSubscription(conn, ctx, state, req)
+		return false
+	case gatewayRequestScheduleOrdinary, gatewayRequestScheduleExclusive:
+		return sendResponse(ctx, conn, g.dispatch(ctx, state, req))
+	default:
+		panic(fmt.Sprintf("unknown Gateway request schedule kind %d", schedule.kind))
+	}
+}
+
+func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stack := string(debug.Stack())
+			slog.Error(
+				"gateway request handler panicked",
+				"method", req.Method,
+				"request_id", req.ID,
+				"panic", recovered,
+				"stack", stack,
+			)
+			stop()
+			if g.debug {
+				panic(gatewayRequestPanicDiagnostic{
+					Operation: gatewayOrdinaryRequestOperation,
+					Method:    req.Method,
+					RequestID: req.ID,
+					Cause:     recovered,
+					Stack:     stack,
+				})
+			}
+		}
+	}()
+	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {
+		stop()
+	}
+}
+
+func isGatewayExclusiveRequest(req protocol.Request) bool {
+	if req.Method == protocol.MethodHandshake {
+		return true
+	}
+	route, ok := apicontract.RouteByMethod(req.Method)
+	if !ok {
+		return false
+	}
+	switch route.Dependency {
+	case apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus:
+		return true
+	}
+	switch route.Scope {
+	case apicontract.ScopeAttachProject, apicontract.ScopeAttachSession:
+		return true
+	}
+	return false
 }
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
@@ -320,10 +486,21 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	if err != nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
 	}
-	if validator, ok := any(params).(interface{ Validate() error }); ok {
-		if err := validator.Validate(); err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	var validationErr error
+	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
+		validationErr = validator.ValidateRPC()
+	} else if validator, ok := any(params).(interface{ Validate() error }); ok {
+		validationErr = validator.Validate()
+	}
+	if validationErr != nil {
+		var rpcErr interface {
+			RPCErrorCode() int
+			RPCErrorData() json.RawMessage
 		}
+		if errors.As(validationErr, &rpcErr) {
+			return responseForError(req.ID, validationErr)
+		}
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error())
 	}
 	resp, err := handler(params)
 	if err != nil {
@@ -401,6 +578,9 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
+	}
+	if errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		return protocol.ErrCodeWorktreeBlocked, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

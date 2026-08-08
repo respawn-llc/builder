@@ -2,13 +2,18 @@ package workflowview
 
 import (
 	"core/server/workflow"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
-	derived := workflow.DeriveWiring(def)
+func DerivedWiring(def workflow.Definition, catalogs ...workflow.TargetAgentCatalog) serverapi.WorkflowDerivedWiring {
+	var catalog workflow.TargetAgentCatalog
+	if len(catalogs) > 0 {
+		catalog = catalogs[0]
+	}
+	derived := workflow.DeriveWiringWithCatalog(def, catalog)
 	resp := serverapi.WorkflowDerivedWiring{
-		Diagnostics: ValidationErrors(string(def.ID), derived.Diagnostics),
+		Diagnostics: ValidationErrors(workflow.WorkflowIDPointer(def.ID), derived.Diagnostics),
 	}
 	for _, node := range def.Nodes {
 		nodeID := workflow.NodeIDOf(node)
@@ -25,26 +30,34 @@ func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
 		})
 	}
 	for _, edge := range def.Edges {
+		applicability := derived.SelectorApplicabilityForEdge(edge.ID)
 		resp.Edges = append(resp.Edges, serverapi.WorkflowDerivedEdgeWiring{
-			EdgeID:                  string(edge.ID),
-			InputBindings:           InputBindings(derived.InputBindingsForEdge(edge.ID)),
-			RequiredProvisionFields: OutputFields(derived.RequiredProvisionFieldsForEdge(edge.ID)),
-			RequiredProviderFields:  OutputFields(derived.RequiredProviderFieldsForJoinEdge(edge.ID)),
+			EdgeID:                         string(edge.ID),
+			InputBindings:                  InputBindings(derived.InputBindingsForEdge(edge.ID)),
+			RequiredProvisionFields:        OutputFields(derived.RequiredProvisionFieldsForEdge(edge.ID)),
+			RequiredProviderFields:         OutputFields(derived.RequiredProviderFieldsForJoinEdge(edge.ID)),
+			AssigneeSelectionApplicability: selectorApplicability(applicability.Assignee),
+			ThinkingSelectionApplicability: selectorApplicability(applicability.Thinking),
 		})
 	}
 	return resp
 }
 
-func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serverapi.WorkflowValidationError {
+func selectorApplicability(fact workflow.SelectorApplicability) serverapi.WorkflowSelectorApplicability {
+	return serverapi.WorkflowSelectorApplicability{
+		Available:        fact.Available,
+		ParameterVisible: fact.ParameterVisible,
+		Reason:           serverapi.WorkflowSelectorApplicabilityReason(fact.Reason),
+	}
+}
+
+func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflow.ValidationError) []serverapi.WorkflowValidationError {
 	out := make([]serverapi.WorkflowValidationError, 0, len(errs))
 	for _, err := range errs {
-		errorWorkflowID := string(err.WorkflowID)
-		if errorWorkflowID == "" {
-			errorWorkflowID = workflowID
-		}
 		projected := serverapi.WorkflowValidationError{
 			Code:              string(err.Code),
 			Message:           err.Message,
+			WorkflowID:        err.WorkflowID,
 			NodeID:            string(err.NodeID),
 			TransitionGroupID: string(err.TransitionGroupID),
 			EdgeID:            string(err.EdgeID),
@@ -52,8 +65,8 @@ func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serv
 			RelatedIDs:        err.RelatedIDs,
 			BlocksContext:     err.BlocksContext,
 		}
-		if errorWorkflowID != "" {
-			projected.WorkflowID = &errorWorkflowID
+		if projected.WorkflowID == nil {
+			projected.WorkflowID = inheritedWorkflowID
 		}
 		out = append(out, projected)
 	}

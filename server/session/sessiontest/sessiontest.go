@@ -8,10 +8,60 @@ package sessiontest
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
 	"core/server/session"
 
 	"core/internal/testharness/recordstore"
 )
+
+// WriteEventLogHeaderFixture replaces a test session's event artifact with a
+// self-describing header fixture.
+func WriteEventLogHeaderFixture(
+	t testing.TB,
+	store *session.Store,
+	header session.EventLogHeader,
+) {
+	t.Helper()
+	if store == nil {
+		t.Fatal("session store is required")
+	}
+	encoded, err := json.Marshal(header)
+	if err != nil {
+		t.Fatalf("marshal event log header fixture: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(store.Dir(), "events.jsonl"),
+		append(encoded, '\n'),
+		0o600,
+	); err != nil {
+		t.Fatalf("write event log header fixture: %v", err)
+	}
+}
+
+// WriteUnsupportedEventLogVersion replaces a test session's event artifact
+// with a newer self-describing header.
+func WriteUnsupportedEventLogVersion(
+	t testing.TB,
+	store *session.Store,
+	version int,
+) {
+	t.Helper()
+	if version <= session.EventLogVersionV1 {
+		t.Fatalf(
+			"unsupported event log fixture version = %d, want > %d",
+			version,
+			session.EventLogVersionV1,
+		)
+	}
+	WriteEventLogHeaderFixture(t, store, session.EventLogHeader{
+		Contract: session.EventLogContract,
+		Version:  version,
+	})
+}
 
 type Persistence struct {
 	records *recordstore.Store[session.PersistedSessionRecord]
@@ -89,20 +139,24 @@ func (p *Persistence) Open(dir string, options ...session.StoreOption) (*session
 	return session.Open(dir, append(p.Options(), options...)...)
 }
 
-// CollectEvents streams the store's event log via the production streaming
-// reader and accumulates every event. Test-only.
-func CollectEvents(store *session.Store) ([]session.Event, error) {
+// CollectRecords streams the store's materialized event log and accumulates
+// every typed record. Test-only.
+func CollectRecords(store *session.Store) ([]session.EventRecord, error) {
 	if store == nil {
 		return nil, nil
 	}
-	events := make([]session.Event, 0)
-	if err := store.WalkEvents(func(evt session.Event) error {
-		events = append(events, evt)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]session.EventRecord, 0)
+	if err := eventLog.WalkRecords(func(record session.EventRecord) error {
+		records = append(records, record)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return events, nil
+	return records, nil
 }
 
 // AgentRole constructs a present continuation agent-role fixture. Test-only.
@@ -114,6 +168,6 @@ func AgentRole(value string) *string {
 // metadata, the full event history, and conversation freshness.
 type Snapshot struct {
 	Meta                  session.Meta
-	Events                []session.Event
+	Records               []session.EventRecord
 	ConversationFreshness session.ConversationFreshness
 }

@@ -42,7 +42,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		next.(*uiModel).layout().syncViewport()
 		return next, cmd
 	}
-	if m.view.Mode() == tui.ModeDetail && inputState.Mode != uiInputModeRollbackEdit {
+	if m.view.Mode() == tui.ModeDetail {
 		switch msg.Type {
 		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
@@ -84,9 +84,6 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if errText, blocked := m.slashCommandInputBlocked(text); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		if inputState.Mode == uiInputModeRollbackEdit && !inputState.Busy {
-			return c.startRollbackFork(text)
 		}
 		if handled, next, cmd := c.handleQueuedSlashCommandInput(text); handled {
 			return next, cmd
@@ -135,18 +132,10 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if inputState.Mode == uiInputModeRollbackEdit {
-			return c.handleRuntimeCtrlC(func() tea.Cmd {
-				return c.stopRollbackSelectionFlowCmd()
-			})
-		}
 		return c.handleRuntimeCtrlC(nil)
 	case tea.KeyShiftTab, tea.KeyCtrlT:
 		return m, m.toggleTranscriptMode()
 	case tea.KeyEsc:
-		if inputState.Mode == uiInputModeRollbackEdit {
-			return m, c.cancelRollbackEditingToSelectionFlowCmd()
-		}
 		if m.view.Mode() != tui.ModeOngoing {
 			return m, nil
 		}
@@ -166,9 +155,6 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if errText, blocked := m.slashCommandInputBlocked(text); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		}
-		if inputState.Mode == uiInputModeRollbackEdit && !inputState.Busy {
-			return c.startRollbackFork(text)
 		}
 		if m.blocksRuntimeInput() {
 			if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
@@ -286,7 +272,7 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 	case tea.KeyDown:
 		return m, m.moveRollbackSelectionWithPaging(1)
 	case tea.KeyEnter:
-		return m, c.beginRollbackEditingFlowCmd()
+		return c.startRollbackFork()
 	case tea.KeyPgUp:
 		return m, m.pageRollbackSelection(-1)
 	case tea.KeyPgDown:

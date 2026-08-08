@@ -151,7 +151,7 @@ func (m *uiModel) shouldTrackPathReferenceQuery() bool {
 		return false
 	}
 	switch m.inputModeState().Mode {
-	case uiInputModeMain, uiInputModeRollbackEdit:
+	case uiInputModeMain:
 	default:
 		return false
 	}

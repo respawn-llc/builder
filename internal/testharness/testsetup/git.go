@@ -148,10 +148,12 @@ func RunGit(t *testing.T, dir string, args ...string) string {
 }
 
 func runGit(dir string, args ...string) (string, error) {
-	commandArgs := append([]string{"-c", "maintenance.auto=false"}, args...)
+	commandArgs := append([]string{"-c", "maintenance.auto=false", "-c", "commit.gpgsign=false"}, args...)
 	command := exec.Command("git", commandArgs...)
 	command.Dir = dir
 	command.Env = append(sanitizedGitEnvironment(os.Environ()),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=kent-test",
 		"GIT_AUTHOR_EMAIL=kent-test@example.invalid",
 		"GIT_COMMITTER_NAME=kent-test",

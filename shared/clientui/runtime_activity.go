@@ -3,6 +3,8 @@ package clientui
 import (
 	"fmt"
 	"strings"
+
+	"core/shared/runtimeinput"
 )
 
 type ReadModelVersion struct {
@@ -159,7 +161,7 @@ func (r RuntimeInputReconciliation) Ambiguous() bool {
 type RuntimeSubmitRequest struct {
 	OperationRef                    RuntimeOperationRef
 	PreSubmitCompactionOperationRef RuntimeOperationRef
-	Text                            string
+	Input                           runtimeinput.Input
 }
 
 func (r RuntimeSubmitRequest) Validate() error {
@@ -169,10 +171,7 @@ func (r RuntimeSubmitRequest) Validate() error {
 	if err := validateOperationRefKind(r.PreSubmitCompactionOperationRef, RuntimeOperationKindPreSubmitCompact); err != nil {
 		return err
 	}
-	if strings.TrimSpace(r.Text) == "" {
-		return fmt.Errorf("submit text is required")
-	}
-	return nil
+	return r.Input.Validate()
 }
 
 type RuntimeShellRequest struct {
@@ -205,24 +204,6 @@ type RuntimeSubmitQueuedRequest struct {
 
 func (r RuntimeSubmitQueuedRequest) Validate() error {
 	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindSubmitQueued)
-}
-
-type RuntimeQueueUserMessageRequest struct {
-	OperationRef RuntimeOperationRef
-	Text         string
-}
-
-func (r RuntimeQueueUserMessageRequest) Validate() error {
-	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindQueuedMessage); err != nil {
-		return err
-	}
-	if r.OperationRef.QueueItemID != nil {
-		return fmt.Errorf("queued-message create request operation ref must use client request id before server queue item id exists")
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return fmt.Errorf("queued message text is required")
-	}
-	return nil
 }
 
 func validateOperationRefKind(ref RuntimeOperationRef, kind RuntimeOperationKind) error {

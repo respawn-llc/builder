@@ -14,7 +14,7 @@ kent worktree leave
 kent worktree delete <selector>
 ```
 
-Every command supports `--json`. Session-scoped commands use `KENT_SESSION_ID` inside a Kent shell or accept `--session <id>` explicitly.
+Every command supports `--json`. Session-scoped commands automatically use the current Session inside a Kent shell or accept `--session <id>` explicitly.
 
 ## Select
 
@@ -26,7 +26,7 @@ Select a worktree by its exact ID, branch, display name, or path. IDs take prece
 - **external**: available to Git but not managed by Kent; entering it registers it
 - **missing**: managed by Kent, but absent from Git
 
-`list` resolves the workspace bound to the current directory and does not require a session. When `KENT_SESSION_ID` or `--session` is present, it marks that session's current worktree with `*`; Kent does not infer a session from workspace history.
+`list` resolves the workspace bound to the current directory and does not require a Session. With current Session context or `--session`, it marks that Session's current worktree with `*`; Kent does not infer a Session from workspace history.
 
 `status` reports a missing checkout or branch without changing the session's worktree.
 
@@ -40,7 +40,7 @@ Select a worktree by its exact ID, branch, display name, or path. IDs take prece
 
 The main workspace worktree cannot be deleted. Deletion blocks while another session has active work in the worktree or a background process uses it. Idle sessions using the worktree move to the main workspace before removal.
 
-Dirty worktrees, or worktrees whose state cannot be determined, require `--force`. This flag applies only to the worktree folder. Agent-shell deletion always retains branches; other CLI callers can pass `--delete-branch` to delete a branch only when Git considers it safe.
+Dirty worktrees, or worktrees whose state cannot be determined, require `--force`. This flag applies only to the worktree folder. Agent-shell deletion always retains branches; other CLI callers can pass `--delete-branch` to delete a branch only when Git considers it safe. `--force-delete-branch` requires `--delete-branch` and deletes the branch without Git's merged-branch check.
 
 If Git retains the branch, deletion succeeds and the CLI prints `Kept branch <name>: <diagnostic>`.
 
@@ -55,7 +55,8 @@ base_dir = "~/.kent/worktrees"
 # setup_timeout_seconds = 60
 ```
 
-- `base_dir` sets the root directory for Kent-managed worktrees.
+- `base_dir` sets the namespace for Kent-managed worktrees. Automatic and explicit worktree paths must remain inside this directory and must not overlap the source workspace in either direction.
+- A persisted managed worktree outside this namespace cannot be activated or restored automatically; move it into the namespace before retrying.
 - `setup_script` runs after Kent creates a worktree and before the create command or a workflow run uses it. Relative paths resolve from the source workspace root.
 - `setup_timeout_seconds` sets the setup script timeout. The default is `60`; `0` or a negative value disables the timeout.
 
@@ -71,7 +72,7 @@ Kent supplies these reserved environment variables, replacing conflicting inheri
 
 - `KENT_WORKTREE_SOURCE_WORKSPACE_ROOT` - Original/main workspace root that created the worktree, e.g. `/home/user/dev/app` or `C:\Users\user\dev\app`.
 - `KENT_WORKTREE_BRANCH_NAME` - Branch/ref name selected for the new worktree, e.g. `feature/search-fix`.
-- `KENT_WORKTREE_ROOT` - Filesystem path to the newly created worktree; setup script runs with this as cwd, e.g. `/home/user/.kent/worktrees/app/search-fix`.
+- `KENT_WORKTREE_ROOT` - Opaque filesystem path to the newly created worktree; setup script runs with this as cwd, for example `/home/user/.kent/worktrees/app/417`. Use this value instead of deriving a path from the branch name.
 - `KENT_WORKTREE_SESSION_ID` - Kent session id that requested the worktree, e.g. `b31234ab-78ce-43d1-8f4c-2d6c6d4adbc1`. Present only when a session initiates creation; workflow task setup omits it.
 - `KENT_WORKTREE_PROJECT_ID` - Kent project id for the workspace/project, e.g. `project-94b18685-19ed-4513-96bb-bcffa10410ff`.
 - `KENT_WORKTREE_WORKSPACE_ID` - Kent workspace binding id for the source workspace, e.g. `workspace-2f7b6d4a`.

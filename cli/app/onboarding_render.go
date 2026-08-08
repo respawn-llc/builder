@@ -357,6 +357,7 @@ func (m *onboardingModel) renderReviewSummary(width int) []string {
 	if enabled, disabled := selectedSkillCounts(&m.state); enabled > 0 || disabled > 0 {
 		appendRow("Enabled skills", fmt.Sprintf("%d enabled, %d disabled", enabled, disabled), m.styles.valueNeutral)
 	}
+	appendRow("Slash commands import", commandImportSummary(&m.state), m.styles.valueNeutral)
 	return lines
 }
 

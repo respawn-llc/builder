@@ -12,11 +12,14 @@ import type {
   TaskAttention,
   TaskApproveResponse,
   TaskMoveResponse,
+  TaskMovePreviewResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
+import type { TaskListPage } from "../workflowLabels";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -24,17 +27,25 @@ import {
   boardGroupSchema,
   commentSchema,
   emptyString,
-  nullableString,
-  runSchema,
-  stringList,
+  nonBlankString,
+  currentNodeSchema,
+  scriptCurrentNodeSchema,
   taskActionsSchema,
   taskStatusSchema,
-  transitionSchema,
   workflowPickerItemSchema,
+  workflowIDSchema,
   workspaceSummarySchema,
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
+import { labelIDListSchema } from "./workflowLabels";
+import { taskDependenciesSchema } from "./taskDependencies";
+export {
+  taskDependenciesSchema,
+  taskDependencyAddResponseSchema,
+  taskDependencyListResponseSchema,
+  taskDependencyRemoveResponseSchema,
+} from "./taskDependencies";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -52,6 +63,58 @@ const workflowPickerSchema = z
   .array(workflowPickerItemSchema)
   .nullish()
   .transform((value) => value ?? []);
+
+export const taskListPageSchema: z.ZodType<TaskListPage> = z
+  .object({
+    scope: z
+      .object({
+        project_id: z.string().min(1),
+        workflow_id: workflowIDSchema.optional(),
+      })
+      .strict(),
+    matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
+    next_offset: z.number().int().positive().nullable().optional(),
+    generated_at_unix_ms: z.number(),
+    tasks: z.array(
+      z
+        .object({
+          task_id: z.string().min(1),
+          short_id: z.string().min(1),
+          workflow_id: workflowIDSchema,
+          workflow_name: z.string().min(1).optional(),
+          title: z.string(),
+          created_at_unix_ms: z.number(),
+          updated_at_unix_ms: z.number(),
+          column_keys: z.array(z.string()).optional(),
+          status: taskStatusSchema,
+          label_ids: labelIDListSchema,
+        })
+        .strict()
+        .transform((value) => ({
+          id: value.task_id,
+          shortID: value.short_id,
+          workflowID: value.workflow_id,
+          workflowName: value.workflow_name ?? null,
+          title: value.title,
+          createdAt: value.created_at_unix_ms,
+          updatedAt: value.updated_at_unix_ms,
+          columnKeys: value.column_keys ?? null,
+          status: value.status,
+          labelIDs: value.label_ids,
+        })),
+    ),
+  })
+  .strict()
+  .transform((value) => ({
+    scope: {
+      projectID: value.scope.project_id,
+      workflowID: value.scope.workflow_id ?? null,
+    },
+    matchingWorkflowCardinality: value.matching_workflow_cardinality,
+    nextOffset: value.next_offset ?? null,
+    generatedAt: value.generated_at_unix_ms,
+    tasks: value.tasks,
+  }));
 
 const unavailableCauseSchema = z.enum([
   "invalid_revision",
@@ -108,61 +171,138 @@ const selectionRequiredResponseSchema = z
       }) as const,
   );
 
+const dependencyConfirmationRequiredResponseSchema = z
+  .object({
+    outcome: z.literal("dependency_confirmation_required"),
+    unsatisfied_dependency_count: z.number().int().positive(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        unsatisfiedDependencyCount: value.unsatisfied_dependency_count,
+      }) as const,
+  );
+
+const appliedCurrentNodesResponseSchema = z
+  .object({
+    outcome: z.literal("applied"),
+    applied: z
+      .object({
+        current_nodes: z.array(currentNodeSchema).min(1),
+      })
+      .strict(),
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        outcome: value.outcome,
+        applied: { currentNodes: value.applied.current_nodes },
+      }) as const,
+  );
+
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          transition_id: z.string().trim().min(1),
-          placement_id: z.string().trim().min(1),
-          run_id: z.string().trim().min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            placementID: value.applied.placement_id,
-            runID: value.applied.run_id,
-          },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
+  selectionRequiredResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
+]);
+
+export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
 ]);
 
+const taskMoveNoOpResponseSchema = z
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
+  .strict()
+  .transform((value) => ({
+    outcome: value.outcome,
+    noOp: { currentNodes: value.no_op.current_nodes },
+  }));
+
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("applied"),
-      applied: z
-        .object({
-          transition_id: z.string().trim().min(1),
-          state: z.string().trim().min(1),
-          placement_ids: stringList,
-          run_ids: stringList,
-        })
-        .strict(),
-    })
-    .strict()
-    .transform(
-      (value) =>
-        ({
-          outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            state: value.applied.state,
-            placementIDs: value.applied.placement_ids,
-            runIDs: value.applied.run_ids,
-          },
-        }) as const,
-    ),
+  appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
+  taskMoveNoOpResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
 ]);
+
+const manualMoveBlockerSchema = z.enum([
+  "invalid_workflow",
+  "no_source_position",
+  "unsupported_destination",
+  "waiting_question",
+  "lifecycle_conflict",
+  "context_session_unavailable",
+  "no_usable_transition",
+  "parallel_branch_requires_fan_out",
+]);
+
+const nonBlankPreservingString = z.string().refine((value) => value.trim().length > 0);
+
+const manualMoveRequiredValueSchema = z
+  .object({
+    node_key: z.string().trim().min(1),
+    output_name: z.string().trim().min(1),
+    description: z.string(),
+    resolved_value: nonBlankPreservingString.nullable().optional(),
+  })
+  .strict()
+  .transform((value) => ({
+    nodeKey: value.node_key,
+    outputName: value.output_name,
+    description: value.description,
+    resolvedValue: value.resolved_value ?? null,
+  }));
+
+export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
+  "outcome",
+  [
+    taskMoveNoOpResponseSchema,
+    z
+      .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, direct: {} })),
+    z
+      .object({
+        outcome: z.literal("transition"),
+        transition: z
+          .object({
+            choices: z.array(
+              z
+                .object({
+                  transition_key: z.string().trim().min(1),
+                  label: z.string().trim().min(1),
+                  source_node_display_name: z.string().trim().min(1),
+                  required_values: z.array(manualMoveRequiredValueSchema),
+                })
+                .strict()
+                .transform((value) => ({
+                  transitionKey: value.transition_key,
+                  label: value.label,
+                  sourceNodeDisplayName: value.source_node_display_name,
+                  requiredValues: value.required_values,
+                })),
+            ).min(1),
+          })
+          .strict(),
+      })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, transition: value.transition })),
+    z
+      .object({
+        outcome: z.literal("blocked"),
+        blocked: z.object({ reason: manualMoveBlockerSchema }).strict(),
+      })
+      .strict()
+      .transform((value) => ({ outcome: value.outcome, blocked: value.blocked })),
+  ],
+);
 
 export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discriminatedUnion("outcome", [
   z
@@ -170,11 +310,8 @@ export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discr
       outcome: z.literal("applied"),
       applied: z
         .object({
-          transition_id: z.string().trim().min(1),
           task_id: z.string().trim().min(1),
-          state: z.string().trim().min(1),
-          placement_ids: stringList,
-          run_ids: stringList,
+          current_nodes: z.array(currentNodeSchema).min(1),
         })
         .strict(),
     })
@@ -183,13 +320,7 @@ export const taskApproveResponseSchema: z.ZodType<TaskApproveResponse> = z.discr
       (value) =>
         ({
           outcome: value.outcome,
-          applied: {
-            transitionID: value.applied.transition_id,
-            taskID: value.applied.task_id,
-            state: value.applied.state,
-            placementIDs: value.applied.placement_ids,
-            runIDs: value.applied.run_ids,
-          },
+          applied: { taskID: value.applied.task_id, currentNodes: value.applied.current_nodes },
         }) as const,
     ),
   selectionRequiredResponseSchema,
@@ -203,7 +334,7 @@ export const projectWorkflowLinksSchema: z.ZodType<readonly ProjectWorkflowLink[
           .object({
             id: z.string(),
             project_id: z.string(),
-            workflow_id: z.string(),
+            workflow_id: workflowIDSchema,
             default: z.boolean(),
           })
           .transform((value) => ({
@@ -276,11 +407,10 @@ function visibleBoardGroups(
 export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
   .object({
     project_id: z.string(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     node_id: z.string(),
     cards: boardCardsSchema,
-    previous_page_token: z.string().nullable(),
-    next_page_token: z.string().nullable(),
+    next_offset: z.number().int().nonnegative().nullable().optional().default(null),
     generated_at_unix_ms: z.number(),
   })
   .strict()
@@ -289,8 +419,7 @@ export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
     workflowID: value.workflow_id,
     nodeID: value.node_id,
     cards: value.cards,
-    previousPageToken: value.previous_page_token,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset,
     generatedAt: value.generated_at_unix_ms,
   }));
 
@@ -322,30 +451,42 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       summary: z.object({
         id: z.string(),
         project_id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         short_id: z.string(),
         title: z.string(),
         created_at_unix_ms: z.number(),
         updated_at_unix_ms: z.number(),
         done: z.boolean(),
-        canceled_at_unix_ms: z.number().nullable().optional(),
-        cancel_reason: nullableString,
       }),
       project: z.object({
         display_name: z.string(),
       }),
-      workflow: workflowPickerItemSchema,
+      workflow: z.object({
+        workflow_id: workflowIDSchema,
+        display_name: z.string(),
+        version: z.number(),
+      }),
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
-      managed_worktree: z.never().optional(),
+      worktree_path: nonBlankString.nullable(),
+      current_nodes: z.array(currentNodeSchema),
+      live_session_ids: z.array(nonBlankString),
+      current_scripts: z.array(
+        z
+          .object({
+            current_node: scriptCurrentNodeSchema,
+            path: nonBlankString,
+          })
+          .strict(),
+      ),
+      retained_session_count: z.number().int().nonnegative(),
       status: taskStatusSchema,
       actions: taskActionsSchema,
+      label_ids: labelIDListSchema,
       attention_count: z.number().int().nonnegative(),
-      runs: z.array(runSchema).nullish().transform(emptyArray),
-      transitions: z.array(transitionSchema).nullish().transform(emptyArray),
-      comments: z.array(commentSchema).nullish().transform(emptyArray),
+      dependencies: taskDependenciesSchema,
     }),
   })
   .transform((value) => ({
@@ -354,7 +495,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     projectID: value.task.summary.project_id,
     projectName: value.task.project.display_name,
     workflowID: value.task.summary.workflow_id,
-    workflowName: value.task.workflow.name,
+    workflowName: value.task.workflow.display_name,
     workflowVersion: value.task.workflow.version,
     title: value.task.summary.title,
     body: value.task.body,
@@ -362,49 +503,66 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     sourceWorkspace: value.task.source_workspace,
     status: value.task.status,
     actions: value.task.actions,
+    labelIDs: value.task.label_ids,
     attentionCount: value.task.attention_count,
-    comments: value.task.comments,
-    runs: value.task.runs,
-    transitions: value.task.transitions,
+    dependencies: value.task.dependencies,
     executionTarget: value.task.execution_target,
+    worktreePath: value.task.worktree_path,
+    currentNodes: value.task.current_nodes,
+    liveSessionIDs: value.task.live_session_ids,
+    currentScripts: value.task.current_scripts.map((script) => ({
+      currentNode: script.current_node,
+      path: script.path,
+    })),
+    retainedSessionCount: value.task.retained_session_count,
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,
-    canceledAt: value.task.summary.canceled_at_unix_ms ?? null,
-    cancelReason: value.task.summary.cancel_reason,
   }));
+
+const activityItemSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("comment"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      comment: commentSchema,
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      comment: value.comment,
+    })),
+  z
+    .object({
+      activity_id: nonBlankString,
+      type: z.literal("session_started"),
+      task_id: nonBlankString,
+      occurred_at_unix_ms: z.number(),
+      updated_at_unix_ms: z.number(),
+      session_started: z.object({ session_id: nonBlankString, name: nonBlankString }).strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.activity_id,
+      type: value.type,
+      taskID: value.task_id,
+      occurredAt: value.occurred_at_unix_ms,
+      updatedAt: value.updated_at_unix_ms,
+      sessionID: value.session_started.session_id,
+      sessionName: value.session_started.name,
+    })),
+]);
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z
   .object({
-    items: z.array(
-      z
-        .object({
-          activity_id: z.string(),
-          type: z.string(),
-          task_id: z.string(),
-          occurred_at_unix_ms: z.number(),
-          updated_at_unix_ms: z.number(),
-          actor: emptyString,
-          summary: z.string(),
-          comment: commentSchema.nullish(),
-          transition: transitionSchema.nullish(),
-          run: runSchema.nullish(),
-          attention: attentionItemSchema.nullish(),
-        })
-        .transform((value) => ({
-          id: value.activity_id,
-          type: value.type,
-          taskID: value.task_id,
-          occurredAt: value.occurred_at_unix_ms,
-          updatedAt: value.updated_at_unix_ms,
-          actor: value.actor,
-          summary: value.summary,
-          comment: value.comment ?? null,
-          transition: value.transition ?? null,
-          run: value.run ?? null,
-          attention: value.attention ?? null,
-        })),
-    ),
+    items: z.array(activityItemSchema),
     next_page_token: z.string().optional().default(""),
     generated_at_unix_ms: z.number(),
   })
@@ -424,8 +582,20 @@ export const pendingAskListSchema = z
             SessionID: z.string(),
             Question: z.string(),
             Suggestions: z.array(z.string()).optional().default([]),
-            RecommendedOptionIndex: z.number().optional().default(0),
+            RecommendedOptionIndex: z.number().int().positive().nullable(),
             CreatedAt: z.string().optional().default(""),
+          })
+          .superRefine((value, context) => {
+            if (
+              value.RecommendedOptionIndex !== null &&
+              value.RecommendedOptionIndex > value.Suggestions.length
+            ) {
+              context.addIssue({
+                code: "custom",
+                message: "recommended option index exceeds suggestions",
+                path: ["RecommendedOptionIndex"],
+              });
+            }
           })
           .transform((value): PendingAsk => ({
             askID: value.AskID,
@@ -450,9 +620,9 @@ export const commentAddResponseSchema = z.object({ comment: commentSchema });
 export const commentPageSchema: z.ZodType<CommentPage> = z
   .object({
     comments: z.array(commentSchema).nullish().transform(emptyArray),
-    next_page_token: z.string().optional().default(""),
+    next_offset: z.number().int().positive().nullable().optional(),
   })
   .transform((value) => ({
     comments: value.comments,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset ?? null,
   }));

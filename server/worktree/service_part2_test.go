@@ -15,7 +15,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +22,26 @@ import (
 
 func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.T) {
 	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-blocked-process")
-	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(created.CanonicalRoot, "tmp"), Running: true}}
+	busy := mustCreateWorktree(t, env, "feature/delete-blocked-process")
+	unrelated := mustCreateWorktree(t, env, "feature/delete-unrelated-process")
+	busySession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, busySession.Meta().SessionID, env.binding.WorkspaceID, busy.WorktreeID, ".")
+	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
+	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(busy.CanonicalRoot, "tmp"), Running: true}}
 
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, created.WorktreeID))
+	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, busy.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
+	}
+	snapshots := env.processes.List()
+	if len(snapshots) != 1 || !snapshots[0].Running {
+		t.Fatalf("background process snapshot changed after blocked delete: %+v", snapshots)
+	}
+	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
+
+	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, unrelated.WorktreeID))
+	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result, err)
 	}
 }
 
@@ -83,7 +96,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	result.release()
 }
 
-func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *testing.T) {
+func TestBeginMutationReacquiresWorkspaceLaneWhenSessionWorkspaceChanges(t *testing.T) {
 	env := newServiceTestEnv(t)
 	secondWorkspace := t.TempDir()
 	initGitRepo(t, secondWorkspace)
@@ -97,14 +110,14 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 	secondSession := createServiceTestSession(t, env.store, secondCfg, secondBinding)
 
-	firstWorkspaceLock, err := env.service.acquireWorkspaceMutationLock(env.ctx, env.binding.WorkspaceID)
+	firstWorkspaceLease, err := env.service.workspaceMutations.Acquire(env.ctx, env.binding.WorkspaceID)
 	if err != nil {
-		t.Fatalf("acquireWorkspaceMutationLock: %v", err)
+		t.Fatalf("acquire workspace mutation lease: %v", err)
 	}
 	firstLockReleased := false
 	defer func() {
 		if !firstLockReleased {
-			firstWorkspaceLock()
+			firstWorkspaceLease.Release()
 		}
 	}()
 
@@ -120,7 +133,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}()
 
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, secondBinding.WorkspaceID, "", ".")
-	firstWorkspaceLock()
+	firstWorkspaceLease.Release()
 	firstLockReleased = true
 
 	var first mutationResult
@@ -174,25 +187,11 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 }
 
-func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
-	baseRoot := filepath.Join(t.TempDir(), "collision")
-	for idx := 0; idx < 1024; idx++ {
-		candidate := baseRoot
-		if idx > 0 {
-			candidate = baseRoot + "-" + strconv.Itoa(idx+1)
-		}
-		if err := os.MkdirAll(candidate, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", candidate, err)
-		}
-	}
-
-	_, err := nextAvailableWorktreeRoot(baseRoot)
-	if !errors.Is(err, ErrWorktreeRootCollisionCap) {
-		t.Fatalf("nextAvailableWorktreeRoot error = %v, want capped collision error", err)
-	}
+func newServiceTestEnv(t *testing.T) *serviceTestEnv {
+	return newServiceTestEnvWithResourceLifecycle(t, nil)
 }
 
-func newServiceTestEnv(t *testing.T) *serviceTestEnv {
+func newServiceTestEnvWithResourceLifecycle(t *testing.T, lifecycle sessionruntime.AgentResourceLifecycle) *serviceTestEnv {
 	t.Helper()
 	ctx := context.Background()
 	home := t.TempDir()
@@ -215,8 +214,9 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	}
 	sess := createServiceTestSession(t, store, cfg, binding)
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    store.AuthoritativeSessionStoreOptions(),
+		PersistenceRoot:   cfg.PersistenceRoot,
+		StoreOptions:      store.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -316,7 +316,7 @@ func waitForFileText(t *testing.T, path string) string {
 			t.Fatalf("ReadFile %s: %v", path, err)
 		}
 		text = strings.TrimSpace(string(body))
-		return true
+		return text != ""
 	}, "timed out waiting for text file at %s", path)
 	return text
 }
@@ -397,8 +397,10 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 
 func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
+		WorktreeTransitionHeader: serverapi.WorktreeTransitionHeader{
+			OperationID: serverapi.NewWorktreeOperationID(),
+			SessionID:   env.session.Meta().SessionID,
+		},
 		Selector:            worktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}

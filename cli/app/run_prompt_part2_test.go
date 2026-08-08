@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"core/internal/testharness/pty/appfixture"
 	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/server/metadata"
@@ -18,7 +22,86 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
+
+func TestLifecycleHookExcludedFromServerHeadlessAndSubagentRuns(t *testing.T) {
+	home, workspace := newRegisteredAppWorkspace(t)
+	recordPath := filepath.Join(t.TempDir(), "lifecycle.jsonl")
+	recorderCommand, err := lifecycleHookProductRecorderCommand(
+		recordPath,
+		appfixture.LifecycleHookBehaviorSuccess,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("lifecycle recorder command: %v", err)
+	}
+	if err := appfixture.WriteConfigWithOptions(
+		context.Background(),
+		filepath.Join(home, config.ConfigDirName),
+		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand},
+	); err != nil {
+		t.Fatalf("write configured lifecycle hook: %v", err)
+	}
+	saveReadyAppAuthState(t, workspace)
+
+	responses, _ := newFakeResponsesServer(t, []string{
+		"ordinary headless response",
+		"fast subagent response",
+	})
+	defer responses.Close()
+	stopServer := startStandingRunPromptServer(t, workspace, responses.URL)
+	defer stopServer()
+	requireNoLifecycleHookProductRecords(t, recordPath)
+
+	run := func(name string, agentRole *string, want string) {
+		t.Helper()
+		result, err := RunPrompt(context.Background(), Options{
+			WorkspaceRoot:         workspace,
+			WorkspaceRootExplicit: true,
+			AgentRole:             agentRole,
+			Model:                 "gpt-5",
+			OpenAIBaseURL:         responses.URL,
+			OpenAIBaseURLExplicit: true,
+		}, name, 0, nil)
+		if err != nil {
+			t.Fatalf("%s RunPrompt: %v", name, err)
+		}
+		if result.Result != want {
+			t.Fatalf("%s result = %q, want %q", name, result.Result, want)
+		}
+		requireNoLifecycleHookProductRecords(t, recordPath)
+	}
+
+	run("ordinary headless", nil, "ordinary headless response")
+	run(
+		"fast subagent",
+		sessionLifecycleStringPtr(config.BuiltInSubagentRoleFast),
+		"fast subagent response",
+	)
+}
+
+func requireNoLifecycleHookProductRecords(t *testing.T, recordPath string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		_, err := os.Stat(recordPath)
+		if err == nil {
+			data, readErr := os.ReadFile(recordPath)
+			if readErr != nil {
+				t.Fatalf("read unexpected lifecycle hook records: %v", readErr)
+			}
+			t.Fatalf("unexpected lifecycle hook records: %s", data)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat lifecycle hook records: %v", err)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
@@ -92,7 +175,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		t.Fatalf("unexpected continuation context: %+v", meta.Continuation)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -101,17 +184,22 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		sawAssistant bool
 	)
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("unmarshal message payload: %v", err)
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			t.Fatalf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "hello from user" {
+		msg := appMessageFromRecord(record)
+		if msg.Role == llm.RoleUser && msg.Content != nil && *msg.Content == "hello from user" {
 			sawUser = true
 		}
-		if msg.Role == llm.RoleAssistant && msg.Content == "hello from fake" && msg.Phase == llm.MessagePhaseFinal {
+		if msg.Role == llm.RoleAssistant &&
+			msg.Content != nil &&
+			*msg.Content == "hello from fake" &&
+			msg.Phase != nil &&
+			*msg.Phase == llm.MessagePhaseFinal {
 			sawAssistant = true
 		}
 	}
@@ -154,6 +242,7 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 		CanonicalRoot:   canonicalWorktreeRoot,
 		DisplayName:     "feature",
 		Availability:    "available",
+		Managed:         true,
 		GitMetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
@@ -222,6 +311,9 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		"",
 		"[subagents.fast]",
 		"provider_override = \"openai\"",
+		"",
+		"[subagents.fast.provider_capabilities]",
+		"provider_id = \"openai\"",
 	}, "\n")
 
 	requestBodies := make(chan map[string]any, 1)
@@ -280,7 +372,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 // kent run no longer starts servers, so tests drive the run client directly.
 func runHeadlessPromptViaEmbedded(t *testing.T, opts Options, clientRequestID, prompt string) serverapi.RunPromptResponse {
 	t.Helper()
-	boot, err := startEmbeddedServer(context.Background(), opts, newHeadlessAuthInteractor(), false)
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), opts, newHeadlessAuthInteractor(), false)
 	if err != nil {
 		t.Fatalf("bootstrap app: %v", err)
 	}
@@ -311,7 +403,7 @@ func TestHeadlessRunPromptClientResumesExistingSessionByID(t *testing.T) {
 		OpenAIBaseURLExplicit: true,
 	}, "req-create-1", "first prompt")
 
-	boot, err := startEmbeddedServer(context.Background(), Options{
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		SessionID:             created.SessionID,
@@ -372,7 +464,7 @@ func TestHeadlessRunPromptClientRestoresContinuationContextFromSelectedSession(t
 		OpenAIBaseURLExplicit: true,
 	}, "req-create-2", "first prompt")
 
-	boot, err := startEmbeddedServer(context.Background(), Options{
+	boot, err := startAppTestEmbeddedServer(t, context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		SessionID:             created.SessionID,
@@ -459,20 +551,42 @@ func openAuthoritativeWorkspaceSessionStore(t *testing.T, workspaceRoot, openAIB
 	return openAuthoritativeAppSession(t, cfg.PersistenceRoot, sessionID)
 }
 
+func appMessageFromRecord(record session.MessageRecord) llm.Message {
+	message := llm.Message{
+		Role:    llm.Role(record.Role),
+		Content: textutil.Value(valueOrEmpty(record.Content)),
+	}
+	if record.MessageType != nil {
+		message.MessageType = textutil.Value(llm.MessageType(*record.MessageType))
+	}
+	if record.Phase != nil {
+		message.Phase = textutil.Value(llm.MessagePhase(*record.Phase))
+	}
+	return message
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func readStoredMessages(store *session.Store) ([]llm.Message, error) {
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		return nil, err
 	}
 	messages := make([]llm.Message, 0, len(events))
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			return nil, err
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			return nil, fmt.Errorf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
+		msg := appMessageFromRecord(record)
 		messages = append(messages, msg)
 	}
 	return messages, nil
@@ -482,7 +596,11 @@ func assertEnvironmentCWD(t *testing.T, messages []llm.Message, cwd string) {
 	t.Helper()
 	want := "\nCWD: " + cwd + "\n"
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment && strings.Contains(msg.Content, want) {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil &&
+			*msg.MessageType == llm.MessageTypeEnvironment &&
+			msg.Content != nil &&
+			strings.Contains(*msg.Content, want) {
 			return
 		}
 	}
@@ -493,11 +611,14 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 	t.Helper()
 	sawWorktreeReminder := false
 	for _, msg := range messages {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeWorktreeMode {
+		if msg.Role != llm.RoleDeveloper || msg.MessageType == nil || *msg.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
 		sawWorktreeReminder = true
-		if strings.Contains(msg.Content, branch) && strings.Contains(msg.Content, cwd) && strings.Contains(msg.Content, workspaceRoot) {
+		if msg.Content != nil &&
+			strings.Contains(*msg.Content, branch) &&
+			strings.Contains(*msg.Content, cwd) &&
+			strings.Contains(*msg.Content, workspaceRoot) {
 			return
 		}
 	}
@@ -510,7 +631,7 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 func assertMessagePresent(t *testing.T, messages []llm.Message, role llm.Role, content string) {
 	t.Helper()
 	for _, msg := range messages {
-		if msg.Role == role && msg.Content == content {
+		if msg.Role == role && msg.Content != nil && *msg.Content == content {
 			return
 		}
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/tui/ongoing"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -24,6 +26,7 @@ type uiProgramComposition struct {
 }
 
 type uiLoopRequest struct {
+	ctx                          context.Context
 	wiring                       *runtimeWiring
 	active                       config.Settings
 	commandRegistry              *commands.Registry
@@ -31,10 +34,13 @@ type uiLoopRequest struct {
 	initialPromptHistoryRecorded bool
 	initialInput                 string
 	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
-	sessionName                  string
+	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
+	initialTransientStatus       *string
+	promptCatalog                apicontract.PromptCommandCatalogService
+	promptCatalogEntries         []commands.PromptCommandCatalogEntry
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
@@ -92,6 +98,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		rendererOutputGate,
 		terminalOutput,
 	)
+	programContext := request.ctx
+	if programContext == nil {
+		programContext = context.Background()
+	}
+	options = append(options, tea.WithContext(programContext))
 	tuiLogger, _ := newRollingTUILogger(request.statusConfig.PersistenceRoot)
 	uiLogger := newMultiUILogger(tuiLogger)
 	runtimeClient := request.wiring.runtimeClient
@@ -101,7 +112,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("runtime client is required")
 	}
-	if request.wiring.transcriptEvents == nil {
+	if request.wiring.eventDispatcher == nil || request.wiring.eventDispatcher.transcriptEvents == nil {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
@@ -117,8 +128,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		sessionID = runtimeClient.MainView().Session.SessionID
 	}
 
-	rawModel := NewProjectedUIModel(
-		runtimeClient,
+	uiOptions := []UIOption{
 		WithUILogger(uiLogger),
 		WithUIModelName(request.active.Model),
 		WithUIConfiguredModelName(request.configuredModelName),
@@ -128,6 +138,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
+		WithUIPromptCommandCatalog(request.promptCatalog),
+		WithUIPromptCommandCatalogEntries(request.promptCatalogEntries),
 		WithUITurnQueueHook(request.wiring.turnQueueHook),
 		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
 		WithUIWorktreeClient(request.wiring.worktrees),
@@ -136,22 +148,33 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
 		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
-		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
-		WithUIOngoingTranscriptEvents(request.wiring.transcriptEvents),
+		WithUIOngoingTranscriptEvents(request.wiring.eventDispatcher.transcriptEvents),
+		WithUIClientLifecycleIssues(request.wiring.lifecycleHookIssues, request.wiring.lifecycleHookDone),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
-	)
+	}
+	if request.sessionTitle != nil {
+		uiOptions = append(uiOptions, WithUISessionName(*request.sessionTitle))
+	}
+	rawModel := NewProjectedUIModel(runtimeClient, uiOptions...)
 	model, ok := rawModel.(*uiModel)
 	if !ok {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
 		return nil, errors.New("projected UI model has unexpected type")
+	}
+	if request.initialTransientStatus != nil {
+		model.startupCmds = append(model.startupCmds, model.showTransientStatusNotice(uiStatusNotice{
+			Text:     *request.initialTransientStatus,
+			Kind:     uiStatusNoticeError,
+			Duration: transientStatusDuration,
+		}))
 	}
 	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)

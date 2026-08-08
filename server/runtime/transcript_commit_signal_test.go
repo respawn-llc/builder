@@ -9,14 +9,16 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
 func TestSubmitUserMessageDoesNotEmitCommittedConversationUpdatedAfterFlushedUserTurn(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	events := make([]Event, 0, 16)
@@ -33,15 +35,16 @@ func TestSubmitUserMessageDoesNotEmitCommittedConversationUpdatedAfterFlushedUse
 }
 
 func TestSubmitUserMessageWithToolCallDoesNotEmitCommittedConversationUpdatedAfterUserFlush(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -65,17 +68,18 @@ func TestSubmitUserMessageWithToolCallDoesNotEmitCommittedConversationUpdatedAft
 }
 
 func TestPatchToolCallStartedUsesTranscriptWorkingDir(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, dir, "ws", "/main")
 	patchText := "*** Begin Patch\n*** Add File: probe.txt\n+hello\n*** End Patch\n"
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "patching", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("patching"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":` + strconv.Quote(patchText) + `}`)}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -105,10 +109,11 @@ func TestPatchToolCallStartedUsesTranscriptWorkingDir(t *testing.T) {
 }
 
 func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssistantMessage(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
+			Assistant: llm.Message{Role: llm.RoleAssistant},
 			OutputItems: []llm.ResponseItem{{
 				Type: llm.ResponseItemTypeOther,
 				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
@@ -116,7 +121,7 @@ func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssist
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -142,8 +147,8 @@ func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssist
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 1 {
 		t.Fatalf("committed conversation_updated count after hosted-tool-only turn = %d, want 1; events=%+v", got, events)
@@ -157,19 +162,20 @@ func TestHostedToolOnlyTurnEmitsCommittedConversationUpdatedBeforeFollowUpAssist
 }
 
 func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHostedPersistence(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: ""},
+			Assistant:     llm.Message{Role: llm.RoleAssistant},
 			ProviderPhase: llm.AbsentProviderPhase(),
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Content: "working"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Content: textutil.Value("working")},
 				{Type: llm.ResponseItemTypeOther, Raw: json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -195,8 +201,8 @@ func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHos
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 1 {
 		t.Fatalf("committed conversation_updated count after missing-phase hosted-only turn = %d, want 1; events=%+v", got, events)
@@ -204,19 +210,20 @@ func TestHostedToolOnlyMissingPhaseTurnEmitsCommittedConversationUpdatedAfterHos
 }
 
 func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdatedAfterUserFlush(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "updated final after review", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("updated final after review"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	events := make([]Event, 0, 48)
@@ -237,11 +244,14 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
 		t.Fatalf("committed conversation_updated count after user flush = %d, want 0; events=%+v", got, events)
 	}
-	if !hasReviewerLocalEntryRole(events, "reviewer_suggestions") {
-		t.Fatalf("expected reviewer_suggestions local entry event, got %+v", events)
+	hasFeedback := false
+	for _, event := range events {
+		if event.LocalEntry != nil && event.LocalEntry.ReviewerFeedback != nil {
+			hasFeedback = true
+		}
 	}
-	if !hasReviewerLocalEntryRole(events, "reviewer_status") {
-		t.Fatalf("expected reviewer_status local entry event, got %+v", events)
+	if !hasFeedback {
+		t.Fatalf("expected typed Reviewer feedback event, got %+v", events)
 	}
 	if !hasEventKind(events, EventReviewerCompleted) {
 		t.Fatalf("expected reviewer_completed event, got %+v", events)

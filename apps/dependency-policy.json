@@ -2,11 +2,8 @@
   "$schema": "./dependency-policy.schema.json",
   "minimumReleaseAgeMinutes": 10080,
   "minimumReleaseAgeExclude": [
-    "@types/node",
-    "vite",
-    "typescript@7.0.2",
-    "@typescript/typescript-*",
-    "@rolldown/*"
+    "@napi-rs/wasm-runtime@1.2.2",
+    "vite@8.2.0"
   ],
   "directDependencyAllowlist": {
     "@app/apps": {
@@ -15,8 +12,7 @@
     "@app/desktop": {
       "dependencies": [
         "@app/native-bridge",
-        "@dnd-kit/core",
-        "@dnd-kit/sortable",
+        "@app/ui-kit",
         "@fontsource-variable/montserrat",
         "@hookform/resolvers",
         "@radix-ui/react-checkbox",
@@ -39,13 +35,15 @@
         "react-dom",
         "react-hook-form",
         "react-i18next",
-        "react-markdown",
-        "rehype-sanitize",
         "remark-gfm",
+        "remark-parse",
+        "shiki",
         "shadcn",
         "sonner",
+        "streamdown",
         "tailwind-merge",
         "tw-animate-css",
+        "unified",
         "zod"
       ],
       "devDependencies": [
@@ -87,6 +85,18 @@
         "zod"
       ],
       "devDependencies": ["typescript", "typescript7", "vitest"]
+    },
+    "@app/ui-kit": {
+      "dependencies": ["@dnd-kit/core", "@dnd-kit/sortable", "react"],
+      "devDependencies": [
+        "@testing-library/jest-dom",
+        "@testing-library/react",
+        "@types/react",
+        "@types/react-dom",
+        "typescript",
+        "typescript7",
+        "vitest"
+      ]
     }
   }
 }

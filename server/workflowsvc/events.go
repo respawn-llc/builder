@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -21,7 +22,7 @@ type workflowProjectEventBroker struct {
 
 type workflowProjectSubscription struct {
 	projectID  string
-	workflowID string
+	workflowID *runtimeids.WorkflowID
 	ch         chan serverapi.WorkflowProjectEvent
 	onClose    func()
 
@@ -34,7 +35,7 @@ func newWorkflowProjectEventBroker() *workflowProjectEventBroker {
 	return &workflowProjectEventBroker{subscribers: make(map[uint64]*workflowProjectSubscription)}
 }
 
-func (b *workflowProjectEventBroker) subscribe(projectID string, workflowID string) (*workflowProjectSubscription, error) {
+func (b *workflowProjectEventBroker) subscribe(projectID string, workflowID *runtimeids.WorkflowID) (*workflowProjectSubscription, error) {
 	sub := &workflowProjectSubscription{
 		projectID:  projectID,
 		workflowID: workflowID,
@@ -71,7 +72,8 @@ func (b *workflowProjectEventBroker) PublishWorkflowEvent(_ context.Context, eve
 		WorkflowID:       event.WorkflowID,
 		Resource:         event.Resource,
 		Action:           event.Action,
-		ChangedIDs:       append([]string(nil), event.ChangedIDs...),
+		PrimaryEntityID:  event.PrimaryEntityID,
+		RelatedIDs:       append([]string(nil), event.RelatedIDs...),
 		OccurredAtUnixMs: occurredAt,
 	})
 	return nil
@@ -97,13 +99,13 @@ func (b *workflowProjectEventBroker) publish(event serverapi.WorkflowProjectEven
 	}
 }
 
-func workflowProjectEventMatches(subscribedProjectID string, eventProjectID string) bool {
-	return subscribedProjectID == "" || subscribedProjectID == eventProjectID
+func workflowProjectEventMatches(subscribedProjectID string, eventProjectID *string) bool {
+	return subscribedProjectID == "" || (eventProjectID != nil && subscribedProjectID == *eventProjectID)
 }
 
 func workflowSubscriptionMatches(sub *workflowProjectSubscription, event serverapi.WorkflowProjectEvent) bool {
-	if sub.workflowID != "" {
-		return event.ProjectID == "" && sub.workflowID == event.WorkflowID
+	if sub.workflowID != nil {
+		return event.ProjectID == nil && event.WorkflowID != nil && *sub.workflowID == *event.WorkflowID
 	}
 	return workflowProjectEventMatches(sub.projectID, event.ProjectID)
 }

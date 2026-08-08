@@ -12,7 +12,9 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -48,17 +50,12 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	if topologyIsMain(match.entry) {
+	if _, err := match.entry.DeletionSelector(); err != nil {
 		release()
-		return serverapi.WorktreeDeleteResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
+		return serverapi.WorktreeDeleteResult{}, err
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
-		target, _, err := s.deleteTarget(ctx, workspaceCtx, match.entry)
-		if err != nil {
-			release()
-			return serverapi.WorktreeDeleteResult{}, err
-		}
-		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
+		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, match.entry, req.ForceFolderRemoval); err != nil {
 			release()
 			return serverapi.WorktreeDeleteResult{}, err
 		}
@@ -71,7 +68,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
 			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
 			return err
-		}, nil)
+		}, req.WorktreeTransitionHeader.Origin)
 		if err != nil {
 			return serverapi.WorktreeDeleteResult{}, err
 		}
@@ -120,33 +117,35 @@ func (s *Service) executeDeleteLocked(
 	req serverapi.WorktreeDeleteRequest,
 	currentSync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
-	if topologyIsMain(entry) {
-		return serverapi.WorktreeDeleteCompletedResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
+	if _, err := entry.DeletionSelector(); err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	if record != nil {
-		if err := s.ensureNoManagedTaskBlockers(ctx, record.ID); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
-		}
-	}
-	mutationCtx, releaseRuns, blockers, err := s.freezeDeleteTargetSessions(ctx, workspaceCtx.sessionID, record)
+	retainRecord, err := s.retainManagedTaskWorktreeRecord(ctx, record)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	defer releaseRuns()
-	if len(blockers) > 0 {
-		return serverapi.WorktreeDeleteCompletedResult{}, activeDeleteBlockerError(blockers)
-	}
+	var targetRoot *string
 	if target != nil {
-		if processBlockers := s.backgroundProcessBlockers(target.record.CanonicalRoot); len(processBlockers) > 0 {
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
-		}
-		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
-		}
+		targetRoot = &target.record.CanonicalRoot
+	} else if record != nil {
+		targetRoot = &record.CanonicalRoot
+	}
+	currentSessionID, err := deleteActivityCurrentSessionID(workspaceCtx.sessionID)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
+	}
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, currentSessionID, record, targetRoot)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
+	}
+	defer activityLease.Close()
+	mutationCtx := activityLease.Context()
+	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
@@ -172,7 +171,7 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
-	if record != nil {
+	if record != nil && !retainRecord {
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -187,17 +186,14 @@ func (s *Service) executeDeleteLocked(
 
 func (s *Service) ensureDeleteFolderRemovalAuthorized(
 	ctx context.Context,
-	target *syncedWorktree,
+	entry serverapi.WorktreeTopologyEntry,
 	forceFolderRemoval bool,
 ) error {
-	if target == nil {
-		return nil
-	}
-	dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
+	dirtyState, err := s.evaluateDeleteCleanliness(ctx, entry)
 	if err != nil {
 		return err
 	}
-	if dirtyState.Kind != serverapi.WorktreeDirtyStateClean && !forceFolderRemoval {
+	if dirtyState.Kind != clientui.WorktreeDirtyStateClean && !forceFolderRemoval {
 		return &serverapi.WorktreeDeletePreconditionError{DirtyState: dirtyState}
 	}
 	return nil
@@ -245,68 +241,99 @@ func (s *Service) deleteTarget(
 	}
 }
 
-func topologyIsMain(entry serverapi.WorktreeTopologyEntry) bool {
-	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		return entry.Registered.Git.IsMain
-	case serverapi.WorktreeTopologyVariantExternal:
-		return entry.External.Git.IsMain
-	default:
-		return false
-	}
-}
-
-func (s *Service) ensureNoManagedTaskBlockers(ctx context.Context, worktreeID string) error {
-	taskBlockers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{String: strings.TrimSpace(worktreeID), Valid: true})
-	if err != nil {
-		return err
-	}
-	if taskBlockers > 0 {
-		return errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still managed by %d non-terminal workflow task(s)", taskBlockers))
-	}
-	return nil
-}
-
-func (s *Service) freezeDeleteTargetSessions(
-	ctx context.Context,
-	currentSessionID string,
-	record *metadata.WorktreeRecord,
-) (context.Context, func(), []metadata.WorktreeSessionBlocker, error) {
+func (s *Service) retainManagedTaskWorktreeRecord(ctx context.Context, record *metadata.WorktreeRecord) (bool, error) {
 	if record == nil {
-		return ctx, func() {}, nil, nil
+		return false, nil
 	}
-	sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
+	taskManagers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{
+		String: strings.TrimSpace(record.ID),
+		Valid:  strings.TrimSpace(record.ID) != "",
+	})
 	if err != nil {
-		return ctx, func() {}, nil, err
+		return false, err
 	}
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, target := range sessions {
-		if id := strings.TrimSpace(target.SessionID); id != "" {
-			sessionIDs = append(sessionIDs, id)
-		}
-	}
-	startBlock, err := s.blockSessionStarts(ctx, sessionIDs)
+	return taskManagers > 0, nil
+}
+
+func deleteActivityCurrentSessionID(raw string) (*runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(raw)
 	if err != nil {
-		return ctx, func() {}, nil, err
+		return nil, fmt.Errorf("parse current delete session id: %w", err)
 	}
-	release := func() { releaseSessionStarts(startBlock) }
-	mutationCtx := authorizeSessionMaintenance(ctx, startBlock)
-	activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
-	for _, target := range sessions {
-		sessionID := strings.TrimSpace(target.SessionID)
-		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
-			continue
-		}
-		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
+	return &sessionID, nil
+}
+
+func (s *Service) acquireDeleteTargetActivity(
+	ctx context.Context,
+	currentSessionID *runtimeids.SessionID,
+	record *metadata.WorktreeRecord,
+	worktreeRoot *string,
+) (deleteTargetActivityLease, error) {
+	lease := deleteTargetActivityLease{ctx: ctx, close: func() {}}
+	if currentSessionID != nil && currentSessionID.IsZero() {
+		return deleteTargetActivityLease{}, errors.New("current delete session id must not be blank when present")
+	}
+	if worktreeRoot != nil && strings.TrimSpace(*worktreeRoot) == "" {
+		return deleteTargetActivityLease{}, errors.New("delete target root must not be blank when present")
+	}
+	if record != nil {
+		sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
 		if err != nil {
-			release()
-			return ctx, func() {}, nil, err
+			return deleteTargetActivityLease{}, err
 		}
-		if active {
-			activeBlockers = append(activeBlockers, target)
+		type targetSession struct {
+			id      runtimeids.SessionID
+			blocker metadata.WorktreeSessionBlocker
+		}
+		targets := make([]targetSession, 0, len(sessions))
+		for _, target := range sessions {
+			sessionID, err := runtimeids.ParseSessionID(target.SessionID)
+			if err != nil {
+				return deleteTargetActivityLease{}, fmt.Errorf("parse worktree-targeting session id %q: %w", target.SessionID, err)
+			}
+			if currentSessionID != nil && sessionID == *currentSessionID {
+				continue
+			}
+			targets = append(targets, targetSession{id: sessionID, blocker: target})
+		}
+		if len(targets) > 0 {
+			sessionIDs := make([]runtimeids.SessionID, 0, len(targets))
+			for _, target := range targets {
+				sessionIDs = append(sessionIDs, target.id)
+			}
+			startBlock, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionTry)
+			if err != nil {
+				if errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
+					return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, err)
+				}
+				return deleteTargetActivityLease{}, err
+			}
+			lease.close = func() { releaseSessionStarts(startBlock) }
+			lease.ctx = authorizeSessionMaintenance(ctx, startBlock)
+		}
+		activeBlockers := make([]metadata.WorktreeSessionBlocker, 0, len(targets))
+		for _, target := range targets {
+			active, err := s.authority.HasBlockingRuntimeActivity(ctx, target.id.String())
+			if err != nil {
+				lease.Close()
+				return deleteTargetActivityLease{}, err
+			}
+			if active {
+				activeBlockers = append(activeBlockers, target.blocker)
+			}
+		}
+		if len(activeBlockers) > 0 {
+			lease.Close()
+			return deleteTargetActivityLease{}, activeDeleteBlockerError(activeBlockers)
 		}
 	}
-	return mutationCtx, release, activeBlockers, nil
+	if worktreeRoot != nil {
+		if processBlockers := s.backgroundProcessBlockers(*worktreeRoot); len(processBlockers) > 0 {
+			lease.Close()
+			return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
+		}
+	}
+	return lease, nil
 }
 
 func activeDeleteBlockerError(blockers []metadata.WorktreeSessionBlocker) error {
@@ -421,10 +448,12 @@ func (s *Service) cleanupDeletedBranch(
 		}
 		branchName = createdBranch
 	case serverapi.WorktreeBranchCleanupModeDeleteSafe:
+	case serverapi.WorktreeBranchCleanupModeDeleteForce:
 	default:
 		panic(fmt.Sprintf("invalid branch cleanup policy %q", policy))
 	}
-	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
+	force := policy == serverapi.WorktreeBranchCleanupModeDeleteForce
+	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, force); err != nil {
 		diagnostic := err.Error()
 		return serverapi.WorktreeBranchCleanupOutcome{
 			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,

@@ -9,7 +9,7 @@ import type { DraftWorkflowDefinition, draftDefinitionFromSource } from "./workf
 export const workflowDefinition: WorkflowDefinition = {
   workflow: {
     description: "",
-    id: "workflow-1",
+    id: "11111111-1111-4111-8111-111111111111",
     name: "Workflow",
     version: 1,
     executionTargetPolicy: defaultWorkflowExecutionTargetPolicy,
@@ -17,6 +17,7 @@ export const workflowDefinition: WorkflowDefinition = {
   derivedWiring: emptyWorkflowDerivedWiring,
   edges: [
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-start",
@@ -27,10 +28,12 @@ export const workflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-agent",
+      thinkingSelection: "configured",
       transitionGroupID: "group-start",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-done",
@@ -41,8 +44,9 @@ export const workflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-done",
+      thinkingSelection: "configured",
       transitionGroupID: "group-done",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
   ],
   nodeGroups: [],
@@ -58,7 +62,7 @@ export const workflowDefinition: WorkflowDefinition = {
       name: "Start",
       sourceNodeID: "node-start",
       transitionID: "start",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
       description: "",
@@ -66,7 +70,7 @@ export const workflowDefinition: WorkflowDefinition = {
       name: "Done",
       sourceNodeID: "node-agent",
       transitionID: "done",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
   ],
 };
@@ -75,6 +79,7 @@ export const groupableWorkflowDefinition: WorkflowDefinition = {
   ...workflowDefinition,
   edges: [
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-start",
@@ -85,10 +90,12 @@ export const groupableWorkflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-source",
+      thinkingSelection: "configured",
       transitionGroupID: "group-start",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-source-agent",
@@ -99,8 +106,9 @@ export const groupableWorkflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-agent",
+      thinkingSelection: "configured",
       transitionGroupID: "group-source-agent",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     requiredItem(workflowDefinition.edges, 1),
   ],
@@ -118,7 +126,7 @@ export const groupableWorkflowDefinition: WorkflowDefinition = {
       name: "Implement",
       sourceNodeID: "node-source",
       transitionID: "implement",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     requiredItem(workflowDefinition.transitionGroups, 1),
   ],
@@ -129,6 +137,7 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
   edges: [
     ...workflowDefinition.edges,
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-branch-a-join",
@@ -139,10 +148,12 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-join",
+      thinkingSelection: "configured",
       transitionGroupID: "group-branch-a-join",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
+      assigneeSelection: "configured",
       contextMode: "new_session",
       contextSource: { kind: "immediate_source", nodeKey: "" },
       id: "edge-branch-b-join",
@@ -153,10 +164,12 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-join",
+      thinkingSelection: "configured",
       transitionGroupID: "group-branch-b-join",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
+      assigneeSelection: "configured",
       contextMode: "continue_session",
       contextSource: { kind: "selected_node", nodeKey: "branch_a" },
       id: "edge-join-done",
@@ -167,8 +180,9 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       promptTemplate: "",
       requiresApproval: false,
       targetNodeID: "node-done",
+      thinkingSelection: "configured",
       transitionGroupID: "group-join-done",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
   ],
   nodes: [
@@ -191,7 +205,7 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       name: "Join",
       sourceNodeID: "node-branch-a",
       transitionID: "join",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
       description: "",
@@ -199,7 +213,7 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       name: "Join",
       sourceNodeID: "node-branch-b",
       transitionID: "join",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
     {
       description: "",
@@ -207,7 +221,7 @@ export const joinWorkflowDefinition: WorkflowDefinition = {
       name: "Done",
       sourceNodeID: "node-join",
       transitionID: "done",
-      workflowID: "workflow-1",
+      workflowID: "11111111-1111-4111-8111-111111111111",
     },
   ],
 };
@@ -238,16 +252,13 @@ function workflowNode(id: string, key: string, kind: WorkflowNode["kind"], name:
     groupID: "",
     groupKey: "",
     id,
-    inputFields: [],
     joinInputProviders: [],
     key,
     kind,
     name,
     completionMode: "",
-    outputFields: [],
-    promptTemplate: kind === "agent" ? "Do work." : "",
     subagentRole: kind === "agent" ? "coder" : "",
-    workflowID: "workflow-1",
+    workflowID: "11111111-1111-4111-8111-111111111111",
   };
 }
 

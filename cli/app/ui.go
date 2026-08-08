@@ -130,6 +130,9 @@ func (m *uiModel) startupSubmitCmd() tea.Cmd {
 		return nil
 	}
 	if m.startupSubmitPromptHistoryRecorded {
+		if input, ok := promptCommandInput(startupText); ok {
+			return m.inputController().startTypedSubmissionWithPreSubmitQueuePosition(startupText, input, preSubmitQueueBack, "", activeSubmitOriginDirect)
+		}
 		return m.inputController().startSubmissionWithPreSubmitQueuePosition(startupText, preSubmitQueueBack, "")
 	}
 	return m.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID(startupText, preSubmitQueueBack, "")
@@ -249,8 +252,8 @@ func worktreeDeleteSuccessStatus(target string, result serverapi.WorktreeDeleteR
 	return status
 }
 
-func worktreeDeleteForceConfirmation(state serverapi.WorktreeDirtyState) string {
-	if state.Kind == serverapi.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
+func worktreeDeleteForceConfirmation(state clientui.WorktreeDirtyState) string {
+	if state.Kind == clientui.WorktreeDirtyStateDirty && state.DirtyFileCount != nil {
 		return fmt.Sprintf("Worktree has %d modified or untracked file(s). Press Delete again to force folder removal.", *state.DirtyFileCount)
 	}
 	return "Worktree cleanliness could not be determined. Press Delete again to force folder removal."

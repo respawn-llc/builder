@@ -76,8 +76,8 @@ func mustBuildResponsesInput(t *testing.T, items []ResponseItem) []responses.Res
 func TestBuildResponsesInputRawTakesPrecedenceOverTypedFields(t *testing.T) {
 	items := []ResponseItem{{
 		Type:   ResponseItemTypeFunctionCallOutput,
-		CallID: "call_1",
-		Name:   string(toolspec.ToolExecCommand),
+		CallID: textutil.Value("call_1"),
+		Name:   textutil.Value(string(toolspec.ToolExecCommand)),
 		Output: json.RawMessage(`"typed-collapsed-output"`),
 		Raw:    json.RawMessage(`{"type":"function_call_output","call_id":"call_1","output":"stale-raw-output"}`),
 	}}
@@ -95,13 +95,13 @@ func TestBuildPayload_SerializesAssistantToolCalls(t *testing.T) {
 		SystemPrompt: "sys",
 		Items: ItemsFromMessages([]Message{
 			{
-				Role:    RoleAssistant,
-				Content: "",
+				Role: RoleAssistant,
+
 				ToolCalls: []ToolCall{
 					{ID: "call-1", Name: "shell", Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 			},
-			{Role: RoleTool, ToolCallID: "call-1", Name: "shell", Content: "{}"},
+			{Role: RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value("shell"), Content: textutil.Value("{}")},
 		}),
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
@@ -177,8 +177,8 @@ func TestItemsFromMessagesNormalizesEscapedHTMLToolArguments(t *testing.T) {
 
 func TestBuildResponsesInput_AssistantUsesTypedMessageInput(t *testing.T) {
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
-		{Role: RoleUser, Content: "u1"},
-		{Role: RoleAssistant, Content: "a1"},
+		{Role: RoleUser, Content: textutil.Value("u1")},
+		{Role: RoleAssistant, Content: textutil.Value("a1")},
 	}))
 	if len(items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(items))
@@ -203,7 +203,7 @@ func TestBuildResponsesInput_AssistantUsesTypedMessageInput(t *testing.T) {
 }
 
 func TestBuildResponsesInput_AssistantPreservesPhase(t *testing.T) {
-	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{{Role: RoleAssistant, Content: "a1", Phase: MessagePhaseCommentary}}))
+	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{{Role: RoleAssistant, Content: textutil.Value("a1"), Phase: textutil.Value(MessagePhaseCommentary)}}))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -226,9 +226,9 @@ func TestBuildResponsesInput_AssistantPreservesPhase(t *testing.T) {
 func TestBuildResponsesInput_CanonicalAssistantPreservesPhase(t *testing.T) {
 	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{{
 		Type:    ResponseItemTypeMessage,
-		Role:    RoleAssistant,
-		Content: "done",
-		Phase:   MessagePhaseFinal,
+		Role:    textutil.Value(RoleAssistant),
+		Content: textutil.Value("done"),
+		Phase:   textutil.Value(MessagePhaseFinal),
 	}}))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
@@ -251,9 +251,9 @@ func TestBuildResponsesInput_CanonicalAssistantPreservesPhase(t *testing.T) {
 
 func TestBuildResponsesInput_NonAssistantRolesUseInputText(t *testing.T) {
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
-		{Role: RoleSystem, Content: "s1"},
-		{Role: RoleDeveloper, Content: "d1"},
-		{Role: RoleUser, Content: "u1"},
+		{Role: RoleSystem, Content: textutil.Value("s1")},
+		{Role: RoleDeveloper, Content: textutil.Value("d1")},
+		{Role: RoleUser, Content: textutil.Value("u1")},
 	}))
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
@@ -271,8 +271,8 @@ func TestBuildResponsesInput_ToolOutputSupportsStructuredInputImageItems(t *test
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
 		{
 			Role:       RoleTool,
-			ToolCallID: "call_1",
-			Content:    `[{"type":"input_image","image_url":"data:image/png;base64,abc"}]`,
+			ToolCallID: textutil.Value("call_1"),
+			Content:    textutil.Value(`[{"type":"input_image","image_url":"data:image/png;base64,abc"}]`),
 		},
 	}))
 	if len(items) != 1 {
@@ -455,7 +455,7 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5",
 		SessionID:  "s1",
-		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}}),
+		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err == nil {
 		t.Fatal("expected compact error")
@@ -464,8 +464,8 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("expected ProviderAPIError from transport path, got %T err=%v", err, err)
 	}
-	if providerErr.ProviderID != "openai" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
-		t.Fatalf("expected openai overflow classification on loopback transport, got %+v", providerErr)
+	if providerErr.ProviderID != "openai-compatible" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
+		t.Fatalf("expected openai-compatible overflow classification on loopback transport, got %+v", providerErr)
 	}
 	if !IsNonRetriableModelError(err) {
 		t.Fatalf("expected 400 overflow response to remain non-retriable, got %v", err)
@@ -477,8 +477,8 @@ func TestBuildResponsesInput_CanonicalToolOutputPromotesStructuredInputFileItems
 	prepared := PrepareOpenAIInputItems([]ResponseItem{
 		{
 			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: "call_1",
-			Name:   string(toolspec.ToolViewImage),
+			CallID: textutil.Value("call_1"),
+			Name:   textutil.Value(string(toolspec.ToolViewImage)),
 			Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 		},
 	})
@@ -541,8 +541,8 @@ func TestBuildResponsesInputRejectsUnpreparedItemsWithTypedDiagnostics(t *testin
 			name: "view image output missing raw",
 			item: ResponseItem{
 				Type:   ResponseItemTypeFunctionCallOutput,
-				CallID: "call_1",
-				Name:   string(toolspec.ToolViewImage),
+				CallID: textutil.Value("call_1"),
+				Name:   textutil.Value(string(toolspec.ToolViewImage)),
 				Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 			},
 			state:     OpenAIInputPreparationMissingRaw,
@@ -550,13 +550,13 @@ func TestBuildResponsesInputRejectsUnpreparedItemsWithTypedDiagnostics(t *testin
 		},
 		{
 			name:      "message missing content",
-			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: RoleUser},
+			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser)},
 			state:     OpenAIInputPreparationMissingRaw,
 			invariant: OpenAIInputInvariantEmptyContent,
 		},
 		{
 			name:      "invalid raw",
-			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello", Raw: json.RawMessage(`{`)},
+			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello"), Raw: json.RawMessage(`{`)},
 			state:     OpenAIInputPreparationInvalidRaw,
 			invariant: OpenAIInputPreparationInvalidRaw,
 		},
@@ -571,10 +571,17 @@ func TestBuildResponsesInputRejectsUnpreparedItemsWithTypedDiagnostics(t *testin
 			if !errors.As(err, &preparationErr) {
 				t.Fatalf("expected typed preparation error, got %T", err)
 			}
+			var expectedName, expectedCallID *string
+			if tt.item.Name != nil {
+				expectedName = textutil.OptionalTrimmedString(*tt.item.Name)
+			}
+			if tt.item.CallID != nil {
+				expectedCallID = textutil.OptionalTrimmedString(*tt.item.CallID)
+			}
 			if preparationErr.Index != 0 ||
 				preparationErr.Type != tt.item.Type ||
-				!reflect.DeepEqual(preparationErr.Name, textutil.OptionalTrimmedString(tt.item.Name)) ||
-				!reflect.DeepEqual(preparationErr.CallID, textutil.OptionalTrimmedString(tt.item.CallID)) ||
+				!reflect.DeepEqual(preparationErr.Name, expectedName) ||
+				!reflect.DeepEqual(preparationErr.CallID, expectedCallID) ||
 				preparationErr.State != tt.state ||
 				preparationErr.Invariant != tt.invariant {
 				t.Fatalf("unexpected preparation error: %+v", preparationErr)
@@ -588,9 +595,9 @@ func TestBuildResponsesInput_MessageToolOutputPromotesPDFToInputMessage(t *testi
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
 		{
 			Role:       RoleTool,
-			ToolCallID: "call_1",
-			Name:       string(toolspec.ToolViewImage),
-			Content:    `[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`,
+			ToolCallID: textutil.Value("call_1"),
+			Name:       textutil.Value(string(toolspec.ToolViewImage)),
+			Content:    textutil.Value(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 		},
 	}))
 	if len(items) != 2 {
@@ -630,8 +637,8 @@ func TestBuildResponsesInput_CanonicalNonViewImageToolOutputKeepsStructuredInput
 	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{
 		{
 			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: "call_1",
-			Name:   string(toolspec.ToolExecCommand),
+			CallID: textutil.Value("call_1"),
+			Name:   textutil.Value(string(toolspec.ToolExecCommand)),
 			Output: json.RawMessage(`[{"type":"input_file","file_data":"Zm9v","filename":"doc.pdf"}]`),
 		},
 	}))
@@ -841,7 +848,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 
 	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "vendor-custom-model",
-		Items: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}}),
+		Items: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -1160,5 +1167,15 @@ func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *tes
 	jsonPayload := mustMarshalObject(t, payload)
 	if _, ok := jsonPayload["prompt_cache_key"]; ok {
 		t.Fatalf("expected prompt_cache_key omitted for openai-compatible provider, got %#v", jsonPayload["prompt_cache_key"])
+	}
+}
+
+func TestPrepareOpenAIInputItemsPreservesReasoningPresentationBytes(t *testing.T) {
+	raw := json.RawMessage(`{"type":"reasoning","id":"reason_1","summary":[{"type":"summary_text","text":"**raw reasoning**"}],"encrypted_content":"enc"}`)
+	prepared := PrepareOpenAIInputItems([]ResponseItem{{
+		Type: ResponseItemTypeReasoning, ID: textutil.Value("reason_1"), Raw: raw,
+	}})
+	if len(prepared) != 1 || string(prepared[0].Raw) != string(raw) {
+		t.Fatalf("prepared reasoning bytes = %q, want %q", prepared[0].Raw, raw)
 	}
 }

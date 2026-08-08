@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"core/server/llm"
@@ -58,16 +59,34 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string, owners ...map[string]*TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
-	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+	entries := visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
+	for index := range entries {
+		entry := &entries[index]
 		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
+		if seq > 0 {
+			entry.CommittedProvenance = &TranscriptCommittedRowProvenance{EventSequence: seq}
+		}
+		if len(owners) > 0 && entry.ToolCallID != "" {
+			if owner := owners[0][entry.ToolCallID]; owner != nil {
+				entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(owner)
+			}
+		}
+	}
+	sort.SliceStable(entries, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			entries[left].CommittedProvenance,
+			entries[right].CommittedProvenance,
+		)
+	})
+	for _, entry := range entries {
 		s.appendEntry(entry)
 	}
 }
@@ -165,8 +184,10 @@ func (w *responseItemMessageWalker) Apply(item llm.ResponseItem) {
 	}
 	switch item.Type {
 	case llm.ResponseItemTypeMessage:
-		role := item.Role
-		if role == "" {
+		role := llm.RoleUser
+		if item.Role != nil {
+			role = *item.Role
+		} else {
 			role = llm.RoleUser
 		}
 		msg := llm.Message{
@@ -175,7 +196,7 @@ func (w *responseItemMessageWalker) Apply(item llm.ResponseItem) {
 			SourcePath:           item.SourcePath,
 			WorktreeContext:      session.CloneWorktreeContext(item.WorktreeContext),
 			Phase:                item.Phase,
-			Content:              item.Content,
+			Content:              textutil.Pointer(item.Content),
 			CompactContent:       item.CompactContent,
 			BackgroundActivityID: item.BackgroundActivityID,
 			BackgroundExitCode:   textutil.Pointer(item.BackgroundExitCode),
@@ -190,42 +211,38 @@ func (w *responseItemMessageWalker) Apply(item llm.ResponseItem) {
 		w.emit(msg)
 	case llm.ResponseItemTypeFunctionCall, llm.ResponseItemTypeCustomToolCall:
 		assistant := w.ensureAssistant()
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
+		callID, _ := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		name, _ := textutil.OptionalTrimmed(item.Name)
 		call := llm.ToolCall{
 			ID:           callID,
-			Name:         item.Name,
+			Name:         name,
 			Presentation: append(json.RawMessage(nil), item.ToolPresentation...),
 			Input:        normalizeRuntimeToolInput(string(item.Arguments)),
 			Custom:       llm.ResponseItemTypeIsCustomToolCall(item.Type),
 			CustomInput:  item.CustomInput,
 		}
-		if call.Custom && strings.TrimSpace(call.CustomInput) != "" {
-			call.Input = normalizeRuntimeToolInput(call.CustomInput)
+		if call.Custom && call.CustomInput != nil &&
+			strings.TrimSpace(*call.CustomInput) != "" {
+			call.Input = normalizeRuntimeToolInput(*call.CustomInput)
 		}
 		assistant.ToolCalls = append(assistant.ToolCalls, call)
 	case llm.ResponseItemTypeFunctionCallOutput, llm.ResponseItemTypeCustomToolOutput:
 		w.flushAssistant()
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
-		if callID == "" {
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
 			return
 		}
 		w.emit(llm.Message{
 			Role:        llm.RoleTool,
 			MessageType: llm.ToolOutputMessageType(item.Type == llm.ResponseItemTypeCustomToolOutput),
-			ToolCallID:  callID,
-			Name:        item.Name,
-			Content:     stringFromJSONRawRuntime(item.Output),
+			ToolCallID:  textutil.Value(callID),
+			Name:        textutil.Pointer(item.Name),
+			Content:     textutil.Value(stringFromJSONRawRuntime(item.Output)),
 		})
 	case llm.ResponseItemTypeReasoning:
-		id := strings.TrimSpace(item.ID)
-		encrypted := strings.TrimSpace(item.EncryptedContent)
-		if id == "" || encrypted == "" {
+		id, hasID := textutil.OptionalTrimmed(item.ID)
+		encrypted, hasEncrypted := textutil.OptionalTrimmed(item.EncryptedContent)
+		if !hasID || !hasEncrypted {
 			return
 		}
 		assistant := w.ensureAssistant()
@@ -254,7 +271,7 @@ func (w *responseItemMessageWalker) flushAssistant() {
 	}
 	msg := *w.currentAssistant
 	w.currentAssistant = nil
-	if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 && len(msg.ReasoningItems) == 0 {
+	if msg.Content == nil && len(msg.ToolCalls) == 0 && len(msg.ReasoningItems) == 0 {
 		return
 	}
 	w.emit(msg)
@@ -290,8 +307,8 @@ func collectMaterializedToolCalls(items []llm.ResponseItem) map[string]struct{} 
 		if msg.Role != llm.RoleTool {
 			return
 		}
-		callID := strings.TrimSpace(msg.ToolCallID)
-		if callID == "" {
+		callID, present := textutil.OptionalTrimmed(msg.ToolCallID)
+		if !present {
 			return
 		}
 		out[callID] = struct{}{}

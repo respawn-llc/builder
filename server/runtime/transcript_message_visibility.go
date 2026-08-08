@@ -11,14 +11,19 @@ import (
 )
 
 func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
-	content := strings.TrimSpace(msg.Content)
+	if msg.Content == nil {
+		return ChatEntry{}, false
+	}
+	content := strings.TrimSpace(*msg.Content)
 	if content == "" {
 		return ChatEntry{}, false
 	}
-	if msg.MessageType == llm.MessageTypeCompactionSummary {
+	messageType, _ := textutil.OptionalValue(msg.MessageType)
+	sourcePath, _ := textutil.OptionalTrimmed(msg.SourcePath)
+	if messageType == llm.MessageTypeCompactionSummary {
 		return compactionSummaryChatEntry(msg), true
 	}
-	return ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: msg.Content, MessageType: msg.MessageType, SourcePath: strings.TrimSpace(msg.SourcePath), CompactLabel: compactLabelForMessage(msg)}, true
+	return ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: *msg.Content, MessageType: messageType, SourcePath: sourcePath, CompactLabel: compactLabelForMessage(msg)}, true
 }
 
 func isRollbackCandidateMessage(msg llm.Message) bool {
@@ -30,20 +35,22 @@ func isRollbackCandidateMessage(msg llm.Message) bool {
 }
 
 func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
-	if strings.TrimSpace(msg.Content) == "" {
+	messageType, _ := textutil.OptionalValue(msg.MessageType)
+	sourcePath, _ := textutil.OptionalTrimmed(msg.SourcePath)
+	if msg.Content == nil {
 		if isUnknownDeveloperMessageType(msg.MessageType) {
 			return ChatEntry{
 				Visibility:   transcript.EntryVisibilityDetail,
 				Role:         string(transcript.EntryRoleDeveloperContext),
 				Text:         "empty developer message",
-				MessageType:  msg.MessageType,
-				SourcePath:   strings.TrimSpace(msg.SourcePath),
+				MessageType:  messageType,
+				SourcePath:   sourcePath,
 				CompactLabel: compactLabelForMessage(msg),
 			}, true
 		}
 		return ChatEntry{}, false
 	}
-	switch msg.MessageType {
+	switch messageType {
 	case llm.MessageTypeAgentsMD,
 		llm.MessageTypeSkills,
 		llm.MessageTypeEnvironment,
@@ -57,41 +64,47 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 	case llm.MessageTypeCompactionSummary:
 		return compactionSummaryChatEntry(msg), true
 	case llm.MessageTypeInterruption:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleInterruption), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleInterruption), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeGoal:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleGoalFeedback), Text: msg.Content, CondensedText: msg.CompactContent, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		condensed, _ := textutil.OptionalExact(msg.CompactContent)
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleGoalFeedback), Text: *msg.Content, CondensedText: condensed, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeErrorFeedback:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleDeveloperFeedback), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleDeveloperFeedback), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
+	case llm.MessageTypeAgentSteer:
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleDeveloperFeedback), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeReviewerFeedback:
 		return ChatEntry{}, false
 	case llm.MessageTypeCompactionSoonReminder:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleWarning), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleWarning), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeBackgroundNotice:
+		condensed, _ := textutil.OptionalExact(msg.CompactContent)
+		activityID, _ := textutil.OptionalTrimmed(msg.BackgroundActivityID)
+		processID, _ := textutil.OptionalTrimmed(msg.Name)
 		return ChatEntry{
 			Visibility:           messageTypeTranscriptVisibility(msg.MessageType),
 			Role:                 string(transcript.EntryRoleSystem),
-			Text:                 msg.Content,
-			CondensedText:        msg.CompactContent,
-			MessageType:          msg.MessageType,
+			Text:                 *msg.Content,
+			CondensedText:        condensed,
+			MessageType:          messageType,
 			CompactLabel:         compactLabelForMessage(msg),
-			BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
-			BackgroundProcessID:  strings.TrimSpace(msg.Name),
+			BackgroundActivityID: activityID,
+			BackgroundProcessID:  processID,
 			BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
 		}, true
 	case llm.MessageTypeHandoffFutureMessage:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
-	case llm.MessageTypeManualCompactionCarryover:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleManualCompactionCarryover), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+	case llm.MessageTypeCompactionPreservedUserMessage:
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleCompactionPreservedUserMessage), Text: *msg.Content, MessageType: messageType, CompactLabel: compactLabelForMessage(msg)}, true
 	default:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	}
 }
 
-func isUnknownDeveloperMessageType(messageType llm.MessageType) bool {
-	if strings.TrimSpace(string(messageType)) == "" {
+func isUnknownDeveloperMessageType(messageType *llm.MessageType) bool {
+	if messageType == nil || strings.TrimSpace(string(*messageType)) == "" {
 		return false
 	}
-	switch messageType {
+	switch *messageType {
 	case llm.MessageTypeAgentsMD,
 		llm.MessageTypeSkills,
 		llm.MessageTypeSubagents,
@@ -104,14 +117,15 @@ func isUnknownDeveloperMessageType(messageType llm.MessageType) bool {
 		llm.MessageTypeReviewerFeedback,
 		llm.MessageTypeBackgroundNotice,
 		llm.MessageTypeCustomToolCallOutput,
-		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeCompactionPreservedUserMessage,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit,
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
 		llm.MessageTypeGoal,
-		llm.MessageTypeActiveGoalContinuation:
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeAgentSteer:
 		return false
 	default:
 		return true
@@ -119,27 +133,36 @@ func isUnknownDeveloperMessageType(messageType llm.MessageType) bool {
 }
 
 func compactionSummaryChatEntry(msg llm.Message) ChatEntry {
-	label := compactLabelForMessage(msg)
+	label, _ := textutil.OptionalTrimmed(msg.CompactContent)
+	text := ""
+	if msg.Content != nil {
+		text = *msg.Content
+	}
+	messageType, _ := textutil.OptionalValue(msg.MessageType)
+	sourcePath, _ := textutil.OptionalTrimmed(msg.SourcePath)
 	return ChatEntry{
 		Visibility:    messageTypeTranscriptVisibility(msg.MessageType),
 		Role:          string(transcript.EntryRoleCompactionSummary),
-		Text:          msg.Content,
+		Text:          text,
 		CondensedText: label,
-		MessageType:   msg.MessageType,
-		SourcePath:    strings.TrimSpace(msg.SourcePath),
+		MessageType:   messageType,
+		SourcePath:    sourcePath,
 		CompactLabel:  label,
 	}
 }
 
-func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.EntryVisibility {
-	switch messageType {
+func messageTypeTranscriptVisibility(messageType *llm.MessageType) transcript.EntryVisibility {
+	if messageType == nil {
+		return transcript.EntryVisibilityOngoing
+	}
+	switch *messageType {
 	case llm.MessageTypeAgentsMD,
 		llm.MessageTypeSkills,
 		llm.MessageTypeEnvironment,
 		llm.MessageTypeSubagents,
 		llm.MessageTypeCompactionSoonReminder,
 		llm.MessageTypeHandoffFutureMessage,
-		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeCompactionPreservedUserMessage,
 		llm.MessageTypeHeadlessMode,
 		llm.MessageTypeHeadlessModeExit:
 		return transcript.EntryVisibilityDetail
@@ -154,7 +177,8 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 		llm.MessageTypeErrorFeedback,
 		llm.MessageTypeWorktreeMode,
 		llm.MessageTypeWorktreeModeExit,
-		llm.MessageTypeGoal:
+		llm.MessageTypeGoal,
+		llm.MessageTypeAgentSteer:
 		return transcript.EntryVisibilityOngoing
 	default:
 		return transcript.EntryVisibilityOngoing
@@ -162,28 +186,38 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 }
 
 func developerContextEntry(msg llm.Message, visibility transcript.EntryVisibility) ChatEntry {
+	text := ""
+	if msg.Content != nil {
+		text = *msg.Content
+	}
+	condensedText, _ := textutil.OptionalTrimmed(msg.CompactContent)
+	messageType, _ := textutil.OptionalValue(msg.MessageType)
+	sourcePath, _ := textutil.OptionalTrimmed(msg.SourcePath)
+	backgroundActivityID, _ := textutil.OptionalTrimmed(msg.BackgroundActivityID)
+	backgroundProcessID, _ := textutil.OptionalTrimmed(msg.Name)
 	return ChatEntry{
 		Visibility:           visibility,
 		Role:                 string(transcript.EntryRoleDeveloperContext),
-		Text:                 msg.Content,
-		CondensedText:        strings.TrimSpace(msg.CompactContent),
-		MessageType:          msg.MessageType,
-		SourcePath:           strings.TrimSpace(msg.SourcePath),
+		Text:                 text,
+		CondensedText:        condensedText,
+		MessageType:          messageType,
+		SourcePath:           sourcePath,
 		WorktreeContext:      session.CloneWorktreeContext(msg.WorktreeContext),
 		CompactLabel:         compactLabelForMessage(msg),
-		BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
-		BackgroundProcessID:  strings.TrimSpace(msg.Name),
+		BackgroundActivityID: backgroundActivityID,
+		BackgroundProcessID:  backgroundProcessID,
 		BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
 	}
 }
 
 func compactLabelForMessage(msg llm.Message) string {
-	if label := strings.TrimSpace(msg.CompactContent); label != "" {
+	if label, present := textutil.OptionalTrimmed(msg.CompactContent); present {
 		return label
 	}
-	switch msg.MessageType {
+	messageType, _ := textutil.OptionalValue(msg.MessageType)
+	switch messageType {
 	case llm.MessageTypeAgentsMD:
-		if sourcePath := strings.TrimSpace(msg.SourcePath); sourcePath != "" {
+		if sourcePath, present := textutil.OptionalTrimmed(msg.SourcePath); present {
 			return fmt.Sprintf("%s file content", sourcePath)
 		}
 		return "AGENTS.md file content"
@@ -202,7 +236,7 @@ func compactLabelForMessage(msg llm.Message) string {
 	case llm.MessageTypeWorktreeModeExit:
 		return ""
 	case llm.MessageTypeCompactionSummary:
-		return "Context compacted"
+		return ""
 	case llm.MessageTypeInterruption:
 		return "You interrupted"
 	case llm.MessageTypeErrorFeedback:
@@ -213,11 +247,11 @@ func compactLabelForMessage(msg llm.Message) string {
 		return "Compaction reminder"
 	case llm.MessageTypeHandoffFutureMessage:
 		return "Future-agent context"
-	case llm.MessageTypeManualCompactionCarryover:
+	case llm.MessageTypeCompactionPreservedUserMessage:
 		return "Last user message preserved for compaction"
 	default:
-		if msg.Role == llm.RoleDeveloper && strings.TrimSpace(string(msg.MessageType)) != "" {
-			return "Developer context: " + strings.TrimSpace(string(msg.MessageType))
+		if msg.Role == llm.RoleDeveloper && strings.TrimSpace(string(messageType)) != "" {
+			return "Developer context: " + strings.TrimSpace(string(messageType))
 		}
 		return ""
 	}

@@ -27,74 +27,73 @@ func (c *countingFailingStreamClient) GenerateStreamWithEvents(context.Context, 
 	return llm.Response{}, c.err
 }
 
-func TestGenerateWithRetryStalledStreamUsesReducedRetryBudget(t *testing.T) {
+func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 	withGenerateRetryDelays(t, []time.Duration{0, 0, 0, 0, 0})
 	withIdleStallRetryDelays(t, []time.Duration{0})
 
 	store := mustCreateTestSession(t)
-	stall := &countingFailingStreamClient{err: fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled)}
-	eng := mustNewTestEngine(t, store, stall, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", stall, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"}, nil, nil, nil); err == nil {
-		t.Fatal("expected stall failure after reduced retries")
-	}
-	if got := stall.calls.Load(); got != int32(len(idleStallRetryDelays)+1) {
-		t.Fatalf("stall attempts = %d, want %d", got, len(idleStallRetryDelays)+1)
-	}
-}
-
-func TestGenerateWithRetryGenericRetriableUsesFullRetryBudget(t *testing.T) {
-	withGenerateRetryDelays(t, []time.Duration{0, 0, 0, 0, 0})
-	withIdleStallRetryDelays(t, []time.Duration{0})
-
-	store := mustCreateTestSession(t)
-	retriable := &countingFailingStreamClient{err: &llm.APIStatusError{StatusCode: 503, Body: "overloaded"}}
-	eng := mustNewTestEngine(t, store, retriable, tools.NewRegistry(), Config{Model: "gpt-5"})
-
-	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", retriable, llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"}, nil, nil, nil); err == nil {
-		t.Fatal("expected failure after full retries")
-	}
-	if got := retriable.calls.Load(); got != int32(len(generateRetryDelays)+1) {
-		t.Fatalf("generic retriable attempts = %d, want %d", got, len(generateRetryDelays)+1)
-	}
-}
-
-func TestGenerateWithRetryRequiredChoiceSurfacesProviderAndTransportFailures(t *testing.T) {
-	withGenerateRetryDelays(t, []time.Duration{0, 0, 0, 0, 0})
-	withIdleStallRetryDelays(t, []time.Duration{0})
-
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	tests := []struct {
-		name string
-		err  error
+		name         string
+		request      llm.Request
+		err          error
+		wantAttempts int32
 	}{
-		{name: "provider", err: &llm.APIStatusError{StatusCode: 503, Body: "overloaded"}},
-		{name: "transport stall", err: fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			retriable := &countingFailingStreamClient{err: tt.err}
-			eng := mustNewTestEngine(t, store, retriable, tools.NewRegistry(), Config{Model: "gpt-5"})
-			request := llm.Request{
+		{
+			name:         "automatic stall uses reduced budget",
+			request:      llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"},
+			err:          fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled),
+			wantAttempts: int32(len(idleStallRetryDelays) + 1),
+		},
+		{
+			name:         "automatic retriable uses full budget",
+			request:      llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "gpt-5"},
+			err:          &llm.APIStatusError{StatusCode: 503, Body: "overloaded"},
+			wantAttempts: int32(len(generateRetryDelays) + 1),
+		},
+		{
+			name: "required provider surfaces without retry",
+			request: llm.Request{
 				Model:          "gpt-5",
 				ToolChoiceMode: llm.ToolChoiceModeRequired,
 				Tools: []llm.Tool{{
 					Name:   "complete_node",
 					Schema: json.RawMessage(`{"type":"object"}`),
 				}},
-			}
+			},
+			err:          &llm.APIStatusError{StatusCode: 503, Body: "overloaded"},
+			wantAttempts: 1,
+		},
+		{
+			name: "required stall surfaces without retry",
+			request: llm.Request{
+				Model:          "gpt-5",
+				ToolChoiceMode: llm.ToolChoiceModeRequired,
+				Tools: []llm.Tool{{
+					Name:   "complete_node",
+					Schema: json.RawMessage(`{"type":"object"}`),
+				}},
+			},
+			err:          fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled),
+			wantAttempts: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retriable := &countingFailingStreamClient{err: tt.err}
 
-			if _, err := eng.generateWithRetryClient(context.Background(), "step-1", retriable, request, nil, nil, nil); err == nil {
-				t.Fatal("expected required-choice failure to surface")
+			if _, err := eng.generateWithRetryClient(context.Background(), "step-1", retriable, tt.request, nil, nil, nil); err == nil {
+				t.Fatal("expected retry-policy failure to surface")
 			}
-			if got := retriable.calls.Load(); got != 1 {
-				t.Fatalf("required-choice attempts = %d, want 1", got)
+			if got := retriable.calls.Load(); got != tt.wantAttempts {
+				t.Fatalf("retry-policy attempts = %d, want %d", got, tt.wantAttempts)
 			}
 		})
 	}
 }
 
 func TestStatusFromRunErrorClassifiesStallAsFailed(t *testing.T) {
+	t.Parallel()
 	stall := fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled)
 	if status := statusFromRunError(stall); status != RunStatusFailed {
 		t.Fatalf("statusFromRunError(stall) = %v, want RunStatusFailed", status)

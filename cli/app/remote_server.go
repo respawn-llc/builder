@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
 	"core/shared/apicontract"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -15,15 +15,14 @@ import (
 )
 
 type remoteAppServer struct {
-	remote       *client.Remote
-	identity     protocol.ServerIdentity
-	cfg          config.App
-	closeFn      func() error
-	owns         bool
-	presentation startupPresentation
-	promptRoots  commands.ClientPromptRoots
-	promptErr    error
-	retarget     *sessionWorkspaceRetargetContext
+	remote         *client.Remote
+	identity       protocol.ServerIdentity
+	cfg            config.App
+	closeFn        func() error
+	owns           bool
+	presentation   startupPresentation
+	retarget       *sessionWorkspaceRetargetContext
+	clientSettings config.ClientSettings
 }
 
 type startupPresentation struct {
@@ -37,7 +36,6 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn f
 	if closeFn == nil {
 		closeFn = remote.Close
 	}
-	promptRoots, promptErr := commands.NewClientPromptRoots()
 	server := &remoteAppServer{
 		remote:       remote,
 		identity:     remote.Identity(),
@@ -45,20 +43,9 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn f
 		closeFn:      closeFn,
 		owns:         ownsServer,
 		presentation: startupPresentation{Theme: theme.Resolve(cfg.Settings.Theme)},
-		promptRoots:  promptRoots,
-		promptErr:    promptErr,
 	}
 	if binding, present := remote.ProjectBinding(); present {
 		server.retarget = sessionWorkspaceRetargetContextFromBinding(binding, server.presentation.Theme)
-	}
-	return server
-}
-
-func newRemoteAppServerWithAuthAndPromptRoots(remote *client.Remote, cfg config.App, closeFn func() error, ownsServer bool, roots commands.ClientPromptRoots) *remoteAppServer {
-	server := newRemoteAppServerWithAuth(remote, cfg, closeFn, ownsServer)
-	if server != nil {
-		server.promptRoots = roots
-		server.promptErr = nil
 	}
 	return server
 }
@@ -67,11 +54,11 @@ func (s *remoteAppServer) PresentationTheme() string {
 	return s.presentation.Theme
 }
 
-func (s *remoteAppServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
-	if s.promptErr != nil {
-		return commands.ClientPromptRoots{}, s.promptErr
+func (s *remoteAppServer) PromptCommandCatalogClient(_ context.Context, sessionID string, _ clientui.SessionExecutionTarget) (apicontract.PromptCommandCatalogService, error) {
+	if s == nil {
+		return nil, errors.New("remote server is required")
 	}
-	return s.promptRoots, nil
+	return s.remote.PromptCommandCatalogClientForSession(sessionID)
 }
 
 func (s *remoteAppServer) Close() error {
@@ -96,6 +83,13 @@ func (s *remoteAppServer) Config() config.App {
 		return config.App{}
 	}
 	return s.cfg
+}
+
+func (s *remoteAppServer) ClientSettings() config.ClientSettings {
+	if s == nil {
+		return config.ClientSettings{}
+	}
+	return s.clientSettings
 }
 
 func (s *remoteAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
@@ -138,9 +132,8 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	retargetContext := sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
 	next := newRemoteAppServerWithAuth(bound.Remote, s.cfg, bound.CloseFn, s.owns)
 	next.presentation = s.presentation
-	next.promptRoots = s.promptRoots
-	next.promptErr = s.promptErr
 	next.retarget = retargetContext
+	next.clientSettings = s.clientSettings
 	s.remote = nil
 	s.closeFn = nil
 	return next, nil

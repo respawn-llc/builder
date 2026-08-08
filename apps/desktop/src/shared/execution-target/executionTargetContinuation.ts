@@ -1,8 +1,8 @@
 import type {
   ApiService,
-  TaskApproveResponse,
   TaskMoveInput,
   TaskMoveResponse,
+  TaskResumeResponse,
   TaskStartResponse,
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
@@ -10,37 +10,38 @@ import type {
 } from "@/api";
 import { newSetupOperationID, type SetupOperationID } from "@/api";
 
-export type ExecutionTargetContinuationAction =
+export type TaskInitiatingAction =
   | Readonly<{
       kind: "start";
       taskID: string;
       setupOperationID: SetupOperationID;
+      proceedDespiteDependencies: boolean;
     }>
   | Readonly<{
       kind: "move";
       input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
     }>
   | Readonly<{
-      kind: "approve";
-      taskTransitionID: string;
+      kind: "resume";
+      taskID: string;
       setupOperationID: SetupOperationID;
     }>;
 
-export type ExecutionTargetActionResult =
+export type TaskInitiatingActionResult =
   | Readonly<{
       kind: "start";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "start" }>;
+      action: Extract<TaskInitiatingAction, { kind: "start" }>;
       response: TaskStartResponse;
     }>
   | Readonly<{
       kind: "move";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "move" }>;
+      action: Extract<TaskInitiatingAction, { kind: "move" }>;
       response: TaskMoveResponse;
     }>
   | Readonly<{
-      kind: "approve";
-      action: Extract<ExecutionTargetContinuationAction, { kind: "approve" }>;
-      response: TaskApproveResponse;
+      kind: "resume";
+      action: Extract<TaskInitiatingAction, { kind: "resume" }>;
+      response: TaskResumeResponse;
     }>;
 
 export type ExecutionTargetSelectionDraft = Readonly<{
@@ -48,16 +49,21 @@ export type ExecutionTargetSelectionDraft = Readonly<{
   customRef: string;
 }>;
 
-export function startExecutionTargetAction(
+export function startTaskInitiatingAction(
   taskID: string,
   setupOperationID: SetupOperationID = newSetupOperationID(),
-): Extract<ExecutionTargetContinuationAction, { kind: "start" }> {
-  return { kind: "start", taskID, setupOperationID };
+): Extract<TaskInitiatingAction, { kind: "start" }> {
+  return {
+    kind: "start",
+    taskID,
+    setupOperationID,
+    proceedDespiteDependencies: false,
+  };
 }
 
-export function moveExecutionTargetAction(
+export function moveTaskInitiatingAction(
   input: TaskMoveInput,
-): Extract<ExecutionTargetContinuationAction, { kind: "move" }> {
+): Extract<TaskInitiatingAction, { kind: "move" }> {
   return {
     kind: "move",
     input: {
@@ -67,11 +73,24 @@ export function moveExecutionTargetAction(
   };
 }
 
-export function approveExecutionTargetAction(
-  taskTransitionID: string,
+export function resumeTaskInitiatingAction(
+  taskID: string,
   setupOperationID: SetupOperationID = newSetupOperationID(),
-): Extract<ExecutionTargetContinuationAction, { kind: "approve" }> {
-  return { kind: "approve", taskTransitionID, setupOperationID };
+): Extract<TaskInitiatingAction, { kind: "resume" }> {
+  return { kind: "resume", taskID, setupOperationID };
+}
+
+export function proceedWithTaskInitiatingAction(action: TaskInitiatingAction): TaskInitiatingAction {
+  if (action.kind === "start") {
+    return { ...action, proceedDespiteDependencies: true };
+  }
+  if (action.kind === "resume") {
+    return action;
+  }
+  return {
+    ...action,
+    input: { ...action.input, proceedDespiteDependencies: true },
+  };
 }
 
 export function initialExecutionTargetSelectionDraft(
@@ -96,17 +115,22 @@ export function executionTargetSelectionFromDraft(
   return customRef.length === 0 ? null : { mode: draft.mode, customRef };
 }
 
-export async function executeExecutionTargetAction(
+export async function executeTaskInitiatingAction(
   api: ApiService,
-  action: ExecutionTargetContinuationAction,
+  action: TaskInitiatingAction,
   selection?: WorkflowExecutionTargetSelection,
-): Promise<ExecutionTargetActionResult> {
+): Promise<TaskInitiatingActionResult> {
   switch (action.kind) {
     case "start":
       return {
         kind: action.kind,
         action,
-        response: await api.startTask(action.taskID, action.setupOperationID, selection),
+        response: await api.startTask({
+          taskID: action.taskID,
+          setupOperationID: action.setupOperationID,
+          executionTarget: selection,
+          proceedDespiteDependencies: action.proceedDespiteDependencies,
+        }),
       };
     case "move":
       return {
@@ -117,11 +141,19 @@ export async function executeExecutionTargetAction(
           executionTarget: selection,
         }),
       };
-    case "approve":
+    case "resume":
       return {
         kind: action.kind,
         action,
-        response: await api.approveTransition(action.taskTransitionID, action.setupOperationID, selection),
+        response: await api.resumeTask({
+          taskID: action.taskID,
+          setupOperationID: action.setupOperationID,
+          executionTarget: selection,
+        }),
       };
   }
+}
+
+export function taskInitiatingActionTaskID(action: TaskInitiatingAction): string {
+  return action.kind === "move" ? action.input.taskID : action.taskID;
 }

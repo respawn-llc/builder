@@ -12,10 +12,9 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
-	"core/shared/textutil"
 )
 
-const taskCommentListDefaultPageSize = 100
+const taskCommentListDefaultLimit = 100
 
 func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
@@ -57,7 +56,7 @@ func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagWasProvided(fs, "author"))
+		commentAuthor := taskCommentAuthorForAdd(context.Background(), remote, taskID, *author, flagExplicit(fs, "author"))
 		if trimmedAuthorID := strings.TrimSpace(*authorID); trimmedAuthorID != "" {
 			commentAuthor.ID = trimmedAuthorID
 		}
@@ -86,104 +85,7 @@ func taskCommentAuthorForAdd(ctx context.Context, remote workflowCommandRemote, 
 	if !ok {
 		return taskCommentAuthor{Kind: "user"}
 	}
-	detail, err := getWorkflowTaskByID(ctx, remote, taskID)
-	if err == nil {
-		if authorID := workflowTaskAgentAuthorID(detail, sessionID); authorID != "" {
-			return taskCommentAuthor{Kind: "agent", ID: authorID}
-		}
-	}
 	return taskCommentAuthor{Kind: "agent", ID: sessionAgentAuthorID(ctx, remote, sessionID)}
-}
-
-func workflowTaskAgentAuthorID(task serverapi.WorkflowTaskDetail, sessionID string) string {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return ""
-	}
-	nodeKeyByID := map[string]string{}
-	for _, placement := range task.Placements {
-		if strings.TrimSpace(placement.NodeID) != "" && strings.TrimSpace(placement.NodeKey) != "" {
-			nodeKeyByID[placement.NodeID] = strings.TrimSpace(placement.NodeKey)
-		}
-	}
-	run, ok := workflowTaskAgentRun(task, trimmedSessionID)
-	if !ok {
-		return ""
-	}
-	if role := strings.TrimSpace(run.Role); role != "" {
-		return role
-	}
-	if nodeKey := nodeKeyByID[strings.TrimSpace(run.NodeID)]; nodeKey != "" {
-		return fmt.Sprintf("Node %s agent", nodeKey)
-	}
-	if nodeID := strings.TrimSpace(run.NodeID); nodeID != "" {
-		return fmt.Sprintf("Node %s agent", nodeID)
-	}
-	if sessionName := strings.TrimSpace(run.SessionName); sessionName != "" {
-		return fmt.Sprintf("Session %s agent", sessionName)
-	}
-	return fmt.Sprintf("Session %s agent", trimmedSessionID)
-}
-
-func workflowTaskAgentRun(task serverapi.WorkflowTaskDetail, sessionID string) (serverapi.WorkflowRun, bool) {
-	currentRunIDs := map[string]bool{}
-	for _, runID := range task.Status.RunIDs {
-		if strings.TrimSpace(runID) != "" {
-			currentRunIDs[strings.TrimSpace(runID)] = true
-		}
-	}
-	var selected serverapi.WorkflowRun
-	selectedScore := workflowTaskAgentRunScore{}
-	found := false
-	for _, run := range task.Runs {
-		if strings.TrimSpace(run.SessionID) != sessionID {
-			continue
-		}
-		score := workflowTaskAgentRunScore{
-			Current:       currentRunIDs[strings.TrimSpace(run.ID)],
-			Unfinished:    run.CompletedAtUnixMs == nil && run.InterruptedAtUnixMs == nil,
-			StartedAt:     run.StartedAtUnixMs,
-			CompletedAt:   run.CompletedAtUnixMs,
-			InterruptedAt: run.InterruptedAtUnixMs,
-			Generation:    run.Generation,
-			ID:            strings.TrimSpace(run.ID),
-		}
-		if !found || score.betterThan(selectedScore) {
-			selected = run
-			selectedScore = score
-			found = true
-		}
-	}
-	return selected, found
-}
-
-type workflowTaskAgentRunScore struct {
-	Current       bool
-	Unfinished    bool
-	StartedAt     *int64
-	CompletedAt   *int64
-	InterruptedAt *int64
-	Generation    int64
-	ID            string
-}
-
-func (s workflowTaskAgentRunScore) betterThan(other workflowTaskAgentRunScore) bool {
-	switch {
-	case s.Current != other.Current:
-		return s.Current
-	case s.Unfinished != other.Unfinished:
-		return s.Unfinished
-	case textutil.CompareOptional(s.StartedAt, other.StartedAt) != 0:
-		return textutil.CompareOptional(s.StartedAt, other.StartedAt) > 0
-	case textutil.CompareOptional(s.CompletedAt, other.CompletedAt) != 0:
-		return textutil.CompareOptional(s.CompletedAt, other.CompletedAt) > 0
-	case textutil.CompareOptional(s.InterruptedAt, other.InterruptedAt) != 0:
-		return textutil.CompareOptional(s.InterruptedAt, other.InterruptedAt) > 0
-	case s.Generation != other.Generation:
-		return s.Generation > other.Generation
-	default:
-		return s.ID > other.ID
-	}
 }
 
 type sessionMainViewGetter interface {
@@ -208,8 +110,8 @@ func sessionAgentAuthorID(ctx context.Context, remote workflowCommandRemote, ses
 func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task comment list", stderr, taskCommentListUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	pageSize := fs.Int("page-size", taskCommentListDefaultPageSize, "maximum number of comments to return")
-	pageToken := fs.String("page-token", "", "continue from a previous comment list response")
+	offset := fs.Int("offset", 0, "zero-based comment offset")
+	limit := fs.Int("limit", taskCommentListDefaultLimit, "maximum number of comments to return")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -217,10 +119,6 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 {
 		fmt.Fprintln(stderr, "task comment list requires <short-id-or-task-id>")
-		return 2
-	}
-	if *pageSize < 1 {
-		fmt.Fprintln(stderr, "task comment list requires --page-size to be positive")
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -231,14 +129,16 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{TaskID: taskID, PageSize: *pageSize, PageToken: *pageToken})
+		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{TaskID: taskID, Offset: offset, Limit: limit})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		writeTaskCommentList(stdout, resp.Comments)
-		if strings.TrimSpace(resp.NextPageToken) != "" {
-			fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
+		if resp.NextOffset != nil {
+			if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
+				return 1
+			}
 		}
 		return 0
 	})

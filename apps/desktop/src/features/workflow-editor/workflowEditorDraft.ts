@@ -4,7 +4,6 @@ import type {
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowExecutionTargetPolicy,
-  WorkflowInputField,
   WorkflowNode,
   WorkflowParameter,
 } from "@/api";
@@ -23,6 +22,10 @@ import {
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
 import { draftParameterRowID, reorderDraftRows } from "./workflowEditorDraftRows";
+import {
+  isProtectedWorkflowParameter,
+  setWorkflowEdgeSelector,
+} from "./workflowEditorEdgeSelection";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
 import type {
   DraftWorkflowDefinition,
@@ -31,7 +34,6 @@ import type {
 } from "./workflowEditorDraftTypes";
 
 export type {
-  DraftInputField,
   DraftWorkflowDefinition,
   DraftWorkflowEdge,
   DraftWorkflowNode,
@@ -70,7 +72,7 @@ export type WorkflowEditorDraftAction =
       type: "editAgentNode";
       nodeID: string;
       patch: Partial<
-        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">
+        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">
       >;
     }>
   | Readonly<{
@@ -78,17 +80,18 @@ export type WorkflowEditorDraftAction =
       nodeID: string;
       patch: Partial<Pick<WorkflowNode, "key" | "name" | "scriptPath">>;
     }>
-  | Readonly<{ type: "addInputField"; nodeID: string }>
-  | Readonly<{
-      type: "updateInputField";
-      nodeID: string;
-      rowID: string;
-      patch: Partial<WorkflowInputField>;
-    }>
-  | Readonly<{ type: "deleteInputField"; nodeID: string; rowID: string }>
-  | Readonly<{ type: "reorderInputField"; nodeID: string; activeRowID: string; overRowID: string }>
   | Readonly<{ type: "assignJoinInputProvider"; nodeID: string; inputName: string; providerEdgeID: string }>
   | Readonly<{ type: "editEdgePrompt"; edgeID: string; promptTemplate: string }>
+  | Readonly<{
+      type: "setEdgeAssigneeSelection";
+      edgeID: string;
+      selection: WorkflowEdge["assigneeSelection"];
+    }>
+  | Readonly<{
+      type: "setEdgeThinkingSelection";
+      edgeID: string;
+      selection: WorkflowEdge["thinkingSelection"];
+    }>
   | Readonly<{ type: "addEdgeParameter"; edgeID: string }>
   | Readonly<{
       type: "updateEdgeParameter";
@@ -149,10 +152,6 @@ type NodeFieldAction = Extract<
       | "editNodeIdentity"
       | "editAgentNode"
       | "editScriptNode"
-      | "addInputField"
-      | "updateInputField"
-      | "deleteInputField"
-      | "reorderInputField"
       | "assignJoinInputProvider";
   }
 >;
@@ -162,6 +161,8 @@ type EdgeFieldAction = Extract<
   {
     type:
       | "editEdgePrompt"
+      | "setEdgeAssigneeSelection"
+      | "setEdgeThinkingSelection"
       | "addEdgeParameter"
       | "updateEdgeParameter"
       | "deleteEdgeParameter"
@@ -203,15 +204,13 @@ const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldActi
   "editNodeIdentity",
   "editAgentNode",
   "editScriptNode",
-  "addInputField",
-  "updateInputField",
-  "deleteInputField",
-  "reorderInputField",
   "assignJoinInputProvider",
 ]);
 
 const edgeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<EdgeFieldAction["type"]>([
   "editEdgePrompt",
+  "setEdgeAssigneeSelection",
+  "setEdgeThinkingSelection",
   "addEdgeParameter",
   "updateEdgeParameter",
   "deleteEdgeParameter",
@@ -326,35 +325,6 @@ function reduceNodeFieldAction(
           scriptPath: action.patch.scriptPath === undefined ? node.scriptPath : action.patch.scriptPath,
         };
       });
-    case "addInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: [
-          {
-            description: "",
-            name: "",
-            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(":"),
-          },
-          ...node.inputFields,
-        ],
-      }));
-    case "updateInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: node.inputFields.map((field) =>
-          field.rowID === action.rowID ? { ...field, ...action.patch } : field,
-        ),
-      }));
-    case "deleteInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: node.inputFields.filter((field) => field.rowID !== action.rowID),
-      }));
-    case "reorderInputField":
-      return editDraftNode(state, action.nodeID, false, (node) => ({
-        ...node,
-        inputFields: reorderDraftRows(node.inputFields, action.activeRowID, action.overRowID),
-      }));
     case "assignJoinInputProvider":
       return editDraftNode(state, action.nodeID, false, (node) => ({
         ...node,
@@ -377,6 +347,14 @@ function reduceEdgeFieldAction(
         ...edge,
         promptTemplate: action.promptTemplate,
       }));
+    case "setEdgeAssigneeSelection":
+      return editDraftEdge(state, action.edgeID, false, (edge) =>
+        setWorkflowEdgeSelector(edge, "assignee", action.selection),
+      );
+    case "setEdgeThinkingSelection":
+      return editDraftEdge(state, action.edgeID, false, (edge) =>
+        setWorkflowEdgeSelector(edge, "thinking", action.selection),
+      );
     case "addEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
@@ -384,6 +362,7 @@ function reduceEdgeFieldAction(
           {
             description: "",
             key: "",
+            purpose: "ordinary",
             rowID: [edge.id, "parameter", state.version.toString(), edge.parameters.length.toString()].join(
               ":",
             ),
@@ -395,13 +374,18 @@ function reduceEdgeFieldAction(
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
         parameters: edge.parameters.map((parameter) =>
-          parameter.rowID === action.parameterRowID ? { ...parameter, ...action.patch } : parameter,
+          parameter.rowID === action.parameterRowID
+            ? { ...parameter, ...action.patch, purpose: parameter.purpose }
+            : parameter,
         ),
       }));
     case "deleteEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
-        parameters: edge.parameters.filter((parameter) => parameter.rowID !== action.parameterRowID),
+        parameters: edge.parameters.filter(
+          (parameter) =>
+            parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
+        ),
       }));
     case "reorderEdgeParameter":
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
@@ -426,10 +410,6 @@ export function draftDefinitionFromSource(source: WorkflowDefinition): DraftWork
     nodes: source.nodes.map((node) => ({
       ...node,
       completionMode: node.completionMode ?? "",
-      inputFields: node.inputFields.map((field, index) => ({
-        ...field,
-        rowID: [node.id, "input", index.toString()].join(":"),
-      })),
     })),
   };
 }
@@ -439,13 +419,9 @@ export function workflowDefinitionFromDraft(draft: DraftWorkflowDefinition): Wor
     ...draft,
     edges: draft.edges.map((edge) => ({
       ...edge,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
+      parameters: edge.parameters.map(({ description, key, purpose }) => ({ description, key, purpose })),
     })),
-    nodes: draft.nodes.map((node) => ({
-      ...node,
-      inputFields: node.inputFields.map(({ name, description }) => ({ name, description })),
-      outputFields: node.outputFields,
-    })),
+    nodes: draft.nodes.map((node) => ({ ...node })),
   };
 }
 
@@ -464,14 +440,16 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
   const definition = workflowDefinitionFromDraft(state.draft);
   return {
     edges: definition.edges.map((edge) => ({
+      assigneeSelection: edge.assigneeSelection,
       contextMode: edge.contextMode,
       contextSource: edge.contextSource,
       id: edge.id,
       key: edge.key,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
+      parameters: edge.parameters.map(({ description, key, purpose }) => ({ description, key, purpose })),
       promptTemplate: edge.promptTemplate,
       requiresApproval: edge.requiresApproval,
       targetNodeID: edge.targetNodeID,
+      thinkingSelection: edge.thinkingSelection,
       transitionGroupID: edge.transitionGroupID,
     })),
     nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),
@@ -484,9 +462,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
       name: node.name,
       completionMode: node.completionMode,
       scriptPath: node.scriptPath,
-      inputFields: node.inputFields,
       joinInputProviders: node.joinInputProviders,
-      promptTemplate: node.promptTemplate,
       subagentRole: node.subagentRole,
     })),
     transitionGroups: definition.transitionGroups.map((group) => ({

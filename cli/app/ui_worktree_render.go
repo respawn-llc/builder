@@ -254,7 +254,7 @@ func (l uiViewLayout) renderWorktreeCreateDialog(width, height int, style uiStyl
 	})
 	addSection(uiWorktreeCreateFieldBranchTarget, true, l.renderWorktreeCreateTargetField(width, dialog))
 	usesBaseRef := dialog.resolution.Kind == serverapi.WorktreeCreateTargetResolutionKindNewBranch
-	addSection(uiWorktreeCreateFieldBaseRef, usesBaseRef, l.renderWorktreeCreateField(width, style, "Base ref", "Used when creating a new branch.", dialog.baseRef, dialog.focus == uiWorktreeCreateFieldBaseRef, usesBaseRef))
+	addSection(uiWorktreeCreateFieldBaseRef, usesBaseRef, l.renderWorktreeCreateField(width, style, "Base ref", "Used when creating a new branch.", dialog.baseRef, dialog.baseRefErrorText, dialog.focus == uiWorktreeCreateFieldBaseRef, usesBaseRef))
 	addSection(uiWorktreeCreateFieldActions, true, renderWorktreeCreateActionGroup(width, m.theme, dialog, dialog.focus == uiWorktreeCreateFieldActions))
 	footer := make([]string, 0, 3)
 	if dialog.submitting {
@@ -336,7 +336,7 @@ func (l uiViewLayout) renderWorktreeCreateTargetField(width int, dialog uiWorktr
 	return lines
 }
 
-func (l uiViewLayout) renderWorktreeCreateField(width int, style uiStyles, label string, helper string, input tuiinput.Editor, focused bool, enabled bool) []string {
+func (l uiViewLayout) renderWorktreeCreateField(width int, style uiStyles, label string, helper string, input tuiinput.Editor, errorText string, focused bool, enabled bool) []string {
 	p := uiPalette(l.model.theme)
 	rowStyle := lipgloss.NewStyle()
 	if focused {
@@ -361,6 +361,9 @@ func (l uiViewLayout) renderWorktreeCreateField(width int, style uiStyles, label
 		lines = append(lines, helperStyle.Render(padANSIRight(truncateQueuedMessageLine(helper, contentWidth), contentWidth)))
 	}
 	lines = append(lines, renderSingleLineEditorFramedSoftCursorLines(contentWidth, 1, input, "› ", focused && enabled && l.model.terminalCursor == nil, lineStyle, borderStyle, 0, "")...)
+	if strings.TrimSpace(errorText) != "" {
+		lines = append(lines, renderWorktreeErrorLines(errorText, contentWidth, lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true), worktreeOverlayMaxErrorLines)...)
+	}
 	return lines
 }
 

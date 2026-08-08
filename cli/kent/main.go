@@ -16,6 +16,7 @@ import (
 	"core/cli/app"
 	"core/prompts"
 	"core/shared/config"
+	"core/shared/imagefileio"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -52,6 +53,7 @@ var runLiveStopApp = app.RunLiveStop
 var runLiveWaitApp = app.RunLiveWait
 
 func main() {
+	imagefileio.ExitIfWorker(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	redirectServiceLogs()
 	if exitCode := rootCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); exitCode != 0 {
 		os.Exit(exitCode)
@@ -87,6 +89,9 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	if len(args) > 0 && args[0] == "attach" {
 		return attachSubcommand(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "detach" {
+		return detachSubcommand(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "rebind" {
 		return rebindSubcommand(args[1:], stdout, stderr)
 	}
@@ -101,6 +106,9 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	}
 	if len(args) > 0 && args[0] == "goal" {
 		return goalSubcommand(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && (args[0] == "question" || args[0] == "questions") {
+		return questionSubcommand(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "worktree" {
 		return worktreeSubcommand(args[1:], stdout, stderr)
@@ -231,6 +239,8 @@ func runSubcommand(args []string) int {
 		return runLiveStopSubcommand(args[1:])
 	case "wait":
 		return runLiveWaitSubcommand(args[1:])
+	case "watch":
+		return runLiveWatchSubcommand(args[1:])
 	}
 	runFS := flag.NewFlagSet(config.Command+" run", flag.ContinueOnError)
 	runFS.SetOutput(os.Stderr)
@@ -397,12 +407,15 @@ func liveControlSubcommand(args []string) string {
 	}
 	verb := args[0]
 	switch verb {
-	case "steer", "stop", "wait":
+	case "steer", "stop", "wait", "watch":
 	default:
 		return ""
 	}
 	positionals, help := liveControlPositionals(verb, args[1:])
 	if help || len(args) == 1 || len(positionals) == 0 {
+		return verb
+	}
+	if verb == "watch" {
 		return verb
 	}
 	sessionID, err := runtimeids.ParseSessionID(positionals[0])
@@ -472,6 +485,10 @@ func runLiveSteerSubcommand(args []string) int {
 		return 2
 	}
 	if err := rejectSelfTarget(sessionID, "kent run steer "+strings.Join(args, " ")); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	if _, err := app.LiveSteerCallerSessionID(); err != nil {
 		emitRunUsageError(runOutputModeFinalText, err.Error())
 		return 2
 	}
@@ -600,6 +617,47 @@ func runLiveWaitSubcommand(args []string) int {
 	}
 	emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
 	return 0
+}
+
+func runLiveWatchSubcommand(args []string) int {
+	return runLiveWatchSubcommandWithRunner(args, app.RunLiveWatch)
+}
+
+type liveWatchRunner func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error)
+
+func runLiveWatchSubcommandWithRunner(args []string, run liveWatchRunner) int {
+	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
+		config.Command+" run watch [--persistence-root <root>] <session-id>",
+		"Watch the next active run outcome.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
+	if err := fs.Parse(args); err != nil {
+		return runLiveFlagError(err)
+	}
+	if len(fs.Args()) != 1 {
+		return runLiveFlagError(errors.New("usage: kent run watch <session-id>"))
+	}
+	sessionID, err := parseCLILiveSessionID(fs.Args()[0])
+	if err != nil {
+		return runLiveFlagError(err)
+	}
+	if err := rejectSelfTarget(sessionID, "kent run watch "+strings.Join(args, " ")); err != nil {
+		return runLiveFlagError(err)
+	}
+	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
+		return runLiveFlagError(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	response, err := run(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, context.Canceled) {
+			return 130
+		}
+		return 1
+	}
+	return writeRunWatchResponse(os.Stdout, os.Stderr, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
 }
 
 func runLiveFlagError(err error) int {

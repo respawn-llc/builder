@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
@@ -23,7 +24,7 @@ func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "fast final", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("fast final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -36,8 +37,8 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
 	}
-	if assistant.Content != "fast final" {
-		t.Fatalf("assistant content = %q, want fast final", assistant.Content)
+	if messageContent(assistant) != "fast final" {
+		t.Fatalf("assistant content = %q, want fast final", messageContent(assistant))
 	}
 	if captureErr != nil || handle == nil {
 		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
@@ -46,8 +47,8 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured live wait after fast completion: %v", err)
 	}
-	if result.AssistantMessage.Content != "fast final" {
-		t.Fatalf("captured final = %q, want fast final", result.AssistantMessage.Content)
+	if messageContent(result.AssistantMessage) != "fast final" {
+		t.Fatalf("captured final = %q, want fast final", messageContent(result.AssistantMessage))
 	}
 }
 
@@ -80,8 +81,6 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	eng.mu.Lock()
 	eng.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       "workflow-run",
-		Generation:  1,
 		Source:      WorkflowCompletionSourceTool,
 		CompletedAt: time.Now().UTC(),
 	}
@@ -169,7 +168,9 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	eng.liveRun.beginStep(snapshot)
 	eng.ensureOrchestrationCollaborators()
 	queueItemID := runtimeids.NewQueueItemID()
-	eng.messageFlow.QueueUserMessageWithID(QueuedUserMessage{ID: queueItemID.String(), Text: "steer pending", ClientRequestID: liveRunTestRequestID(t).String()})
+	if _, err := eng.messageFlow.QueueUserMessageWithID(queuedUserMessageWithID(queueItemID.String(), "steer pending", liveRunTestRequestID(t).String())); err != nil {
+		t.Fatalf("queue pending steer: %v", err)
+	}
 	eng.liveRun.mu.Lock()
 	eng.liveRun.current.trackQueuedItemForLiveRun(queueItemID)
 	delete(eng.liveRun.current.publishingItems, queueItemID)
@@ -217,66 +218,58 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	}
 }
 
-func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
+func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
+	for _, test := range []struct {
+		name        string
+		options     exclusiveStepOptions
+		wantActive  bool
+		waitMessage string
+	}{
+		{
+			name:        "emit run state",
+			options:     exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+			wantActive:  true,
+			waitMessage: "live run step",
+		},
+		{
+			name:        "maintenance",
+			options:     exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance},
+			wantActive:  false,
+			waitMessage: "maintenance step",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- lifecycle.Run(context.Background(), test.options, func(context.Context, string) error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatalf("timed out waiting for %s", test.waitMessage)
+			}
+			if active := eng.HasActiveLiveRunGroup(); active != test.wantActive {
+				t.Fatalf("active live-run group = %t, want %t", active, test.wantActive)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("%s: %v", test.waitMessage, err)
+			}
+			if eng.HasActiveLiveRunGroup() {
+				t.Fatal("live-run group stayed active after idle completion")
+			}
 		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live run step")
-	}
-	if !eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=true step did not open active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("live run step: %v", err)
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("live-run group stayed active after idle completion")
-	}
-}
-
-func TestMaintenanceStepDoesNotOpenActiveLiveRunGroup(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: false, ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for maintenance step")
-	}
-	if eng.HasActiveLiveRunGroup() {
-		t.Fatal("EmitRunState=false step opened active live-run group")
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("maintenance step: %v", err)
 	}
 }
 
@@ -336,7 +329,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 			<-releaseBefore
 			return nil
 		})
-		if err == nil && (!accepted || item.ID == "" || item.Text != "steer") {
+		if err == nil && (!accepted || item.ID == "" || mustQueuedUserMessageText(t, item) != "steer") {
 			err = errors.New("unexpected accepted queue item")
 		}
 		queueDone <- err
@@ -495,7 +488,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	modelEntered := make(chan struct{})
 	releaseModel := make(chan struct{})
 	client := &hookClient{
-		response: llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}},
+		response: llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final answer"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
 		beforeReturn: func() error {
 			close(modelEntered)
 			<-releaseModel
@@ -526,60 +519,8 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured live run result: %v", err)
 	}
-	if waited.ResultKind != LiveRunResultAssistantFinalAnswer || waited.AssistantMessage.Content != "final answer" {
+	if waited.ResultKind != LiveRunResultAssistantFinalAnswer || messageContent(waited.AssistantMessage) != "final answer" {
 		t.Fatalf("wait result = %+v", waited)
-	}
-}
-
-func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := newBlockingThenBlockedQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "hello")
-		submitDone <- err
-	}()
-	client.waitStarted(t)
-
-	queued := eng.QueueUserMessageWithClientRequestID("steer into drain", "req-queued")
-	handle, captureErr := eng.CaptureActiveRunResult(context.Background())
-	if queued.ID == "" || captureErr != nil {
-		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
-	}
-	handle, err := eng.CaptureActiveRunResult(context.Background())
-	if err != nil {
-		t.Fatalf("CaptureActiveRunResult: %v", err)
-	}
-	waitDone := make(chan struct {
-		result LiveRunResult
-		err    error
-	}, 1)
-	go func() {
-		result, err := handle.Wait()
-		waitDone <- struct {
-			result LiveRunResult
-			err    error
-		}{result: result, err: err}
-	}()
-
-	client.release()
-	client.waitSecondStarted(t)
-	select {
-	case waited := <-waitDone:
-		t.Fatalf("wait completed before tagged queued drain model result: result=%+v err=%v", waited.result, waited.err)
-	default:
-	}
-	client.releaseSecond()
-	if err := <-submitDone; err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	waited := <-waitDone
-	if waited.err != nil {
-		t.Fatalf("captured live run result: %v", waited.err)
-	}
-	if waited.result.AssistantMessage.Content != "queued work handled" {
-		t.Fatalf("wait result = %+v, want queued work handled", waited.result)
 	}
 }
 
@@ -793,14 +734,18 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 		t.Fatal("timed out waiting for active step")
 	}
 
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "race-safe steer", ClientRequestID: "req-publishing"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "race-safe steer", "req-publishing")
 	tagged := eng.liveRun.beginQueueItemPublication(mustQueueItemID(item.ID), func(queueItemID string) {
 		eng.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
 	if !tagged || item.ID == "" {
 		t.Fatalf("publishing queue setup tagged=%t item=%+v", tagged, item)
 	}
-	item = eng.messageFlow.QueueUserMessageWithID(item)
+	var queueErr error
+	item, queueErr = eng.messageFlow.QueueUserMessageWithID(item)
+	if queueErr != nil {
+		t.Fatalf("queue publishing item: %v", queueErr)
+	}
 	stopped, err := eng.TryInterruptActiveRun()
 	if err != nil || !stopped {
 		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v, want active stop", stopped, err)
@@ -837,14 +782,14 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 			}
 		},
 	})
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "stopped drained", ClientRequestID: "req-stopped"}
+	item := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "stopped drained", "req-stopped")
 	queueItemID := mustQueueItemID(item.ID)
 	eng.markQueuedUserInjectionForAutoDrain(item.ID)
 	eng.liveRun.mu.Lock()
 	eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 	eng.liveRun.mu.Unlock()
 
-	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserSteeringIntent{{message: item}})
+	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserMessage{{message: item}})
 	if len(remaining) != 0 {
 		t.Fatalf("remaining stopped drained items = %+v, want none", remaining)
 	}
@@ -853,11 +798,11 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 	}
 	assertStoppedQueuedStatus(t, statuses, item.ID)
 
-	idle := eng.QueueUserMessage("idle after stopped drain")
+	idle := mustQueueUserMessage(t, eng, "idle after stopped drain")
 	if eng.hasQueuedUserAutoDrainIDs() {
 		t.Fatal("later idle queue was marked for auto-drain by stale stopped state")
 	}
-	if !eng.DiscardQueuedUserMessage(idle.ID) {
+	if !mustDiscardQueuedUserMessage(t, eng, idle.ID) {
 		t.Fatal("later idle queue was not left pending")
 	}
 }
@@ -907,4 +852,67 @@ func liveRunTestRequestID(t *testing.T) runtimeids.RuntimeClientRequestID {
 		t.Fatalf("parse live-run test request id: %v", err)
 	}
 	return id
+}
+
+func TestCapturedActiveRunResultCompletesLateTaggedQueuedDrain(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("initial work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
+	}}
+	transitions := make(chan StepLifecycleTransition)
+	releaseTransition := make(chan struct{})
+	sink := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
+		transitions <- transition
+		<-releaseTransition
+		return nil
+	}}
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitUserMessage(context.Background(), "hello")
+		submitDone <- err
+	}()
+	if got := <-transitions; got != StepLifecycleTransitionBegan {
+		t.Fatalf("first transition = %q, want began", got)
+	}
+	releaseTransition <- struct{}{}
+	if got := <-transitions; got != StepLifecycleTransitionEnded {
+		t.Fatalf("second transition = %q, want ended", got)
+	}
+	queued, queueErr := eng.QueueUserMessageForAutoDrain("steer into drain", "initial-drain")
+	if queueErr != nil {
+		t.Fatalf("queue auto-drain item: %v", queueErr)
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelWait()
+	handle, err := eng.CaptureActiveRunResult(waitCtx)
+	if queued.ID == "" || err != nil {
+		t.Fatalf("queued=%+v capture error=%v", queued, err)
+	}
+	releaseTransition <- struct{}{}
+	if err := <-submitDone; err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if got := <-transitions; got != StepLifecycleTransitionBegan {
+		t.Fatalf("queued transition = %q, want began", got)
+	}
+	late, accepted, queueErr := eng.QueueUserMessageForActiveRun(context.Background(), "steer admitted after drain snapshot", liveRunTestRequestID(t), nil)
+	if late.ID == "" || !accepted || queueErr != nil {
+		t.Fatalf("late queued=%+v accepted=%t queue error=%v", late, accepted, queueErr)
+	}
+	releaseTransition <- struct{}{}
+	if got := <-transitions; got != StepLifecycleTransitionEnded {
+		t.Fatalf("final transition = %q, want ended", got)
+	}
+	releaseTransition <- struct{}{}
+	waited, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live run result: %v", err)
+	}
+	if messageContent(waited.AssistantMessage) != "queued work handled" {
+		t.Fatalf("wait result = %+v, want queued work handled", waited)
+	}
+	if eng.HasActiveLiveRunGroup() {
+		t.Fatal("live-run group remained active after draining late tagged steering")
+	}
 }

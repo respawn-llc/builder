@@ -1,8 +1,27 @@
 import { z } from "zod";
+import { createElement } from "react";
+import { render } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { FakeRpcTransport } from "../api";
+import {
+  SidebarRootContext,
+  type SidebarPageNavigator,
+  type SidebarRootController,
+  type SidebarMode,
+  type TaskDetailInitialFocus,
+} from "@/app-facade";
+import { TaskDetailSurface } from "@/features/task-detail";
+import { FakeRpcTransport, type FakeRoute } from "../api";
+import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
+import type { NativeBridge } from "../native-bridge";
+import { createTestSidebarController } from "../sidebar";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -14,13 +33,9 @@ export const taskUpdateParamsSchema = jsonObjectSchema.and(
 );
 
 const workflow = {
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   display_name: "Delivery",
-  description: "",
   version: 1,
-  is_project_default: true,
-  valid_for_task_creation: true,
-  validation_errors: [],
 };
 
 const workspace = {
@@ -36,12 +51,12 @@ const taskActions = {
   can_start: false,
   can_interrupt: true,
   can_resume: false,
-  can_cancel: true,
+  can_delete: false,
 };
 
 const attentionBase = {
   project_id: "project-1",
-  workflow_id: "workflow-1",
+  workflow_id: "11111111-1111-4111-8111-111111111111",
   task_id: "task-1",
   task_short_id: "T-1",
   task_title: "Resolve blocker",
@@ -53,13 +68,12 @@ export const taskDetailResponse = {
     summary: {
       id: "task-1",
       project_id: "project-1",
-      workflow_id: "workflow-1",
+      workflow_id: "11111111-1111-4111-8111-111111111111",
       short_id: "T-1",
       title: "Resolve blocker",
       created_at_unix_ms: 1,
       updated_at_unix_ms: 2,
       done: false,
-      canceled_at_unix_ms: null,
     },
     project: { display_name: "Project" },
     workflow,
@@ -67,79 +81,51 @@ export const taskDetailResponse = {
     source_workspace: workspace,
     execution_target: {
       mode: "head",
-      effective_root: "/tmp/worktree",
       requested_ref: "HEAD",
       resolved_ref: "refs/heads/main",
       commit_oid: "0123456789abcdef0123456789abcdef01234567",
       provenance: "resolved",
-      current_branch: "T-1",
-      managed_worktree: {
-        worktree_id: "worktree-1",
-        display_name: "T-1",
-        canonical_root: "/tmp/worktree",
-        availability: "available",
-      },
     },
+    worktree_path: "/tmp/worktree",
+    current_nodes: [
+      {
+        node_id: "node-1",
+        transition_branch_key: null,
+        session_id: "session-1",
+      },
+    ],
+    live_session_ids: ["session-1"],
+    current_scripts: [],
+    retained_session_count: 1,
     status: {
       kind: "running",
       native_state: "running",
       node_ids: ["node-1"],
-      run_ids: ["run-1"],
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
+    label_ids: [],
     attention_count: 2,
-    runs: [
-      {
-        id: "run-1",
-        task_id: "task-1",
-        placement_id: "placement-1",
-        node_id: "node-1",
-        session_id: "session-1",
-        session_name: "Kent session",
-        role: "agent",
-        status: "running",
-        generation: 1,
-        waiting_ask_id: "ask-1",
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: null,
-      },
-    ],
-    transitions: [
-      {
-        id: "transition-1",
-        transition_id: "ship",
-        transition_display_name: "Ship",
-        source_node_display_name: "Implement",
-        state: "pending_approval",
-        commentary: "Looks good",
-        output_values: { result: "ok" },
-        edges: [
-          {
-            id: "transition-edge-1",
-            edge_key: "ship",
-            target_node_display_name: "Ship",
-            state: "pending",
-            requires_approval: true,
-            output_requirements: [],
-          },
-        ],
-        workflow_revision_seen: 7,
-        created_at_unix_ms: 2,
-        applied_at_unix_ms: null,
-      },
-    ],
-    comments: [
-      {
-        id: "comment-1",
-        task_id: "task-1",
-        body: "Existing comment",
-        author: guiTaskCommentAuthor,
-        created_at_unix_ms: 1,
-        updated_at_unix_ms: 1,
-      },
-    ],
+    dependencies: {
+      blocker_count: 0,
+      unsatisfied_blocker_count: 0,
+      directly_blocked_task_count: 0,
+      directions: [
+        {
+          direction: "blocked-by",
+          total_count: 0,
+          unsatisfied_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 5 } },
+        },
+        {
+          direction: "blocks",
+          total_count: 0,
+          items: [],
+          add_availability: { available: { remaining_capacity: 4 } },
+        },
+      ],
+    },
   },
 };
 
@@ -149,21 +135,27 @@ export const taskAttentionResponse = {
       ...attentionBase,
       id: "attention-question",
       kind: "question",
-      run_id: "run-1",
+      current_node: {
+        node_id: "node-1",
+        transition_branch_key: null,
+        session_id: "session-1",
+      },
       session_id: "session-1",
-      ask_id: "ask-1",
-      task_transition_id: "",
-      message: "",
+      question_id: "ask-1",
+      message: "Approve protected path?",
     },
     {
       ...attentionBase,
       id: "attention-approval",
       kind: "approval",
-      run_id: "run-1",
-      session_id: "session-1",
-      ask_id: "",
-      task_transition_id: "transition-1",
-      message: "Approve transition",
+      approval_id: "approval-1",
+      approval_snapshot: {
+        source_node_display_name: "Implement",
+        targets: [{ display_name: "Ship" }],
+        commentary: "Looks good",
+        output_values: { result: "ok" },
+        workflow_revision_seen: 7,
+      },
     },
   ],
   generated_at_unix_ms: 3,
@@ -181,18 +173,10 @@ export async function createTaskDetailFixture(): Promise<TaskDetail> {
   return client.getTask("task-1");
 }
 
-export const taskDetailResponseWithNewerActiveRun = {
+export const taskDetailResponseWithAdditionalLiveSession = {
   task: {
     ...taskDetailResponse.task,
-    runs: [
-      ...taskDetailResponse.task.runs,
-      {
-        ...taskDetailResponse.task.runs[0],
-        id: "run-2",
-        session_id: "session-2",
-        started_at_unix_ms: 2,
-      },
-    ],
+    live_session_ids: ["session-1", "session-2"],
   },
 };
 
@@ -200,43 +184,29 @@ export const taskDetailNoInboxResponse = {
   task: {
     ...taskDetailResponse.task,
     attention_count: 0,
-    transitions: [],
   },
 };
 
-export const taskDetailResponseWithScriptRun = {
+export const taskDetailResponseWithCurrentScript = {
   task: {
     ...taskDetailNoInboxResponse.task,
-    actions: { ...taskActions, can_interrupt: false },
-    runs: [
+    current_nodes: [{ node_id: "node-script", transition_branch_key: null, session_id: null }],
+    live_session_ids: [],
+    current_scripts: [
       {
-        id: "run-script",
-        task_id: "task-1",
-        placement_id: "placement-script",
-        node_id: "node-script",
-        node_kind: "script",
-        script_path: "scripts/run",
-        session_id: "",
-        session_name: "",
-        role: "script",
-        status: "interrupted",
-        generation: 1,
-        waiting_ask_id: null,
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: 2,
-        interruption_reason: "script failed",
-        interruption_detail_json: '{"kind":"script_failure"}',
+        current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
+        path: "scripts/run",
       },
     ],
   },
 };
 
-export const taskDetailResponseWithInterruptedScriptRun = {
+export const taskDetailResponseWithInterruptedCurrentScript = {
   task: {
-    ...taskDetailResponseWithScriptRun.task,
+    ...taskDetailResponseWithCurrentScript.task,
     actions: { ...taskActions, can_interrupt: false, can_resume: true },
     attention_count: 1,
+    current_scripts: [],
   },
 };
 
@@ -245,12 +215,9 @@ export const interruptedTaskAttentionResponse = {
     {
       ...attentionBase,
       id: "attention-interrupted",
-      kind: "interrupted_run",
-      run_id: "run-script",
-      session_id: "",
-      ask_id: "",
-      task_transition_id: "",
-      message: "Script failed",
+      kind: "interrupted_current_node",
+      current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
+      session_id: null,
       detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
     },
   ],
@@ -261,10 +228,14 @@ export const questionAttention = {
   ...attentionBase,
   id: "attention-question",
   kind: "question",
-  run_id: "run-1",
+  current_node: {
+    node_id: "node-1",
+    transition_branch_key: null,
+    session_id: "session-1",
+  },
   session_id: "session-1",
-  ask_id: "ask-1",
-  task_transition_id: "",
+  session_name: "Session one",
+  question_id: "ask-1",
   message: "Choose snack",
   recommended_option_index: 1,
   suggestions: ["Trail mix", "Dark chocolate"],
@@ -274,10 +245,11 @@ export const taskQuestionWaitingEvent = {
   event: {
     resource: "task",
     action: "question_waiting",
-    changed_ids: ["task-1", "run-1", "ask-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    related_ids: ["session-1", "ask-1"],
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 
@@ -285,10 +257,10 @@ export const taskUpdatedEvent = {
   event: {
     resource: "task",
     action: "updated",
-    changed_ids: ["task-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
-    workflow_id: "workflow-1",
+    workflow_id: "11111111-1111-4111-8111-111111111111",
   },
 };
 
@@ -300,12 +272,14 @@ export const activityResponse = {
       task_id: "task-1",
       occurred_at_unix_ms: 2,
       updated_at_unix_ms: 2,
-      actor: "GUI",
-      summary: "Comment added",
-      comment: null,
-      transition: null,
-      run: null,
-      attention: null,
+      comment: {
+        id: "comment-activity-1",
+        task_id: "task-1",
+        body: "Comment added",
+        author: "user",
+        created_at_unix_ms: 2,
+        updated_at_unix_ms: 2,
+      },
     },
   ],
   next_page_token: "",
@@ -337,7 +311,16 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: taskDetailResponse.task.comments,
+  comments: [
+    {
+      id: "comment-1",
+      task_id: "task-1",
+      body: "Existing comment",
+      author: guiTaskCommentAuthor,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+    },
+  ],
   next_page_token: "",
 };
 
@@ -374,6 +357,99 @@ export const taskUpdateResponse = {
     id: "task-1",
   },
 };
+
+export type TaskDetailFixtureOptions = Readonly<{
+  attention?: JsonValue;
+  asks?: unknown;
+  comments?: unknown;
+  initialFocus?: TaskDetailInitialFocus | undefined;
+  nativeBridge?: NativeBridge | undefined;
+  navigator?: SidebarPageNavigator | undefined;
+  onMutated?: (() => void) | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
+  path?: string | undefined;
+  retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
+  routes?: readonly FakeRoute[] | undefined;
+}>;
+
+export function createTaskDetailTestServices(
+  task: JsonValue,
+  {
+    asks,
+    attention = taskAttentionFixture(task),
+    comments,
+    nativeBridge,
+    path = "/tasks/task-1",
+    routes = [],
+  }: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  window.history.pushState(null, "", path);
+  return createTestServices(
+    [
+      ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [],
+          },
+        },
+      },
+      { method: "workflow.task.get", result: task },
+      { method: "workflow.task.attention.list", result: attention },
+      ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
+      { method: "workflow.task.activity.list", result: activityResponse },
+      ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
+      ...routes,
+    ],
+    nativeBridge,
+  );
+}
+
+export function mountTaskDetailSurface(
+  task: JsonValue,
+  options: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  const services = createTaskDetailTestServices(task, options);
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
+    routeTree: createRootRoute(),
+  });
+  render(
+    createElement(RouterContextProvider, {
+      router,
+      children: createElement(SidebarRootContext.Provider, {
+        value: createTestSidebarController(),
+        children: createElement(TestAppProviders, {
+          children: createElement(TaskDetailSurface, {
+            enabled: true,
+            initialFocus: options.initialFocus,
+            navigator: options.navigator,
+            onMutated: options.onMutated,
+            openSidebar: options.openSidebar,
+            retainedState: options.retainedState,
+            sidebarMode: options.sidebarMode,
+            taskId: "task-1",
+          }),
+          services,
+        }),
+      }),
+    }),
+  );
+  return services;
+}
+
+function taskAttentionFixture(task: JsonValue): JsonValue {
+  if (task === taskDetailResponseWithInterruptedCurrentScript) {
+    return interruptedTaskAttentionResponse;
+  }
+  if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {
+    return emptyTaskAttentionResponse;
+  }
+  return taskAttentionResponse;
+}
 
 export function callParams(
   calls: readonly Readonly<{ method: string; params: JsonValue }>[],

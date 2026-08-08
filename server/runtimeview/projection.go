@@ -11,21 +11,32 @@ import (
 	"core/shared/transcript/patchformat"
 )
 
-func MainViewFromRuntimeActivity(engine *runtime.Engine, version clientui.ReadModelVersion, activity clientui.RuntimeActivity) clientui.RuntimeMainView {
+func MainViewFromRuntimeActivity(
+	engine *runtime.Engine,
+	version clientui.ReadModelVersion,
+	activity clientui.RuntimeActivity,
+) (clientui.RuntimeMainView, error) {
 	if engine == nil {
-		return clientui.RuntimeMainView{}
+		return clientui.RuntimeMainView{}, nil
 	}
-	sessionView := SessionViewFromRuntime(engine)
+	sessionView, err := SessionViewFromRuntime(engine)
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
+	status, err := StatusFromRuntime(engine)
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
 	if err := activity.Validate(); err != nil {
 		activity = clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true}
 	}
 	return clientui.RuntimeMainView{
 		Version:             version,
-		Status:              StatusFromRuntime(engine),
+		Status:              status,
 		Session:             sessionView,
 		Activity:            activity,
 		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-	}
+	}, nil
 }
 
 func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clientui.RuntimeStatus, sessionView clientui.RuntimeSessionView) clientui.RuntimeMainView {
@@ -42,19 +53,24 @@ func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clien
 	}
 }
 
-func StatusFromRuntime(engine *runtime.Engine) clientui.RuntimeStatus {
+func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	if engine == nil {
-		return clientui.RuntimeStatus{}
+		return clientui.RuntimeStatus{}, nil
+	}
+	freshness, err := engine.ConversationFreshness()
+	if err != nil {
+		return clientui.RuntimeStatus{}, err
 	}
 	usage := engine.ContextUsage()
+	fastModeAvailable := engine.FastModeAvailable()
 	status := clientui.RuntimeStatus{
 		ReviewerFrequency:                 engine.ReviewerFrequency(),
 		ReviewerEnabled:                   engine.ReviewerEnabled(),
 		AutoCompactionEnabled:             engine.AutoCompactionEnabled(),
 		QuestionsEnabled:                  engine.QuestionsEnabled(),
-		FastModeAvailable:                 engine.FastModeAvailable(),
+		FastModeAvailable:                 fastModeAvailable,
 		FastModeEnabled:                   engine.FastModeEnabled(),
-		ConversationFreshness:             ConversationFreshnessFromSession(engine.ConversationFreshness()),
+		ConversationFreshness:             ConversationFreshnessFromSession(freshness),
 		PreviousSessionID:                 engine.PreviousSessionID(),
 		ParentAgentSessionID:              engine.ParentAgentSessionID(),
 		NavigationTargetSessionID:         engine.NavigationTargetSessionID(),
@@ -70,43 +86,47 @@ func StatusFromRuntime(engine *runtime.Engine) clientui.RuntimeStatus {
 		CompactionCount: engine.CompactionCount(),
 		Goal:            GoalFromSessionState(engine.Goal(), engine.GoalLoopSuspended()),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.RunID != "" {
-		status.WorkflowActive = engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed
+	if workflowState, err := engine.WorkflowSessionState(); err != nil {
+		return clientui.RuntimeStatus{}, err
+	} else if workflowState != nil && !engine.WorkflowTerminalState().Completed {
 		status.WorkflowSession = &clientui.WorkflowSessionStatus{
-			RunID:      workflowState.RunID,
-			TaskID:     workflowState.TaskID,
+			TaskID:     string(workflowState.TaskID),
 			WorkflowID: workflowState.WorkflowID,
 		}
 	}
-	return status
+	return status, nil
 }
 
-func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionStatus {
+func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.TranscriptSessionStatus, error) {
 	if engine == nil {
-		return clientui.TranscriptSessionStatus{}
+		return clientui.TranscriptSessionStatus{}, nil
 	}
+	fastModeAvailable := engine.FastModeAvailable()
 	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:         engine.ReviewerFrequency(),
 		ReviewerEnabled:           engine.ReviewerEnabled(),
 		AutoCompactionEnabled:     engine.AutoCompactionEnabled(),
 		QuestionsEnabled:          engine.QuestionsEnabled(),
-		FastModeAvailable:         engine.FastModeAvailable(),
+		FastModeAvailable:         fastModeAvailable,
 		FastModeEnabled:           engine.FastModeEnabled(),
 		ThinkingLevel:             engine.ThinkingLevel(),
 		CompactionMode:            engine.CompactionMode(),
+		CompactionCount:           engine.CompactionCount(),
 		PreviousSessionID:         engine.PreviousSessionID(),
 		ParentAgentSessionID:      engine.ParentAgentSessionID(),
 		NavigationTargetSessionID: engine.NavigationTargetSessionID(),
 	}
-	if workflowState := engine.WorkflowSessionState(); workflowState.RunID != "" {
+	workflowState, err := engine.WorkflowSessionState()
+	if err != nil {
+		return clientui.TranscriptSessionStatus{}, err
+	}
+	if workflowState != nil && !engine.WorkflowTerminalState().Completed {
 		status.Workflow = &clientui.TranscriptWorkflowSession{
-			Active:     engine.WorkflowRunConfigured() && !engine.WorkflowTerminalState().Completed,
-			RunID:      workflowState.RunID,
-			TaskID:     workflowState.TaskID,
+			TaskID:     string(workflowState.TaskID),
 			WorkflowID: workflowState.WorkflowID,
 		}
 	}
-	return status
+	return status, nil
 }
 
 func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.RuntimeGoal {
@@ -121,15 +141,20 @@ func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.Run
 	}
 }
 
-func SessionViewFromRuntime(engine *runtime.Engine) clientui.RuntimeSessionView {
+func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView, error) {
 	if engine == nil {
-		return clientui.RuntimeSessionView{}
+		return clientui.RuntimeSessionView{}, nil
+	}
+	freshness, err := engine.ConversationFreshness()
+	if err != nil {
+		return clientui.RuntimeSessionView{}, err
 	}
 	return clientui.RuntimeSessionView{
 		SessionID:             engine.SessionID(),
 		SessionName:           engine.SessionName(),
-		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
-	}
+		AgentRole:             engine.ContinuationAgentRole(),
+		ConversationFreshness: ConversationFreshnessFromSession(freshness),
+	}, nil
 }
 
 func ConversationFreshnessFromSession(freshness session.ConversationFreshness) clientui.ConversationFreshness {

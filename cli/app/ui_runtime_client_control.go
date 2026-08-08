@@ -202,12 +202,20 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
 			ClientRequestID:                 id,
 			SessionID:                       c.sessionID,
-			Text:                            req.Text,
+			Input:                           req.Input,
 			OperationRef:                    req.OperationRef,
 			PreSubmitCompactionOperationRef: req.PreSubmitCompactionOperationRef,
 		})
 	})
-	return userTurnSubmissionFromResponse(resp, req.Text, requestID), err
+	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req), requestID), err
+}
+
+func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
+	text, err := input.Input.CanonicalHistoryText()
+	if err != nil {
+		panic("runtime submit input must validate before projection: " + err.Error())
+	}
+	return text
 }
 
 func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
@@ -289,25 +297,6 @@ func (c *sessionRuntimeClient) interruptRuntimeCandidate(
 		InputReconciliation: resp.InputReconciliation,
 	}
 	return candidate, nil
-}
-
-func (c *sessionRuntimeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
-	if err := req.Validate(); err != nil {
-		return clientui.QueuedUserMessage{}, err
-	}
-	requestID := req.OperationRef.ClientRequestID.String()
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, _ string) (serverapi.RuntimeQueueUserMessageResponse, error) {
-		return c.controls.QueueUserMessage(ctx, serverapi.RuntimeQueueUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, OperationRef: req.OperationRef, Text: req.Text})
-	})
-	if err != nil {
-		c.notifyConnectionState(err)
-		return clientui.QueuedUserMessage{}, err
-	}
-	responseClientRequestID := strings.TrimSpace(resp.ClientRequestID)
-	if responseClientRequestID == "" {
-		responseClientRequestID = requestID
-	}
-	return clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: resp.Text, ClientRequestID: responseClientRequestID}, nil
 }
 
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {

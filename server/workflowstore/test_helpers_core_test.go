@@ -6,11 +6,46 @@ import (
 	"testing"
 
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 func completionHasCode(err error, code CompletionCode) bool {
 	var cve CompletionValidationError
 	return errors.As(err, &cve) && cve.HasCode(code)
+}
+
+func projectNextTaskSequence(t *testing.T, ctx context.Context, store *Store, projectID string) int64 {
+	t.Helper()
+	var sequence int64
+	if err := store.db.QueryRowContext(ctx, `SELECT next_task_seq FROM projects WHERE id = ?`, projectID).Scan(&sequence); err != nil {
+		t.Fatalf("query project next task sequence: %v", err)
+	}
+	return sequence
+}
+
+func assertTaskCreationUnchanged(t *testing.T, ctx context.Context, store *Store, projectID string, wantSequence int64) {
+	t.Helper()
+	if got := projectNextTaskSequence(t, ctx, store, projectID); got != wantSequence {
+		t.Fatalf("project next task sequence = %d, want unchanged %d", got, wantSequence)
+	}
+	var taskCount int64
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_records WHERE project_id = ?`, projectID).Scan(&taskCount); err != nil {
+		t.Fatalf("count project tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("project task count = %d, want 0", taskCount)
+	}
+	var currentNodeCount int64
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM task_current_nodes current_node
+JOIN task_records task ON task.id = current_node.task_id
+WHERE task.project_id = ?`, projectID).Scan(&currentNodeCount); err != nil {
+		t.Fatalf("count project current nodes: %v", err)
+	}
+	if currentNodeCount != 0 {
+		t.Fatalf("project current node count = %d, want 0", currentNodeCount)
+	}
 }
 
 func setCommentCreatedAt(t *testing.T, ctx context.Context, store *Store, commentID string, createdAtUnixMs int64) {
@@ -19,55 +54,6 @@ func setCommentCreatedAt(t *testing.T, ctx context.Context, store *Store, commen
 	// created_at rows without sleeping between comment writes.
 	if _, err := store.db.ExecContext(ctx, `UPDATE task_comments SET created_at_unix_ms = ? WHERE id = ?`, createdAtUnixMs, commentID); err != nil {
 		t.Fatalf("force comment timestamp: %v", err)
-	}
-}
-
-func mutateSnapshotTransition(t *testing.T, snapshot *runStartSnapshot, transitionID string, mutate func(*transitionContractSnapshot)) {
-	t.Helper()
-	for index := range snapshot.TransitionGroups {
-		if snapshot.TransitionGroups[index].TransitionID == transitionID {
-			mutate(&snapshot.TransitionGroups[index])
-			return
-		}
-	}
-	t.Fatalf("snapshot transition %q missing from %+v", transitionID, snapshot.TransitionGroups)
-}
-
-func mutateRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID, mutate func(*testing.T, *runStartSnapshot)) {
-	t.Helper()
-	row, err := store.queries.GetTaskRun(ctx, string(runID))
-	if err != nil {
-		t.Fatalf("GetTaskRun: %v", err)
-	}
-	snapshot := runStartSnapshot{}
-	if err := workflow.UnmarshalString(row.RunStartSnapshotJson, &snapshot); err != nil {
-		t.Fatalf("unmarshal snapshot: %v", err)
-	}
-	mutate(t, &snapshot)
-	updateRunStartSnapshot(t, ctx, store, runID, snapshot)
-}
-
-func nodeSnapshotByID(t *testing.T, snapshot runStartSnapshot, nodeID workflow.NodeID) nodeContractSnapshot {
-	t.Helper()
-	for _, node := range snapshot.Nodes {
-		if node.ID == nodeID {
-			return node
-		}
-	}
-	t.Fatalf("snapshot node %q missing from %+v", nodeID, snapshot.Nodes)
-	return nodeContractSnapshot{}
-}
-
-func updateRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID, snapshot runStartSnapshot) {
-	t.Helper()
-	snapshotJSON, err := workflow.MarshalString(snapshot)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
-	// Intentional corruption fixture: mutate a persisted run-start snapshot to
-	// test snapshot drift/freeze behavior that product APIs cannot create.
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET run_start_snapshot_json = ? WHERE id = ?`, snapshotJSON, string(runID)); err != nil {
-		t.Fatalf("update snapshot: %v", err)
 	}
 }
 
@@ -92,7 +78,7 @@ func newWorkflowDeletionFixture(t *testing.T) workflowDeletionFixture {
 	return workflowDeletionFixture{ctx: ctx, store: store, projectID: binding.ProjectID}
 }
 
-func (f workflowDeletionFixture) linkedWorkflow(t *testing.T, isDefault bool) (workflow.WorkflowID, ProjectWorkflowLinkRecord) {
+func (f workflowDeletionFixture) linkedWorkflow(t *testing.T, isDefault bool) (runtimeids.WorkflowID, ProjectWorkflowLinkRecord) {
 	t.Helper()
 	workflowID := createValidWorkflow(t, f.ctx, f.store)
 	return workflowID, linkWorkflow(t, f.ctx, f.store, f.projectID, workflowID, isDefault)
@@ -107,7 +93,7 @@ func (f workflowDeletionFixture) unlink(t *testing.T, linkID, replacementDefault
 	return result
 }
 
-func (f workflowDeletionFixture) preview(t *testing.T, workflowID workflow.WorkflowID) WorkflowDeleteImpact {
+func (f workflowDeletionFixture) preview(t *testing.T, workflowID runtimeids.WorkflowID) WorkflowDeleteImpact {
 	t.Helper()
 	impact, err := f.store.PreviewWorkflowDelete(f.ctx, workflowID)
 	if err != nil {
@@ -160,7 +146,7 @@ func hasWorkflowDeleteBlocker(blockers []WorkflowDeleteBlocker, code string, cou
 	return false
 }
 
-func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revision int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
+func workflowGraphSaveRequestFromDefinition(workflowID runtimeids.WorkflowID, revision int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
 	req := WorkflowGraphSaveRequest{WorkflowID: workflowID, ExpectedVersion: revision, Confirmed: confirmed}
 	groupKeyByID := make(map[string]string, len(def.NodeGroups))
 	for index, group := range def.NodeGroups {
@@ -169,18 +155,32 @@ func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revi
 	}
 	for _, node := range def.Nodes {
 		groupID := workflow.NodeGroupID(node)
-		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), PromptTemplate: workflow.NodePromptTemplate(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), InputFields: workflow.NodeInputFields(node), JoinInputProviders: workflow.NodeJoinInputProviders(node), OutputFields: workflow.NodeOutputFields(node)})
+		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), JoinInputProviders: workflow.NodeJoinInputProviders(node)})
 	}
 	for _, group := range def.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for _, edge := range def.Edges {
-		req.Edges = append(req.Edges, EdgeRecord{ID: edge.ID, WorkflowID: workflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
+		assigneeSelection := edge.AssigneeSelection
+		if assigneeSelection == "" {
+			assigneeSelection = workflow.AssigneeSelectionConfigured
+		}
+		thinkingSelection := edge.ThinkingSelection
+		if thinkingSelection == "" {
+			thinkingSelection = workflow.ThinkingSelectionConfigured
+		}
+		parameters := append([]workflow.Parameter(nil), edge.Parameters...)
+		for index := range parameters {
+			if parameters[index].Purpose == "" {
+				parameters[index].Purpose = workflow.ParameterPurposeOrdinary
+			}
+		}
+		req.Edges = append(req.Edges, EdgeRecord{ID: edge.ID, WorkflowID: workflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: assigneeSelection, ThinkingSelection: thinkingSelection, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
 	}
 	return req
 }
 
-func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, edit func(workflow.Definition, *WorkflowGraphSaveRequest)) WorkflowGraphSaveResult {
+func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, workflowID runtimeids.WorkflowID, edit func(workflow.Definition, *WorkflowGraphSaveRequest)) WorkflowGraphSaveResult {
 	t.Helper()
 	def, record, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
@@ -188,6 +188,19 @@ func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, w
 	}
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	edit(def, &req)
+	for index := range req.Edges {
+		if req.Edges[index].AssigneeSelection == "" {
+			req.Edges[index].AssigneeSelection = workflow.AssigneeSelectionConfigured
+		}
+		if req.Edges[index].ThinkingSelection == "" {
+			req.Edges[index].ThinkingSelection = workflow.ThinkingSelectionConfigured
+		}
+		for parameterIndex := range req.Edges[index].Parameters {
+			if req.Edges[index].Parameters[parameterIndex].Purpose == "" {
+				req.Edges[index].Parameters[parameterIndex].Purpose = workflow.ParameterPurposeOrdinary
+			}
+		}
+	}
 	result, err := store.SaveWorkflowGraph(ctx, req)
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph workflow fixture: %v", err)
@@ -337,4 +350,37 @@ func mutateWorkflowGraphSaveTransitionGroup(groups []TransitionGroupRecord, grou
 		changed = append(changed, group)
 	}
 	return changed
+}
+
+func nodeByKey(t *testing.T, def workflow.Definition, key string) workflow.Node {
+	t.Helper()
+	for _, node := range def.Nodes {
+		if string(workflow.NodeKey(node)) == key {
+			return node
+		}
+	}
+	t.Fatalf("missing node key %q", key)
+	return nil
+}
+
+func edgeByKey(t *testing.T, def workflow.Definition, key string) workflow.Edge {
+	t.Helper()
+	for _, edge := range def.Edges {
+		if string(edge.Key) == key {
+			return edge
+		}
+	}
+	t.Fatalf("missing edge key %q", key)
+	return workflow.Edge{}
+}
+
+func nodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
+	t.Helper()
+	for _, node := range def.Nodes {
+		if node.Kind() == kind {
+			return node
+		}
+	}
+	t.Fatalf("missing node kind %q", kind)
+	return nil
 }

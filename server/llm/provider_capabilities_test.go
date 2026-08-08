@@ -95,6 +95,12 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 			wantID:   "openai-compatible",
 		},
 		{
+			name:     "loopback base url uses openai compatible",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
+			settings: config.Settings{OpenAIBaseURL: "http://127.0.0.1:11434/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
 			name:     "none auth with no override falls back to openai",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
 			settings: config.Settings{Model: "gpt-5.6-sol"},
@@ -142,8 +148,8 @@ func TestResolveOpenAITransportProviderVariant_DefaultLoopbackAndRemoteCompatibl
 	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com", OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected bare api.openai.com base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", OpenAIAuthMode{}); err != nil || got != "openai" {
-		t.Fatalf("expected loopback base url to resolve openai variant, got variant=%q err=%v", got, err)
+	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
+		t.Fatalf("expected loopback base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
 	if got, err := resolveOpenAITransportProviderVariant("https://example.openai.azure.com/openai/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected remote compatible base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
@@ -162,6 +168,9 @@ func TestIsOpenAIFirstPartyBaseURL(t *testing.T) {
 	}
 	if IsOpenAIFirstPartyBaseURL("https://example.test/v1") {
 		t.Fatal("did not expect non-OpenAI endpoint to be treated as first-party OpenAI")
+	}
+	if IsOpenAIFirstPartyBaseURL("http://127.0.0.1:11434/v1") {
+		t.Fatal("did not expect loopback endpoint to be treated as first-party OpenAI")
 	}
 }
 

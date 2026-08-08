@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -148,7 +149,7 @@ func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (cl
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
 		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            text,
+		Input:                           runtimeinput.Text(text),
 	})
 }
 
@@ -370,14 +371,6 @@ func runtimeOperationRefsContain(refs []clientui.RuntimeOperationRef, ref client
 		}
 	}
 	return false
-}
-
-func (m *uiModel) queueRuntimeUserMessage(text string) (clientui.QueuedUserMessage, error) {
-	m.checkTUIBlockingOperation("runtime queue mutation", "queue user message")
-	if client := m.runtimeClient(); client != nil {
-		return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage), Text: text})
-	}
-	return clientui.QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text}, nil
 }
 
 func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {

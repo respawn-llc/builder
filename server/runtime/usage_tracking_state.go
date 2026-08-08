@@ -5,6 +5,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 )
 
 type usageTrackingState struct {
@@ -88,11 +89,12 @@ func normalizeUsageForTrackingState(usage llm.Usage) llm.Usage {
 	if usage.WindowTokens < 0 {
 		usage.WindowTokens = 0
 	}
-	if usage.CachedInputTokens < 0 {
-		usage.CachedInputTokens = 0
+	usage.CachedInputTokens = textutil.Pointer(usage.CachedInputTokens)
+	if usage.CachedInputTokens != nil && *usage.CachedInputTokens < 0 {
+		*usage.CachedInputTokens = 0
 	}
-	if usage.CachedInputTokens > usage.InputTokens {
-		usage.CachedInputTokens = usage.InputTokens
+	if usage.CachedInputTokens != nil && *usage.CachedInputTokens > usage.InputTokens {
+		*usage.CachedInputTokens = usage.InputTokens
 	}
 	return usage
 }
@@ -135,9 +137,9 @@ func nextUsageTrackingTotals(totalInputTokens, totalCachedInputTokens int, usage
 	if totalCachedInputTokens < 0 {
 		totalCachedInputTokens = 0
 	}
-	if usage.HasCachedInputTokens && usage.InputTokens > 0 {
+	if usage.CachedInputTokens != nil && usage.InputTokens > 0 {
 		totalInputTokens += usage.InputTokens
-		totalCachedInputTokens += usage.CachedInputTokens
+		totalCachedInputTokens += *usage.CachedInputTokens
 		if totalCachedInputTokens > totalInputTokens {
 			totalCachedInputTokens = totalInputTokens
 		}

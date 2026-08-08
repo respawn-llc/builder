@@ -1,47 +1,10 @@
 package session
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
 const persistedMessageTypeCompactionSummary = "compaction_summary"
 
 const firstPromptPreviewMaxChars = 120
-
-type persistedMessageEnvelope struct {
-	Role        string `json:"role"`
-	MessageType string `json:"message_type,omitempty"`
-	Content     string `json:"content"`
-}
-
-func firstPromptPreviewFromEvent(kind string, payload json.RawMessage) (string, bool) {
-	msg, ok := visibleUserMessageFromEvent(kind, payload)
-	if !ok {
-		return "", false
-	}
-
-	preview := normalizeFirstPromptPreview(msg.Content)
-	if preview == "" {
-		return "", false
-	}
-	return preview, true
-}
-
-func visibleUserMessageFromEvent(kind string, payload json.RawMessage) (persistedMessageEnvelope, bool) {
-	if strings.TrimSpace(kind) != "message" || len(payload) == 0 {
-		return persistedMessageEnvelope{}, false
-	}
-
-	var msg persistedMessageEnvelope
-	if err := json.Unmarshal(payload, &msg); err != nil {
-		return persistedMessageEnvelope{}, false
-	}
-	if !isVisibleUserMessage(msg) {
-		return persistedMessageEnvelope{}, false
-	}
-	return msg, true
-}
 
 func normalizeFirstPromptPreview(content string) string {
 	for _, line := range strings.Split(content, "\n") {
@@ -69,15 +32,14 @@ func truncatePromptPreview(text string, maxChars int) string {
 	return string(runes[:maxChars-1]) + "…"
 }
 
-func isVisibleUserMessage(msg persistedMessageEnvelope) bool {
-	if strings.TrimSpace(msg.Role) != "user" {
+func isVisibleUserMessageFields(role string, messageType string, content string) bool {
+	if strings.TrimSpace(role) != "user" {
 		return false
 	}
-	content := strings.TrimSpace(msg.Content)
-	if content == "" {
+	if strings.TrimSpace(content) == "" {
 		return false
 	}
-	if strings.TrimSpace(msg.MessageType) == persistedMessageTypeCompactionSummary {
+	if strings.TrimSpace(messageType) == persistedMessageTypeCompactionSummary {
 		return false
 	}
 	return true

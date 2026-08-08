@@ -109,10 +109,63 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 	handler(g, conn, ctx, state, route, req)
 }
 
-func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
+func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
+	if !state.clientCapabilities.TranscriptLiveRunFinished {
+		subscribe = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+			subscription, err := g.deps.SessionTranscriptClient().SubscribeSessionTranscript(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+			return &legacyTranscriptSubscription{inner: subscription}, nil
+		}
+	}
+	serveGatewaySubscription(conn, ctx, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 		return protocol.SessionTranscriptEventParams{Message: message}
 	})
+}
+
+type legacyTranscriptSubscription struct {
+	inner      serverapi.TranscriptSubscription
+	suppressed uint64
+}
+
+type legacyTranscriptSequenceError struct {
+	Sequence   uint64
+	Suppressed uint64
+}
+
+func (e *legacyTranscriptSequenceError) Error() string {
+	return fmt.Sprintf(
+		"legacy transcript sequence %d is below suppressed message count %d",
+		e.Sequence,
+		e.Suppressed,
+	)
+}
+
+func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
+	for {
+		message, err := s.inner.Next(ctx)
+		if err != nil {
+			return clientui.TranscriptMessage{}, err
+		}
+		if message.Kind() == clientui.TranscriptMessageLiveRunFinished {
+			s.suppressed++
+			continue
+		}
+		if message.Sequence < s.suppressed {
+			return clientui.TranscriptMessage{}, &legacyTranscriptSequenceError{
+				Sequence:   message.Sequence,
+				Suppressed: s.suppressed,
+			}
+		}
+		message.Sequence -= s.suppressed
+		return message, nil
+	}
+}
+
+func (s *legacyTranscriptSubscription) Close() error {
+	return s.inner.Close()
 }
 
 func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](
@@ -190,7 +243,15 @@ func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.
 }
 
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {
-	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{ProjectID: evt.ProjectID, WorkflowID: evt.WorkflowID, Resource: evt.Resource, Action: evt.Action, ChangedIDs: evt.ChangedIDs, OccurredAtUnixMs: evt.OccurredAtUnixMs}}
+	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
+		ProjectID:        evt.ProjectID,
+		WorkflowID:       evt.WorkflowID,
+		Resource:         protocol.WorkflowProjectEventResource(evt.Resource),
+		Action:           protocol.WorkflowProjectEventAction(evt.Action),
+		PrimaryEntityID:  evt.PrimaryEntityID,
+		RelatedIDs:       append([]string(nil), evt.RelatedIDs...),
+		OccurredAtUnixMs: evt.OccurredAtUnixMs,
+	}}
 }
 
 func worktreeSetupEventParams(evt serverapi.WorktreeSetupEvent) protocol.WorktreeSetupEventParams {

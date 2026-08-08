@@ -25,14 +25,14 @@ import (
 type AgentRuntimePlanOptions struct {
 	Settings                            config.Settings
 	EnabledTools                        []toolspec.ID
-	Workdir                             string
+	FilesystemContext                   tools.FilesystemContext
 	Sources                             map[string]string
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
 	Client                              llm.Client
 	ClientFactory                       runtimewire.RuntimeClientFactory
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
-	WorkflowRun                         *workflowruntime.Config
+	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	AskQuestionBatchSkipped             func(tools.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
@@ -48,14 +48,17 @@ type AgentRuntimePlan struct {
 }
 
 func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, error) {
-	options.Workdir = strings.TrimSpace(options.Workdir)
-	if options.Workdir == "" {
-		return AgentRuntimePlan{}, errors.New("agent runtime workdir is required")
+	if strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.RealPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" ||
+		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.RealPath) == "" {
+		return AgentRuntimePlan{}, errors.New("agent runtime filesystem context is required")
 	}
 	options.Settings = cloneAgentRuntimeSettings(options.Settings)
 	options.EnabledTools = append([]toolspec.ID(nil), options.EnabledTools...)
 	options.Sources = maps.Clone(options.Sources)
 	options.StartLogLines = append([]string(nil), options.StartLogLines...)
+	options.FilesystemContext = options.FilesystemContext.Clone()
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -194,6 +197,10 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 }
 
 func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *session.Store, logger *runlog.RunLogger, plan AgentRuntimePlan) (*runtimewire.RuntimeWiring, error) {
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return nil, err
+	}
 	options := plan.options
 	wiringOptions := runtimewire.RuntimeWiringOptions{
 		Context:                             resource.ctx,
@@ -203,12 +210,13 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		Client:                              options.Client,
 		ClientFactory:                       options.ClientFactory,
 		ReviewerClientFactory:               options.ReviewerClientFactory,
-		WorkflowRun:                         options.WorkflowRun,
+		CurrentNodeExecution:                options.CurrentNodeExecution,
 		AskQuestionBatchSkipped:             options.AskQuestionBatchSkipped,
 		PromptFacingSnapshotReloader:        options.PromptFacingSnapshotReloader,
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,
 		SkipContinuationAgentRoleValidation: options.SkipContinuationAgentRoleValidation,
 		GlobalConfigDir:                     a.options.persistenceRoot,
+		FilesystemContext:                   options.FilesystemContext,
 		StepLifecycle:                       resource,
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
@@ -228,9 +236,9 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 	}
 	return runtimewire.NewRuntimeWiringWithBackground(
 		store,
+		eventLog,
 		options.Settings,
 		options.EnabledTools,
-		options.Workdir,
 		a.options.authManager,
 		logger,
 		a.options.background,

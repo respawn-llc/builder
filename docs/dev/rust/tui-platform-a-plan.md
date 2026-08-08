@@ -1,5 +1,8 @@
 # Platform A — loop viability (Phase 3 of tui-rebuild-plan.md)
 
+> [!CAUTION]
+> Rust work is frozen. This document is a historical planning record and does not authorize implementation. Do not edit or run `tui-rs/` unless Rust work is explicitly reactivated.
+
 Mission (ratified 2026-07-03, reworded post-nuke 2026-07-04): build the runtime loop from first principles — the old 5-layer onion is deleted, not a reference. Subscription I/O lives off the reducer/work loop behind channels; structured concurrency only; one composition. Generalize as the platform effect runtime (typed channel contract between sync reducer and I/O workers, cancellation, single-flight frozen-mutation primitive). Recreate tui-bin; restore build.sh TUI artifact. Gate: harness-certified unattended 15-minute chat session (turns render, keys respond, no hang, no crash), artifacts attached — pass or abandon.
 
 Post-mortem root cause this layer exists to kill: blocking subscription I/O starved the single work loop → first-chat-turn hang. Old shape (deleted): runtime_host/runtime_driver/runtime_work_loop/endpoint_* onion, 649-type message layer, 9.5K reducer.
@@ -44,7 +47,7 @@ Starvation-proofing invariants (the demon this layer exists to kill; each become
 
 Also owned here: the single-flight frozen-mutation primitive as a typed `tui-runtime` contract (one in-flight mutation per key), first consumed by Platform D.
 
-Walking skeleton = compose the above with rpc-client: connect → subscribe → render streamed events as raw appended lines; keys produce a visible typed acknowledgement; explicitly non-product output. Soak scenario drives exactly this binary.
+Walking skeleton = exercise the local runtime and render loop without networking; keys produce a visible typed acknowledgement and the output remains explicitly non-product. Server connectivity begins with the dedicated network crate in Platform D.
 
 - [ ] Adversarial subagent review of this direction
 - [ ] Nikita grilling/ratification → ticket body

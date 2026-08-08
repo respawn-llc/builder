@@ -2,11 +2,13 @@ package serverapi
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 type RuntimeSetSessionNameRequest struct {
@@ -85,10 +87,20 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 type RuntimeSubmitUserTurnRequest struct {
 	ClientRequestID                 string                       `json:"client_request_id"`
 	SessionID                       string                       `json:"session_id"`
-	Text                            string                       `json:"text"`
+	Input                           RuntimeUserTurnInput         `json:"input"`
 	OperationRef                    clientui.RuntimeOperationRef `json:"operation_ref"`
 	PreSubmitCompactionOperationRef clientui.RuntimeOperationRef `json:"pre_submit_compaction_operation_ref,omitempty"`
 }
+
+type RuntimeUserTurnInputKind = runtimeinput.Kind
+
+const (
+	RuntimeUserTurnInputKindText          = runtimeinput.KindText
+	RuntimeUserTurnInputKindPromptCommand = runtimeinput.KindPromptCommand
+)
+
+type RuntimePromptCommandInput = runtimeinput.PromptCommand
+type RuntimeUserTurnInput = runtimeinput.Input
 
 type RuntimeSubmitUserTurnResponse struct {
 	Message     string `json:"message"`
@@ -148,23 +160,11 @@ type RuntimeInterruptResponse struct {
 	InputReconciliation clientui.RuntimeInputReconciliationSnapshot `json:"input_reconciliation"`
 }
 
-type RuntimeQueueUserMessageRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
-	Text            string                       `json:"text"`
-}
-
-type RuntimeQueueUserMessageResponse struct {
-	QueueItemID     string `json:"queue_item_id"`
-	Text            string `json:"text"`
-	ClientRequestID string `json:"client_request_id"`
-}
-
 type RuntimeLiveSteerRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Text            string `json:"text"`
+	ClientRequestID string  `json:"client_request_id"`
+	SessionID       string  `json:"session_id"`
+	CallerSessionID *string `json:"caller_session_id,omitempty"`
+	Text            string  `json:"text"`
 }
 
 type RuntimeLiveSteerResponse struct {
@@ -351,6 +351,9 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
+	if err := r.Input.Validate(); err != nil {
+		return err
+	}
 	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {
 		return err
 	}
@@ -399,24 +402,18 @@ func (r RuntimeInterruptRequest) Validate() error {
 	}
 	return nil
 }
-func (r RuntimeQueueUserMessageRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindQueuedMessage, r.ClientRequestID); err != nil {
-		return err
-	}
-	if r.OperationRef.QueueItemID != nil {
-		return errors.New("queued-message create operation_ref must not carry queue item id")
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return errors.New("text is required")
-	}
-	return nil
-}
 func (r RuntimeLiveSteerRequest) Validate() error {
 	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
+	}
+	if r.CallerSessionID != nil {
+		callerSessionID, err := runtimeids.ParseSessionID(*r.CallerSessionID)
+		if err != nil {
+			return fmt.Errorf("caller_session_id: %w", err)
+		}
+		if !callerSessionID.IsCanonicalUUIDv4() {
+			return errors.New("caller_session_id: canonical UUIDv4 required")
+		}
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return errors.New("text is required")

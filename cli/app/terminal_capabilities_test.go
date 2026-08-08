@@ -89,7 +89,7 @@ func TestTerminalCapabilitiesUseIndependentWhitelists(t *testing.T) {
 				"TMUX":         "/private/tmp/tmux/default,1,0",
 				"TERM_PROGRAM": "ghostty",
 			},
-			wantResize: ongoing.TerminalResizeWidthRehydration,
+			wantResize: ongoing.TerminalResizeTmuxWidthRehydration,
 			wantLinks:  transcriptrender.MarkdownLinkLabelAndDestination,
 		},
 		{

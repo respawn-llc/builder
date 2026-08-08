@@ -10,13 +10,14 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 type sessionTransition struct {
 	Action                       serverapi.SessionTransitionAction
 	InitialPrompt                string
 	InitialPromptHistoryRecorded bool
-	InitialInput                 string
+	InitialInput                 *string
 	TargetSessionID              string
 	ForkUserMessageSeq           int64
 	PreviousSessionID            *runtimeids.SessionID
@@ -102,11 +103,15 @@ func resolveSessionTransition(_ context.Context, req sessionTransitionResolveReq
 		if err != nil {
 			return serverapi.SessionDirective{}, err
 		}
+		draftDisposition := serverapi.RestoreStoredDraftSessionDraftDisposition()
+		if initialInput, present := textutil.OptionalValue(req.Transition.InitialInput); present {
+			draftDisposition = serverapi.OverrideStoredDraftSessionDraftDisposition(initialInput)
+		}
 		return serverapi.LaunchSessionDirective(
 			serverapi.OpenExistingSessionLaunchIntent(targetID),
 			serverapi.NewSessionLaunchPreparation(
 				nil,
-				serverapi.OverrideStoredDraftSessionDraftDisposition(req.Transition.InitialInput),
+				draftDisposition,
 				serverapi.SessionAuthPreparationKeepCurrent,
 			),
 		), nil
@@ -129,7 +134,11 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if baseName == "" {
 		baseName = parentMeta.SessionID
 	}
-	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(req.Store, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
+	eventLog, err := req.Store.MaterializeEventLog()
+	if err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(eventLog, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
 	if err != nil {
 		return serverapi.SessionDirective{}, err
 	}
@@ -144,11 +153,15 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}
+	draftDisposition := serverapi.RestoreStoredDraftSessionDraftDisposition()
+	if initialInput, present := textutil.OptionalValue(req.Transition.InitialInput); present {
+		draftDisposition = serverapi.OverrideStoredDraftSessionDraftDisposition(initialInput)
+	}
 	return serverapi.LaunchSessionDirective(
 		serverapi.OpenExistingSessionLaunchIntent(forkID),
 		serverapi.NewSessionLaunchPreparation(
 			prompt,
-			serverapi.RestoreStoredDraftSessionDraftDisposition(),
+			draftDisposition,
 			serverapi.SessionAuthPreparationKeepCurrent,
 		),
 	), nil

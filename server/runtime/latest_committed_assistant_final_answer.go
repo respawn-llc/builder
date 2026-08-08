@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -10,50 +8,48 @@ import (
 	"core/server/session"
 )
 
-var errLatestCommittedAssistantFinalAnswerStoreRequired = errors.New("session store is required")
-
-// LatestCommittedAssistantFinalAnswerFromStore finds the newest durable
+// LatestCommittedAssistantFinalAnswerFromEventLog finds the newest durable
 // assistant final answer in the active transcript segment. A compaction
 // boundary is an absence result and is never decoded as carried history.
-func LatestCommittedAssistantFinalAnswerFromStore(store *session.Store) (*string, error) {
-	if store == nil {
-		return nil, errLatestCommittedAssistantFinalAnswerStoreRequired
-	}
-
+func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.MaterializedEventLog) (*string, error) {
 	var (
 		answer   *string
 		matchErr error
 	)
-	_, err := store.ReadNewestSegmentBackward(func(evt session.Event) bool {
-		switch evt.Kind {
-		case "message":
-			var message llm.Message
-			if err := json.Unmarshal(evt.Payload, &message); err != nil {
-				matchErr = fmt.Errorf("decode message event seq %d: %w", evt.Seq, err)
+	_, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			matchErr = payloadErr
+			return true
+		}
+		switch payload := payload.(type) {
+		case session.MessageRecord:
+			message, restoreErr := llmMessageFromSessionRecord(payload)
+			if restoreErr != nil {
+				matchErr = fmt.Errorf("restore session message record seq %d: %w", record.Seq(), restoreErr)
 				return true
 			}
 			if message.Role != llm.RoleAssistant ||
-				message.Phase != llm.MessagePhaseFinal ||
-				strings.TrimSpace(message.Content) == "" ||
+				message.Phase == nil ||
+				*message.Phase != llm.MessagePhaseFinal ||
+				message.Content == nil ||
+				strings.TrimSpace(*message.Content) == "" ||
 				isNoopFinalAnswer(message) {
 				return false
 			}
-			text := message.Content
+			text := *message.Content
 			answer = &text
 			matchErr = nil
 			return true
-		case "history_replaced":
-			_, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
-			if err != nil {
-				matchErr = fmt.Errorf("%w seq %d: %w", errDecodeHistoryReplacedEvent, evt.Seq, err)
+		case session.HistoryReplacementRecord:
+			_, restoreErr := historyReplacementPayloadFromSessionRecord(payload)
+			if restoreErr != nil {
+				matchErr = fmt.Errorf("restore session history replacement record seq %d: %w", record.Seq(), restoreErr)
 				return true
 			}
-			if !ignoredLegacy {
-				answer = nil
-				matchErr = nil
-				return true
-			}
-			return false
+			answer = nil
+			matchErr = nil
+			return true
 		default:
 			return false
 		}

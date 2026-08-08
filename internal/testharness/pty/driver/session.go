@@ -295,10 +295,7 @@ func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAss
 		}
 		return nil
 	case SessionCommandTerminateProcess:
-		if s.cmd.Process == nil {
-			return errors.New("PTY child process is unavailable")
-		}
-		return signalProcessGroup(s.cmd.Process.Pid, syscall.SIGTERM)
+		return s.ForceKill()
 	default:
 		return fmt.Errorf("unsupported session command kind %d", command.Kind)
 	}
@@ -308,7 +305,11 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 	if pid <= 0 {
 		return errors.New("PTY child process id is unavailable")
 	}
-	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+	err := syscall.Kill(-pid, signal)
+	if errors.Is(err, syscall.ESRCH) {
+		err = syscall.Kill(pid, signal)
+	}
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
 	return nil

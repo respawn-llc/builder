@@ -7,7 +7,7 @@ import { errorMessage } from "@/api";
 import { basename, formatRelativeTime, projectKeyFromName } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } from "@/app-facade";
 import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -33,17 +33,21 @@ import {
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
 export function HomeRoute() {
+  return <SidebarRootOwner><HomeRouteContent /></SidebarRootOwner>;
+}
+
+function HomeRouteContent() {
   const { t } = useTranslation();
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
   const navigation = useAppNavigation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const queryClient = useQueryClient();
   const creation = useProjectCreation();
   const projects = useProjectPages();
-  const attention = useGlobalAttentionPages();
-  useGlobalAttentionEvents();
+  const attentionSubscriptionReady = useGlobalAttentionEvents();
+  const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
@@ -173,7 +177,7 @@ export function HomeRoute() {
             disabled={disabled}
             onChooseWorkspace={() => void chooseWorkspace()}
             onCreateWorkflow={() => {
-              void openSidebar({ kind: "workflowCreate", mode: "overlay" });
+              open({ kind: "workflowCreate", mode: "overlay" });
             }}
             onTabChange={setPrimaryTab}
             projectItems={projectItems}
@@ -198,8 +202,7 @@ type AttentionListProps = Readonly<{
 
 function AttentionList({ items, query }: AttentionListProps) {
   const { t } = useTranslation();
-  const navigation = useAppNavigation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   if (query.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
@@ -229,20 +232,24 @@ function AttentionList({ items, query }: AttentionListProps) {
       onLoadMore={() => void query.fetchNextPage()}
       paddingEnd={16}
       paddingStart={16}
-      renderItem={(item) => <AttentionRow item={item} navigation={navigation} openSidebar={openSidebar} />}
+      renderItem={(item) => <AttentionRow item={item} openSidebar={open} />}
     />
   );
 }
 
 const AttentionRow = memo(function AttentionRow({
   item,
-  navigation,
   openSidebar,
 }: Readonly<{
   item: AttentionItem;
-  navigation: ReturnType<typeof useAppNavigation>;
-  openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+  openSidebar: SidebarRootController["open"];
 }>) {
+  const { t } = useTranslation();
+  const message =
+    item.message ??
+    (item.kind === "approval"
+      ? t("app.attention.approvalFallback")
+      : t("app.attention.interruptedCurrentNodeFallback"));
   return (
     <button
       className={cx(
@@ -251,23 +258,14 @@ const AttentionRow = memo(function AttentionRow({
       )}
       data-testid="attention-row"
       onClick={() => {
-        if (item.taskID.length > 0) {
-          void openSidebar({
-            kind: "taskDetail",
-            initialFocus: taskDetailInitialFocusFromAttentionItem(item),
-            inboxNav: true,
-            mode: "overlay",
-            onMutated: undefined,
-            taskID: item.taskID,
-          });
-          return;
-        }
-        if (item.workflowID.length > 0) {
-          void navigation.openWorkflowEditor({
-            projectID: item.projectID.length > 0 ? item.projectID : undefined,
-            workflowID: item.workflowID,
-          });
-        }
+        openSidebar({
+          kind: "taskDetail",
+          initialFocus: taskDetailInitialFocusFromAttentionItem(item),
+          inboxNav: true,
+          mode: "overlay",
+          onMutated: undefined,
+          taskID: item.taskID,
+        });
       }}
       type="button"
     >
@@ -282,7 +280,7 @@ const AttentionRow = memo(function AttentionRow({
         ) : null}
       </div>
       {item.taskTitle.length > 0 ? <strong className="min-w-0 truncate">{item.taskTitle}</strong> : null}
-      <span className="min-w-0 text-sm break-words">{item.message}</span>
+      <span className="min-w-0 text-sm break-words">{message}</span>
       <span className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</span>
     </button>
   );
@@ -291,31 +289,21 @@ const AttentionRow = memo(function AttentionRow({
 function attentionRowPropsEqual(
   previous: Readonly<{
     item: AttentionItem;
-    navigation: ReturnType<typeof useAppNavigation>;
-    openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+    openSidebar: SidebarRootController["open"];
   }>,
   next: Readonly<{
     item: AttentionItem;
-    navigation: ReturnType<typeof useAppNavigation>;
-    openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+    openSidebar: SidebarRootController["open"];
   }>,
 ): boolean {
-  return (
-    previous.openSidebar === next.openSidebar &&
-    previous.navigation === next.navigation &&
-    attentionItemsEqual(previous.item, next.item)
-  );
+  return previous.openSidebar === next.openSidebar && attentionItemsEqual(previous.item, next.item);
 }
 
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {
   return (
     previous.id === next.id &&
     previous.kind === next.kind &&
-    previous.projectID === next.projectID &&
-    previous.workflowID === next.workflowID &&
     previous.taskID === next.taskID &&
-    previous.askID === next.askID &&
-    previous.taskTransitionID === next.taskTransitionID &&
     previous.taskShortID === next.taskShortID &&
     previous.taskTitle === next.taskTitle &&
     previous.message === next.message &&

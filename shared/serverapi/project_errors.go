@@ -12,6 +12,7 @@ var ErrWorkspaceNotRegistered = errors.New("workspace is not registered")
 var ErrWorkspaceBindingAmbiguous = errors.New("workspace binding is ambiguous")
 var ErrProjectNotFound = errors.New("project not found")
 var ErrProjectUnavailable = errors.New("project is unavailable")
+var ErrWorkspacePathIdentity = errors.New("workspace path identity could not be recovered")
 
 type WorkspaceBindingAmbiguousError struct {
 	CanonicalRoot string
@@ -67,4 +68,37 @@ func AsProjectUnavailable(err error) (ProjectUnavailableError, bool) {
 		return ProjectUnavailableError{}, false
 	}
 	return unavailable, true
+}
+
+type WorkspacePathIdentityError struct {
+	WorkspaceRoot string
+	Cause         error
+	remoteMessage *string
+}
+
+func (e WorkspacePathIdentityError) Error() string {
+	if e.remoteMessage != nil && strings.TrimSpace(*e.remoteMessage) != "" {
+		return *e.remoteMessage
+	}
+	root := strings.TrimSpace(e.WorkspaceRoot)
+	if e.Cause == nil {
+		return fmt.Sprintf("%s: %q", ErrWorkspacePathIdentity, root)
+	}
+	return fmt.Sprintf("%s: %q: %v", ErrWorkspacePathIdentity, root, e.Cause)
+}
+
+func (e WorkspacePathIdentityError) Unwrap() error {
+	return e.Cause
+}
+
+func (e WorkspacePathIdentityError) Is(target error) bool {
+	return target == ErrWorkspacePathIdentity
+}
+
+func AsWorkspacePathIdentity(err error) (WorkspacePathIdentityError, bool) {
+	var identity WorkspacePathIdentityError
+	if !errors.As(err, &identity) {
+		return WorkspacePathIdentityError{}, false
+	}
+	return identity, true
 }

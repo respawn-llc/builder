@@ -114,7 +114,7 @@ func (m *uiModel) statusLineLabel() string {
 		return "review"
 	}
 	if m.rollback.isActive() {
-		return "editing"
+		return "rollback"
 	}
 	if goalIsPresent(m.cachedRuntimeStatus().Goal) {
 		return "goal"

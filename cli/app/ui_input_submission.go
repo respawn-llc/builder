@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,17 @@ const (
 )
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
+	return c.startTypedSubmissionWithPreSubmitQueuePosition(text, runtimeinput.Text(text), queuePosition, queuedID, activeSubmitOriginDirect)
+}
+
+func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
+	return c.startTypedSubmissionWithPreSubmitQueuePosition(text, runtimeinput.Text(text), queuePosition, queuedID, origin)
+}
+
+func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePosition(text string, input runtimeinput.Input, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -40,13 +52,20 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 	}
 	m.layout().syncViewport()
 	if isUserShell {
-		return tea.Batch(c.submitUserShellCmd(text, command), m.reconcileSpinnerTicking(false))
+		return tea.Batch(c.submitUserShellCmd(text, command, origin), m.reconcileSpinnerTicking(false))
 	}
-	return tea.Batch(c.submitCmd(text, queuedID), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.submitCmd(text, input, queuedID, origin), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
+	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text, queuePosition, queuedID, activeSubmitOriginDirect)
+}
+
+func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
+	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
+		return cmd
+	}
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
 	}
@@ -54,15 +73,15 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 		return blockCmd
 	}
 	m.rememberPromptHistoryLocally(text)
-	return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID)
+	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, origin)
 }
 
-func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
+func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	preSubmitCompactionRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
 	m.addPendingRuntimeOperation(preSubmitCompactionRef)
-	token := m.beginSubmitAttempt(text, queuedID, operationRef)
+	token := m.beginSubmitAttempt(text, queuedID, operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
@@ -71,7 +90,7 @@ func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 		submission, err := m.submitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
 			OperationRef:                    operationRef,
 			PreSubmitCompactionOperationRef: preSubmitCompactionRef,
-			Text:                            text,
+			Input:                           input,
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
@@ -85,10 +104,10 @@ func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 	}
 }
 
-func (c uiInputController) submitUserShellCmd(originalText, command string) tea.Cmd {
+func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell)
-	token := m.beginSubmitAttempt(originalText, "", operationRef)
+	token := m.beginSubmitAttempt(originalText, "", operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
@@ -105,7 +124,7 @@ func (c uiInputController) submitUserShellCmd(originalText, command string) tea.
 	}
 }
 
-func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef clientui.RuntimeOperationRef) uint64 {
+func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef clientui.RuntimeOperationRef, origin activeSubmitOrigin) uint64 {
 	if m == nil {
 		return 0
 	}
@@ -113,7 +132,7 @@ func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef 
 	if m.submitToken == 0 {
 		m.submitToken++
 	}
-	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, operationRef: operationRef, restoreOnInterrupt: true}
+	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, origin: origin, operationRef: operationRef, restoreOnInterrupt: true}
 	return m.submitToken
 }
 
@@ -173,7 +192,12 @@ func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.turnQueueHook == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
+	if m.turnQueueHook == nil ||
+		m.blocksRuntimeInput() ||
+		len(m.queued) > 0 ||
+		m.injectedQueueBlocksDrain() ||
+		m.hasEnqueuedInjectedRuntimeWork() ||
+		m.ask.hasCurrent() {
 		return
 	}
 	m.turnQueueHook.OnTurnQueueDrained()
@@ -187,8 +211,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.token != 0 && msg.token != m.activeSubmit.token {
 		return m, nil
 	}
+	submitOrigin := m.activeSubmit.origin
 	m.observeRuntimeRequestResult(msg.err)
-	restoreSubmittedText := msg.err != nil && (msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
+	restoreSubmittedText := msg.err != nil && (submitOrigin == activeSubmitOriginQueued || msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
 	if msg.token != 0 && msg.err != nil && isRuntimeOperationInterrupted(msg.err) && m.activeSubmit.restoreOnInterrupt {
 		restore, _ := m.shouldRestoreActiveSubmitAfterInterrupt()
 		restoreSubmittedText = restore
@@ -205,11 +230,15 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
-		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
+		restoreInjectedCmd := tea.Cmd(nil)
+		if submitOrigin != activeSubmitOriginQueued {
+			restoreInjectedCmd = c.restorePendingInjectedIntoInput()
+		}
 		if restoreSubmittedText {
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
 		}
 		c.restoreQueuedMessagesIntoInput()
+		c.notifyTurnQueueDrainedIfIdle()
 		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
@@ -217,10 +246,17 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
-		m.activity = uiActivityError
+		if submitOrigin != activeSubmitOriginQueued {
+			m.activity = uiActivityError
+		}
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
 		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		if notFound, ok := promptCommandNotFound(msg.err); ok && notFound.Command != nil {
+			if refreshCmd := m.startPromptCatalogRefresh(*notFound.Command); refreshCmd != nil {
+				return m, tea.Batch(restoreInjectedCmd, statusCmd, refreshCmd)
+			}
+		}
 		return m, tea.Batch(restoreInjectedCmd, statusCmd)
 	}
 

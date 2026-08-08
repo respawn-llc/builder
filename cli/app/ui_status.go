@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -146,6 +147,7 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		AuthStatePath:         strings.TrimSpace(m.statusConfig.AuthStatePath),
 		SessionName:           strings.TrimSpace(m.sessionName),
 		SessionID:             strings.TrimSpace(m.sessionID),
+		AgentRole:             textutil.Pointer(m.cachedRuntimeMainView().Session.AgentRole),
 		ConfiguredModelName:   strings.TrimSpace(m.configuredModelName),
 		ModelName:             strings.TrimSpace(m.modelName),
 		ThinkingLevel:         strings.TrimSpace(m.thinkingLevel),

@@ -3,7 +3,6 @@ import { z } from "zod";
 import type {
   ApprovalDecision,
   ApprovalQuestionPrompt,
-  AttentionItem,
   AttentionQuestionPrompt,
   BoardCard,
   BoardColumn,
@@ -11,11 +10,10 @@ import type {
   ProjectBinding,
   TaskActions,
   TaskComment,
-  TaskRun,
+  TaskCurrentNode,
+  TaskScriptCurrentNode,
   TaskStatus,
   TaskStatusKind,
-  TaskTransition,
-  TransitionEdge,
   WorkflowOutputField,
   WorkflowParameter,
   WorkflowPickerItem,
@@ -24,8 +22,20 @@ import type {
   WorkspaceAvailability,
   OrdinaryQuestionPrompt,
 } from "../models";
+import type {
+  ApprovalAttentionItem,
+  AttentionItem,
+  InterruptedCurrentNodeAttentionItem,
+  QuestionAttentionItem,
+} from "../attention";
+import { labelIDListSchema } from "./workflowLabels";
+import { workflowIDSchema } from "./workflowID";
+
+export { workflowIDSchema } from "./workflowID";
 
 export const emptyString = z.string().optional().default("");
+export const nonBlankString = z.string().trim().min(1);
+export const nullableWorkflowIDSchema = workflowIDSchema.nullish().transform((value) => value ?? null);
 export const numberValue = z.number().default(0);
 export const nullableString = z
   .string()
@@ -37,8 +47,10 @@ const nullableNonBlankString = z
   .min(1)
   .nullish()
   .transform((value) => value ?? null);
-const nullableNumber = z
+const nullablePositiveInteger = z
   .number()
+  .int()
+  .positive()
   .nullish()
   .transform((value) => value ?? null);
 export const stringList = z
@@ -52,16 +64,20 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
   "deny",
 ]);
 
-const ordinaryQuestionPromptSchema = z.object({
-  kind: z.literal("ordinary"),
-  suggestions: stringList,
-  recommended_option_index: z.number().optional().default(0),
-});
+const ordinaryQuestionPromptSchema = z
+  .object({
+    kind: z.literal("ordinary"),
+    suggestions: stringList,
+    recommended_option_index: nullablePositiveInteger,
+  })
+  .strict();
 
-const approvalQuestionPromptSchema = z.object({
-  kind: z.literal("approval"),
-  approval_decisions: z.array(approvalDecisionSchema).min(1),
-});
+const approvalQuestionPromptSchema = z
+  .object({
+    kind: z.literal("approval"),
+    approval_decisions: z.array(approvalDecisionSchema).min(1),
+  })
+  .strict();
 
 export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
   .discriminatedUnion("kind", [ordinaryQuestionPromptSchema, approvalQuestionPromptSchema])
@@ -151,7 +167,7 @@ export const validationErrorSchema: z.ZodType<WorkflowValidationError> = z
   .object({
     code: z.string(),
     message: z.string(),
-    workflow_id: emptyString,
+    workflow_id: nullableWorkflowIDSchema,
     node_id: emptyString,
     transition_group_id: emptyString,
     edge_id: emptyString,
@@ -182,15 +198,13 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
   .object({
     key: z.string(),
     description: emptyString,
+    purpose: z.enum(["ordinary", "target_assignee", "target_thinking"]),
   })
-  .transform((value) => ({ key: value.key, description: value.description }));
+  .transform((value) => ({ key: value.key, description: value.description, purpose: value.purpose }));
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
-    workflow_id: z
-      .string()
-      .min(1)
-      .refine((value) => value.trim() === value),
+    workflow_id: workflowIDSchema,
     display_name: z.string(),
     description: emptyString,
     version: z.number(),
@@ -214,7 +228,6 @@ export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
 export const taskStatusSchema: z.ZodType<TaskStatus> = z
   .object({
     kind: z.enum([
-      "canceled",
       "done",
       "waiting_question",
       "waiting_approval",
@@ -226,7 +239,6 @@ export const taskStatusSchema: z.ZodType<TaskStatus> = z
     ]),
     native_state: z.string(),
     node_ids: stringList,
-    run_ids: stringList,
     attention_types: stringList,
   })
   .strict()
@@ -234,7 +246,6 @@ export const taskStatusSchema: z.ZodType<TaskStatus> = z
     kind: value.kind satisfies TaskStatusKind,
     nativeState: value.native_state,
     nodeIDs: value.node_ids,
-    runIDs: value.run_ids,
     attentionTypes: value.attention_types,
   }));
 
@@ -243,15 +254,13 @@ export const taskActionsSchema: z.ZodType<TaskActions> = z
     can_start: z.boolean(),
     can_interrupt: z.boolean(),
     can_resume: z.boolean(),
-    can_cancel: z.boolean(),
-    manual_move_target_node_ids: stringList,
+    can_delete: z.boolean(),
   })
   .transform((value) => ({
     canStart: value.can_start,
     canInterrupt: value.can_interrupt,
     canResume: value.can_resume,
-    canCancel: value.can_cancel,
-    manualMoveTargetNodeIDs: value.manual_move_target_node_ids,
+    canDelete: value.can_delete,
   }));
 
 export const boardColumnSchema: z.ZodType<BoardColumn> = z
@@ -263,10 +272,6 @@ export const boardColumnSchema: z.ZodType<BoardColumn> = z
       display_name: z.string(),
       assignee_role: emptyString,
       output_fields: z
-        .array(workflowOutputFieldSchema)
-        .nullish()
-        .transform((value) => value ?? []),
-      transition_output_fields: z
         .array(workflowOutputFieldSchema)
         .nullish()
         .transform((value) => value ?? []),
@@ -284,7 +289,6 @@ export const boardColumnSchema: z.ZodType<BoardColumn> = z
     name: value.node.display_name,
     assigneeRole: value.node.assignee_role,
     outputFields: value.node.output_fields,
-    transitionOutputFields: value.node.transition_output_fields,
     groupID: value.group_id,
     sortOrder: value.sort_order,
     isBacklog: value.is_backlog,
@@ -319,11 +323,23 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
         truncated: z.boolean(),
       })
       .strict(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     active_node_ids: stringList,
     source_workspace: workspaceSummarySchema,
     status: taskStatusSchema,
     actions: taskActionsSchema,
+    label_ids: labelIDListSchema,
+    dependency_progress: z
+      .object({
+        satisfied_count: z.number().int().nonnegative(),
+        total_count: z.number().int().positive(),
+      })
+      .strict()
+      .refine((value) => value.satisfied_count <= value.total_count)
+      .optional()
+      .transform((value) =>
+        value === undefined ? null : { satisfiedCount: value.satisfied_count, totalCount: value.total_count },
+      ),
     updated_at_unix_ms: z.number(),
   })
   .strict()
@@ -337,55 +353,154 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     sourceWorkspace: value.source_workspace,
     status: value.status,
     actions: value.actions,
+    labelIDs: value.label_ids,
+    dependencyProgress: value.dependency_progress,
     updatedAt: value.updated_at_unix_ms,
   }));
 
-export const attentionItemSchema: z.ZodType<AttentionItem> = z
-  .object({
-    id: z.string(),
-    kind: z.string(),
-    project_id: emptyString,
-    workflow_id: emptyString,
-    task_id: emptyString,
-    task_short_id: emptyString,
-    task_title: emptyString,
-    run_id: emptyString,
-    session_id: emptyString,
-    ask_id: emptyString,
-    task_transition_id: emptyString,
-    message: z.string(),
-    detail_json: emptyString,
-    suggestions: stringList,
-    recommended_option_index: z.number().optional().default(0),
-    question: questionPromptSchema.nullish(),
-    occurred_at_unix_ms: z.number(),
-  })
-  .transform((value) => ({
+const attentionItemBaseWireSchema = z.object({
+  id: nonBlankString,
+  project_id: nonBlankString,
+  workflow_id: workflowIDSchema,
+  task_id: nonBlankString,
+  task_short_id: nonBlankString,
+  task_title: nonBlankString,
+  occurred_at_unix_ms: z.number(),
+});
+
+type AttentionItemBase = Pick<
+  QuestionAttentionItem,
+  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "occurredAt"
+>;
+
+function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSchema>): AttentionItemBase {
+  return {
     id: value.id,
-    kind: value.kind,
     projectID: value.project_id,
     workflowID: value.workflow_id,
     taskID: value.task_id,
     taskShortID: value.task_short_id,
     taskTitle: value.task_title,
-    runID: value.run_id,
-    sessionID: value.session_id,
-    askID: value.ask_id,
-    taskTransitionID: value.task_transition_id,
-    message: value.message,
-    detailJSON: value.detail_json,
-    suggestions: value.suggestions,
-    recommendedOptionIndex: value.recommended_option_index,
-    question: value.question ?? null,
     occurredAt: value.occurred_at_unix_ms,
+  };
+}
+
+const approvalSnapshotSchema = z
+  .object({
+    source_node_display_name: nonBlankString,
+    targets: z.array(z.object({ display_name: nonBlankString }).strict()),
+    commentary: emptyString,
+    output_values: z.record(z.string(), z.string()),
+    workflow_revision_seen: z.number().int().nonnegative(),
+  })
+  .strict()
+  .transform((value) => ({
+    sourceNodeName: value.source_node_display_name,
+    targets: value.targets.map((target) => ({ displayName: target.display_name })),
+    commentary: value.commentary,
+    outputValues: value.output_values,
+    version: value.workflow_revision_seen,
   }));
+
+export const currentNodeSchema: z.ZodType<TaskCurrentNode> = z
+  .object({
+    node_id: nonBlankString,
+    transition_branch_key: nullableNonBlankString,
+    session_id: nullableNonBlankString,
+    effective_assignee: nullableNonBlankString,
+    effective_thinking: nullableNonBlankString,
+  })
+  .strict()
+  .transform((value) => ({
+    nodeID: value.node_id,
+    transitionBranchKey: value.transition_branch_key,
+    sessionID: value.session_id,
+    effectiveAssignee: value.effective_assignee,
+    effectiveThinking: value.effective_thinking,
+  }));
+
+export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
+  .object({
+    node_id: nonBlankString,
+    transition_branch_key: nullableNonBlankString,
+    session_id: z.null().optional().transform(() => null),
+  })
+  .strict()
+  .transform((value) => ({
+    nodeID: value.node_id,
+    transitionBranchKey: value.transition_branch_key,
+    sessionID: value.session_id,
+  }));
+
+export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnion("kind", [
+  attentionItemBaseWireSchema
+    .extend({
+      kind: z.literal("question"),
+      current_node: currentNodeSchema,
+      session_id: nullableNonBlankString,
+      session_name: nonBlankString.nullable(),
+      question_id: nonBlankString,
+      message: nonBlankString,
+      suggestions: stringList,
+      recommended_option_index: nullablePositiveInteger,
+      question: questionPromptSchema.nullish(),
+    })
+    .strict()
+    .transform((value): QuestionAttentionItem => ({
+      ...adaptAttentionItemBase(value),
+      kind: value.kind,
+      currentNode: value.current_node,
+      sessionID: value.session_id,
+      sessionName: value.session_name,
+      questionID: value.question_id,
+      message: value.message,
+      suggestions: value.suggestions,
+      recommendedOptionIndex: value.recommended_option_index,
+      question: value.question ?? null,
+    })),
+  attentionItemBaseWireSchema
+    .extend({
+      kind: z.literal("approval"),
+      approval_id: nonBlankString,
+      approval_snapshot: approvalSnapshotSchema,
+      session_name: z.null(),
+      message: nullableNonBlankString,
+    })
+    .strict()
+    .transform((value): ApprovalAttentionItem => ({
+      ...adaptAttentionItemBase(value),
+      kind: value.kind,
+      approvalID: value.approval_id,
+      approvalSnapshot: value.approval_snapshot,
+      message: value.message,
+    })),
+  attentionItemBaseWireSchema
+    .extend({
+      kind: z.literal("interrupted_current_node"),
+      current_node: currentNodeSchema,
+      session_id: nullableNonBlankString,
+      session_name: z.null(),
+      detail_json: nullableNonBlankString,
+      message: nullableNonBlankString,
+    })
+    .strict()
+    .transform((value): InterruptedCurrentNodeAttentionItem => ({
+      ...adaptAttentionItemBase(value),
+      kind: value.kind,
+      currentNode: value.current_node,
+      sessionID: value.session_id,
+      detailJSON: value.detail_json,
+      message: value.message,
+    })),
+]);
 
 export const commentSchema: z.ZodType<TaskComment> = z
   .object({
     id: z.string(),
     task_id: z.string(),
     body: z.string(),
-    author: z.string(),
+    author: z.enum(["agent", "user"]),
+    author_id: z.string().min(1).optional(),
     created_at_unix_ms: z.number(),
     updated_at_unix_ms: z.number(),
   })
@@ -393,102 +508,8 @@ export const commentSchema: z.ZodType<TaskComment> = z
     id: value.id,
     taskID: value.task_id,
     body: value.body,
-    author: value.author,
+    authorKind: value.author,
+    authorID: value.author_id ?? null,
     createdAt: value.created_at_unix_ms,
     updatedAt: value.updated_at_unix_ms,
-  }));
-
-export const runSchema: z.ZodType<TaskRun> = z
-  .object({
-    id: z.string(),
-    task_id: z.string(),
-    placement_id: z.string(),
-    node_id: z.string(),
-    node_kind: emptyString,
-    script_path: emptyString,
-    session_id: emptyString,
-    session_name: emptyString,
-    role: emptyString,
-    status: z.string(),
-    generation: z.number(),
-    waiting_ask_id: nullableString,
-    started_at_unix_ms: nullableNumber,
-    completed_at_unix_ms: nullableNumber,
-    interrupted_at_unix_ms: nullableNumber,
-    interruption_reason: nullableString,
-    interruption_detail_json: emptyString,
-  })
-  .transform((value) => ({
-    id: value.id,
-    taskID: value.task_id,
-    placementID: value.placement_id,
-    nodeID: value.node_id,
-    nodeKind: value.node_kind,
-    scriptPath: value.script_path,
-    sessionID: value.session_id,
-    sessionName: value.session_name,
-    role: value.role,
-    status: value.status,
-    generation: value.generation,
-    waitingAskID: value.waiting_ask_id,
-    startedAt: value.started_at_unix_ms,
-    completedAt: value.completed_at_unix_ms,
-    interruptedAt: value.interrupted_at_unix_ms,
-    interruptionReason: value.interruption_reason,
-    interruptionDetail: value.interruption_detail_json,
-  }));
-
-export const transitionEdgeSchema: z.ZodType<TransitionEdge> = z
-  .object({
-    id: z.string(),
-    edge_key: z.string(),
-    target_node_display_name: emptyString,
-    state: z.string(),
-    requires_approval: z.boolean(),
-    output_requirements: z
-      .array(z.object({ field_name: z.string() }))
-      .nullish()
-      .transform((value) => value ?? []),
-  })
-  .transform((value) => ({
-    id: value.id,
-    edgeKey: value.edge_key,
-    targetNodeName: value.target_node_display_name,
-    state: value.state,
-    requiresApproval: value.requires_approval,
-    outputRequirements: value.output_requirements.map((item) => item.field_name),
-  }));
-
-export const transitionSchema: z.ZodType<TaskTransition> = z
-  .object({
-    id: z.string(),
-    transition_id: z.string(),
-    transition_display_name: emptyString,
-    source_node_display_name: emptyString,
-    state: z.string(),
-    commentary: emptyString,
-    output_values: z
-      .record(z.string(), z.string())
-      .nullish()
-      .transform((value) => value ?? {}),
-    edges: z
-      .array(transitionEdgeSchema)
-      .nullish()
-      .transform((value) => value ?? []),
-    workflow_revision_seen: z.number().optional().default(0),
-    created_at_unix_ms: z.number(),
-    applied_at_unix_ms: nullableNumber,
-  })
-  .transform((value) => ({
-    id: value.id,
-    transitionID: value.transition_id,
-    transitionName: value.transition_display_name,
-    sourceNodeName: value.source_node_display_name,
-    state: value.state,
-    commentary: value.commentary,
-    outputValues: value.output_values,
-    edges: value.edges,
-    version: value.workflow_revision_seen,
-    createdAt: value.created_at_unix_ms,
-    appliedAt: value.applied_at_unix_ms,
   }));

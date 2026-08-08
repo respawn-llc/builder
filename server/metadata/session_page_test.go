@@ -15,6 +15,7 @@ import (
 )
 
 func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	updatedAt := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
@@ -46,6 +47,7 @@ func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
 }
 
 func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	updatedAt := time.Now().UTC()
@@ -90,6 +92,7 @@ func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
 }
 
 func TestSessionPageNavigatesOlderAndNewerWithStableTieBreaks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	updatedAt := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
@@ -138,6 +141,7 @@ func TestSessionPageNavigatesOlderAndNewerWithStableTieBreaks(t *testing.T) {
 }
 
 func TestSessionPageRejectsInvalidAndCrossScopeTokens(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other project")
@@ -197,6 +201,7 @@ func TestSessionPageRejectsInvalidAndCrossScopeTokens(t *testing.T) {
 }
 
 func TestSessionPageUsesLiveRecencyWithoutOffsetDrift(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	base := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)

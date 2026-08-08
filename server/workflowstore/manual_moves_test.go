@@ -1,645 +1,591 @@
 package workflowstore
 
 import (
-	"context"
 	"errors"
-	"reflect"
+	"strings"
 	"testing"
 
 	"core/server/workflow"
 )
 
-func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
+func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	done := nodeByKind(t, def, workflow.NodeKindTerminal)
+	target := startTask(t, ctx, store, task.ID).Mutation.Created[0].Reference.NodeID
 
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)})
-	if err != nil {
-		t.Fatalf("ManualMoveTask: %v", err)
-	}
-	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
-		t.Fatalf("manual move result = %+v, want applied terminal placement", moved)
-	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions: %v", err)
-	}
-	if len(transitions) != 2 || transitions[1].ID == "" || transitions[1].TransitionID != "manual_done" || len(transitions[1].OutputValues) != 0 {
-		t.Fatalf("manual move transition = %+v", transitions)
-	}
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements: %v", err)
-	}
-	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != workflow.NodeIDOf(done) || placements[2].State != "active" {
-		t.Fatalf("manual terminal placements = %+v, want an active terminal sink", placements)
-	}
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	for _, run := range runs {
-		if run.PlacementID == moved.PlacementIDs[0] {
-			t.Fatalf("terminal placement unexpectedly owns run %+v", run)
-		}
+	_, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: target,
+		Commentary:   strings.Repeat("x", workflow.MaxCommentaryBytes+1),
+	})
+	var validation CompletionValidationError
+	if !errors.As(err, &validation) || !validation.HasCode(CompletionCodeCommentaryTooLarge) {
+		t.Fatalf("PrepareManualMove error = %T %v, want oversized commentary validation", err, err)
 	}
 }
 
-func TestManualMoveRejectsActiveRunWithoutMutationAndRestartsAfterInterrupt(t *testing.T) {
+func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
+	target := nodeByKey(t, definition, "implement")
+	edge := edgeByKey(t, definition, "next")
 
-	placementsBefore, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements before restart: %v", err)
-	}
-	runsBefore, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns before restart: %v", err)
-	}
-	transitionsBefore, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions before restart: %v", err)
-	}
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
-	if !errors.Is(err, ErrManualMoveDuringActiveRun) {
-		t.Fatalf("ManualMoveTask restart error = %v, want active-run rejection", err)
-	}
-
-	placementsAfterRejectedMove, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements after rejected restart: %v", err)
-	}
-	runsAfterRejectedMove, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns after rejected restart: %v", err)
-	}
-	transitionsAfterRejectedMove, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions after rejected restart: %v", err)
-	}
-	if !reflect.DeepEqual(placementsAfterRejectedMove, placementsBefore) {
-		t.Fatalf("placements after rejected restart = %+v, want unchanged %+v", placementsAfterRejectedMove, placementsBefore)
-	}
-	if !reflect.DeepEqual(runsAfterRejectedMove, runsBefore) {
-		t.Fatalf("runs after rejected restart = %+v, want unchanged %+v", runsAfterRejectedMove, runsBefore)
-	}
-	if !reflect.DeepEqual(transitionsAfterRejectedMove, transitionsBefore) {
-		t.Fatalf("transitions after rejected restart = %+v, want unchanged %+v", transitionsAfterRejectedMove, transitionsBefore)
-	}
-
-	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
-		t.Fatalf("InterruptRun: %v", err)
-	}
-	preparation, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
-	if err != nil {
-		t.Fatalf("PrepareManualMove restart after interrupt: %v", err)
-	}
-	if _, err := store.db.ExecContext(ctx, `
-CREATE TRIGGER fail_interrupted_manual_move_transition
-BEFORE INSERT ON task_transitions
-BEGIN
-    SELECT RAISE(ABORT, 'forced manual move failure');
-END`); err != nil {
-		t.Fatalf("create forced manual move failure: %v", err)
-	}
-	failed, err := store.ApplyManualMove(ctx, preparation, nil)
-	if err == nil {
-		t.Fatal("ApplyManualMove succeeded with forced transition failure")
-	}
-	if failed.TransitionID != "" ||
-		len(failed.ResolvedApprovalTransitionProjections) != 0 ||
-		len(failed.ResolvedInterruptedRunProjections) != 0 {
-		t.Fatalf("failed manual move exposed resolution projections: %+v", failed)
-	}
-	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER fail_interrupted_manual_move_transition`); err != nil {
-		t.Fatalf("drop forced manual move failure: %v", err)
-	}
-	if projection, ok, err := store.PendingInterruptedRunAttentionProjection(ctx, started.RunID); err != nil || !ok || projection.RunID != started.RunID {
-		t.Fatalf("pending interruption after rollback = %+v, %v, %v", projection, ok, err)
-	}
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
-	if err != nil {
-		t.Fatalf("ManualMoveTask restart after interrupt: %v", err)
-	}
-	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
-		t.Fatalf("restart result = %+v, want applied start placement without a run", moved)
-	}
-	if len(moved.ResolvedInterruptedRunProjections) != 1 {
-		t.Fatalf("resolved interrupted-run projections = %+v, want one", moved.ResolvedInterruptedRunProjections)
-	}
-	resolved := moved.ResolvedInterruptedRunProjections[0]
-	if resolved.RunID != started.RunID ||
-		resolved.TaskID != task.ID ||
-		resolved.InterruptionReason != "manual" ||
-		resolved.InterruptionDetailJSON == nil ||
-		*resolved.InterruptionDetailJSON != "{}" {
-		t.Fatalf("resolved interrupted-run projection = %+v", resolved)
-	}
-}
-
-func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
-		RunID:    started.RunID,
-		Kind:     ProtocolViolationInvalidCompletion,
-		MaxCount: 2,
-		Detail:   `{"detail":"first attempt"}`,
-	}); err != nil {
-		t.Fatalf("RecordProtocolViolation: %v", err)
-	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
-	if err != nil {
-		t.Fatalf("ManualMoveTask reset: %v", err)
-	}
-	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
-		t.Fatalf("reset move = %+v, want applied start placement without automation", moved)
-	}
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements: %v", err)
-	}
-	if len(placements) != 4 || placements[2].State != "superseded" || placements[3].NodeID != workflow.NodeIDOf(start) || placements[3].State != "active" {
-		t.Fatalf("reset placements = %+v, want active start placement after superseded terminal", placements)
-	}
-	runs, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("runs after reset = %+v, want no new automation", runs)
-	}
-	restarted, err := store.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask after reset: %v", err)
-	}
-	if restarted.RunID == "" || restarted.RunID == started.RunID {
-		t.Fatalf("restart result = %+v, want second run", restarted)
-	}
-	runs, err = store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns after restart: %v", err)
-	}
-	if len(runs) != 2 {
-		t.Fatalf("runs after restart = %+v, want second automation run", runs)
-	}
-	secondAttempt, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
-		RunID:    restarted.RunID,
-		Kind:     ProtocolViolationInvalidCompletion,
-		MaxCount: 2,
-		Detail:   `{"detail":"second attempt"}`,
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  manual note  ",
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
 	})
 	if err != nil {
-		t.Fatalf("RecordProtocolViolation after manual restart: %v", err)
+		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if secondAttempt.Count != 1 || secondAttempt.Interrupted {
-		t.Fatalf("violation after manual restart = %+v, want count 1 active", secondAttempt)
+	if !prepared.RequiresExecutionTarget() {
+		t.Fatal("forward executable move did not require execution-target selection")
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied {
+		t.Fatalf("manual move outcome = %q, want applied", moved.Outcome)
+	}
+	if len(moved.Mutation.Removed) != 1 || !moved.Mutation.Removed[0].Equal(source.Reference) {
+		t.Fatalf("manual move removed = %+v, want source current node", moved.Mutation.Removed)
+	}
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) ||
+		moved.Mutation.Created[0].EnteredByEdgeID == nil ||
+		*moved.Mutation.Created[0].EnteredByEdgeID != edge.ID ||
+		moved.Mutation.Created[0].Scheduling == nil ||
+		moved.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady ||
+		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual plan" ||
+		moved.Mutation.Created[0].CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "manual note" {
+		t.Fatalf("manual move created = %+v, want ready materialized target", moved.Mutation.Created)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(moved.Mutation.Created[0].Reference) {
+		t.Fatalf("current nodes after manual move = %+v, want target only", currentNodes)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
 	}
 }
 
-func TestManualMoveBackwardReusesStoredOutputValues(t *testing.T) {
+func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "reused"}})
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	plan := nodeByKey(t, def, "plan")
-
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(plan)})
+	target := nodeByKey(t, definition, "implement")
+	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"unknown": "value"},
+		},
+	})
+	if !errors.Is(err, ErrManualMoveValuesInvalid) {
+		t.Fatalf("PrepareManualMove error = %T %v, want ErrManualMoveValuesInvalid", err, err)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ManualMoveTask backward: %v", err)
+		t.Fatalf("ListCurrentNodes: %v", err)
 	}
-	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 {
-		t.Fatalf("backward move = %+v, want pending approval before executable target automation", moved)
-	}
-	transitions, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions: %v", err)
-	}
-	if len(transitions) != 3 || transitions[2].OutputValues["prior_summary"] != "reused" {
-		t.Fatalf("backward transition outputs = %+v, want reused prior_summary", transitions)
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(started.Reference) {
+		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
 	}
 }
 
-func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "next", OutputValues: map[string]string{"prior_summary": "carry"}})
-	def, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	plan := nodeByKey(t, def, "plan")
-	start := nodeByKind(t, def, workflow.NodeKindStart)
-
-	// A backward move onto an agent node parks the task in pending approval
-	// with no active placement: its source placement is already completed.
-	approval, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(plan)})
-	if err != nil {
-		t.Fatalf("ManualMoveTask to approval: %v", err)
-	}
-	if approval.State != "pending_approval" {
-		t.Fatalf("setup move state = %q, want pending_approval", approval.State)
-	}
-
-	// Moving the awaiting-approval task back to Backlog must succeed, discard
-	// the pending approval, and land a single active placement at the start node.
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start), AllowMissingEdge: true})
-	if err != nil {
-		t.Fatalf("ManualMoveTask from approval to backlog: %v", err)
-	}
-	if moved.State != "applied" || len(moved.PlacementIDs) != 1 {
-		t.Fatalf("approval-to-backlog move = %+v, want applied with one placement", moved)
-	}
-	if len(moved.ResolvedApprovalTransitionProjections) != 1 {
-		t.Fatalf("resolved approval projections = %+v, want one", moved.ResolvedApprovalTransitionProjections)
-	}
-	projection := moved.ResolvedApprovalTransitionProjections[0]
-	if projection.TransitionID != approval.TransitionID || projection.ProjectID != binding.ProjectID || projection.WorkflowID != string(workflowID) || projection.TaskID != task.ID {
-		t.Fatalf("resolved approval projection = %+v", projection)
-	}
-
-	transitions, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions: %v", err)
-	}
-	rejected := 0
-	for _, transition := range transitions {
-		if transition.ID == approval.TransitionID {
-			if transition.State != "rejected" {
-				t.Fatalf("approval transition state = %q, want rejected", transition.State)
-			}
-			rejected++
-		}
-	}
-	if rejected != 1 {
-		t.Fatalf("expected the pending approval to be rejected exactly once, transitions = %+v", transitions)
-	}
-
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements: %v", err)
-	}
-	active := 0
-	for _, placement := range placements {
-		if placement.State == "active" {
-			active++
-			if placement.NodeID != workflow.NodeIDOf(start) {
-				t.Fatalf("active placement node = %q, want start node %q", placement.NodeID, workflow.NodeIDOf(start))
-			}
-		}
-	}
-	if active != 1 {
-		t.Fatalf("expected exactly one active placement at the start node, placements = %+v", placements)
-	}
-}
-
-func TestManualMoveContinueSessionRequiresSourceSession(t *testing.T) {
+func TestPrepareManualMoveDryRunsTargetValueAndContextMaterialization(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	impl := nodeByKey(t, def, "implement")
+	target := nodeByKey(t, definition, "implement")
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(impl), OutputValues: map[string]string{"prior_summary": "done"}})
-	if !errors.Is(err, ErrManualMoveContinueSessionNeedsSource) {
-		t.Fatalf("ManualMoveTask continue_session error = %v, want source session requirement", err)
-	}
-}
-
-func TestManualMoveRejectsUnsupportedContextSourcesV1(t *testing.T) {
-	type completion struct {
-		nodeKey      string
-		transitionID string
-		outputValues map[string]string
-	}
-	type reworkEdge struct {
-		sourceNodeKey string
-		targetNodeKey string
-		contextSource workflow.ContextSourceKind
-	}
-	completions := []completion{
-		{nodeKey: "plan", transitionID: "implement", outputValues: map[string]string{"summary": "plan done"}},
-		{nodeKey: "implementation", transitionID: "accept", outputValues: map[string]string{"summary": "implemented"}},
-		{nodeKey: "acceptance", transitionID: "open_pr", outputValues: map[string]string{"acceptance_decision": "approved"}},
-		{nodeKey: "open_pr", transitionID: "rework", outputValues: map[string]string{"summary": "needs changes"}},
-	}
-	cases := []struct {
-		name          string
-		rework        *reworkEdge
-		completedRuns int
-		targetNodeKey string
-		moveOutputKey string
-		wantErr       error
-	}{
-		{
-			name:          "selected node forward",
-			completedRuns: 2,
-			targetNodeKey: "open_pr",
-			moveOutputKey: "acceptance_decision",
-			wantErr:       ErrManualMoveSelectedContextSource,
+	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "manual plan"},
 		},
-		{
-			name:          "selected node historical backward",
-			completedRuns: 3,
-			targetNodeKey: "acceptance",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMoveSelectedContextSource,
-		},
-		{
-			name:          "previous target forward",
-			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
-			completedRuns: 2,
-			targetNodeKey: "implementation",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
-		},
-		{
-			name:          "previous target or new forward",
-			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTargetOrNew},
-			completedRuns: 2,
-			targetNodeKey: "implementation",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
-		},
-		{
-			name:          "previous target historical backward",
-			rework:        &reworkEdge{sourceNodeKey: "open_pr", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
-			completedRuns: 4,
-			targetNodeKey: "open_pr",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
-		},
+	}); err == nil {
+		t.Fatal("PrepareManualMove accepted a target whose required continuation context could not be materialized")
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, store, binding := newTestStoreContext(t)
-			workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
-			def, _, err := store.GetDefinition(ctx, workflowID)
-			if err != nil {
-				t.Fatalf("GetDefinition: %v", err)
-			}
-			if tc.rework != nil {
-				sourceNode := nodeByKey(t, def, tc.rework.sourceNodeKey)
-				targetNode := nodeByKey(t, def, tc.rework.targetNodeKey)
-				addOutputFieldToNode(t, ctx, store, workflowID, sourceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-				addTargetHistoryReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(sourceNode), workflow.NodeIDOf(targetNode), tc.rework.contextSource, false)
-			}
-			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-			task := createDefaultTask(t, ctx, store, binding.ProjectID)
-			startTask(t, ctx, store, task.ID)
-			for _, completed := range completions[:tc.completedRuns] {
-				node := nodeByKey(t, def, completed.nodeKey)
-				run := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(node))
-				completeRun(t, ctx, store, CompleteRunRequest{RunID: run.ID, TransitionID: completed.transitionID, OutputValues: completed.outputValues})
-			}
-
-			targetNode := nodeByKey(t, def, tc.targetNodeKey)
-			_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(targetNode), OutputValues: map[string]string{tc.moveOutputKey: "manual"}})
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("ManualMoveTask context source error = %v, want %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestManualMovePendingApprovalRequiresSourceRun(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
+		t.Fatalf("ListCurrentNodes: %v", err)
 	}
-	agent := nodeByKey(t, def, "agent")
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(agent)})
-	if !errors.Is(err, ErrManualMoveApprovalNeedsSourceRun) {
-		t.Fatalf("ManualMoveTask missing source run error = %v, want source run requirement", err)
-	}
-	placements, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements: %v", err)
-	}
-	if len(placements) != 1 || placements[0].State != "active" {
-		t.Fatalf("placements after rejected manual move = %+v, want original active placement", placements)
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
 	}
 }
 
-type manualMoveExecutableFixture struct {
-	ctx          context.Context
-	store        *Store
-	taskID       workflow.TaskID
-	targetNodeID workflow.NodeID
-	candidate    *ExecutionTargetCandidate
-}
-
-func newManualMoveExecutableFixture(t *testing.T, requiresApproval bool) manualMoveExecutableFixture {
-	t.Helper()
+func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
-	if requiresApproval {
-		requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
-	}
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "automatic proposal"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("CompleteCurrentNode returned no pending Approval")
+	}
+	supersededApprovalID := completed.PendingApproval.ID
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	return manualMoveExecutableFixture{
-		ctx:          ctx,
-		store:        store,
-		taskID:       task.ID,
-		targetNodeID: workflow.NodeIDOf(nodeByKey(t, def, "implement")),
-		candidate:    sourceExecutionTargetCandidate(binding.WorkspaceID, binding.CanonicalRoot),
-	}
-}
+	target := nodeByKey(t, definition, "implement")
 
-func (f manualMoveExecutableFixture) request() ManualMoveRequest {
-	return ManualMoveRequest{
-		TaskID:       f.taskID,
-		TargetNodeID: f.targetNodeID,
-		OutputValues: map[string]string{"prior_summary": "done"},
-		AutoApprove:  true,
-	}
-}
-
-func (f manualMoveExecutableFixture) snapshot(t *testing.T) *ExecutionTargetSnapshot {
-	t.Helper()
-	_, snapshot := executionTargetFactsForTask(t, f.ctx, f.store, f.taskID)
-	return snapshot
-}
-
-func TestManualMoveAutoApprovedExecutableTargetLocksNoneAndCreatesRunAtomically(t *testing.T) {
-	fixture := newManualMoveExecutableFixture(t, false)
-	preparation, err := fixture.store.PrepareManualMove(fixture.ctx, fixture.request())
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  Manual proposal is ready.  ",
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual proposal"}},
+	})
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if !preparation.RequiresExecutionTarget() {
-		t.Fatal("auto-approved executable move does not require an execution target")
-	}
-	moved, err := fixture.store.ApplyManualMove(fixture.ctx, preparation, fixture.candidate)
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
-	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 1 {
-		t.Fatalf("manual auto-approved executable move = %+v, want applied placement and run", moved)
+	if moved.Outcome != ManualMoveResultOutcomeApplied {
+		t.Fatalf("manual move outcome = %q, want applied", moved.Outcome)
 	}
-	transitions, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
+	if len(moved.TaskAttentionResolution.Approvals) != 1 ||
+		moved.TaskAttentionResolution.Approvals[0].ApprovalID != supersededApprovalID {
+		t.Fatalf("manual move attention resolution = %+v, want superseded Approval", moved.TaskAttentionResolution)
+	}
+	if len(moved.Mutation.Removed) != 1 || !moved.Mutation.Removed[0].Equal(source.Reference) ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) ||
+		moved.Mutation.Created[0].CurrentInputValues["prior_summary"] != "manual proposal" ||
+		moved.Mutation.Created[0].CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "Manual proposal is ready." {
+		t.Fatalf("manual move mutation = %+v, want immediate approved replacement", moved.Mutation)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ListTransitions: %v", err)
+		t.Fatalf("ListCurrentNodes before Approval: %v", err)
 	}
-	if len(transitions) != 2 || transitions[1].State != "applied" {
-		t.Fatalf("transitions = %+v, want no intermediate pending transition", transitions)
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(moved.Mutation.Created[0].Reference) {
+		t.Fatalf("current nodes after manual Approval = %+v, want target only", currentNodes)
 	}
-	snapshot := fixture.snapshot(t)
-	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeNone {
-		t.Fatalf("snapshot = %+v, want locked none", snapshot)
+	approvals, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if len(approvals) != 0 {
+		t.Fatalf("pending Approvals = %+v, want none after manual Approval", approvals)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
+	}
+
+}
+
+func TestManualMoveForwardExecutableScriptValidatesAndMaterializesTarget(t *testing.T) {
+	fixture := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := nodeByKind(t, definition, workflow.NodeKindStart)
+	source, err := workflow.NewCurrentNodeReference(fixture.task.ID, workflow.NodeIDOf(start), nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+
+	prepared, err := fixture.store.PrepareManualMove(fixture.ctx, ManualMoveRequest{
+		TaskID:       fixture.task.ID,
+		TargetNodeID: fixture.scriptID,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if !prepared.RequiresExecutionTarget() {
+		t.Fatal("script move did not require an execution target")
+	}
+	moved, err := fixture.store.ApplyManualMove(fixture.ctx, prepared, nil)
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Removed) != 1 || !moved.Mutation.Removed[0].Equal(source) ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != fixture.scriptID ||
+		moved.Mutation.Created[0].Scheduling == nil ||
+		moved.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		t.Fatalf("script move mutation = %+v, want ready script target", moved)
 	}
 }
 
-func TestManualMoveApprovalRequiredExecutableTargetDefersTargetLock(t *testing.T) {
-	fixture := newManualMoveExecutableFixture(t, true)
-	moved, err := fixture.store.ManualMoveTask(fixture.ctx, fixture.request())
+func TestManualMoveExecutableRejectsMissingBackwardAndParallelPaths(t *testing.T) {
+	t.Run("missing direct edge", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		definition, _, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		target := nodeByKey(t, definition, "implement")
+
+		preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(target)})
+		if err != nil || preview.Outcome != ManualMovePreviewOutcomeTransition {
+			t.Fatalf("missing-edge manual move preview = %+v, error = %v, want transition choice", preview, err)
+		}
+	})
+
+	t.Run("backward executable target", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+		if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "next",
+			OutputValues: map[string]string{"prior_summary": "plan"},
+		}); err != nil {
+			t.Fatalf("CompleteCurrentNode: %v", err)
+		}
+		definition, _, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		target := nodeByKey(t, definition, "plan")
+
+		preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(target)})
+		if err != nil || preview.Outcome != ManualMovePreviewOutcomeTransition {
+			t.Fatalf("backward manual move preview = %+v, error = %v, want transition choice", preview, err)
+		}
+	})
+
+	t.Run("parallel current nodes", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createFanoutJoinWorkflow(t, ctx, store)
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+		if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "split",
+			OutputValues: map[string]string{"summary": "plan"},
+		}); err != nil {
+			t.Fatalf("CompleteCurrentNode split: %v", err)
+		}
+		definition, _, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		target := nodeByKey(t, definition, "impl_a")
+
+		preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(target)})
+		if err != nil || preview.Outcome != ManualMovePreviewOutcomeNoOp {
+			t.Fatalf("parallel manual move preview = %+v, error = %v, want same-current no-op", preview, err)
+		}
+	})
+}
+
+func TestManualMoveToNonExecutableSupersedesPendingApproval(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "plan"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	approvals, err := store.ListPendingApprovals(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ManualMoveTask approval-required executable: %v", err)
+		t.Fatalf("ListPendingApprovals before move: %v", err)
 	}
-	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 || !moved.RequiresApproval {
-		t.Fatalf("manual approval-required executable move = %+v, want pending approval without automation", moved)
+	if len(approvals) != 1 {
+		t.Fatalf("pending approvals before move = %+v, want one", approvals)
 	}
-	snapshot := fixture.snapshot(t)
-	if snapshot != nil {
-		t.Fatalf("snapshot = %+v, want target to remain unlocked until approval", snapshot)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := nodeByKind(t, definition, workflow.NodeKindStart)
+
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Created) != 1 || moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(start) {
+		t.Fatalf("manual move target = %+v, want start current node", moved.Mutation.Created)
+	}
+	approvals, err = store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after move: %v", err)
+	}
+	if len(approvals) != 0 {
+		t.Fatalf("pending approvals after move = %+v, want none", approvals)
 	}
 }
 
-func TestManualMoveAutoApprovedExecutableTargetFailureLeavesSourceUntouched(t *testing.T) {
-	fixture := newManualMoveExecutableFixture(t, false)
-	placementsBefore, err := fixture.store.ListPlacements(fixture.ctx, fixture.taskID)
+func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
-		t.Fatalf("ListPlacements before move: %v", err)
+		t.Fatalf("GetDefinition: %v", err)
 	}
-	transitionsBefore, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
+	target := nodeByKey(t, definition, "impl_a")
+	transition := workflow.TransitionID("split")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(target),
+		TransitionKey: &transition,
+		Values:        map[workflow.ModelKey]map[string]string{"plan": {"summary": "manual plan"}},
+	})
 	if err != nil {
-		t.Fatalf("ListTransitions before move: %v", err)
+		t.Fatalf("PrepareManualMove: %v", err)
 	}
-
-	_, err = fixture.store.ManualMoveTask(fixture.ctx, fixture.request())
-	if !errors.Is(err, ErrExecutionTargetRequired) {
-		t.Fatalf("ManualMoveTask missing execution target error = %v, want ErrExecutionTargetRequired", err)
-	}
-	placementsAfter, err := fixture.store.ListPlacements(fixture.ctx, fixture.taskID)
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
 	if err != nil {
-		t.Fatalf("ListPlacements after move: %v", err)
+		t.Fatalf("ApplyManualMove: %v", err)
 	}
-	transitionsAfter, err := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
-	if err != nil {
-		t.Fatalf("ListTransitions after move: %v", err)
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Removed) != 1 ||
+		!moved.Mutation.Removed[0].Equal(source.Reference) ||
+		len(moved.Mutation.Created) != 2 {
+		t.Fatalf("fan-out manual move = %+v, want task-wide branch replacement", moved)
 	}
-	if !reflect.DeepEqual(placementsAfter, placementsBefore) || !reflect.DeepEqual(transitionsAfter, transitionsBefore) {
-		t.Fatalf("failed auto-approved move mutated task: placements=%+v transitions=%+v", placementsAfter, transitionsAfter)
+	branches := make(map[workflow.TransitionBranchKey]bool)
+	for _, currentNode := range moved.Mutation.Created {
+		branch, ok := currentNode.Reference.TransitionBranchKey()
+		if !ok {
+			t.Fatalf("created fan-out node = %+v, want branch scope", currentNode)
+		}
+		branches[branch] = true
+	}
+	if !branches["split_a"] || !branches["split_b"] {
+		t.Fatalf("created branches = %+v, want split_a and split_b", branches)
 	}
 }
 
-func TestManualMoveAutoApprovedExecutableRejectsCandidateForLockedManagedTarget(t *testing.T) {
-	fixture := newManualMoveExecutableFixture(t, false)
-	setTaskExecutionTargetFixture(t, fixture.ctx, fixture.store, fixture.taskID, workflow.ExecutionTargetModeHead, nil)
-
-	req := fixture.request()
-	req.ExecutionTarget = fixture.candidate
-	_, err := fixture.store.ManualMoveTask(fixture.ctx, req)
-	if !errors.Is(err, ErrExecutionTargetAlreadyLocked) {
-		t.Fatalf("ManualMoveTask error = %v, want ErrExecutionTargetAlreadyLocked", err)
+func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode split: %v", err)
 	}
-	snapshot := fixture.snapshot(t)
-	if snapshot == nil || snapshot.Mode != workflow.ExecutionTargetModeHead {
-		t.Fatalf("snapshot = %+v, want original head target", snapshot)
+	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode)
+	for _, currentNode := range split.Mutation.Created {
+		branch, ok := currentNode.Reference.TransitionBranchKey()
+		if !ok {
+			t.Fatalf("split current node = %+v, want branch scope", currentNode)
+		}
+		branches[branch] = currentNode
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["split_a"].Reference,
+		TransitionID: "join_a",
+		OutputValues: map[string]string{"joined": "branch A"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode partial join: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "synth")
+	transition := workflow.TransitionID("synthesize")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(target),
+		TransitionKey: &transition,
+		Values:        map[workflow.ModelKey]map[string]string{"impl_a": {"joined": "manual branch A"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied || len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(target) {
+		t.Fatalf("manual move from fan-out = %+v, want one post-Join target", moved)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(moved.Mutation.Created[0].Reference) {
+		t.Fatalf("current nodes = %+v, want only post-Join target", currentNodes)
 	}
 }
 
-func TestManualMoveRejectsMissingEdgeExecutableTarget(t *testing.T) {
+func TestManualMoveFinalRevalidationReturnsNoOpWithoutExecutionTargetMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	impl := nodeByKey(t, def, "implement")
-
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(impl), AllowMissingEdge: true})
-	if !errors.Is(err, ErrManualMoveExecutableTargetNeedsEdge) {
-		t.Fatalf("ManualMoveTask missing executable edge error = %v, want executable edge requirement", err)
-	}
-	runs, err := store.ListRuns(ctx, task.ID)
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
 	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
+		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if len(runs) != 0 {
-		t.Fatalf("runs after rejected missing-edge executable move = %+v, want none", runs)
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "automatic plan"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode before final apply: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeNoOp || len(moved.CurrentNodes) != 1 ||
+		moved.CurrentNodes[0].Reference.NodeID != workflow.NodeIDOf(target) {
+		t.Fatalf("final revalidation result = %+v, want authoritative no-op", moved)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("execution target after final no-op = %+v, want unchanged", targetContext.Task.ExecutionTarget)
 	}
 }
 
-func TestManualMoveRejectsActiveParallelBatch(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task, branchRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
-	def, _, err := store.GetDefinition(ctx, workflowID)
+func TestManualMoveScriptValidationRollsBackReplacement(t *testing.T) {
+	fixture := newScriptExecutionFixture(t, "scripts/missing", nil)
+	prepared, err := fixture.store.PrepareManualMove(fixture.ctx, ManualMoveRequest{
+		TaskID:       fixture.task.ID,
+		TargetNodeID: fixture.scriptID,
+	})
 	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
+		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	join := nodeByKey(t, def, "join")
-	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(join), OutputValues: map[string]string{"summary": "manual"}}); !errors.Is(err, ErrManualMoveDuringParallelBatch) {
-		t.Fatalf("ManualMoveTask active parallel error = %v, want active parallel rejection", err)
+	if _, err := fixture.store.ApplyManualMove(fixture.ctx, prepared, nil); err == nil {
+		t.Fatal("ApplyManualMove: want invalid script error")
 	}
-	if len(branchRuns) != 2 {
-		t.Fatalf("branch runs = %+v, want two active branches", branchRuns)
+	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Reference.NodeID == fixture.scriptID {
+		t.Fatalf("current nodes after invalid script move = %+v, want unchanged source", currentNodes)
 	}
 }

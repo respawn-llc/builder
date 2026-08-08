@@ -11,11 +11,11 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type API struct {
@@ -24,11 +24,13 @@ type API struct {
 	recoveredWarningProvider func() (string, bool, error)
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
+	managedWorktreeBaseDir   string
 }
 
 type APIOptions struct {
 	RuntimeClientFactory     runtimewire.RuntimeClientFactory
 	RecoveredWarningProvider func() (string, bool, error)
+	ManagedWorktreeBaseDir   string
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
@@ -38,13 +40,8 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 		recoveredWarningProvider: options.RecoveredWarningProvider,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
+		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
 	}
-}
-
-type recoveredWarningEntry struct {
-	Visibility transcript.EntryVisibility `json:"visibility,omitempty"`
-	Role       string                     `json:"role"`
-	Text       string                     `json:"text"`
 }
 
 func appendRecoveredWarning(store *session.Store, provider func() (string, bool, error)) error {
@@ -58,8 +55,15 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	if !ok || warning == "" || store == nil {
 		return nil
 	}
-	_, err = store.AppendGeneratedRecoveredWarning("local_entry", recoveredWarningEntry{
-		Visibility: transcript.EntryVisibilityOngoing,
+	if store.Meta().GeneratedRecoveredWarningIssued {
+		return nil
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return err
+	}
+	_, err = eventLog.AppendGeneratedRecoveredWarning(session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})
@@ -113,6 +117,25 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	if err := context.Cause(ctx); err != nil {
 		return AgentRuntimePlan{}, err
 	}
+	projectWorkspaceBoundary, err := s.metadataStore.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	managedWorktreeRoots, err := s.metadataStore.ListManagedWorktreeRoots(ctx)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	executionRoot := target.WorkspaceRoot
+	var currentWorktreeRoot *string
+	if target.Worktree != nil {
+		executionRoot = target.Worktree.Root
+		root := target.Worktree.Root
+		currentWorktreeRoot = &root
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(target.EffectiveWorkdir, executionRoot, projectWorkspaceBoundary)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
 	if err != nil {
 		return AgentRuntimePlan{}, err
@@ -134,10 +157,17 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
+	var managedWorktreePathContext *tools.ManagedWorktreePathContext
+	if strings.TrimSpace(s.managedWorktreeBaseDir) != "" {
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot, managedWorktreeRoots)
+		if err != nil {
+			return AgentRuntimePlan{}, err
+		}
+	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
 		Settings:                 req.ActiveSettings,
 		EnabledTools:             enabledTools,
-		Workdir:                  target.EffectiveWorkdir,
+		FilesystemContext:        tools.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
 		Sources:                  req.Source.Sources,
 		FastMode:                 s.fastModeState,
 		ClientFactory:            s.runtimeClientFactory,

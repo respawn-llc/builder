@@ -44,6 +44,26 @@ var (
 	ErrExecutionTargetAlreadyLocked = errors.New("execution target is already locked")
 )
 
+func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) error {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return err
+	}
+	prepared, err := s.prepareExecutionTargetMutation(ctx, task, candidate)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := applyPreparedExecutionTargetMutation(ctx, s.queries.WithTx(tx), task, prepared, s.now().UnixMilli()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) GetTaskExecutionTargetContext(ctx context.Context, taskID workflow.TaskID) (TaskExecutionTargetContext, error) {
 	task, err := s.queries.GetTask(ctx, strings.TrimSpace(string(taskID)))
 	if err != nil {
@@ -377,18 +397,10 @@ func nullableStringPointer(value *string) sql.NullString {
 func taskSourceWorkspaceForExecution(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.Workspace, error) {
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	if sourceWorkspaceID == "" {
-		workspaces, err := q.ListProjectWorkspaces(ctx, task.ProjectID)
+		var err error
+		sourceWorkspaceID, err = metadata.ResolveProjectSourceWorkspaceID(ctx, q, task.ProjectID)
 		if err != nil {
 			return sqlitegen.Workspace{}, err
-		}
-		for _, workspace := range workspaces {
-			if workspace.IsPrimary != 0 {
-				sourceWorkspaceID = workspace.ID
-				break
-			}
-		}
-		if sourceWorkspaceID == "" && len(workspaces) > 0 {
-			sourceWorkspaceID = workspaces[0].ID
 		}
 	}
 	if sourceWorkspaceID == "" {

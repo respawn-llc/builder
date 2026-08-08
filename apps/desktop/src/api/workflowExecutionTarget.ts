@@ -33,35 +33,21 @@ export type WorkflowExecutionTargetSelectionRequirement =
     }>;
 
 export type WorkflowExecutionTargetProvenance = "resolved" | "legacy_observed";
-export type WorkflowExecutionTargetWorktreeAvailability = "available" | "missing" | "inaccessible";
-
-export type WorkflowExecutionTargetWorktree = Readonly<{
-  id: string;
-  displayName: string;
-  canonicalRoot: string;
-  availability: WorkflowExecutionTargetWorktreeAvailability;
-}>;
 
 export type WorkflowNoManagedExecutionTarget = Readonly<{
   mode: "none";
-  effectiveRoot: string;
   requestedRef: null;
   resolvedRef: null;
   commitOID: null;
   provenance: "resolved";
-  currentBranch: null;
-  managedWorktree: null;
 }>;
 
 export type WorkflowManagedExecutionTarget = Readonly<{
   mode: Exclude<WorkflowExecutionTargetSelectionMode, "none">;
-  effectiveRoot: string | null;
   requestedRef: string;
   resolvedRef: string | null;
   commitOID: string;
   provenance: WorkflowExecutionTargetProvenance;
-  currentBranch: string | null;
-  managedWorktree: WorkflowExecutionTargetWorktree | null;
 }>;
 
 export type WorkflowExecutionTarget = WorkflowNoManagedExecutionTarget | WorkflowManagedExecutionTarget;
@@ -71,26 +57,15 @@ export const defaultWorkflowExecutionTargetPolicy: WorkflowExecutionTargetPolicy
   customRef: null,
 };
 
-export type TaskStartApplied = Readonly<{
-  transitionID: string;
-  placementID: string;
-  runID: string;
-}>;
+import type { TaskCurrentNode } from "./models";
 
-export type TaskMoveApplied = Readonly<{
-  transitionID: string;
-  state: string;
-  placementIDs: readonly string[];
-  runIDs: readonly string[];
-}>;
+export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskResumeApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
-export type TaskApproveApplied = Readonly<{
-  transitionID: string;
-  taskID: string;
-  state: string;
-  placementIDs: readonly string[];
-  runIDs: readonly string[];
-}>;
+export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskMoveNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+
+export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
 export type WorkflowExecutionTargetActionResponse<TApplied> =
   | Readonly<{
@@ -100,8 +75,53 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
   | Readonly<{
       outcome: "selection_required";
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
+    }>
+  | Readonly<{
+      outcome: "dependency_confirmation_required";
+      unsatisfiedDependencyCount: number;
     }>;
 
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
-export type TaskMoveResponse = WorkflowExecutionTargetActionResponse<TaskMoveApplied>;
+export type TaskResumeResponse =
+  | Readonly<{ outcome: "applied"; applied: TaskResumeApplied }>
+  | Readonly<{
+      outcome: "selection_required";
+      selectionRequired: WorkflowExecutionTargetSelectionRequirement;
+    }>;
+export type TaskMoveResponse =
+  | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
 export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
+
+export type TaskMovePreviewBlocker =
+  | "invalid_workflow"
+  | "no_source_position"
+  | "unsupported_destination"
+  | "waiting_question"
+  | "lifecycle_conflict"
+  | "context_session_unavailable"
+  | "no_usable_transition"
+  | "parallel_branch_requires_fan_out";
+
+export type TaskMoveRequiredValue = Readonly<{
+  nodeKey: string;
+  outputName: string;
+  description: string;
+  resolvedValue: string | null;
+}>;
+
+export type TaskMovePreviewChoice = Readonly<{
+  transitionKey: string;
+  label: string;
+  sourceNodeDisplayName: string;
+  requiredValues: readonly TaskMoveRequiredValue[];
+}>;
+
+export type TaskMovePreviewResponse =
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>
+  | Readonly<{ outcome: "direct"; direct: Readonly<Record<string, never>> }>
+  | Readonly<{
+      outcome: "transition";
+      transition: Readonly<{ choices: readonly TaskMovePreviewChoice[] }>;
+    }>
+  | Readonly<{ outcome: "blocked"; blocked: Readonly<{ reason: TaskMovePreviewBlocker }> }>;

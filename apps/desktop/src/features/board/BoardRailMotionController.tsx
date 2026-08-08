@@ -59,18 +59,19 @@ export type BoardRailMotionControllerProps = Readonly<{
   board: SelectedWorkflowBoard;
   columnDropState: (column: BoardColumn) => BoardColumnDropState;
   columnIsCollapsed: (column: BoardColumn) => boolean;
+  dragDisabled: boolean;
   firstActiveID: string | undefined;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
-  onCardsLoadError: (error: unknown) => void;
   onDeleteTask: (taskID: string) => void;
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
-  onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
   onInterruptTask: (taskID: string) => void;
   onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   pendingCardMove: PendingBoardCardMove | null;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>;
@@ -85,18 +86,19 @@ export function BoardRailMotionController({
   board,
   columnDropState,
   columnIsCollapsed,
+  dragDisabled,
   firstActiveID,
   onCardClick,
   onCardDragEnd,
   onCardDragStart,
-  onCardsLoadError,
   onDeleteTask,
   onDropTask,
   onExpandColumn,
-  onInterruptedRunObserved,
   onInterruptTask,
   onRegisterColumnScrollport,
   onResumeTask,
+  pendingInterruptTaskIDs,
+  pendingResumeTaskIDs,
   pendingCardMove,
   scrollportRef,
 }: BoardRailMotionControllerProps) {
@@ -443,6 +445,7 @@ export function BoardRailMotionController({
                     board={board}
                     displayedCards={displayedColumns.get(column.id)}
                     column={column}
+                    dragDisabled={dragDisabled}
                     dropState={columnDropState(column)}
                     isCollapsed={effectiveColumnIsCollapsed(column)}
                     isFirstActive={column.id === firstActiveID}
@@ -451,16 +454,16 @@ export function BoardRailMotionController({
                     onCardClick={onCardClick}
                     onCardDragEnd={onCardDragEnd}
                     onCardDragStart={onCardDragStart}
-                    onCardsLoadError={onCardsLoadError}
                     onDeleteTask={onDeleteTask}
                     onDropTask={onDropTask}
                     onExpandColumn={onExpandColumn}
-                    onInterruptedRunObserved={onInterruptedRunObserved}
                     onInterruptTask={onInterruptTask}
                     onReportColumnSnapshot={reportColumnSnapshot}
                     onRegisterColumn={registerColumn}
                     onRegisterColumnScrollport={onRegisterColumnScrollport}
                     onResumeTask={onResumeTask}
+                    pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+                    pendingResumeTaskIDs={pendingResumeTaskIDs}
                     scrollportRef={scrollportRef}
                   />
                 ))}
@@ -472,6 +475,7 @@ export function BoardRailMotionController({
                 board={board}
                 displayedCards={displayedColumns.get(section.column.id)}
                 column={section.column}
+                dragDisabled={dragDisabled}
                 dropState={columnDropState(section.column)}
                 isCollapsed={effectiveColumnIsCollapsed(section.column)}
                 isFirstActive={section.column.id === firstActiveID}
@@ -480,16 +484,16 @@ export function BoardRailMotionController({
                 onCardClick={onCardClick}
                 onCardDragEnd={onCardDragEnd}
                 onCardDragStart={onCardDragStart}
-                onCardsLoadError={onCardsLoadError}
                 onDeleteTask={onDeleteTask}
                 onDropTask={onDropTask}
                 onExpandColumn={onExpandColumn}
-                onInterruptedRunObserved={onInterruptedRunObserved}
                 onInterruptTask={onInterruptTask}
                 onReportColumnSnapshot={reportColumnSnapshot}
                 onRegisterColumn={registerColumn}
                 onRegisterColumnScrollport={onRegisterColumnScrollport}
                 onResumeTask={onResumeTask}
+                pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+                pendingResumeTaskIDs={pendingResumeTaskIDs}
                 scrollportRef={scrollportRef}
               />
             ),

@@ -1,29 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import type { BoardColumn } from "@/api";
+import type { BoardCard, BoardColumn, ProjectLabelCatalog } from "@/api";
+import { orderedAssignedLabels } from "@/shared/labels";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 import { classifyDrop } from "./BoardDropActions";
+import { toKanbanCardVM } from "./BoardColumnViewModel";
 
 describe("classifyDrop", () => {
-  it("prioritizes Backlog start over the same server-provided manual target", () => {
+  it("routes a same-current destination through authoritative preview", () => {
     expect(
       classifyDrop(
         baseColumn,
-        { ...baseDragPayload, canStart: true, manualMoveTargetNodeIDs: ["node-target"] },
-        "node-target",
-      ),
-    ).toEqual({ kind: "start" });
-  });
-
-  it("does not force target-union output fields onto allowed manual moves", () => {
-    expect(
-      classifyDrop(
-        {
-          ...baseColumn,
-          id: "node-review",
-          transitionOutputFields: [{ name: "summary", description: "Summary" }],
-        },
-        { ...baseDragPayload, manualMoveTargetNodeIDs: ["node-review"] },
+        { ...baseDragPayload, activeNodeIDs: ["node-target"] },
         undefined,
       ),
     ).toEqual({ kind: "move" });
@@ -35,79 +23,17 @@ describe("classifyDrop", () => {
         {
           ...baseColumn,
           kind: "join",
-          transitionOutputFields: [{ name: "summary", description: "Summary" }],
         },
         { ...baseDragPayload, activeNodeIDs: [], statusKind: "backlog" },
         undefined,
       ),
     ).toEqual({ kind: "reject" });
   });
-
-  it("allows explicit manual targets for join columns", () => {
-    expect(
-      classifyDrop(
-        { ...baseColumn, id: "node-join", kind: "join" },
-        {
-          ...baseDragPayload,
-          activeNodeIDs: [],
-          manualMoveTargetNodeIDs: ["node-join"],
-          statusKind: "backlog",
-        },
-        undefined,
-      ),
-    ).toEqual({ kind: "move" });
-  });
-
-  it("moves terminal targets without collecting transition output values", () => {
-    expect(
-      classifyDrop(
-        {
-          ...baseColumn,
-          id: "node-terminal",
-          isDone: true,
-          kind: "terminal",
-          transitionOutputFields: [{ name: "summary", description: "Summary" }],
-        },
-        { ...baseDragPayload, manualMoveTargetNodeIDs: [] },
-        undefined,
-      ),
-    ).toEqual({ kind: "move", allowMissingEdge: true });
-  });
-
-  it("collects transition output values for non-terminal targets", () => {
-    expect(
-      classifyDrop(
-        {
-          ...baseColumn,
-          id: "node-review",
-          isDone: false,
-          kind: "agent",
-          transitionOutputFields: [{ name: "summary", description: "Summary" }],
-        },
-        { ...baseDragPayload, manualMoveTargetNodeIDs: [] },
-        undefined,
-      ),
-    ).toEqual({ kind: "missingInput" });
-  });
-
-  it("auto-approves script targets like other executable automation targets", () => {
-    expect(
-      classifyDrop(
-        {
-          ...baseColumn,
-          kind: "script",
-        },
-        { ...baseDragPayload, manualMoveTargetNodeIDs: [] },
-        undefined,
-      ),
-    ).toEqual({ kind: "move", allowMissingEdge: true, autoApprove: true });
-  });
 });
 
 const baseDragPayload: BoardCardDragPayload = {
   activeNodeIDs: ["node-current"],
   canStart: false,
-  manualMoveTargetNodeIDs: [],
   statusKind: "active",
   taskID: "task-1",
 };
@@ -124,5 +50,75 @@ const baseColumn: BoardColumn = {
   outputFields: [],
   sortOrder: 0,
   taskCount: 0,
-  transitionOutputFields: [],
 };
+
+describe("toKanbanCardVM", () => {
+  it("renders cached card labels in refreshed Project catalog order without refetching the card", () => {
+    const alphaID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
+    const betaID = "942495c2-5958-4959-8445-94046ad74fbd";
+    const card: BoardCard = {
+      actions: {
+        canDelete: true,
+        canInterrupt: false,
+        canResume: false,
+        canStart: true,
+      },
+      activeNodeIDs: [],
+      dependencyProgress: null,
+      id: "task-1",
+      labelIDs: [betaID, alphaID],
+      preview: { markdown: "", truncated: false },
+      shortID: "KNT-1",
+      sourceWorkspace: {
+        availability: "available",
+        id: "workspace-1",
+        isPrimary: true,
+        name: "Workspace",
+        rootPath: "/workspace",
+        updatedAt: 1,
+      },
+      status: {
+        attentionTypes: [],
+        kind: "backlog",
+        nativeState: "active",
+        nodeIDs: [],
+      },
+      title: "Task",
+      updatedAt: 1,
+      workflowID: "11111111-1111-4111-8111-111111111111",
+    };
+    const catalog: ProjectLabelCatalog = {
+      projectID: "project-1",
+      labels: [
+        { id: alphaID, name: "Alpha" },
+        { id: betaID, name: "Beta" },
+      ],
+    };
+
+    expect(
+      toKanbanCardVM(card, { attachedWorkspaceCount: 1, defaultWorkspaceID: "workspace-1" }, catalog).labels,
+    ).toEqual([
+      { id: alphaID, name: "Alpha" },
+      { id: betaID, name: "Beta" },
+    ]);
+  });
+});
+
+describe("orderedAssignedLabels", () => {
+  it("projects assigned labels in the Project catalog sequence", () => {
+    const alphaID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
+    const betaID = "942495c2-5958-4959-8445-94046ad74fbd";
+    const catalog: ProjectLabelCatalog = {
+      projectID: "project-1",
+      labels: [
+        { id: alphaID, name: "Alpha" },
+        { id: betaID, name: "Beta" },
+      ],
+    };
+
+    expect(orderedAssignedLabels(catalog, [betaID, alphaID])).toEqual([
+      { id: alphaID, name: "Alpha" },
+      { id: betaID, name: "Beta" },
+    ]);
+  });
+});

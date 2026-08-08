@@ -10,6 +10,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -23,11 +24,12 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
 		purposes = append(purposes, req.Purpose)
 		providerIdentifiers = append(providerIdentifiers, req.ProviderSettings.ProviderIdentifier)
-		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "gpt-5",
 			ProviderIdentifier: "factory-agent",
@@ -37,11 +39,10 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		[]toolspec.ID{toolspec.ToolExecCommand},
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -62,15 +63,16 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 	store := newRuntimeWireSession(t, root, "factory-conflict")
 	_, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{Model: "gpt-5", ModelContextWindow: 200000, Timeouts: config.Timeouts{ModelRequestSeconds: 1}},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
 		RuntimeWiringOptions{
-			Client:        &runtimewireCaptureClient{},
-			ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
+			FilesystemContext: runtimeWireFilesystemContext(t, root),
+			Client:            &runtimewireCaptureClient{},
+			ClientFactory:     RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
 		},
 	)
 	if !errors.Is(err, ErrRuntimeClientFactoryConflict) {
@@ -89,11 +91,12 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 		if req.Purpose != RuntimeClientPurposeReviewer {
 			t.Fatalf("factory purpose = %v, want reviewer", req.Purpose)
 		}
-		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "review", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("review"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -102,12 +105,12 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
 		RuntimeWiringOptions{
-			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}},
+			FilesystemContext:     runtimeWireFilesystemContext(t, root),
+			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}},
 			ReviewerClientFactory: factory,
 		},
 	)
@@ -131,11 +134,12 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 		if got.Value(contextKey{}) != "activation" {
 			t.Fatalf("factory context value = %v, want activation", got.Value(contextKey{}))
 		}
-		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -144,11 +148,10 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{Context: ctx, ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -165,6 +168,7 @@ func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
 	calls := 0
 	_, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "",
 			ProviderOverride:   "openai",
@@ -173,11 +177,10 @@ func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
 			calls++
 			return nil, wantErr
 		})},
@@ -241,6 +244,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "operator-alias",
 			ProviderOverride:   "openai",
@@ -257,11 +261,10 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		nil,
-		root,
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{ClientFactory: factory},
+		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -270,7 +273,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 
 	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "operator-alias",
-		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}}),
+		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
 	}
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)

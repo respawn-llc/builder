@@ -1,4 +1,4 @@
-Create a continuation summary for the next agent that resumes this task after a handoff. Output the summary as your entire next response. Do not continue the task, call tools, address the user, add acknowledgements or formatting. 
+Create a continuation summary for the next agent that resumes this task after a handoff. Output the summary as your entire next response. Do not continue the task, call tools, address the user, add acknowledgements or formatting.
 
 The continuing agent will receive this summary and share the current workspace, but will not have the earlier conversation context or tool call outputs. Give them enough context to continue toward the original user goal without repeating completed work or asking the user to restate prior decisions. Prefer a well-organized summary that preserves all continuation-critical context. Favor actionable state and decision context over chronology.
 

@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -9,9 +11,11 @@ import (
 	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestart(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 
@@ -21,7 +25,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 			steeringPriorityUser,
 			steeringMessageEventDefault,
 			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: "candidate before several compactions"}},
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("candidate before several compactions")}},
 		),
 	); err != nil {
 		t.Fatalf("persist rollback candidate: %v", err)
@@ -42,8 +46,8 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 			compactionModeManual,
 			llm.ItemsFromMessages([]llm.Message{{
 				Role:        llm.RoleUser,
-				MessageType: llm.MessageTypeCompactionSummary,
-				Content:     "candidate-free summary",
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("candidate-free summary"),
 			}}),
 		); err != nil {
 			t.Fatalf("replace history %d: %v", index, err)
@@ -101,7 +105,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 			steeringPriorityUser,
 			steeringMessageEventDefault,
 			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: "new prompt to replace in fork"}},
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("new prompt to replace in fork")}},
 		),
 	); err != nil {
 		t.Fatalf("persist fork target: %v", err)
@@ -111,9 +115,10 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 		t.Fatal("fork target did not establish a newer rollback locator")
 	}
 	forkedStore, _, err := session.ForkAtUserMessage(
-		reopened.store,
+		reopened.eventLog,
 		forkTargetPage.LatestRollbackCandidate.UserMessageSeq,
-		"rollback locator fork", sessioncontract.SessionCategoryMain,
+		"rollback locator fork",
+		sessioncontract.SessionCategoryMain,
 	)
 	if err != nil {
 		t.Fatalf("fork at newer rollback target: %v", err)
@@ -151,14 +156,15 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 }
 
 func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued answer"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued answer")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
 
-	eng.QueueUserMessage("queued rollback candidate")
+	mustQueueUserMessage(t, eng, "queued rollback candidate")
 	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("submit queued user message: %v", err)
 	}
@@ -181,26 +187,36 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 }
 
 func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
-	event, _, err := store.AppendEvent("compact-step", "history_replaced", historyReplacementPayload{
-		Engine: "local",
-		LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
-			UserMessageSeq: 7,
+	eventLog := mustMaterializeTestEventLog(t, store)
+	appendMalformedRollbackCandidateHistoryReplacement(t, store)
+
+	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if engine != nil || !errors.Is(err, rollbacktarget.ErrInvalidCandidateLocator) {
+		t.Fatalf("runtime restore result = engine:%+v error:%v", engine, err)
+	}
+}
+
+func appendMalformedRollbackCandidateHistoryReplacement(t *testing.T, store *session.Store) {
+	t.Helper()
+	line, err := json.Marshal(struct {
+		Seq     int64                            `json:"seq"`
+		Kind    session.EventKind                `json:"kind"`
+		Payload session.HistoryReplacementRecord `json:"payload"`
+	}{
+		Seq:  1,
+		Kind: session.EventKindHistoryReplace,
+		Payload: session.HistoryReplacementRecord{
+			Engine: "local",
+			Mode:   session.CompactionModeManual,
+			LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+				UserMessageSeq: 1,
+			},
 		},
-		Items: llm.ItemsFromMessages([]llm.Message{{
-			Role:        llm.RoleUser,
-			MessageType: llm.MessageTypeCompactionSummary,
-			Content:     "summary",
-		}}),
 	})
 	if err != nil {
-		t.Fatalf("append malformed history replacement: %v", err)
+		t.Fatalf("marshal malformed rollback candidate history replacement: %v", err)
 	}
-	if !isCompactionSegmentBoundary(event) {
-		t.Fatal("malformed locator made a structurally valid history replacement stop acting as a segment boundary")
-	}
-
-	if _, err := New(store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"}); err == nil {
-		t.Fatal("runtime restore accepted a nonpositive rollback candidate page cursor")
-	}
+	appendRawCurrentEventLine(t, store, line)
 }

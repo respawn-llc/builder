@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { errorMessage } from "@/api";
-import { useAppNavigation } from "@/app-facade";
+import { useAppNavigation, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { NativeDialogWindow } from "@/shared/native-dialog";
@@ -132,10 +132,15 @@ function ProjectCreateForm({
   });
   const nameField = form.register("name", projectNameRules(t));
   const keyField = form.register("key", projectKeyRules(t));
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: !isCreating,
+    kind: "form",
+  });
 
   return (
     <form
       className={cx("grid gap-[var(--space-3)]", className)}
+      onKeyDown={formShortcut}
       onSubmit={(event) => void form.handleSubmit(onSubmitDraft)(event)}
     >
       <TextInput

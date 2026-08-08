@@ -13,20 +13,29 @@ import (
 )
 
 type taskShowOutput struct {
-	Summary         serverapi.WorkflowTaskSummary      `json:"summary"`
-	Body            string                             `json:"body"`
-	SourceURL       string                             `json:"source_url,omitempty"`
-	Project         serverapi.ProjectBoardProject      `json:"project"`
-	Workflow        serverapi.WorkflowPickerItem       `json:"workflow"`
-	SourceWorkspace serverapi.ProjectWorkspaceSummary  `json:"source_workspace"`
-	ExecutionTarget *serverapi.WorkflowExecutionTarget `json:"execution_target,omitempty"`
-	Status          serverapi.WorkflowTaskStatus       `json:"status"`
-	Actions         serverapi.WorkflowTaskActions      `json:"actions"`
-	AttentionCount  int                                `json:"attention_count"`
-	PlacementCount  int                                `json:"placement_count"`
-	RunCount        int                                `json:"run_count"`
-	TransitionCount int                                `json:"transition_count"`
-	CommentCount    int                                `json:"comment_count"`
+	Summary              serverapi.WorkflowTaskSummary         `json:"summary"`
+	Body                 string                                `json:"body"`
+	SourceURL            string                                `json:"source_url,omitempty"`
+	Project              serverapi.ProjectBoardProject         `json:"project"`
+	Workflow             serverapi.WorkflowTaskWorkflowSummary `json:"workflow"`
+	SourceWorkspace      serverapi.ProjectWorkspaceSummary     `json:"source_workspace"`
+	ExecutionTarget      *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
+	WorktreePath         *string                               `json:"worktree_path"`
+	CurrentNodes         []serverapi.WorkflowTaskCurrentNode   `json:"current_nodes"`
+	LiveSessionIDs       []string                              `json:"live_session_ids"`
+	CurrentScripts       []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
+	RetainedSessionCount int                                   `json:"retained_session_count"`
+	Status               serverapi.WorkflowTaskStatus          `json:"status"`
+	Actions              serverapi.WorkflowTaskActions         `json:"actions"`
+	LabelIDs             []string                              `json:"label_ids"`
+	AttentionCount       int                                   `json:"attention_count"`
+	Dependencies         *taskShowDependencySummary            `json:"dependencies,omitempty"`
+}
+
+type taskShowDependencySummary struct {
+	BlockerCount            int `json:"blocker_count"`
+	UnsatisfiedBlockerCount int `json:"unsatisfied_blocker_count"`
+	BlockedTaskCount        int `json:"blocked_task_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -63,7 +72,12 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
 		}
-		if err := writeTaskDetail(stdout, task); err != nil {
+		labelNames, err := taskLabelNamesForHumanOutput(context.Background(), remote, task.Summary.ProjectID, task.LabelIDs)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeTaskDetailWithLabelNames(stdout, task, labelNames); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -72,22 +86,39 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput {
-	return taskShowOutput{
-		Summary:         task.Summary,
-		Body:            task.Body,
-		SourceURL:       task.SourceURL,
-		Project:         task.Project,
-		Workflow:        task.Workflow,
-		SourceWorkspace: task.SourceWorkspace,
-		ExecutionTarget: task.ExecutionTarget,
-		Status:          task.Status,
-		Actions:         task.Actions,
-		AttentionCount:  task.AttentionCount,
-		PlacementCount:  len(task.Placements),
-		RunCount:        len(task.Runs),
-		TransitionCount: len(task.Transitions),
-		CommentCount:    len(task.Comments),
+	output := taskShowOutput{
+		Summary:              task.Summary,
+		Body:                 task.Body,
+		SourceURL:            task.SourceURL,
+		Project:              task.Project,
+		Workflow:             task.Workflow,
+		SourceWorkspace:      task.SourceWorkspace,
+		ExecutionTarget:      task.ExecutionTarget,
+		WorktreePath:         task.WorktreePath,
+		CurrentNodes:         task.CurrentNodes,
+		LiveSessionIDs:       task.LiveSessionIDs,
+		CurrentScripts:       task.CurrentScripts,
+		RetainedSessionCount: task.RetainedSessionCount,
+		Status:               task.Status,
+		Actions:              task.Actions,
+		LabelIDs:             normalizedLabelIDs(task.LabelIDs),
+		AttentionCount:       task.AttentionCount,
 	}
+	if task.Dependencies.BlockerCount != 0 ||
+		task.Dependencies.UnsatisfiedBlockerCount != 0 ||
+		task.Dependencies.DirectlyBlockedTaskCount != 0 {
+		output.Dependencies = &taskShowDependencySummary{
+			BlockerCount:            task.Dependencies.BlockerCount,
+			UnsatisfiedBlockerCount: task.Dependencies.UnsatisfiedBlockerCount,
+			BlockedTaskCount:        task.Dependencies.DirectlyBlockedTaskCount,
+		}
+	}
+	return output
+}
+
+func normalizedLabelIDs(ids []string) []string {
+	normalized := make([]string, 0, len(ids))
+	return append(normalized, ids...)
 }
 
 func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, serverapi.WorkflowTaskDetail, error) {
@@ -127,6 +158,10 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 	return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found", trimmed)
 }
 func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error {
+	return writeTaskDetailWithLabelNames(stdout, task, nil)
+}
+
+func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTaskDetail, labelNames []string) error {
 	statusText, err := taskStatusText(task.Status)
 	if err != nil {
 		return err
@@ -140,29 +175,56 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 	fmt.Fprintf(stdout, "Project: %q (%s)\n", task.Project.DisplayName, task.Summary.ProjectID)
 	fmt.Fprintf(stdout, "Workflow: %q (%s)\n", task.Workflow.DisplayName, task.Workflow.WorkflowID)
 	fmt.Fprintf(stdout, "Created at %s UTC\n", time.UnixMilli(task.Summary.CreatedAtUnixMs).UTC().Format(time.RFC3339))
-	if len(task.Runs) > 0 {
-		fmt.Fprintf(stdout, "Total agent runs: %d\n", len(task.Runs))
-	}
 	if strings.TrimSpace(task.SourceWorkspace.RootPath) != "" {
 		fmt.Fprintf(stdout, "Main workspace: %s\n", task.SourceWorkspace.RootPath)
 	}
 	if task.ExecutionTarget != nil {
 		writeTaskExecutionTarget(stdout, *task.ExecutionTarget)
 	}
+	if task.WorktreePath != nil {
+		fmt.Fprintf(stdout, "Worktree: %s\n", *task.WorktreePath)
+	}
+	for _, sessionID := range task.LiveSessionIDs {
+		fmt.Fprintf(stdout, "Current session: %s\n", sessionID)
+	}
+	fmt.Fprintf(stdout, "Retained sessions: %d\n", task.RetainedSessionCount)
+	for _, script := range task.CurrentScripts {
+		fmt.Fprintf(stdout, "Current script: %s (%s)\n", script.Path, script.CurrentNode.NodeID)
+	}
+	for _, node := range task.CurrentNodes {
+		if node.EffectiveAssignee != nil {
+			fmt.Fprintf(stdout, "Current node %s effective assignee: %s\n", node.NodeID, *node.EffectiveAssignee)
+		}
+		if node.EffectiveThinking != nil {
+			fmt.Fprintf(stdout, "Current node %s effective thinking: %s\n", node.NodeID, *node.EffectiveThinking)
+		}
+	}
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
-	writeTaskDetailComments(stdout, task.Summary.ShortID, task.Comments)
-	return nil
+	if len(labelNames) > 0 {
+		fmt.Fprintf(stdout, "Labels:")
+		for _, name := range labelNames {
+			fmt.Fprintf(stdout, " %q", name)
+		}
+		fmt.Fprintln(stdout)
+	}
+	return writeTaskDependencyDirections(stdout, task.Dependencies.Directions)
+}
+
+func taskLabelNamesForHumanOutput(ctx context.Context, remote workflowCommandRemote, projectID string, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	_, snapshot, err := loadWorkflowProjectLabelCatalog(ctx, remote, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return workflowProjectLabelNames(snapshot, ids)
 }
 
 func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecutionTarget) {
 	fmt.Fprintf(stdout, "Execution target: %s\n", target.Mode)
-	if target.EffectiveRoot != nil {
-		fmt.Fprintf(stdout, "Execution root: %s\n", *target.EffectiveRoot)
-	} else if target.Mode != serverapi.WorkflowExecutionTargetModeNone {
-		fmt.Fprintln(stdout, "Execution root: unavailable")
-	}
 	if target.RequestedRef != nil {
 		fmt.Fprintf(stdout, "Requested revision: %s\n", *target.RequestedRef)
 	}
@@ -175,15 +237,6 @@ func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecuti
 			label = "Observed commit (legacy)"
 		}
 		fmt.Fprintf(stdout, "%s: %s\n", label, shortCommitOID(*target.CommitOID))
-	}
-	if target.CurrentBranch != nil {
-		fmt.Fprintf(stdout, "Current branch: %s\n", *target.CurrentBranch)
-	}
-	if target.ManagedWorktree != nil {
-		worktreeRoot := strings.TrimSpace(target.ManagedWorktree.CanonicalRoot)
-		if worktreeRoot != "" {
-			fmt.Fprintf(stdout, "Worktree: %s\n", worktreeRoot)
-		}
 	}
 }
 
@@ -198,7 +251,7 @@ func shortCommitOID(commitOID string) string {
 
 func taskStatusText(status serverapi.WorkflowTaskStatus) (string, error) {
 	switch status.Kind {
-	case serverapi.WorkflowTaskStatusKindCanceled, serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
+	case serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
 		return string(status.Kind), nil
 	default:
 		return "", fmt.Errorf("unsupported task status %q", status.Kind)

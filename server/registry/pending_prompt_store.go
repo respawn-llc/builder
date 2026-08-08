@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -27,10 +28,10 @@ func newPendingPromptStore() *pendingPromptStore {
 	return &pendingPromptStore{pending: make(map[string]map[string]PendingPromptSnapshot)}
 }
 
-func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time, publish func(PendingPromptSnapshot)) bool {
+func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) (PendingPromptSnapshot, bool) {
 	id, requestID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ID)
 	if id == "" || requestID == "" {
-		return false
+		return PendingPromptSnapshot{}, false
 	}
 	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
 	s.mu.Lock()
@@ -41,10 +42,7 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	}
 	pending[requestID] = snapshot
 	s.mu.Unlock()
-	if publish != nil {
-		publish(snapshot)
-	}
-	return true
+	return snapshot, true
 }
 
 func (s *pendingPromptStore) Complete(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) (PendingPromptSnapshot, bool) {
@@ -84,12 +82,12 @@ func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(Pending
 	s.mu.Lock()
 	items := listPendingPrompts(s.pending[id])
 	delete(s.pending, id)
+	s.mu.Unlock()
 	for _, item := range items {
 		if resolve != nil {
 			resolve(item)
 		}
 	}
-	s.mu.Unlock()
 }
 
 func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(sessionID string, fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
@@ -104,14 +102,7 @@ func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromp
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return pendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
+		return sessionruntime.PendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
 	})
 	return items
-}
-
-func pendingPromptOrderLess(leftCreatedAt time.Time, leftID string, rightCreatedAt time.Time, rightID string) bool {
-	if leftCreatedAt.Equal(rightCreatedAt) {
-		return leftID < rightID
-	}
-	return leftCreatedAt.Before(rightCreatedAt)
 }

@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -14,54 +15,6 @@ import (
 	"sync"
 	"testing"
 )
-
-func TestReviewerRunsOnAllFrequencyWithoutToolCalls(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:           "gpt-5",
-		FastModeEnabled: true,
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			VerboseOutput: true,
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-	if len(reviewerClient.calls) != 1 {
-		t.Fatalf("expected reviewer to be called once for frequency=all, got %d", len(reviewerClient.calls))
-	}
-	if !reviewerClient.calls[0].FastMode {
-		t.Fatal("expected reviewer request to inherit fast mode")
-	}
-	statuses := 0
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if transcript.EntryRole(entry.Role) == transcript.EntryRoleReviewerStatus {
-			statuses++
-		}
-	}
-	if statuses != 1 {
-		t.Fatalf("reviewer status entries = %d, want 1", statuses)
-	}
-}
 
 func reviewerPromptConfig(path string) Config {
 	return Config{Reviewer: ReviewerConfig{
@@ -76,7 +29,7 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 		t.Fatalf("ensure locked: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 	}}}
 	if _, err := eng.runReviewerSuggestions(context.Background(), "review", client); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
@@ -117,8 +70,8 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	autoCompactionEnabled := false
 	store := mustCreateTestSession(t, workspace)
 	mainClient := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	reviewerClient := &fakeClient{}
 	cfg := reviewerPromptConfig(reviewerPromptPath)
@@ -206,15 +159,49 @@ func TestReviewerFrequencyOffDoesNotReadSystemPromptFile(t *testing.T) {
 	}
 }
 
+func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	mainClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+
+	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:           "gpt-5",
+		FastModeEnabled: true,
+		Reviewer: ReviewerConfig{
+			Frequency:     "all",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        reviewerClient,
+		},
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if len(reviewerClient.calls) != 1 {
+		t.Fatalf("expected reviewer to be called once, got %d", len(reviewerClient.calls))
+	}
+	if !reviewerClient.calls[0].FastMode {
+		t.Fatal("expected reviewer request to inherit fast mode")
+	}
+}
+
 func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["x"]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["x"]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -241,8 +228,8 @@ func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "" {
-		t.Fatalf("assistant content = %q, want empty", msg.Content)
+	if msg.Content != nil {
+		t.Fatalf("assistant content = %q, want absent", *msg.Content)
 	}
 	if len(mainClient.calls) != 1 {
 		t.Fatalf("expected one main model call, got %d", len(mainClient.calls))
@@ -254,8 +241,8 @@ func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 	finalAssistantContents := make([]string, 0)
 	noopFinalCount := 0
 	for _, persisted := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if persisted.Role == llm.RoleAssistant && persisted.Phase == llm.MessagePhaseFinal {
-			finalAssistantContents = append(finalAssistantContents, persisted.Content)
+		if persisted.Role == llm.RoleAssistant && persisted.Phase != nil && *persisted.Phase == llm.MessagePhaseFinal {
+			finalAssistantContents = append(finalAssistantContents, messageContent(persisted))
 		}
 		if isNoopFinalAnswer(persisted) {
 			noopFinalCount++
@@ -300,17 +287,17 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call_patch_1", Name: string(toolspec.ToolPatch), Custom: true, CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"}},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{ID: "call_patch_1", Name: string(toolspec.ToolPatch), Custom: true, CustomInput: textutil.Value("*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch")}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -328,8 +315,8 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "final" {
-		t.Fatalf("assistant content = %q, want final", msg.Content)
+	if messageContent(msg) != "final" {
+		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to be called once after patch edit, got %d", len(reviewerClient.calls))
@@ -340,7 +327,7 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{
 				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 			},
@@ -349,10 +336,10 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		finalTextResponse("original final"),
 		finalTextResponse(reviewerNoopToken),
 	}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Double-check test output before final handoff."]}`},
+	reviewerClient := &streamRequiredClient{response: llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Double-check test output before final handoff."]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
+	}}
 	eng := mustNewExecTestEngine(t, store, mainClient, Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
@@ -363,21 +350,20 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		},
 	})
 
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+	_, err := eng.SubmitUserMessage(context.Background(), "do task")
+	if err == nil {
+		t.Fatal("expected explicit Reviewer NO_OP follow-up failure")
 	}
-	if msg.Content != "original final" {
-		t.Fatalf("assistant content = %q, want original final", msg.Content)
+	if reviewerClient.StreamCalls() != 1 {
+		t.Fatalf("reviewer stream calls = %d, want 1", reviewerClient.StreamCalls())
 	}
-	assertModelCallCount(t, reviewerClient, 1)
 	assertModelCallCount(t, mainClient, 3)
 
 	feedback := 0
 	for _, message := range requestMessages(mainClient.calls[2]) {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeReviewerFeedback {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeReviewerFeedback {
 			feedback++
-			if strings.TrimSpace(message.Content) == "" {
+			if strings.TrimSpace(messageContent(message)) == "" {
 				t.Fatal("reviewer feedback content is blank")
 			}
 		}
@@ -386,62 +372,24 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		t.Fatalf("reviewer feedback messages = %d, want 1; messages=%+v", feedback, requestMessages(mainClient.calls[2]))
 	}
 
+	statuses := 0
 	snapshot := eng.ChatSnapshot()
 	for _, entry := range snapshot.Entries {
 		if entry.Text == reviewerNoopToken {
 			t.Fatalf("noop token leaked into chat snapshot: %+v", snapshot.Entries)
 		}
+		if transcript.EntryRole(entry.Role) == transcript.EntryRoleReviewerStatus {
+			statuses++
+		}
 	}
-	assertReviewerPresentation(t, snapshot, 0)
+	if statuses != 0 {
+		t.Fatalf("reviewer status entries = %d, want none; entries=%+v", statuses, snapshot.Entries)
+	}
 	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	assertReviewerPresentation(t, restored.ChatSnapshot(), 0)
-}
-
-func TestReviewerUsesStreamingClientWhenAvailable(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{
-				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "original final", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	reviewerClient := &streamRequiredClient{response: llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Check output formatting."]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "original final" {
-		t.Fatalf("assistant content = %q, want original final", msg.Content)
-	}
-	if reviewerClient.StreamCalls() != 1 {
-		t.Fatalf("expected one reviewer stream call, got %d", reviewerClient.StreamCalls())
+	for _, restoredEntry := range restored.ChatSnapshot().Entries {
+		if transcript.IsReviewerEntryRole(restoredEntry.Role) {
+			t.Fatalf("application failure persisted a Reviewer row: %+v", restoredEntry)
+		}
 	}
 }
 
@@ -454,7 +402,7 @@ func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
 	if _, err := engine.SubmitUserMessage(context.Background(), "stale turn"); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("SubmitUserMessage after close err=%v, want ErrEngineClosed", err)
 	}
-	if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "stale append"}})); !errors.Is(err, ErrEngineClosed) {
+	if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("stale append")}})); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("steer after close err=%v, want ErrEngineClosed", err)
 	}
 }

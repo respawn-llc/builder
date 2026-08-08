@@ -11,6 +11,7 @@ import (
 	"core/shared/serverapi"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -33,7 +34,9 @@ type serviceTestPublisher struct {
 	ready    chan struct{}
 }
 
-func (p *serviceTestPublisher) PublishSessionIdentity(string, *clientui.SessionExecutionTarget) {}
+func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
+	return nil
+}
 
 func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
 	p.mu.Lock()
@@ -152,6 +155,180 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	}
 }
 
+func TestCreateWorktreeUsesCompactAutomaticRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "compact-root",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/compact-root",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	root := resp.Worktree.Topology.Registered.Kent.CanonicalRoot
+	canonicalBase, err := config.CanonicalWorkspaceRoot(env.baseDir)
+	if err != nil {
+		t.Fatalf("canonical base: %v", err)
+	}
+	expectedParent := filepath.Join(canonicalBase, normalizeWorkspacePathKey(filepath.Base(env.workspaceRoot)))
+	if filepath.Dir(root) != expectedParent {
+		t.Fatalf("compact root parent = %q, want normalized parent %q", filepath.Dir(root), expectedParent)
+	}
+	leaf := filepath.Base(root)
+	if len(leaf) != 3 {
+		t.Fatalf("regular compact leaf = %q, want three digits", leaf)
+	}
+	for _, r := range leaf {
+		if r < '0' || r > '9' {
+			t.Fatalf("regular compact leaf = %q, want digits", leaf)
+		}
+	}
+}
+
+func TestCreateWorktreePreservesExplicitRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	root := filepath.Join(env.baseDir, "explicit-root")
+	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         root,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-root",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree explicit: %v", err)
+	}
+	if got := resp.Worktree.Topology.Registered.Kent.CanonicalRoot; got != root {
+		canonical, canonicalErr := config.CanonicalWorkspaceRoot(root)
+		if canonicalErr != nil || got != canonical {
+			t.Fatalf("explicit root = %q, want %q", got, root)
+		}
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootThroughBaseSymlinkBeforeGit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(env.baseDir, "link")); err != nil {
+		t.Fatalf("symlink base child: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-symlink-escape",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join("link", "new"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-symlink-escape",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a relative root that escaped through a base symlink")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed explicit symlink creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	before := len(mustListWorktrees(t, env).Worktrees)
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "explicit-source-overlap",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(env.workspaceRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/explicit-source-overlap",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed overlapping explicit creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	existingRoot := filepath.Join(env.baseDir, "existing-root")
+	if _, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "existing-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         existingRoot,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/existing-managed-root",
+	}); err != nil {
+		t.Fatalf("CreateWorktree existing root: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(existingRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted an explicit root nested in an existing managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed nested creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
+func TestCreateWorktreeRejectsExplicitRootNestedInManagedWorktreeFromOtherProject(t *testing.T) {
+	env := newServiceTestEnv(t)
+	otherWorkspaceRoot := filepath.Join(env.baseDir, "other-workspace")
+	if err := os.MkdirAll(otherWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other workspace: %v", err)
+	}
+	otherBinding, err := env.store.CreateProjectForWorkspace(env.ctx, otherWorkspaceRoot, "Other")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	otherManagedRoot := filepath.Join(env.baseDir, "other-managed-root")
+	if err := os.MkdirAll(otherManagedRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll other managed root: %v", err)
+	}
+	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
+		ID:            uuid.NewString(),
+		WorkspaceID:   otherBinding.WorkspaceID,
+		CanonicalRoot: otherManagedRoot,
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	before := len(mustListWorktrees(t, env).Worktrees)
+
+	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "nested-other-project-managed-root",
+		SessionID:        env.session.Meta().SessionID,
+		RootPath:         filepath.Join(otherManagedRoot, "nested"),
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature/nested-other-project-managed-root",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree accepted a root nested in another project's managed Worktree")
+	}
+	if after := len(mustListWorktrees(t, env).Worktrees); after != before {
+		t.Fatalf("failed cross-project nested creation changed Worktree count from %d to %d", before, after)
+	}
+}
+
 func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")
@@ -242,10 +419,6 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 		t.Fatalf("SubscribeWorktreeSetup: %v", err)
 	}
 	defer func() { _ = sub.Close() }()
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/setup-fails"})
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: setupID,
 		ClientRequestID:  "req-setup-fails",
@@ -261,6 +434,7 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
 		t.Fatalf("CreateWorktree error = %T %v, want retained worktree facts", err, err)
 	}
+	expectedRoot := retained.Worktree.Registered.Kent.CanonicalRoot
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected setup-failed worktree kept, stat err=%v", statErr)
 	}
@@ -333,10 +507,6 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 		t.Fatalf("SubscribeWorktreeSetup: %v", err)
 	}
 	defer func() { _ = sub.Close() }()
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/setup-cancel"})
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
 	ctx, cancel := context.WithCancel(env.ctx)
 	resultCh := make(chan error, 1)
 	go func() {
@@ -362,78 +532,76 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 	if err == nil {
 		t.Fatal("CreateWorktree succeeded, want cancellation error")
 	}
-	if _, statErr := os.Stat(expectedRoot); statErr != nil {
-		t.Fatalf("expected canceled setup worktree kept, stat err=%v", statErr)
-	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 	evt := nextSetupTerminalEvent(t, sub)
 	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || !evt.Canceled {
 		t.Fatalf("canceled setup event = %+v", evt)
 	}
-}
-
-func TestCreateWorktreeSetupDirectoryScriptKeepsWorktreeAndSessionTarget(t *testing.T) {
-	env := newServiceTestEnv(t)
-	scriptRelpath := filepath.Join("scripts", "directory")
-	if err := os.MkdirAll(filepath.Join(env.workspaceRoot, scriptRelpath), 0o755); err != nil {
-		t.Fatalf("MkdirAll script dir: %v", err)
+	if evt.WorktreeRoot == "" {
+		t.Fatal("canceled setup event omitted retained worktree root")
 	}
-	env.service.setupScript = scriptRelpath
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
-	if err != nil {
-		t.Fatalf("SubscribeWorktreeSetup: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-directory",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       "feature/setup-directory",
-	})
-	if err == nil {
-		t.Fatal("CreateWorktree succeeded, want directory setup script error")
-	}
-	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
-	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
-		t.Fatalf("directory setup event = %+v", evt)
+	if _, statErr := os.Stat(evt.WorktreeRoot); statErr != nil {
+		t.Fatalf("expected canceled setup worktree kept, stat err=%v", statErr)
 	}
 }
 
-func TestCreateWorktreeMissingSetupScriptKeepsWorktreeAndSessionTarget(t *testing.T) {
+func TestCreateWorktreeInvalidSetupScriptsKeepWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
-	env.service.setupScript = filepath.Join("scripts", "missing.sh")
-	setupID := serverapi.NewWorktreeSetupOperationID()
-	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
-	if err != nil {
-		t.Fatalf("SubscribeWorktreeSetup: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/setup-missing"})
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-missing",
-		SessionID:        env.session.Meta().SessionID,
-		BaseRef:          "HEAD",
-		CreateBranch:     true,
-		BranchName:       "feature/setup-missing",
-	})
-	if err == nil {
-		t.Fatal("CreateWorktree succeeded, want missing setup script error")
-	}
-	if _, statErr := os.Stat(expectedRoot); statErr != nil {
-		t.Fatalf("expected missing-setup worktree kept, stat err=%v", statErr)
-	}
-	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
-	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
-		t.Fatalf("missing setup event = %+v", evt)
+	for _, tc := range []struct {
+		name       string
+		scriptPath string
+		branchName string
+		prepare    func(*testing.T)
+	}{
+		{
+			name:       "directory",
+			scriptPath: filepath.Join("scripts", "directory"),
+			branchName: "feature/setup-directory",
+			prepare: func(t *testing.T) {
+				if err := os.MkdirAll(filepath.Join(env.workspaceRoot, "scripts", "directory"), 0o755); err != nil {
+					t.Fatalf("MkdirAll script dir: %v", err)
+				}
+			},
+		},
+		{
+			name:       "missing",
+			scriptPath: filepath.Join("scripts", "missing.sh"),
+			branchName: "feature/setup-missing",
+			prepare:    func(*testing.T) {},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.prepare(t)
+			env.service.setupScript = tc.scriptPath
+			setupID := serverapi.NewWorktreeSetupOperationID()
+			sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+			if err != nil {
+				t.Fatalf("SubscribeWorktreeSetup: %v", err)
+			}
+			defer func() { _ = sub.Close() }()
+			_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+				SetupOperationID: setupID,
+				ClientRequestID:  "req-" + tc.name,
+				SessionID:        env.session.Meta().SessionID,
+				BaseRef:          "HEAD",
+				CreateBranch:     true,
+				BranchName:       tc.branchName,
+			})
+			if err == nil {
+				t.Fatal("CreateWorktree succeeded, want invalid setup script error")
+			}
+			assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
+			evt := nextSetupTerminalEvent(t, sub)
+			if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
+				t.Fatalf("invalid setup event = %+v", evt)
+			}
+			if evt.WorktreeRoot == "" {
+				t.Fatal("invalid setup event omitted retained worktree root")
+			}
+			if _, statErr := os.Stat(evt.WorktreeRoot); statErr != nil {
+				t.Fatalf("expected invalid-setup worktree kept, stat err=%v", statErr)
+			}
+		})
 	}
 }
 
@@ -472,13 +640,7 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 
 func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testing.T) {
 	env := newServiceTestEnv(t)
-	createSpec := CreateSpec{BaseRef: "HEAD"}
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, createSpec)
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
-
-	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-detached-head",
 		SessionID:        env.session.Meta().SessionID,
@@ -487,26 +649,21 @@ func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testin
 	if err == nil {
 		t.Fatal("CreateWorktree from checked-out HEAD succeeded")
 	}
-	if _, statErr := os.Stat(expectedRoot); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("detached worktree root stat error = %v, want not exist", statErr)
-	}
 	worktrees, listErr := env.service.git.List(env.ctx, env.workspaceRoot)
 	if listErr != nil {
-		t.Fatalf("git worktree list: %v", listErr)
+		t.Fatalf("list worktrees after detached create rollback: %v", listErr)
 	}
 	for _, worktree := range worktrees {
-		if worktree.Root == expectedRoot {
-			t.Fatalf("detached worktree remained registered: %+v", worktree)
+		if !worktree.IsMain {
+			t.Fatalf("detached worktree remained registered after failed create: %+v", worktree)
 		}
 	}
 	records, listErr := env.store.ListWorktreeRecordsByWorkspaceID(env.ctx, env.binding.WorkspaceID)
 	if listErr != nil {
-		t.Fatalf("ListWorktreeRecordsByWorkspaceID: %v", listErr)
+		t.Fatalf("list worktree records after detached create rollback: %v", listErr)
 	}
-	for _, record := range records {
-		if record.CanonicalRoot == expectedRoot {
-			t.Fatalf("detached Kent worktree record remained registered: %+v", record)
-		}
+	if len(records) != 0 {
+		t.Fatalf("detached Kent worktree records remained after failed create: %+v", records)
 	}
 }
 
@@ -560,33 +717,24 @@ func TestResolveWorktreeCreateTargetClassifiesBranchDetachedRefAndNewBranch(t *t
 	}
 }
 
-func TestResolveRequestedWorktreeRootCreatesBaseDirAndAutoSuffixesCollisions(t *testing.T) {
+func TestResolveRequestedWorktreeRootPreservesExplicitRelativeRoot(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), "missing-base")
-	service := &Service{baseDir: baseDir}
-	firstRoot, err := defaultWorktreeRoot(baseDir, "workspace-1", "feature/collision")
-	if err != nil {
-		t.Fatalf("defaultWorktreeRoot: %v", err)
-	}
-	if err := os.MkdirAll(firstRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll collision root: %v", err)
-	}
-	firstRoot, err = config.CanonicalWorkspaceRoot(firstRoot)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot collision root: %v", err)
-	}
-
-	resolvedRoot, err := service.resolveRequestedWorktreeRoot("", "workspace-1", CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/collision"})
+	service := &Service{managedRoots: newManagedRootAllocator(baseDir, nil)}
+	sourceRoot := t.TempDir()
+	resolvedRoot, err := service.managedRoots.resolveExplicitRoot("nested/explicit", sourceRoot)
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
 	}
-	if resolvedRoot == firstRoot {
-		t.Fatalf("expected suffixed root after collision, got %q", resolvedRoot)
+	canonicalBase, err := config.CanonicalWorkspaceRoot(baseDir)
+	if err != nil {
+		t.Fatalf("canonical base: %v", err)
 	}
-	if !strings.HasPrefix(resolvedRoot, firstRoot+"-") {
-		t.Fatalf("expected suffixed collision root, got %q (base %q)", resolvedRoot, firstRoot)
+	want, err := config.ResolveExistingAncestorRealPath(filepath.Join(canonicalBase, "nested/explicit"))
+	if err != nil {
+		t.Fatalf("canonical expected root: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(baseDir, "workspace-1")); err != nil {
-		t.Fatalf("expected workspace base dir created, stat err=%v", err)
+	if resolvedRoot != want {
+		t.Fatalf("resolved root = %q, want %q", resolvedRoot, want)
 	}
 }
 
@@ -723,10 +871,6 @@ func TestSwitchSessionTargetRejectsInvalidPreviousTargetBeforeMetadataMutation(t
 
 func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	env := newServiceTestEnv(t)
-	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/create-rollback"})
-	if err != nil {
-		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
-	}
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-rollback",
@@ -741,13 +885,7 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	if sessionTargetWorktreeID(resp.Target) != "" {
 		t.Fatalf("create changed target despite no-enter contract: target=%+v", resp.Target)
 	}
-	if _, statErr := os.Stat(expectedRoot); statErr != nil {
-		t.Fatalf("expected failed create worktree root kept, stat err=%v", statErr)
-	}
-	expectedRoot, err = config.CanonicalWorkspaceRoot(expectedRoot)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot expected: %v", err)
-	}
+	expectedRoot := resp.Worktree.Topology.Registered.Kent.CanonicalRoot
 	if got := runGit(t, env.workspaceRoot, "branch", "--list", "feature/create-rollback"); strings.Contains(got, "feature/create-rollback") {
 		// Branch remains because setup has completed and the worktree is inspectable.
 	} else {

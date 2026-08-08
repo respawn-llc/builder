@@ -13,6 +13,7 @@ export const architectureOwners = Object.freeze({
   TEST_SUPPORT: "test-support",
   TOOLING: "tooling",
   UI: "ui",
+  UI_KIT: "ui-kit",
   VENDOR: "vendor",
 });
 
@@ -25,6 +26,7 @@ export const architectureElements = Object.freeze([
   architectureElement(architectureOwners.UI, "src/ui"),
   architectureElement(architectureOwners.API, "src/api"),
   architectureElement(architectureOwners.TEST_SUPPORT, "src/test-support"),
+  architectureElement(architectureOwners.UI_KIT, "packages/ui-kit"),
   architectureElement(architectureOwners.NATIVE_PACKAGE, "packages/*", "name"),
   architectureElement(architectureOwners.I18N, "src/i18n"),
   architectureElement(architectureOwners.VENDOR, "src/vendor"),
@@ -38,6 +40,7 @@ export const architectureEntrypoints = Object.freeze({
   API_COMPOSITION: "composition/index.ts",
   INDEX: "index.ts",
   NATIVE_PACKAGE: "src/index.ts",
+  UI_KIT: "src/ReorderableList.tsx",
   VENDOR_ELK_API: "elkjs-types.ts",
   VENDOR_ELK_BUNDLED: "elkjs-bundled-types.ts",
   VENDOR_XYFLOW: "xyflow-react-types.ts",
@@ -84,6 +87,11 @@ const dependencyTargets = {
   SHARED: dependencyTarget(architectureOwners.SHARED, "@/shared/*"),
   TOOLING_TYPES: dependencyTarget(architectureOwners.TOOLING, "@/types"),
   UI: dependencyTarget(architectureOwners.UI, "@/ui"),
+  UI_KIT: dependencyTarget(
+    architectureOwners.UI_KIT,
+    "@app/ui-kit",
+    architectureEntrypoints.UI_KIT,
+  ),
   VENDOR_ELK_API: dependencyTarget(
     architectureOwners.VENDOR,
     "elkjs/lib/elk-api",
@@ -136,6 +144,7 @@ const ownerDependencyMatrix = [
     dependencyTargets.APP_FACADE,
     dependencyTargets.SHARED,
     dependencyTargets.UI,
+    dependencyTargets.UI_KIT,
     dependencyTargets.API,
     dependencyTargets.I18N,
     ...vendorDependencies,
@@ -145,9 +154,11 @@ const ownerDependencyMatrix = [
     dependencyTargets.APP_FACADE,
     dependencyTargets.API,
     dependencyTargets.UI,
+    dependencyTargets.UI_KIT,
     dependencyTargets.SHARED,
     ...vendorDependencies,
   ),
+  ownerDependencies(architectureOwners.UI_KIT, dependencyTargets.UI_KIT),
   ownerDependencies(architectureOwners.TEST_SUPPORT, ...compositionDependencies),
   ownerDependencies(architectureOwners.TOOLING, dependencyTargets.TOOLING_TYPES),
 ];

@@ -4,14 +4,17 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"core/internal/testharness/testsetup"
 )
 
 func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	path := filepath.Join(repoRoot, "server", "registry", "runtime_registry.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
@@ -34,8 +37,51 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 	})
 }
 
+func TestProductionTranscriptPublishersDoNotConstructSequencedMessages(t *testing.T) {
+	repoRoot := testsetup.RepositoryRoot(t)
+	for _, rel := range []string{
+		filepath.Join("server", "registry"),
+		filepath.Join("server", "runtimeview"),
+	} {
+		root := filepath.Join(repoRoot, rel)
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || strings.HasSuffix(info.Name(), "_test.go") || !strings.HasSuffix(info.Name(), ".go") {
+				return nil
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				lit, ok := node.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				selector, ok := lit.Type.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "TranscriptMessage" {
+					return true
+				}
+				for _, element := range lit.Elts {
+					if _, ok := element.(*ast.KeyValueExpr); ok {
+						t.Errorf("%s constructs a sequenced TranscriptMessage literal; publish a TranscriptEvent instead", path)
+						break
+					}
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("scan transcript publishers under %s: %v", rel, err)
+		}
+	}
+}
+
 func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	registryFiles, err := filepath.Glob(filepath.Join(repoRoot, "server", "registry", "*.go"))
 	if err != nil {
 		t.Fatalf("list registry files: %v", err)
@@ -71,7 +117,18 @@ func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session feed sequencer: %v", err)
 	}
+	var fields []string
 	ast.Inspect(file, func(node ast.Node) bool {
+		if spec, ok := node.(*ast.TypeSpec); ok && spec.Name.Name == "sessionFeedSequencer" {
+			if structType, ok := spec.Type.(*ast.StructType); ok {
+				for _, field := range structType.Fields.List {
+					for _, name := range field.Names {
+						fields = append(fields, name.Name)
+					}
+				}
+			}
+			return false
+		}
 		ident, ok := node.(*ast.Ident)
 		if !ok {
 			return true
@@ -81,17 +138,20 @@ func TestRuntimeReadModelTranscriptProjectionHasNoLegacyKinds(t *testing.T) {
 		}
 		return true
 	})
+	if len(fields) != 2 || fields[0] != "mu" || fields[1] != "broker" {
+		t.Fatalf("session feed sequencer fields = %v, want only mutex and broker", fields)
+	}
 }
 
 func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	forbidden := map[string]bool{
-		"TranscriptSegmentPage":          true,
-		"TranscriptSegmentPageForward":   true,
-		"TranscriptSegmentPageFromStore": true,
-		"GetSessionTranscriptPage":       true,
-		"ReadSegmentBackward":            true,
-		"ReadEventsBackwardUntil":        true,
+		"TranscriptSegmentPage":             true,
+		"TranscriptSegmentPageForward":      true,
+		"TranscriptSegmentPageFromEventLog": true,
+		"GetSessionTranscriptPage":          true,
+		"ReadSegmentBackward":               true,
+		"ReadRecentRecords":                 true,
 	}
 	for _, rel := range []string{
 		filepath.Join("server", "runtime", "transcript_subscription.go"),
@@ -120,7 +180,7 @@ func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *tes
 }
 
 func TestTranscriptRuntimeViewProjectionDoesNotUseLegacyChatEntryShape(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	rel := filepath.Join("server", "runtimeview", "transcript_subscription.go")
 	path := filepath.Join(repoRoot, rel)
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
@@ -147,7 +207,7 @@ func TestTranscriptRuntimeViewProjectionDoesNotUseLegacyChatEntryShape(t *testin
 }
 
 func TestLegacyUntypedNoticeIsOnlyProducedByFossilProjectionPath(t *testing.T) {
-	repoRoot := findRegistryRepoRoot(t)
+	repoRoot := testsetup.RepositoryRoot(t)
 	allowedFunctions := map[string]bool{
 		"legacyUntypedNoticeFactFromLocalEntry": true,
 	}
@@ -189,13 +249,4 @@ func basicStringLiteralValue(lit *ast.BasicLit) string {
 		return ""
 	}
 	return value
-}
-
-func findRegistryRepoRoot(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
-	return root
 }

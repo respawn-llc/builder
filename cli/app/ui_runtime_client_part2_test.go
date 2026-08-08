@@ -11,6 +11,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +42,6 @@ func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testin
 type reconnectRetryRuntimeControlClient struct {
 	mu               sync.Mutex
 	firstSubmitErr   error
-	firstQueueErr    error
 	firstRecordErr   error
 	appendErr        error
 	compactErr       error
@@ -52,11 +52,9 @@ type reconnectRetryRuntimeControlClient struct {
 	queuedWork       bool
 	queuedWorkCalls  int
 	submitCalls      int
-	queueCalls       int
 	recordCalls      int
 	submitRequestID  []string
 	submitRefs       []clientui.RuntimeOperationRef
-	queueRequestID   []string
 	recordRequestID  []string
 	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
 	showGoalResp     serverapi.RuntimeGoalShowResponse
@@ -73,12 +71,6 @@ func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.submitRequestID...)
-}
-
-func (c *reconnectRetryRuntimeControlClient) queueRequestIDs() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.queueRequestID...)
 }
 
 func (c *reconnectRetryRuntimeControlClient) recordRequestIDs() []string {
@@ -177,17 +169,6 @@ func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req se
 	c.interruptReq = req
 	c.mu.Unlock()
 	return c.interruptResp, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) QueueUserMessage(_ context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.queueCalls++
-	c.queueRequestID = append(c.queueRequestID, req.ClientRequestID)
-	if c.queueCalls == 1 && c.firstQueueErr != nil {
-		return serverapi.RuntimeQueueUserMessageResponse{}, c.firstQueueErr
-	}
-	return serverapi.RuntimeQueueUserMessageResponse{QueueItemID: "queue-1", Text: req.Text, ClientRequestID: req.ClientRequestID}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) DiscardQueuedUserMessage(context.Context, serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
@@ -382,16 +363,14 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-1",
-				Objective: "ship feature",
-				Status:    clientui.RuntimeGoalStatusActive,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-1",
+			Objective: "ship feature",
+			Status:    clientui.RuntimeGoalStatusActive,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(
@@ -401,16 +380,14 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
 	)
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-1",
-				Objective: "ship feature",
-				Status:    clientui.RuntimeGoalStatusPaused,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-1",
+			Objective: "ship feature",
+			Status:    clientui.RuntimeGoalStatusPaused,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit paused goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(
@@ -420,10 +397,7 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
 	)
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind:    clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{}))); err != nil {
 		t.Fatalf("admit cleared goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(t, runtimeClient, nil, nil)
@@ -441,16 +415,14 @@ func TestRuntimeClientCanonicalGoalStatusReplacesCachedGoal(t *testing.T) {
 		}},
 	})
 
-	if _, err := runtimeClient.admitTranscriptMessageState(clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageGoalStatus,
-		Payload: clientui.TranscriptPayload{GoalStatus: &clientui.TranscriptGoalStatus{
-			Goal: &clientui.TranscriptGoal{
-				ID:        "goal-new",
-				Objective: "new",
-				Status:    clientui.RuntimeGoalStatusActive,
-			},
-		}},
-	}); err != nil {
+	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: &clientui.TranscriptGoal{
+			ID:        "goal-new",
+			Objective: "new",
+			Status:    clientui.RuntimeGoalStatusActive,
+		},
+	})),
+	); err != nil {
 		t.Fatalf("admit replacement goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(
@@ -502,7 +474,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -516,33 +488,6 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	}
 	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
 		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
-	}
-}
-
-func TestRuntimeClientQueueUserMessageReusesRequestIDAcrossReconnect(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{firstQueueErr: serverapi.ErrRuntimeUnavailable}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	item, err := runtimeClient.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindQueuedMessage,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		Text: "queued",
-	})
-	if err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
-	}
-	if item.ID != "queue-1" || item.Text != "queued" {
-		t.Fatalf("queued item = %+v, want server response", item)
-	}
-	if got := controls.queueRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
-		t.Fatalf("queue request ids = %+v, want same non-empty id across retry", got)
-	} else if item.ClientRequestID != got[0] {
-		t.Fatalf("queued item client request id = %q, want %q", item.ClientRequestID, got[0])
 	}
 }
 
@@ -578,7 +523,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {
@@ -787,7 +732,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 		},
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Text:                            "hello",
+		Input:                           runtimeinput.Text("hello"),
 	})
 	message := submission.Message
 	if err != nil {

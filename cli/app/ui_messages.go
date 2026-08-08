@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/cli/app/commands"
 	"core/shared/clientui"
 
 	"github.com/google/uuid"
@@ -31,6 +32,12 @@ func newSubmitDoneMsg(token uint64, message string, submittedText string, err er
 
 type promptHistoryPersistErrMsg struct {
 	err error
+}
+
+type promptCatalogRefreshDoneMsg struct {
+	token   *uuid.UUID
+	entries []commands.PromptCommandCatalogEntry
+	err     error
 }
 
 type committedEntryPersistDoneMsg struct {
@@ -99,6 +106,7 @@ type injectedQueueCreateDoneMsg struct {
 	token                    uint64
 	localID                  string
 	item                     clientui.QueuedUserMessage
+	completed                bool
 	approvalCommentaryAnswer *clientui.PromptAnswer
 	err                      error
 }
@@ -120,6 +128,13 @@ type compactDoneMsg struct {
 	err error
 }
 
+type activeSubmitOrigin uint8
+
+const (
+	activeSubmitOriginDirect activeSubmitOrigin = iota
+	activeSubmitOriginQueued
+)
+
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
@@ -127,6 +142,7 @@ type activeSubmitState struct {
 	stepID             string
 	text               string
 	queuedID           string
+	origin             activeSubmitOrigin
 	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool

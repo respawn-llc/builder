@@ -8,8 +8,10 @@ import (
 	"strings"
 	"sync"
 
+	"core/cli/app/internal/lifecyclehook"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
+	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 )
 
@@ -46,12 +48,16 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	}
 	_ = diagnosticWriter
 	_ = startLogLine
-	wiring, stopTranscriptEvents := prepareSharedRuntimeWiring(
+	wiring, stopTranscriptEvents, err := prepareSharedRuntimeWiring(
 		ctx,
 		clients,
 		plan,
 		reactivator,
 	)
+	if err != nil {
+		_ = lease.Release()
+		return nil, err
+	}
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
@@ -59,13 +65,12 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		})
 	}
 	return &runtimeLaunchPlan{
-		Wiring: wiring,
+		Wiring:           wiring,
+		stopEventStreams: stopStreams,
 		close: func() error {
-			stopStreams()
 			return lease.Release()
 		},
 		detachClose: func() error {
-			stopStreams()
 			return lease.ReleaseWithClosePolicy(serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
 		},
 	}, nil
@@ -91,33 +96,59 @@ func prepareSharedRuntimeWiring(
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
 	reactivator *runtimeReactivator,
-) (*runtimeWiring, func()) {
+) (*runtimeWiring, func(), error) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
 	}
+	terminalFocus := newTerminalFocusState()
+	initialLifecycleContext := lifecyclecontract.Context{}
+	if len(plan.ClientLifecycleCommand) > 0 {
+		var err error
+		initialLifecycleContext, err = lifecyclehook.InitialContext(plan.SessionID, plan.SessionTitle)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	lifecycleProxy := newClientLifecycleProxy(
+		ctx,
+		plan.ClientLifecycleCommand,
+		initialLifecycleContext,
+		terminalFocus.FocusedForAttention,
+	)
 	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
 	}
-	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	var transcriptStream ongoingTranscriptEventStream
+	if lifecycleProxy != nil {
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, reactivator.Reactivate, lifecycleProxy.AcceptTranscript)
+	} else {
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, reactivator.Reactivate)
+	}
 	transcriptEvents := transcriptStream.Events
+	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	stopTranscriptEvents := transcriptStream.Stop
-	terminalFocus := newTerminalFocusState()
-	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
+	notificationHooks := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
 				return sessionName
 			}
 		}
-		return strings.TrimSpace(plan.SessionName)
+		if plan.SessionTitle == nil {
+			return ""
+		}
+		return strings.TrimSpace(*plan.SessionTitle)
 	}, terminalFocus.FocusedForAttention)
+	var queueHook turnQueueHook = notificationHooks
+	if lifecycleProxy != nil {
+		queueHook = newTurnQueueHooks(notificationHooks, lifecycleProxy)
+	}
 	wiring := &runtimeWiring{
-		transcriptEvents:      transcriptEvents,
+		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
 		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       turnQueueHook,
-		turnQueueHook:         turnQueueHook,
+		promptAttention:       notificationHooks,
+		turnQueueHook:         queueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,
 		worktrees:             clients.Worktrees,
@@ -126,5 +157,15 @@ func prepareSharedRuntimeWiring(
 		processViews:          clients.ProcessViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}
-	return wiring, stopTranscriptEvents
+	if lifecycleProxy != nil {
+		wiring.lifecycleHookIssues = lifecycleProxy.Issues()
+		wiring.lifecycleHookDone = lifecycleProxy.Done()
+		lifecycleProxy.AcceptSessionStart(plan.ClientLifecycleOpeningKind)
+	}
+	return wiring, func() {
+		transcriptStream.Stop()
+		if lifecycleProxy != nil {
+			lifecycleProxy.Close()
+		}
+	}, nil
 }

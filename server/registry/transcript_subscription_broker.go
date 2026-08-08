@@ -13,6 +13,7 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 )
 
 const transcriptSubscriptionBufferSize = 256
@@ -50,7 +51,7 @@ func (b *transcriptSubscriptionBroker) SubscriberCount() int {
 	return len(b.subscribers)
 }
 
-func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptMessage) (*transcriptSubscription, error) {
+func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptEvent) (*transcriptSubscription, error) {
 	if b == nil {
 		return nil, fmt.Errorf("transcript stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
@@ -78,8 +79,8 @@ func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptMe
 	return sub, nil
 }
 
-func (b *transcriptSubscriptionBroker) Publish(messages []clientui.TranscriptMessage) {
-	if b == nil || len(messages) == 0 {
+func (b *transcriptSubscriptionBroker) Publish(events []clientui.TranscriptEvent) {
+	if b == nil || len(events) == 0 {
 		return
 	}
 	b.mu.Lock()
@@ -93,8 +94,8 @@ func (b *transcriptSubscriptionBroker) Publish(messages []clientui.TranscriptMes
 	}
 	b.mu.Unlock()
 	for _, sub := range subs {
-		for _, message := range messages {
-			if err := sub.publish(message); err != nil {
+		for _, event := range events {
+			if err := sub.publish(event); err != nil {
 				sub.closeWithError(transcriptPublishError(err))
 				break
 			}
@@ -112,18 +113,41 @@ func (b *transcriptSubscriptionBroker) Close(err error) {
 		return
 	}
 	b.closed = true
+	subs := b.detachSubscribersLocked()
+	b.mu.Unlock()
+	closeTranscriptSubscribers(subs, err)
+}
+
+func (b *transcriptSubscriptionBroker) CloseSubscribers(err error) {
+	if b == nil {
+		return
+	}
+	subs := b.detachSubscribers()
+	closeTranscriptSubscribers(subs, err)
+}
+
+func (b *transcriptSubscriptionBroker) detachSubscribers() []*transcriptSubscription {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.detachSubscribersLocked()
+}
+
+func (b *transcriptSubscriptionBroker) detachSubscribersLocked() []*transcriptSubscription {
 	subs := make([]*transcriptSubscription, 0, len(b.subscribers))
 	for id, sub := range b.subscribers {
 		subs = append(subs, sub)
 		delete(b.subscribers, id)
 	}
-	b.mu.Unlock()
+	return subs
+}
+
+func closeTranscriptSubscribers(subs []*transcriptSubscription, err error) {
 	for _, sub := range subs {
 		sub.closeWithError(err)
 	}
 }
 
-func (s *transcriptSubscription) publish(message clientui.TranscriptMessage) error {
+func (s *transcriptSubscription) publish(event clientui.TranscriptEvent) error {
 	if s == nil {
 		return errTranscriptContractViolation("transcript subscription is nil")
 	}
@@ -132,7 +156,7 @@ func (s *transcriptSubscription) publish(message clientui.TranscriptMessage) err
 	if s.done {
 		return io.EOF
 	}
-	message.Sequence = s.nextSeq + 1
+	message := clientui.NewTranscriptMessage(s.nextSeq+1, event)
 	if err := s.contract.Validate(message); err != nil {
 		return err
 	}
@@ -178,10 +202,20 @@ func transcriptPublishError(err error) error {
 	return serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReasonContractViolation, err)
 }
 
+func transcriptProjectionContractError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return transcriptPublishError(errTranscriptContractViolation(err.Error()))
+}
+
 type transcriptSubscriptionContract struct {
-	hydrated      bool
-	activeStream  *runtimeids.AssistantStreamID
-	inFlightTools map[clientui.ToolCallID]struct{}
+	hydrated                 bool
+	activeStream             *runtimeids.AssistantStreamID
+	inFlightTools            map[clientui.ToolCallID]struct{}
+	hydratedEventSequence    int64
+	hasHydratedEventSequence bool
+	liveLocator              *transcript.CommittedRowLocator
 }
 
 func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptMessage) error {
@@ -189,13 +223,14 @@ func (c *transcriptSubscriptionContract) Validate(message clientui.TranscriptMes
 		return errTranscriptContractViolation(err.Error())
 	}
 	if !c.hydrated {
-		if message.Kind != clientui.TranscriptMessageHydration || message.Payload.Hydration == nil {
-			return errTranscriptContractViolation(fmt.Sprintf("first message must be hydration seq=1, got kind=%q seq=%d", message.Kind, message.Sequence))
+		hydration, ok := message.Payload().(clientui.TranscriptHydration)
+		if message.Kind() != clientui.TranscriptMessageHydration || !ok {
+			return errTranscriptContractViolation(fmt.Sprintf("first message must be hydration seq=1, got kind=%q seq=%d", message.Kind(), message.Sequence))
 		}
 		c.hydrated = true
-		return c.validateHydration(*message.Payload.Hydration)
+		return c.validateHydration(hydration)
 	}
-	if message.Kind == clientui.TranscriptMessageHydration {
+	if message.Kind() == clientui.TranscriptMessageHydration {
 		return errTranscriptContractViolation(fmt.Sprintf("hydration repeated at seq=%d", message.Sequence))
 	}
 	return c.validateLiveMessage(message)
@@ -214,30 +249,39 @@ func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.Tr
 		if err := validateCommittedRow(row); err != nil {
 			return err
 		}
+		if !c.hasHydratedEventSequence || row.Locator.EventSequence > c.hydratedEventSequence {
+			c.hydratedEventSequence = row.Locator.EventSequence
+			c.hasHydratedEventSequence = true
+		}
 	}
 	return nil
 }
 
 func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.TranscriptMessage) error {
-	payload := message.Payload
-	switch message.Kind {
+	switch message.Kind() {
 	case clientui.TranscriptMessageAssistantDelta:
-		return c.matchOrStartStream(payload.AssistantDelta.StreamID, message.Sequence, "assistant_delta")
+		payload := message.Payload().(clientui.TranscriptAssistantDelta)
+		return c.matchOrStartStream(payload.StreamID, message.Sequence, "assistant_delta")
 	case clientui.TranscriptMessageAssistantStreamAbort:
-		if err := c.matchActiveStream(payload.AssistantStreamAbort.StreamID, message.Sequence, "assistant_stream_abort"); err != nil {
+		payload := message.Payload().(clientui.TranscriptAssistantStreamAbort)
+		if err := c.matchActiveStream(payload.StreamID, message.Sequence, "assistant_stream_abort"); err != nil {
 			return err
 		}
 		c.activeStream = nil
 		return nil
 	case clientui.TranscriptMessageToolStart:
-		return c.trackToolStart(*payload.ToolStart, fmt.Sprintf("tool_start at seq=%d", message.Sequence))
+		return c.trackToolStart(message.Payload().(clientui.TranscriptToolStart), fmt.Sprintf("tool_start at seq=%d", message.Sequence))
 	case clientui.TranscriptMessageToolAbort:
-		return c.trackToolTerminal(payload.ToolAbort.ToolCallID, fmt.Sprintf("tool_abort at seq=%d", message.Sequence))
+		return c.trackToolTerminal(message.Payload().(clientui.TranscriptToolAbort).ToolCallID, fmt.Sprintf("tool_abort at seq=%d", message.Sequence))
 	case clientui.TranscriptMessageCommittedRow:
-		if err := validateCommittedRow(*payload.CommittedRow); err != nil {
+		row := message.Payload().(clientui.TranscriptCommittedRow)
+		if err := validateCommittedRow(row); err != nil {
 			return err
 		}
-		if row := payload.CommittedRow; row.Assistant != nil {
+		if err := c.validateLiveLocator(row.Locator); err != nil {
+			return err
+		}
+		if row.Assistant != nil {
 			if row.Assistant.StreamID != nil {
 				if err := c.matchActiveStream(*row.Assistant.StreamID, message.Sequence, "committed assistant row"); err != nil {
 					return err
@@ -247,10 +291,37 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 				return errTranscriptContractViolation(fmt.Sprintf("committed assistant row at seq=%d has nil stream_id while stream %s is active", message.Sequence, c.activeStream.String()))
 			}
 		}
-		if row := payload.CommittedRow; row.Tool != nil {
+		if row.Tool != nil {
 			return c.trackToolTerminal(row.Tool.ToolCallID, fmt.Sprintf("committed tool row at seq=%d", message.Sequence))
 		}
 	}
+	return nil
+}
+
+func (c *transcriptSubscriptionContract) validateLiveLocator(locator transcript.CommittedRowLocator) error {
+	if c.liveLocator == nil {
+		if c.hasHydratedEventSequence && locator.EventSequence <= c.hydratedEventSequence {
+			return errTranscriptContractViolation(fmt.Sprintf("first live committed row event sequence %d is not newer than hydrated sequence %d", locator.EventSequence, c.hydratedEventSequence))
+		}
+		if locator.RowOrdinal != 1 {
+			return errTranscriptContractViolation(fmt.Sprintf("first live committed row for event %d has ordinal %d, want 1", locator.EventSequence, locator.RowOrdinal))
+		}
+		copyLocator := locator
+		c.liveLocator = &copyLocator
+		return nil
+	}
+	if locator.EventSequence < c.liveLocator.EventSequence {
+		return errTranscriptContractViolation(fmt.Sprintf("live committed row event sequence regressed from %d to %d", c.liveLocator.EventSequence, locator.EventSequence))
+	}
+	if locator.EventSequence == c.liveLocator.EventSequence {
+		if locator.RowOrdinal != c.liveLocator.RowOrdinal+1 {
+			return errTranscriptContractViolation(fmt.Sprintf("live committed row ordinal for event %d = %d, want %d", locator.EventSequence, locator.RowOrdinal, c.liveLocator.RowOrdinal+1))
+		}
+	} else if locator.RowOrdinal != 1 {
+		return errTranscriptContractViolation(fmt.Sprintf("live committed row for event %d starts at ordinal %d, want 1", locator.EventSequence, locator.RowOrdinal))
+	}
+	copyLocator := locator
+	c.liveLocator = &copyLocator
 	return nil
 }
 

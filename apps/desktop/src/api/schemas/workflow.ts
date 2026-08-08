@@ -20,6 +20,7 @@ import { emptyWorkflowDerivedWiring } from "../models";
 import {
   emptyString,
   validationErrorSchema,
+  workflowIDSchema,
   workflowOutputFieldSchema,
   workflowParameterSchema,
 } from "./common";
@@ -46,7 +47,7 @@ const workflowExecutionTargetPolicySchema: z.ZodType<WorkflowExecutionTargetPoli
 
 const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
   .object({
-    id: z.string(),
+    id: workflowIDSchema,
     name: z.string(),
     description: emptyString,
     version: z.number(),
@@ -63,11 +64,11 @@ const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
 export const workflowListSchema: z.ZodType<WorkflowPage> = z
   .object({
     workflows: z.array(workflowRecordSchema).nullish().transform(emptyArray),
-    next_page_token: emptyString,
+    next_offset: z.number().int().positive().nullable().optional(),
   })
   .transform((value) => ({
     workflows: value.workflows,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset ?? null,
   }));
 
 export const workflowCreateSchema: z.ZodType<WorkflowRecord> = z
@@ -80,7 +81,7 @@ const projectWorkflowLinkSchema: z.ZodType<ProjectWorkflowLink> = z
   .object({
     id: z.string(),
     project_id: z.string(),
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     default: z.boolean(),
   })
   .transform((value) => ({
@@ -113,7 +114,7 @@ const workflowNodeGroupsSchema = z
     z
       .object({
         group_id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         group_key: z.string(),
         display_name: z.string(),
         sort_order: z.number(),
@@ -136,17 +137,15 @@ const workflowNodesSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         key: z.string(),
         kind: z.string(),
         display_name: z.string(),
         group_id: emptyString,
         group_key: emptyString,
         subagent_role: emptyString,
-        prompt_template: emptyString,
         completion_mode: emptyString,
         script_path: z.string().nullable().optional(),
-        input_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
         join_input_providers: z
           .array(
             z
@@ -161,7 +160,6 @@ const workflowNodesSchema = z
           )
           .nullish()
           .transform(emptyArray),
-        output_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
       })
       .transform((value) => ({
         id: value.id,
@@ -172,12 +170,9 @@ const workflowNodesSchema = z
         groupID: value.group_id,
         groupKey: value.group_key,
         subagentRole: value.subagent_role,
-        promptTemplate: value.prompt_template,
         completionMode: value.completion_mode,
         scriptPath: value.script_path ?? null,
-        inputFields: value.input_fields,
         joinInputProviders: value.join_input_providers,
-        outputFields: value.output_fields,
       })),
   )
   .nullish()
@@ -188,7 +183,7 @@ const workflowTransitionGroupsSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         source_node_id: z.string(),
         transition_id: z.string(),
         display_name: z.string(),
@@ -236,6 +231,22 @@ const workflowOutputRequirementsSchema = z
   .nullish()
   .transform(emptyArray);
 
+const selectorApplicabilitySchema = z.object({
+  available: z.boolean(),
+  parameter_visible: z.boolean(),
+  reason: z.enum([
+    "eligible",
+    "topology",
+    "context_source",
+    "no_callable_roles",
+    "no_thinking_support",
+    "unavailable_configuration",
+    "sole_callable_role",
+    "no_thinking_levels",
+    "sole_thinking_level",
+  ]),
+});
+
 const workflowDerivedWiringSchema: z.ZodType<WorkflowDerivedWiring> = z
   .object({
     nodes: z
@@ -276,12 +287,24 @@ const workflowDerivedWiringSchema: z.ZodType<WorkflowDerivedWiring> = z
             input_bindings: workflowInputBindingsSchema,
             required_provision_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
             required_provider_fields: z.array(workflowOutputFieldSchema).nullish().transform(emptyArray),
+            assignee_selection_applicability: selectorApplicabilitySchema,
+            thinking_selection_applicability: selectorApplicabilitySchema,
           })
           .transform((value) => ({
             edgeID: value.edge_id,
             inputBindings: value.input_bindings,
             requiredProvisionFields: value.required_provision_fields,
             requiredProviderFields: value.required_provider_fields,
+            assigneeSelectionApplicability: {
+              available: value.assignee_selection_applicability.available,
+              parameterVisible: value.assignee_selection_applicability.parameter_visible,
+              reason: value.assignee_selection_applicability.reason,
+            },
+            thinkingSelectionApplicability: {
+              available: value.thinking_selection_applicability.available,
+              parameterVisible: value.thinking_selection_applicability.parameter_visible,
+              reason: value.thinking_selection_applicability.reason,
+            },
           })),
       )
       .nullish()
@@ -314,10 +337,12 @@ const workflowEdgesSchema = z
     z
       .object({
         id: z.string(),
-        workflow_id: z.string(),
+        workflow_id: workflowIDSchema,
         transition_group_id: z.string(),
         key: z.string(),
         target_node_id: z.string(),
+        assignee_selection: z.enum(["configured", "previous_node"]),
+        thinking_selection: z.enum(["configured", "previous_node"]),
         requires_approval: z.boolean(),
         context_mode: z.string(),
         context_source: workflowContextSourceSchema,
@@ -332,6 +357,8 @@ const workflowEdgesSchema = z
         transitionGroupID: value.transition_group_id,
         key: value.key,
         targetNodeID: value.target_node_id,
+        assigneeSelection: value.assignee_selection,
+        thinkingSelection: value.thinking_selection,
         requiresApproval: value.requires_approval,
         contextMode: value.context_mode,
         contextSource: value.context_source,
@@ -409,10 +436,8 @@ const workflowGraphSaveImpactSchema: z.ZodType<WorkflowGraphSaveImpact> = z
     removed_edge_count: z.number(),
     node_task_reference_count: z.number(),
     edge_task_reference_count: z.number(),
-    active_node_placement_count: z.number(),
+    active_current_node_count: z.number(),
     pending_approval_count: z.number(),
-    active_run_count: z.number(),
-    runnable_run_count: z.number(),
     start_node_change_count: z.number(),
     last_terminal_change_count: z.number(),
     task_referenced_node_kind_change_count: z.number(),
@@ -423,10 +448,8 @@ const workflowGraphSaveImpactSchema: z.ZodType<WorkflowGraphSaveImpact> = z
     removedEdgeCount: value.removed_edge_count,
     nodeTaskReferenceCount: value.node_task_reference_count,
     edgeTaskReferenceCount: value.edge_task_reference_count,
-    activeNodePlacementCount: value.active_node_placement_count,
+    activeCurrentNodeCount: value.active_current_node_count,
     pendingApprovalCount: value.pending_approval_count,
-    activeRunCount: value.active_run_count,
-    runnableRunCount: value.runnable_run_count,
     startNodeChangeCount: value.start_node_change_count,
     lastTerminalChangeCount: value.last_terminal_change_count,
     taskReferencedNodeKindChangeCount: value.task_referenced_node_kind_change_count,
@@ -485,14 +508,14 @@ export const workflowGraphSaveSchema: z.ZodType<WorkflowGraphSaveResult> = z
 
 const workflowDeleteImpactSchema: z.ZodType<WorkflowDeleteImpact> = z
   .object({
-    workflow_id: z.string(),
+    workflow_id: workflowIDSchema,
     version: z.number(),
     project_count: z.number(),
     link_count: z.number(),
     default_replacement_project_count: z.number(),
     task_count: z.number(),
-    active_run_count: z.number(),
-    runnable_run_count: z.number(),
+    current_node_count: z.number(),
+    pending_approval_count: z.number(),
     blocked_task_count: z.number(),
   })
   .transform((value) => ({
@@ -502,8 +525,8 @@ const workflowDeleteImpactSchema: z.ZodType<WorkflowDeleteImpact> = z
     linkCount: value.link_count,
     defaultReplacementProjectCount: value.default_replacement_project_count,
     taskCount: value.task_count,
-    activeRunCount: value.active_run_count,
-    runnableRunCount: value.runnable_run_count,
+    currentNodeCount: value.current_node_count,
+    pendingApprovalCount: value.pending_approval_count,
     blockedTaskCount: value.blocked_task_count,
   }));
 

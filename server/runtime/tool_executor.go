@@ -11,9 +11,8 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/textutil"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type defaultToolExecutor struct {
@@ -29,7 +28,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
 	workingDir := e.transcriptWorkingDir()
-	workflowActive := e.workflowRunActive()
+	workflowActive := e.currentNodeExecutionActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
 	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
@@ -70,7 +69,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				defer serialGate.done(serialOrdinal)
 			}
 			if !knownTool {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -94,7 +93,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 			}
 			if !ok {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -106,10 +105,11 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			)
 			if err != nil {
 				callErr = err
-				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}
+				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
 			}
 			res.CallID = tc.ID
 			res.Name = toolID
+			res = tools.MaterializeModelWarnings(res)
 			results[idx] = res
 			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
 				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)
@@ -154,10 +154,11 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			executableCall.Name = string(toolID)
 		}
 		if call.Custom && knownTool {
-			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
+			customInput, _ := textutil.OptionalExact(call.CustomInput)
+			executableCall.Input = executorInputForCustomTool(toolID, customInput)
 		}
 		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
-		if !knownTool || toolID != toolspec.ToolAskQuestion || !workflowActive || !askQuestionMaterializable(engine) {
+		if !knownTool || toolID != toolspec.ToolAskQuestion || !askQuestionMaterializable(engine) {
 			continue
 		}
 		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
@@ -169,7 +170,6 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 	if len(askCandidateIndexes) == 0 {
 		return prepared, nil
 	}
-	batchID := uuid.NewString()
 	for ordinal, index := range askCandidateIndexes {
 		promptIDs := append([]string(nil), askCandidatePromptIDs...)
 		call := prepared[index].call
@@ -177,7 +177,6 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               runID,
 			StepID:              stepID,
-			BatchID:             batchID,
 			PromptID:            call.ID,
 			BatchPromptIDs:      promptIDs,
 			CandidateOrdinal:    ordinal,
@@ -242,30 +241,24 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) tools.Result {
 	e := t.engine
 	result := tools.Result{CallID: call.ID, Name: toolspec.ToolCompleteNode}
-	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
 		result.IsError = true
-		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during a workflow run"})
-		result.Summary = "not in workflow run"
+		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during current-node execution"})
+		result.Summary = textutil.Value("not in current-node execution")
 		return result
 	}
-	parsed, err := workflowruntime.DecodeCompletion(call.Input, e.cfg.WorkflowRun.Contract)
+	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
-	completed, err := e.cfg.WorkflowRun.Controller.CompleteWorkflowRun(ctx, workflowruntime.CompletionRequest{
-		RunID:              e.cfg.WorkflowRun.Contract.RunID,
-		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
-		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
-		TransitionID:       parsed.TransitionID,
-		OutputValues:       parsed.OutputValues,
-		Commentary:         parsed.Commentary,
-	})
+	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
 	e.recordWorkflowTerminalState(WorkflowCompletionSourceTool)
 	result.Output = workflowruntime.ToolSuccessPayload(completed)
-	result.Summary = "workflow node completed"
+	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true
 	return result
 }

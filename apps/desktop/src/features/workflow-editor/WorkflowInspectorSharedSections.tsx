@@ -2,7 +2,7 @@ import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowDefinition, WorkflowEdge, WorkflowNode } from "@/api";
-import { Checkbox, HelpHint, IslandSurface, MarkdownText } from "@/ui";
+import { Checkbox, HelpHint, IslandSurface, StaticMarkdown } from "@/ui";
 import { cx } from "@/ui";
 import { DetailRow, DetailSection } from "./WorkflowInspectorPrimitives";
 import { derivedNodeWiring, providerEdgeLabel } from "./workflowInspectorWiring";
@@ -137,7 +137,7 @@ export function PromptPreview({ help, prompt }: Readonly<{ help?: string | undef
         {help === undefined ? null : <HelpHint className="shrink-0" label={help} side="right" />}
       </span>
       <IslandSurface as="div" className="rounded-[var(--radius-m)] p-[var(--space-2)] text-sm" level={1}>
-        <MarkdownText value={prompt} />
+        <StaticMarkdown value={prompt} />
       </IslandSurface>
     </div>
   );

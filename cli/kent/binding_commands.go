@@ -32,6 +32,12 @@ func projectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return projectListSubcommand(args[1:], stdout, stderr)
 		case "create":
 			return projectCreateSubcommand(args[1:], stdout, stderr)
+		case "default":
+			return projectDefaultSubcommand(args[1:], stdout, stderr)
+		case "detach":
+			return detachSubcommand(args[1:], stdout, stderr)
+		case "delete":
+			return projectDeleteSubcommand(args[1:], stdout, stderr)
 		}
 	}
 	fs := newCommandFlagSet(config.Command+" project", stderr, projectUsage)

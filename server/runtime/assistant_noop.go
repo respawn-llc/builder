@@ -6,5 +6,8 @@ import (
 )
 
 func isNoopFinalAnswer(msg llm.Message) bool {
-	return msg.Phase == llm.MessagePhaseFinal && transcript.IsNoopFinalText(msg.Content)
+	return msg.Phase != nil &&
+		*msg.Phase == llm.MessagePhaseFinal &&
+		msg.Content != nil &&
+		transcript.IsNoopFinalText(*msg.Content)
 }

@@ -1,52 +1,35 @@
 package commands
 
-import "strings"
+import "core/shared/runtimeinput"
 
-const promptArgumentsPlaceholder = "$ARGUMENTS"
-
-type promptCommandSpec struct {
-	Name         string
-	Description  string
-	Prompt       string
-	FreshSession bool
-}
-
-func registerPromptCommands(r *Registry, specs []promptCommandSpec) {
+func registerBuiltinPromptCommands(r *Registry) {
 	if r == nil {
 		return
 	}
-	for _, spec := range specs {
-		commandName := spec.Name
-		commandDescription := spec.Description
-		commandPrompt := spec.Prompt
-		freshSession := spec.FreshSession
-		activeRunPolicy := ActiveRunPolicyRequiresIdle
-		if freshSession {
-			activeRunPolicy = ActiveRunPolicyAllowed
-		}
-		r.RegisterWithOptions(commandName, commandDescription, RegisterOptions{ActiveRunPolicy: activeRunPolicy, PreservePromptHistoryDraft: true}, func(args string) Result {
+	for _, command := range runtimeinput.BuiltinPromptCommands() {
+		command := command
+		r.RegisterWithOptions(command.Alias(), builtinPromptDescription(command), RegisterOptions{
+			ActiveRunPolicy:            ActiveRunPolicyAllowed,
+			PreservePromptHistoryDraft: true,
+		}, func(args string) Result {
+			prompt := runtimeinput.NewBuiltinPromptCommand(command, args)
 			return Result{
 				Handled:           true,
 				Action:            ActionNone,
-				SubmitUser:        true,
-				User:              buildPromptSubmission(commandPrompt, args),
-				FreshConversation: freshSession,
+				PromptCommand:     &prompt,
+				FreshConversation: true,
 			}
 		})
 	}
 }
 
-func buildPromptSubmission(prompt, args string) string {
-	trimmedArgs := strings.TrimSpace(args)
-	if strings.Contains(prompt, promptArgumentsPlaceholder) {
-		return strings.ReplaceAll(prompt, promptArgumentsPlaceholder, trimmedArgs)
+func builtinPromptDescription(command runtimeinput.BuiltinPromptCommand) string {
+	switch command {
+	case runtimeinput.BuiltinPromptCommandReview:
+		return "Run code review"
+	case runtimeinput.BuiltinPromptCommandInit:
+		return "Run repository initialization prompt"
+	default:
+		panic("invalid built-in prompt command")
 	}
-	if trimmedArgs == "" {
-		return prompt
-	}
-	base := strings.TrimRight(prompt, "\n")
-	if base == "" {
-		return trimmedArgs
-	}
-	return base + "\n\n" + trimmedArgs
 }

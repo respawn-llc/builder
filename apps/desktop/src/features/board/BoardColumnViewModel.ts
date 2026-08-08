@@ -1,4 +1,12 @@
-import type { BoardCard, BoardColumn, BoardGroup, MarkdownPreview, TaskStatusKind } from "@/api";
+import type {
+  BoardCard,
+  BoardColumn,
+  BoardGroup,
+  MarkdownPreview,
+  ProjectLabelCatalog,
+  TaskStatusKind,
+} from "@/api";
+import { orderedAssignedLabels } from "@/shared/labels";
 
 export type KanbanGroupVM = Readonly<{
   id: string;
@@ -21,15 +29,21 @@ export type KanbanCardVM = Readonly<{
   updatedAt: number;
   activeNodeIDs: readonly string[];
   statusKind: TaskStatusKind;
-  statusRunIDs: readonly string[];
+  dependencyProgress: BoardCard["dependencyProgress"];
+  labels: readonly KanbanCardLabelVM[];
   workspaceChipLabel: string | null;
   borderTone: BoardCardBorderTone;
   actions: Readonly<{
     canInterrupt: boolean;
     canResume: boolean;
     canStart: boolean;
-    manualMoveTargetNodeIDs: readonly string[];
+    canDelete: boolean;
   }>;
+}>;
+
+export type KanbanCardLabelVM = Readonly<{
+  id: string;
+  name: string;
 }>;
 
 export type BoardWorkspaceContext = Readonly<{
@@ -56,7 +70,11 @@ export function toKanbanColumnVM(column: BoardColumn): KanbanColumnVM {
   };
 }
 
-export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspaceContext): KanbanCardVM {
+export function toKanbanCardVM(
+  card: BoardCard,
+  workspaceContext: BoardWorkspaceContext,
+  labelCatalog: ProjectLabelCatalog | null,
+): KanbanCardVM {
   return {
     id: card.id,
     shortID: card.shortID,
@@ -65,14 +83,15 @@ export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspace
     updatedAt: card.updatedAt,
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
-    statusRunIDs: card.status.runIDs,
+    dependencyProgress: card.dependencyProgress,
+    labels: orderedAssignedLabels(labelCatalog, card.labelIDs),
     workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
     borderTone: boardCardBorderTone(card.status.kind),
     actions: {
       canInterrupt: card.actions.canInterrupt,
       canResume: card.actions.canResume,
       canStart: card.actions.canStart,
-      manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
+      canDelete: card.actions.canDelete,
     },
   };
 }
@@ -97,7 +116,6 @@ function boardCardBorderTone(statusKind: TaskStatusKind): BoardCardBorderTone {
     case "backlog":
     case "active":
     case "done":
-    case "canceled":
     case "interrupted":
     case "running":
     case "queued":

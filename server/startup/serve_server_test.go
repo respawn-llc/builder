@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +16,9 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/metadata"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowstore"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
@@ -69,35 +71,8 @@ var noopOnboarding = OnboardingHandler(func(_ context.Context, req OnboardingReq
 	return reloaded, nil
 })
 
-var serveTestPortReservations = struct {
-	sync.Mutex
-	listeners map[string]net.Listener
-}{listeners: map[string]net.Listener{}}
-
-func reserveServeTestPort(t *testing.T, listener net.Listener) {
-	t.Helper()
-	addr := listener.Addr().String()
-	serveTestPortReservations.Lock()
-	if existing := serveTestPortReservations.listeners[addr]; existing != nil {
-		_ = existing.Close()
-	}
-	serveTestPortReservations.listeners[addr] = listener
-	serveTestPortReservations.Unlock()
-	t.Cleanup(func() { releaseServeTestPort(addr) })
-}
-
-func releaseServeTestPort(addr string) {
-	serveTestPortReservations.Lock()
-	listener := serveTestPortReservations.listeners[addr]
-	delete(serveTestPortReservations.listeners, addr)
-	serveTestPortReservations.Unlock()
-	if listener != nil {
-		_ = listener.Close()
-	}
-}
-
 func releaseServeTestPortForConfig(cfg config.App) {
-	releaseServeTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
+	testsetup.ReleaseLoopbackPort(cfg.Settings.ServerHost, cfg.Settings.ServerPort)
 }
 
 func registerServeWorkspace(t *testing.T, workspace string) {
@@ -164,14 +139,9 @@ func waitForServeResponse(t *testing.T, httpClient *http.Client, url string) *ht
 
 func configureServeTestServerPort(t *testing.T) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve server port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	reserveServeTestPort(t, listener)
+	reservation := testsetup.ReserveLoopbackPort(t)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
-	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
+	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
 }
 
 func TestStartServeServerMatchesEmbeddedStartup(t *testing.T) {
@@ -235,7 +205,8 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.PromptControl ||
 		!capabilities.ProcessOutput ||
 		!capabilities.AttentionNotifications ||
-		!capabilities.OnboardingFinalize {
+		!capabilities.OnboardingFinalize ||
+		!capabilities.PromptCommands {
 		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
 	}
 }
@@ -256,8 +227,26 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 	}
 	if capabilities.AuthBootstrap ||
 		capabilities.RuntimeLiveControl ||
-		capabilities.AttentionNotifications {
+		capabilities.AttentionNotifications ||
+		capabilities.PromptCommands {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+	promptOnly := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog},
+		{Dependency: rpccontract.DependencyRuntimeControl},
+		{Method: protocol.MethodRuntimeSubmitUserTurn},
+	})
+	if !promptOnly.PromptCommands {
+		t.Fatalf("catalog/runtime/typed-submit routes should enable PromptCommands: %+v", promptOnly)
+	}
+	for _, routes := range [][]rpccontract.Route{
+		{{Dependency: rpccontract.DependencyRuntimeControl}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
+		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
+		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Dependency: rpccontract.DependencyRuntimeControl}},
+	} {
+		if got := serverCapabilityFlags(routes).PromptCommands; got {
+			t.Fatalf("incomplete prompt-command routes enabled capability: %+v", routes)
+		}
 	}
 }
 
@@ -268,6 +257,134 @@ func TestServeWaitsForContextCancellation(t *testing.T) {
 	if err := server.Serve(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Serve error = %v, want context canceled", err)
 	}
+}
+
+func TestStartWithOptionsRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
+	workspace := newServeWorkspace(t)
+	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
+	embedded, err := StartWithOptions(context.Background(), request, envAuthHandler{}, noopOnboarding, Options{})
+	if err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	taskID, currentNode := createAdmittedCurrentNodeForRecovery(t, embedded)
+	if err := embedded.Close(); err != nil {
+		t.Fatalf("close initial server: %v", err)
+	}
+
+	restarted, err := StartWithOptions(context.Background(), request, envAuthHandler{}, noopOnboarding, Options{})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	detail, err := restarted.WorkflowClient().GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{TaskID: string(taskID)})
+	if err != nil {
+		t.Fatalf("GetWorkflowTask after restart: %v", err)
+	}
+	if !detail.Task.Actions.CanResume || detail.Task.Actions.CanInterrupt {
+		t.Fatalf("task actions after restart reconciliation = %+v, want resumable and not interruptible", detail.Task.Actions)
+	}
+	store, err := workflowstore.New(restarted.MetadataStore(), workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
+	if err != nil {
+		t.Fatalf("workflowstore.New after restart: %v", err)
+	}
+	currentNodes, err := store.ListCurrentNodes(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after restart: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		!currentNodes[0].Reference.Equal(currentNode) ||
+		currentNodes[0].Scheduling == nil ||
+		currentNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted ||
+		currentNodes[0].Scheduling.Interruption == nil ||
+		currentNodes[0].Scheduling.Interruption.Reason != workflowexecution.ReasonCurrentNodeStartupRecovery ||
+		currentNodes[0].Scheduling.Interruption.Detail.Code != string(workflowexecution.ReasonCurrentNodeStartupRecovery) ||
+		currentNodes[0].Scheduling.Interruption.Detail.Fields == nil ||
+		len(currentNodes[0].Scheduling.Interruption.Detail.Fields) != 0 {
+		t.Fatalf("current nodes after startup recovery = %+v, want interrupted admitted current node %v", currentNodes, currentNode)
+	}
+}
+
+func createAdmittedCurrentNodeForRecovery(t *testing.T, server *EmbeddedServer) (workflow.TaskID, workflow.CurrentNodeReference) {
+	t.Helper()
+	ctx := context.Background()
+	client := server.WorkflowClient()
+	created, err := client.CreateAndLinkWorkflowToProject(ctx, serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Restart recovery",
+		ProjectID:     server.ProjectID(),
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultAlways,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+	definition, err := client.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var startID, terminalID string
+	for _, node := range definition.Definition.Nodes {
+		switch node.Kind {
+		case "start":
+			startID = node.ID
+		case "terminal":
+			terminalID = node.ID
+		}
+	}
+	if startID == "" || terminalID == "" {
+		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
+	}
+	agentID := "node-agent-" + created.Workflow.ID.String()
+	if _, err := client.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
+		WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNode: %v", err)
+	}
+	startGroupID := "group-start-" + created.Workflow.ID.String()
+	doneGroupID := "group-done-" + created.Workflow.ID.String()
+	if _, err := client.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
+		WorkflowID: created.Workflow.ID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start",
+	}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
+	}
+	if _, err := client.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
+		WorkflowID: created.Workflow.ID, GroupID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done",
+	}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
+	}
+	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
+		WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work.",
+	}); err != nil {
+		t.Fatalf("AddWorkflowEdge: %v", err)
+	}
+	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
+		WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
+	}); err != nil {
+		t.Fatalf("AddWorkflowEdge: %v", err)
+	}
+	workflowID := created.Workflow.ID
+	task, err := client.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  server.ProjectID(),
+		WorkflowID: &workflowID,
+		Title:      "Recover admitted current node",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	store, err := workflowstore.New(server.MetadataStore(), workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	started, err := store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("StartTask created current nodes = %+v, want one", started.Mutation.Created)
+	}
+	currentNode := started.Mutation.Created[0].Reference
+	if err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+	return workflow.TaskID(task.Task.ID), currentNode
 }
 
 func TestServeRequiresContext(t *testing.T) {

@@ -2,28 +2,26 @@ package workflowstore
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type WorkflowDeleteImpact struct {
-	WorkflowID                     workflow.WorkflowID
+	WorkflowID                     runtimeids.WorkflowID
 	Version                        int64
 	ProjectCount                   int64
 	LinkCount                      int64
 	DefaultReplacementProjectCount int64
 	TaskCount                      int64
-	ActiveRunCount                 int64
-	RunnableRunCount               int64
+	CurrentNodeCount               int64
+	PendingApprovalCount           int64
 	BlockedTaskCount               int64
 }
 
 type WorkflowDeleteRequest struct {
-	WorkflowID           workflow.WorkflowID
+	WorkflowID           runtimeids.WorkflowID
 	Confirmed            bool
 	ExpectedVersion      int64
 	ExpectedProjectCount int64
@@ -33,11 +31,10 @@ type WorkflowDeleteRequest struct {
 }
 
 type WorkflowDeleteResult struct {
-	Deleted                               bool
-	Impact                                WorkflowDeleteImpact
-	Blockers                              []WorkflowDeleteBlocker
-	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
-	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
+	Deleted  bool
+	Impact   WorkflowDeleteImpact
+	Blockers []WorkflowDeleteBlocker
+	TaskAttentionResolution
 }
 
 type WorkflowDeleteBlocker struct {
@@ -46,11 +43,11 @@ type WorkflowDeleteBlocker struct {
 	Count   int64
 }
 
-func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID workflow.WorkflowID) (WorkflowDeleteImpact, error) {
-	if strings.TrimSpace(string(workflowID)) == "" {
-		return WorkflowDeleteImpact{}, errors.New("workflow id is required")
+func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
+	if workflowID.IsZero() {
+		return WorkflowDeleteImpact{}, ErrWorkflowIDRequired
 	}
-	row, err := s.queries.GetWorkflowDeleteImpact(ctx, string(workflowID))
+	row, err := s.queries.GetWorkflowDeleteImpact(ctx, workflowID)
 	if err != nil {
 		return WorkflowDeleteImpact{}, err
 	}
@@ -58,8 +55,8 @@ func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID workflow.W
 }
 
 func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (WorkflowDeleteResult, error) {
-	if strings.TrimSpace(string(req.WorkflowID)) == "" {
-		return WorkflowDeleteResult{}, errors.New("workflow id is required")
+	if req.WorkflowID.IsZero() {
+		return WorkflowDeleteResult{}, ErrWorkflowIDRequired
 	}
 	impact, err := s.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
@@ -75,7 +72,10 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	current, err := q.GetWorkflowDeleteImpact(ctx, string(req.WorkflowID))
+	if _, err := q.AcquireWorkflowDependencyWriteLock(ctx, req.WorkflowID); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("lock workflow dependency projects: %w", err)
+	}
+	current, err := q.GetWorkflowDeleteImpact(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, err
 	}
@@ -85,29 +85,38 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 
 	now := s.now().UnixMilli()
-	resolution, err := workflowAttentionResolution(ctx, q, string(req.WorkflowID))
+	resolution, err := workflowAttentionResolution(ctx, q, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskTransitionsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task transitions: %w", err)
+	if _, err := q.TouchWorkflowDependencySurvivors(ctx, sqlitegen.TouchWorkflowDependencySurvivorsParams{
+		WorkflowID:      req.WorkflowID,
+		UpdatedAtUnixMs: now,
+	}); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("touch workflow dependency survivors: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskNodePlacementsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task placements: %w", err)
+	if _, err := q.DeleteWorkflowTaskDependenciesByWorkflowID(ctx, req.WorkflowID); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task dependencies: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTaskCommentsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, req.WorkflowID); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task pending approvals: %w", err)
+	}
+	if _, err := q.DeleteWorkflowTaskCurrentNodesByWorkflowID(ctx, req.WorkflowID); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task current nodes: %w", err)
+	}
+	if _, err := q.DeleteWorkflowTaskCommentsByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task comments: %w", err)
 	}
-	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow tasks: %w", err)
 	}
-	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: string(req.WorkflowID)}); err != nil {
+	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: req.WorkflowID}); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("clear workflow default links: %w", err)
 	}
-	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, req.WorkflowID); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow project links: %w", err)
 	}
-	deletedCount, err := q.DeleteWorkflowByID(ctx, string(req.WorkflowID))
+	deletedCount, err := q.DeleteWorkflowByID(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow: %w", err)
 	}
@@ -118,23 +127,22 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 		return WorkflowDeleteResult{}, err
 	}
 	return WorkflowDeleteResult{
-		Deleted:                               true,
-		Impact:                                impact,
-		ResolvedApprovalTransitionProjections: resolution.ResolvedApprovalTransitionProjections,
-		ResolvedInterruptedRunProjections:     resolution.ResolvedInterruptedRunProjections,
+		Deleted:                 true,
+		Impact:                  impact,
+		TaskAttentionResolution: resolution,
 	}, nil
 }
 
 func workflowDeleteImpactFromRow(row sqlitegen.GetWorkflowDeleteImpactRow) WorkflowDeleteImpact {
 	return WorkflowDeleteImpact{
-		WorkflowID:                     workflow.WorkflowID(row.WorkflowID),
+		WorkflowID:                     row.WorkflowID,
 		Version:                        row.Version,
 		ProjectCount:                   row.ProjectCount,
 		LinkCount:                      row.LinkCount,
 		DefaultReplacementProjectCount: row.DefaultReplacementProjectCount,
 		TaskCount:                      row.TaskCount,
-		ActiveRunCount:                 row.ActiveRunCount,
-		RunnableRunCount:               row.RunnableRunCount,
+		CurrentNodeCount:               row.CurrentNodeCount,
+		PendingApprovalCount:           row.PendingApprovalCount,
 		BlockedTaskCount:               row.BlockedTaskCount,
 	}
 }
@@ -147,11 +155,11 @@ func workflowDeleteBlockers(req WorkflowDeleteRequest, impact WorkflowDeleteImpa
 	if impact.DefaultReplacementProjectCount > 0 {
 		blockers = append(blockers, WorkflowDeleteBlocker{Code: "default_replacement_required", Message: "Workflow is the default for projects that still have other workflow links. Set replacement defaults before deleting this workflow.", Count: impact.DefaultReplacementProjectCount})
 	}
-	if impact.ActiveRunCount > 0 {
-		blockers = append(blockers, WorkflowDeleteBlocker{Code: "active_runs", Message: "Workflow has active runs. Interrupt or finish affected tasks before deleting the workflow.", Count: impact.ActiveRunCount})
+	if impact.CurrentNodeCount > 0 {
+		blockers = append(blockers, WorkflowDeleteBlocker{Code: "current_nodes", Message: "Workflow has non-terminal current nodes. Interrupt or finish affected tasks before deleting the workflow.", Count: impact.CurrentNodeCount})
 	}
-	if impact.RunnableRunCount > 0 {
-		blockers = append(blockers, WorkflowDeleteBlocker{Code: "runnable_runs", Message: "Workflow has runnable runs. Cancel or finish affected tasks before deleting the workflow.", Count: impact.RunnableRunCount})
+	if impact.PendingApprovalCount > 0 {
+		blockers = append(blockers, WorkflowDeleteBlocker{Code: "pending_approvals", Message: "Workflow has pending approvals. Resolve affected tasks before deleting the workflow.", Count: impact.PendingApprovalCount})
 	}
 	if !req.Confirmed {
 		blockers = append(blockers, WorkflowDeleteBlocker{Code: "confirmation_required", Message: "Workflow deletion will delete the workflow and any affected task database rows. Confirm with the current impact counts before deleting.", Count: workflowDeleteConfirmationCount(impact)})

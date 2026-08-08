@@ -26,10 +26,6 @@ func cloneMeta(in Meta) Meta {
 		goal := *in.Goal
 		out.Goal = &goal
 	}
-	if in.WorkflowSession != nil {
-		workflow := *in.WorkflowSession
-		out.WorkflowSession = &workflow
-	}
 	out.Locked = cloneLockedContract(in.Locked)
 	return out
 }

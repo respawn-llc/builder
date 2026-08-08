@@ -1,8 +1,12 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 	"time"
+
+	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type WorkflowCompletionSource string
@@ -16,42 +20,34 @@ const (
 
 type WorkflowTerminalState struct {
 	Completed   bool
-	RunID       string
 	Generation  int64
 	Source      WorkflowCompletionSource
 	CompletedAt time.Time
 }
 
 type WorkflowSessionState struct {
-	RunID      string
-	TaskID     string
-	WorkflowID string
+	TaskID     workflow.TaskID
+	WorkflowID runtimeids.WorkflowID
 }
 
-func (e *Engine) WorkflowSessionState() WorkflowSessionState {
+func (e *Engine) WorkflowSessionState() (*WorkflowSessionState, error) {
 	if e == nil {
-		return WorkflowSessionState{}
+		return nil, nil
 	}
-	if e.workflowRunActive() {
-		return WorkflowSessionState{
-			RunID:      strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
-			TaskID:     strings.TrimSpace(e.cfg.WorkflowRun.Instructions.TaskID),
-			WorkflowID: strings.TrimSpace(e.cfg.WorkflowRun.Instructions.WorkflowID),
+	if execution, active := e.currentNodeExecutionConfig(); active {
+		instructions := execution.Instructions
+		if strings.TrimSpace(string(instructions.CurrentNode.TaskID)) == "" {
+			return nil, fmt.Errorf("active Workflow execution has no Task ID")
 		}
+		if instructions.WorkflowID.IsZero() {
+			return nil, fmt.Errorf("active Workflow execution has no Workflow ID")
+		}
+		return &WorkflowSessionState{
+			TaskID:     instructions.CurrentNode.TaskID,
+			WorkflowID: instructions.WorkflowID,
+		}, nil
 	}
-	if e.store == nil {
-		return WorkflowSessionState{}
-	}
-	meta := e.store.Meta()
-	workflowSession := meta.WorkflowSession
-	if workflowSession == nil {
-		return WorkflowSessionState{}
-	}
-	return WorkflowSessionState{
-		RunID:      strings.TrimSpace(workflowSession.RunID),
-		TaskID:     strings.TrimSpace(workflowSession.TaskID),
-		WorkflowID: strings.TrimSpace(workflowSession.WorkflowID),
-	}
+	return nil, nil
 }
 
 func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
@@ -77,7 +73,7 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 }
 
 func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {
-	if e == nil || !e.workflowRunActive() {
+	if e == nil || !e.currentNodeExecutionActive() {
 		return
 	}
 	transitioned := e.recordWorkflowTerminalState(source)
@@ -94,8 +90,6 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) bo
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
-		RunID:       strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
-		Generation:  e.cfg.WorkflowRun.Contract.ExpectedGeneration,
 		Source:      source,
 		CompletedAt: time.Now(),
 	}

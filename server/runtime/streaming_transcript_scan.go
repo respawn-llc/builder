@@ -1,15 +1,16 @@
 package runtime
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -28,10 +29,11 @@ import (
 // streamed in, so the assistant message is buffered until the turn closes (the
 // next non-tool event or end of stream) before its entries are emitted.
 type streamingTranscriptScan struct {
-	scan             *inMemoryTranscriptScan
-	completions      map[string]tools.Result
-	materialized     map[string]struct{}
-	cacheWarningMode config.CacheWarningMode
+	scan                 *inMemoryTranscriptScan
+	completions          map[string]tools.Result
+	completionProvenance map[string]*TranscriptCommittedRowProvenance
+	materialized         map[string]struct{}
+	cacheWarningMode     config.CacheWarningMode
 
 	turn turnBuffer
 
@@ -39,43 +41,56 @@ type streamingTranscriptScan struct {
 }
 
 type turnBuffer struct {
-	assistant         *llm.Message
-	assistantStepID   string
-	callIDs           []string
-	materialized      []llm.Message
-	materializedSteps []string
-	localEntries      []storedLocalEntry
-	localEntrySteps   []string
+	assistant              *llm.Message
+	assistantProvenance    *TranscriptCommittedRowProvenance
+	assistantStepID        string
+	callIDs                []string
+	materialized           []llm.Message
+	materializedProvenance []*TranscriptCommittedRowProvenance
+	materializedSteps      []string
+	localEntries           []storedLocalEntry
+	localEntryProvenance   []*TranscriptCommittedRowProvenance
+	localEntrySteps        []string
 }
 
 func newStreamingTranscriptScan(req inMemoryTranscriptScanRequest, cacheWarningMode config.CacheWarningMode) *streamingTranscriptScan {
 	completions := make(map[string]tools.Result)
 	materialized := make(map[string]struct{})
 	return &streamingTranscriptScan{
-		scan:             newInMemoryTranscriptScan(req, completions, materialized),
-		completions:      completions,
-		materialized:     materialized,
-		cacheWarningMode: cacheWarningMode,
+		scan:                 newInMemoryTranscriptScan(req, completions, materialized),
+		completions:          completions,
+		completionProvenance: make(map[string]*TranscriptCommittedRowProvenance),
+		materialized:         materialized,
+		cacheWarningMode:     cacheWarningMode,
 	}
 }
 
-func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
+func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord) error {
 	if s == nil {
 		return nil
 	}
-	switch strings.TrimSpace(evt.Kind) {
-	case "message":
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			return fmt.Errorf("decode message event: %w", err)
+	stepID, _ := textutil.OptionalExact(record.StepID())
+	payload, err := record.Payload()
+	if err != nil {
+		return err
+	}
+	switch payload := payload.(type) {
+	case session.MessageRecord:
+		msg, err := llmMessageFromSessionRecord(payload)
+		if err != nil {
+			return fmt.Errorf("restore session message record: %w", err)
+		}
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
 		}
 		for _, reconstructed := range reconstructPersistedMessages(msg) {
-			s.applyReconstructedMessage(reconstructed, evt.Seq, evt.StepID)
+			s.applyReconstructedMessage(reconstructed, &provenance, stepID)
 		}
-	case "tool_completed":
-		var completion storedToolCompletion
-		if err := json.Unmarshal(evt.Payload, &completion); err != nil {
-			return fmt.Errorf("decode tool_completed event: %w", err)
+	case session.ToolCompletionRecord:
+		completion, err := storedToolCompletionFromSessionRecord(payload)
+		if err != nil {
+			return fmt.Errorf("restore session tool completion record: %w", err)
 		}
 		callID := strings.TrimSpace(completion.CallID)
 		if callID == "" {
@@ -90,66 +105,109 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 			CondensedText: completion.CondensedText,
 			Presentation:  completion.Presentation,
 		}
-	case "local_entry":
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			return fmt.Errorf("decode local_entry event: %w", err)
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.completionProvenance[callID] = cloneTranscriptCommittedRowProvenance(&provenance)
+	case session.LocalEntryRecord:
+		if payload.Role == string(transcript.EntryRoleReviewerStatus) {
+			return nil
+		}
+		entry, err := storedLocalEntryFromSessionRecord(payload)
+		if err != nil {
+			return fmt.Errorf("restore session local entry record: %w", err)
 		}
 		if entry.AfterToolCallID != nil {
 			callID := strings.TrimSpace(*entry.AfterToolCallID)
 			if callID == "" {
-				return errors.New("decode local_entry event: after-tool call identity is empty")
+				return errors.New("session local entry record: after-tool call identity is empty")
 			}
 			if s.turn.assistant == nil || !s.turnOwnsCall(callID) {
 				return fmt.Errorf(
-					"decode local_entry event: after-tool call identity is outside the buffered assistant turn (call_id=%q)",
+					"session local entry record: after-tool call identity is outside the buffered assistant turn (call_id=%q)",
 					callID,
 				)
 			}
+			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+			if provenanceErr != nil {
+				return provenanceErr
+			}
 			s.turn.localEntries = append(s.turn.localEntries, entry)
-			s.turn.localEntrySteps = append(s.turn.localEntrySteps, strings.TrimSpace(evt.StepID))
+			s.turn.localEntryProvenance = append(s.turn.localEntryProvenance, cloneTranscriptCommittedRowProvenance(&provenance))
+			s.turn.localEntrySteps = append(s.turn.localEntrySteps, stepID)
 			return nil
 		}
 		s.closeTurn()
-		s.appendLocalEntry(entry, evt.StepID)
-	case sessionEventCacheWarning:
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.appendLocalEntry(entry, stepID, &provenance)
+	case session.ReviewerFeedbackRecord:
 		s.closeTurn()
-		var warning transcript.CacheWarning
-		if err := json.Unmarshal(evt.Payload, &warning); err != nil {
-			return fmt.Errorf("decode %s event: %w", sessionEventCacheWarning, err)
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance))
+	case session.ReviewerErrorRecord:
+		s.closeTurn()
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance))
+	case session.CacheWarningRecord:
+		s.closeTurn()
+		warning := cacheWarningFromSessionRecord(payload)
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
 		}
 		s.scan.appendEntry(ChatEntry{
-			StepID:     strings.TrimSpace(evt.StepID),
-			Visibility: cacheWarningEntryVisibility(s.cacheWarningMode),
-			Role:       cacheWarningTranscriptRole,
-			Text:       transcript.CacheWarningText(warning),
+			StepID:              stepID,
+			Visibility:          cacheWarningEntryVisibility(s.cacheWarningMode),
+			Role:                cacheWarningTranscriptRole,
+			Text:                transcript.CacheWarningText(warning),
+			CommittedProvenance: &provenance,
 		})
-	case "history_replaced":
+	case session.HistoryReplacementRecord:
 		s.closeTurn()
-		payload, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
+		replacement, err := historyReplacementPayloadFromSessionRecord(payload)
 		if err != nil {
-			return fmt.Errorf("%w: %w", errDecodeHistoryReplacedEvent, err)
-		}
-		if ignoredLegacy {
-			return nil
+			return fmt.Errorf("restore session history replacement record: %w", err)
 		}
 		s.scan.MarkCompactionBoundary()
-		for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(payload.Items)) {
-			entry.StepID = strings.TrimSpace(evt.StepID)
+		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
+		if provenanceErr != nil {
+			return provenanceErr
+		}
+		entries := transcriptEntriesFromHistoryReplacement(
+			llm.PrepareOpenAIInputItems(replacement.Items),
+			replacement.CompactionNumber,
+		)
+		for index := range entries {
+			entries[index].StepID = stepID
+		}
+		for _, entry := range assignHistoryReplacementEntryProvenance(entries, &provenance) {
 			s.scan.appendEntry(entry)
 		}
-		if answer := strings.TrimSpace(payload.LastCommittedAssistantFinalAnswer); answer != "" {
-			s.lastCommittedAssistantFinalAnswer = payload.LastCommittedAssistantFinalAnswer
+		if replacement.LastCommittedAssistantFinalAnswer != nil {
+			if answer := strings.TrimSpace(*replacement.LastCommittedAssistantFinalAnswer); answer != "" {
+				s.lastCommittedAssistantFinalAnswer = *replacement.LastCommittedAssistantFinalAnswer
+			}
 		}
 	}
 	return nil
 }
 
-func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, seq int64, stepID string) {
+func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID string) {
 	if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
 		s.closeTurn()
 		buffered := msg
 		s.turn.assistant = &buffered
+		s.turn.assistantProvenance = cloneTranscriptCommittedRowProvenance(provenance)
 		s.turn.assistantStepID = strings.TrimSpace(stepID)
 		s.turn.callIDs = s.turn.callIDs[:0]
 		for _, call := range msg.ToolCalls {
@@ -159,13 +217,15 @@ func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, seq
 		}
 		return
 	}
-	if msg.Role == llm.RoleTool && s.turn.assistant != nil && s.turnOwnsCall(strings.TrimSpace(msg.ToolCallID)) {
+	toolCallID, _ := textutil.OptionalTrimmed(msg.ToolCallID)
+	if msg.Role == llm.RoleTool && s.turn.assistant != nil && s.turnOwnsCall(toolCallID) {
 		s.turn.materialized = append(s.turn.materialized, msg)
+		s.turn.materializedProvenance = append(s.turn.materializedProvenance, cloneTranscriptCommittedRowProvenance(provenance))
 		s.turn.materializedSteps = append(s.turn.materializedSteps, strings.TrimSpace(stepID))
 		return
 	}
 	s.closeTurn()
-	s.applyMessage(msg, seq, stepID)
+	s.applyMessage(msg, provenance, stepID)
 }
 
 func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
@@ -180,8 +240,12 @@ func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
 	return false
 }
 
-func (s *streamingTranscriptScan) applyMessage(msg llm.Message, seq int64, stepID string) {
-	s.scan.ApplyMessage(msg, seq, stepID)
+func (s *streamingTranscriptScan) applyMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID string) {
+	var seq int64
+	if provenance != nil {
+		seq = provenance.EventSequence
+	}
+	s.scan.ApplyMessage(msg, seq, stepID, s.completionProvenance)
 	s.lastCommittedAssistantFinalAnswer = applyLastCommittedAssistantFinalAnswer(s.lastCommittedAssistantFinalAnswer, msg)
 }
 
@@ -190,11 +254,14 @@ func (s *streamingTranscriptScan) closeTurn() {
 		return
 	}
 	assistant := *s.turn.assistant
+	assistantProvenance := s.turn.assistantProvenance
 	assistantStepID := s.turn.assistantStepID
 	materialized := s.turn.materialized
+	materializedProvenance := s.turn.materializedProvenance
 	materializedSteps := s.turn.materializedSteps
 	callIDs := s.turn.callIDs
 	localEntries := s.turn.localEntries
+	localEntryProvenance := s.turn.localEntryProvenance
 	localEntrySteps := s.turn.localEntrySteps
 
 	if len(materializedSteps) != len(materialized) {
@@ -203,45 +270,83 @@ func (s *streamingTranscriptScan) closeTurn() {
 	if len(localEntrySteps) != len(localEntries) {
 		panic(fmt.Sprintf("persisted transcript local-entry step identity count mismatch: local_entry_count=%d step_id_count=%d", len(localEntries), len(localEntrySteps)))
 	}
+	if len(materializedProvenance) != len(materialized) {
+		panic(fmt.Sprintf("persisted transcript tool-message provenance count mismatch: materialized_count=%d provenance_count=%d", len(materialized), len(materializedProvenance)))
+	}
+	if len(localEntryProvenance) != len(localEntries) {
+		panic(fmt.Sprintf("persisted transcript local-entry provenance count mismatch: local_entry_count=%d provenance_count=%d", len(localEntries), len(localEntryProvenance)))
+	}
+	orderedMaterialized := make([]struct {
+		message    llm.Message
+		provenance *TranscriptCommittedRowProvenance
+		stepID     string
+	}, len(materialized))
+	for index := range materialized {
+		provenance := materializedProvenance[index]
+		if callID, present := textutil.OptionalTrimmed(materialized[index].ToolCallID); present {
+			if owner := s.completionProvenance[callID]; owner != nil {
+				provenance = owner
+			}
+		}
+		orderedMaterialized[index] = struct {
+			message    llm.Message
+			provenance *TranscriptCommittedRowProvenance
+			stepID     string
+		}{
+			message:    materialized[index],
+			provenance: provenance,
+			stepID:     materializedSteps[index],
+		}
+	}
+	sort.SliceStable(orderedMaterialized, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			orderedMaterialized[left].provenance,
+			orderedMaterialized[right].provenance,
+		)
+	})
 	for _, rm := range materialized {
-		if callID := strings.TrimSpace(rm.ToolCallID); callID != "" {
+		if callID, present := textutil.OptionalTrimmed(rm.ToolCallID); present {
 			s.materialized[callID] = struct{}{}
 		}
 	}
-	s.applyMessage(assistant, 0, assistantStepID)
+	s.applyMessage(assistant, assistantProvenance, assistantStepID)
 	for index, entry := range localEntries {
 		callID := strings.TrimSpace(*entry.AfterToolCallID)
 		if _, materialized := s.materialized[callID]; materialized {
 			continue
 		}
-		s.appendLocalEntry(entry, localEntrySteps[index])
+		s.appendLocalEntry(entry, localEntrySteps[index], localEntryProvenance[index])
 	}
-	for index, rm := range materialized {
-		s.applyMessage(rm, 0, materializedSteps[index])
-		callID := strings.TrimSpace(rm.ToolCallID)
+	for _, materializedEntry := range orderedMaterialized {
+		s.applyMessage(materializedEntry.message, materializedEntry.provenance, materializedEntry.stepID)
+		callID, _ := textutil.OptionalTrimmed(materializedEntry.message.ToolCallID)
 		for localIndex, entry := range localEntries {
 			if entry.AfterToolCallID == nil || strings.TrimSpace(*entry.AfterToolCallID) != callID {
 				continue
 			}
-			s.appendLocalEntry(entry, localEntrySteps[localIndex])
+			s.appendLocalEntry(entry, localEntrySteps[localIndex], localEntryProvenance[localIndex])
 		}
 	}
 
 	for _, callID := range callIDs {
 		delete(s.completions, callID)
+		delete(s.completionProvenance, callID)
 		delete(s.materialized, callID)
 	}
 	s.turn = turnBuffer{
-		callIDs:           callIDs[:0],
-		materialized:      materialized[:0],
-		materializedSteps: materializedSteps[:0],
-		localEntries:      localEntries[:0],
-		localEntrySteps:   localEntrySteps[:0],
+		callIDs:                callIDs[:0],
+		materialized:           materialized[:0],
+		materializedProvenance: materializedProvenance[:0],
+		materializedSteps:      materializedSteps[:0],
+		localEntries:           localEntries[:0],
+		localEntryProvenance:   localEntryProvenance[:0],
+		localEntrySteps:        localEntrySteps[:0],
 	}
 }
 
-func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string) {
+func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string, provenance *TranscriptCommittedRowProvenance) {
 	projected := *localEntryChatEntryForStep(entry, stepID)
+	projected.CommittedProvenance = cloneTranscriptCommittedRowProvenance(provenance)
 	s.scan.appendEntry(projected)
 }
 

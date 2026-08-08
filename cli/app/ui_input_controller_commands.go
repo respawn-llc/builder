@@ -7,13 +7,51 @@ import (
 	"core/cli/app/commands"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandResult commands.Result, queuePosition preSubmitQueuePosition) (tea.Model, tea.Cmd) {
+	return c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult, queuePosition, activeSubmitOriginDirect)
+}
+
+func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
 	m := c.model
+	if commandResult.PromptCommand != nil {
+		invocation := commandResult.PromptCommand
+		canonical, err := runtimeinput.CanonicalCommandText(invocation.Name, invocation.Arguments)
+		if err != nil {
+			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
+		history, err := invocation.CanonicalHistoryText()
+		if err != nil {
+			return m, m.sendTransientStatusWithNoticeID(err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		}
+		if commandResult.FreshConversation && (m.isBusy() || m.currentConversationFreshness() != clientui.ConversationFreshnessFresh) {
+			previousSessionID, err := runtimeids.ParseSessionID(m.sessionID)
+			if err != nil {
+				return m, c.model.appendLocalEntryWithNoticeID("error", "Current session identity is invalid: "+err.Error(), "")
+			}
+			if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, canonical); blocked {
+				return m, disconnectCmd
+			}
+			m.nextSessionInitialPrompt = history
+			m.nextSessionInitialPromptHistoryRecorded = true
+			m.nextPreviousSessionID = &previousSessionID
+			m.exitAction = UIActionNewSession
+			return m, tea.Quit
+		}
+		m.rememberPromptCommandHistoryLocally(history)
+		return m, c.startTypedSubmissionWithPreSubmitQueuePosition(
+			canonical,
+			runtimeinput.Input{Kind: runtimeinput.KindPromptCommand, PromptCommand: invocation},
+			queuePosition,
+			"",
+			origin,
+		)
+	}
 	if commandResult.SubmitUser {
 		if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, commandResult.User); blocked {
 			return m, disconnectCmd
@@ -31,7 +69,7 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 		return m, tea.Quit
 	}
 	if commandResult.SubmitUser {
-		return m, c.startSubmissionWithPreSubmitQueuePosition(commandResult.User, queuePosition, "")
+		return m, c.startSubmissionWithPreSubmitQueuePositionAndOrigin(commandResult.User, queuePosition, "", origin)
 	}
 	prefixCmd := tea.Cmd(nil)
 	if commandResult.Text != "" {

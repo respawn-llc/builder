@@ -4,14 +4,14 @@ import type { TaskDetailInitialFocus } from "./sidebarContext";
 export function taskDetailInitialFocusFromAttentionItem(
   item: AttentionItem | undefined,
 ): TaskDetailInitialFocus | undefined {
-  if (item?.kind === "question" && item.askID.length > 0) {
-    return { kind: "question", askIDs: [item.askID] };
+  if (item?.kind === "question" && item.questionID.length > 0) {
+    return { kind: "question", askIDs: [item.questionID] };
   }
-  if (item?.kind === "approval" && item.taskTransitionID.length > 0) {
-    return { kind: "approval", taskTransitionID: item.taskTransitionID };
+  if (item?.kind === "approval" && item.approvalID.length > 0) {
+    return { kind: "approval", approvalID: item.approvalID };
   }
-  if (item?.kind === "interrupted_run" && item.runID.length > 0) {
-    return { kind: "interrupted_run", runID: item.runID };
+  if (item?.kind === "interrupted_current_node") {
+    return { kind: "interrupted_current_node" };
   }
   return undefined;
 }
@@ -35,9 +35,9 @@ export function sameTaskDetailInitialFocus(
     );
   }
   if (left.kind === "approval") {
-    return right.kind === "approval" && left.taskTransitionID === right.taskTransitionID;
+    return right.kind === "approval" && left.approvalID === right.approvalID;
   }
-  return right.kind === "interrupted_run" && left.runID === right.runID;
+  return right.kind === left.kind;
 }
 
 function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
@@ -45,7 +45,7 @@ function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
     return `question:${focus.askIDs.join(",")}`;
   }
   if (focus.kind === "approval") {
-    return `approval:${focus.taskTransitionID}`;
+    return `approval:${focus.approvalID}`;
   }
-  return `interrupted_run:${focus.runID}`;
+  return focus.kind;
 }

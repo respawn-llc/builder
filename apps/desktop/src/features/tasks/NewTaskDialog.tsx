@@ -1,15 +1,23 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect, useMemo, useRef } from "react";
+import { Plus } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage } from "@/api";
-import { useConnectionSnapshot } from "@/app-facade";
+import { errorMessage, isProjectMissingError, type TaskDependencyCreateIntent } from "@/api";
+import { useConnectionSnapshot, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import {
+  LabelChooser,
+  ProjectLabelsProvider,
+  orderedAssignedLabels,
+  useProjectLabelCatalog,
+} from "@/shared/labels";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
-import { Button, Dialog, SelectField, TextArea, TextInput } from "@/ui";
+import { Badge, Button, Dialog, FieldShell, SelectField, TextArea, TextInput } from "@/ui";
 import { cx } from "@/ui";
 
 const newTaskContentMaxWidth = "560px";
@@ -86,55 +94,151 @@ export function NewTaskWindowRoute({
 }
 
 export function NewTaskForm({
+  projectID,
+  initialSourceWorkspaceID,
+  pendingRelationship,
+  ...props
+}: Readonly<{
+  boardQueryWorkflowID: string | undefined;
+  className?: string;
+  onSubmitted: (taskID: string) => void;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  onProjectMissing?: (() => void) | undefined;
+  projectID: string;
+  workflowID: string;
+  initialSourceWorkspaceID?: string | undefined;
+  pendingRelationship?:
+    | Readonly<{
+        originTaskID: string;
+        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
+      }>
+    | undefined;
+}>) {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
+  const reportLabelError = useCallback(
+    (error: unknown) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "new-task-label-load-error",
+        title: t("labels.loadFailed"),
+        tone: "danger",
+      });
+    },
+    [push, t],
+  );
+  return (
+    <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
+      <NewTaskFormContent
+        initialSourceWorkspaceID={initialSourceWorkspaceID}
+        pendingRelationship={pendingRelationship}
+        projectID={projectID}
+        {...props}
+      />
+    </ProjectLabelsProvider>
+  );
+}
+
+function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
   onSubmitted,
+  onPendingChange,
+  onProjectMissing,
+  initialSourceWorkspaceID,
+  pendingRelationship,
   projectID,
   workflowID,
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string;
-  onSubmitted: () => void;
+  onSubmitted: (taskID: string) => void;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  onProjectMissing?: (() => void) | undefined;
   projectID: string;
   workflowID: string;
+  initialSourceWorkspaceID?: string | undefined;
+  pendingRelationship?:
+    | Readonly<{
+        originTaskID: string;
+        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
+      }>
+    | undefined;
 }>) {
   const { t } = useTranslation();
   const connection = useConnectionSnapshot();
   const workspaces = useWorkspaces(projectID);
+  const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
-  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
+  useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
+  const projectMissing = [workspaces.error, createTask.error].some(isProjectMissingError);
+  useEffect(() => {
+    if (projectMissing) onProjectMissing?.();
+  }, [onProjectMissing, projectMissing]);
+  const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
+  const [labelCreatePending, setLabelCreatePending] = useState(false);
+  const effectiveSelectedLabelIDs = useMemo(() => {
+    if (catalog.data === undefined) {
+      return selectedLabelIDs;
+    }
+    const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
+    return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
+  }, [catalog.data, selectedLabelIDs]);
+  const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID;
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
-  const initialWorkspaceID = initialSourceWorkspaceID(defaultWorkspaceID, workspaceItems);
+  const initialWorkspaceID = resolveInitialSourceWorkspaceID(
+    initialSourceWorkspaceID,
+    defaultWorkspaceID,
+    workspaceItems,
+  );
   const initializedRef = useRef(false);
   const form = useForm<NewTaskFormValues>({
     resolver: zodResolver(newTaskSchema),
     defaultValues: {
       title: "",
       body: "",
-      sourceWorkspaceID: initialWorkspaceID,
+      sourceWorkspaceID: initialWorkspaceID ?? "",
     },
   });
+  const canSubmit =
+    connection.phase === "connected" &&
+    !createTask.isPending &&
+    !labelCreatePending &&
+    initialWorkspaceID !== undefined;
 
   useEffect(() => {
-    if (!initializedRef.current && initialWorkspaceID.length > 0) {
+    if (!initializedRef.current && initialWorkspaceID !== undefined) {
       form.reset({ title: "", body: "", sourceWorkspaceID: initialWorkspaceID });
       initializedRef.current = true;
     }
   }, [form, initialWorkspaceID]);
-
   async function submit(values: NewTaskFormValues): Promise<void> {
-    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
-    if (sourceWorkspaceID.length === 0) {
+    if (!canSubmit) {
       return;
     }
-    await createTask.mutateAsync({
-      projectID,
-      workflowID,
-      title: values.title,
-      body: values.body,
-      sourceWorkspaceID,
-    });
-    onSubmitted();
+    const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
+    const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
+    try {
+      const taskID = await createTask.mutateAsync({
+        projectID,
+        workflowID,
+        title: values.title,
+        body: values.body,
+        sourceWorkspaceID,
+        labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
+        dependencyIntent:
+          pendingRelationship === undefined
+            ? undefined
+            : {
+                relatedTaskID: pendingRelationship.originTaskID,
+                newTaskRole: pendingRelationship.newTaskRole,
+              },
+      });
+      onSubmitted(taskID);
+    } catch {
+      // The mutation state renders the persistent failure without clearing form input.
+    }
   }
 
   const workspaceOptions = useMemo(
@@ -143,13 +247,16 @@ export function NewTaskForm({
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
   const displayedWorkspaceID =
-    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
-  const disabled =
-    connection.phase !== "connected" || createTask.isPending || initialWorkspaceID.length === 0;
+    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : (initialWorkspaceID ?? "");
+  const formShortcut = useTextFieldSubmitShortcut({
+    available: canSubmit,
+    kind: "form",
+  });
 
   return (
     <form
       className={cx("grid gap-[var(--space-3)]", className)}
+      onKeyDown={formShortcut}
       onSubmit={(event) => void form.handleSubmit(submit)(event)}
     >
       <TextInput
@@ -162,6 +269,19 @@ export function NewTaskForm({
         placeholder={t("task.bodyPlaceholder")}
         rows={6}
         {...form.register("body")}
+      />
+      <NewTaskLabels
+        disabled={connection.phase !== "connected"}
+        onCreatePendingChange={setLabelCreatePending}
+        onSelectionChange={(labelID, selected) => {
+          setSelectedLabelIDs((current) => {
+            if (selected) {
+              return current.includes(labelID) ? current : [...current, labelID];
+            }
+            return current.filter((candidate) => candidate !== labelID);
+          });
+        }}
+        selectedLabelIDs={effectiveSelectedLabelIDs}
       />
       {workspaceItems.length === 1 ? (
         <>
@@ -194,19 +314,83 @@ export function NewTaskForm({
       {createTask.error !== null ? (
         <p className="m-0 text-[var(--color-error)]">{errorMessage(createTask.error)}</p>
       ) : null}
-      <Button className="mx-auto w-full max-w-[400px]" disabled={disabled} type="submit" variant="primary">
+      <Button className="mx-auto w-full max-w-[400px]" disabled={!canSubmit} type="submit" variant="primary">
         {t("task.create")}
       </Button>
     </form>
   );
 }
 
-function initialSourceWorkspaceID(
-  defaultWorkspaceID: string,
+function NewTaskLabels({
+  disabled,
+  onCreatePendingChange,
+  onSelectionChange,
+  selectedLabelIDs,
+}: Readonly<{
+  disabled: boolean;
+  onCreatePendingChange(pending: boolean): void;
+  onSelectionChange(labelID: string, selected: boolean): void;
+  selectedLabelIDs: readonly string[];
+}>) {
+  const { t } = useTranslation();
+  const catalog = useProjectLabelCatalog();
+  const inputID = useId();
+  const labels = catalog.data === undefined ? [] : orderedAssignedLabels(catalog.data, selectedLabelIDs);
+  return (
+    <FieldShell
+      errorId={`${inputID}-error`}
+      hintId={`${inputID}-hint`}
+      inputId={inputID}
+      label={t("labels.filter")}
+    >
+      <LabelChooser
+        invocation={{
+          kind: "assignment",
+          onCreatePendingChange,
+          selectedLabelIDs,
+          onSelectionChange,
+        }}
+        trigger={
+          <Button
+            aria-label={t("labels.editAssignments")}
+            className="min-h-11 h-auto w-full min-w-0 justify-start text-left"
+            disabled={disabled}
+            id={inputID}
+            variant="secondary"
+          >
+            <span className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)]">
+              {labels.length === 0 ? (
+                <span className="inline-flex items-center gap-[var(--space-1)] text-[var(--color-muted)]">
+                  <Plus aria-hidden="true" size={14} />
+                  {t("labels.add")}
+                </span>
+              ) : null}
+              {labels.map((label) => (
+                <Badge key={label.id} tone="neutral">
+                  {label.name}
+                </Badge>
+              ))}
+            </span>
+          </Button>
+        }
+      />
+    </FieldShell>
+  );
+}
+
+function resolveInitialSourceWorkspaceID(
+  requestedWorkspaceID: string | undefined,
+  defaultWorkspaceID: string | undefined,
   workspaceItems: readonly { id: string }[],
-): string {
-  if (defaultWorkspaceID.length > 0) {
+): string | undefined {
+  if (
+    requestedWorkspaceID !== undefined &&
+    workspaceItems.some((workspace) => workspace.id === requestedWorkspaceID)
+  ) {
+    return requestedWorkspaceID;
+  }
+  if (defaultWorkspaceID !== undefined) {
     return defaultWorkspaceID;
   }
-  return workspaceItems[0]?.id ?? "";
+  return workspaceItems[0]?.id;
 }

@@ -181,7 +181,7 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
+	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePrompt)); err != nil {
 		t.Fatalf("accept pending prompt: %v", err)
 	}
 	surface.calls = nil
@@ -201,6 +201,6 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 
 func committedMessageForOngoingResizeTest() clientui.TranscriptMessage {
 	message := ongoingTranscriptMessage(2, clientui.TranscriptMessageCommittedRow)
-	message.Payload.CommittedRow.User.Text = "committed"
+	message.Payload().(clientui.TranscriptCommittedRow).User.Text = "committed"
 	return message
 }

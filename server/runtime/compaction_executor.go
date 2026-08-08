@@ -63,7 +63,7 @@ func compactionConversationWithPromptItems(items []llm.ResponseItem, instruction
 	if prompt == "" {
 		return conversation
 	}
-	return append(conversation, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: prompt}})...)
+	return append(conversation, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(prompt)}})...)
 }
 
 func (e *Engine) compactWithContextRepairRetry(
@@ -92,7 +92,7 @@ func (e *Engine) compactWithContextRepairRetry(
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(stepID)
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
 		if repairErr != nil {
 			return resp, items, errors.Join(err, repairErr)
 		}
@@ -214,13 +214,19 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	return req, true, nil
 }
 
-func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, providerID string, instructions string, mode compactionMode) (compactionResult, error) {
-	summary, repairStats, err := e.localCompactionSummaryWithRepair(ctx, input, instructions, mode)
+func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.ResponseItem, providerID string, instructions string, mode compactionMode) (compactionResult, error) {
+	summary, repairStats, err := e.localCompactionSummaryWithRepair(
+		ctx,
+		textutil.OptionalTrimmedString(stepID),
+		input,
+		instructions,
+		mode,
+	)
 	if err != nil {
 		return compactionResult{}, err
 	}
 	replacement := llm.ItemsFromMessages([]llm.Message{{
-		Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: strings.TrimSpace(summary),
+		Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value(strings.TrimSpace(summary)),
 	}})
 
 	usageInputTokens := estimateItemsTokens(replacement)
@@ -234,16 +240,15 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 		trimmedItemsCount: nil,
 		overflowRepair:    repairStats,
 		provider:          providerID,
-		summary:           strings.TrimSpace(summary),
 	}, nil
 }
 
 func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
-	summary, _, err := e.localCompactionSummaryWithRepair(ctx, input, instructions, mode)
+	summary, _, err := e.localCompactionSummaryWithRepair(ctx, nil, input, instructions, mode)
 	return summary, err
 }
 
-func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, compactionOverflowRepairStats, error) {
+func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairStepID *string, input []llm.ResponseItem, instructions string, mode compactionMode) (string, compactionOverflowRepairStats, error) {
 	locked, err := e.ensureLocked()
 	if err != nil {
 		return "", compactionOverflowRepairStats{}, err
@@ -275,7 +280,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []l
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending("")
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(repairStepID)
 		if repairErr != nil {
 			return "", w, errors.Join(err, repairErr)
 		}
@@ -311,7 +316,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []l
 }
 
 func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode) (string, error) {
-	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: instructions}})...)
+	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(instructions)}})...)
 	for attempt := 0; ; attempt++ {
 		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
 		if err != nil {
@@ -342,7 +347,10 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked se
 			items = append(items, retryItems...)
 			continue
 		}
-		summary := strings.TrimSpace(resp.Assistant.Content)
+		if resp.Assistant.Content == nil {
+			return "", errors.New("local compaction summary was empty")
+		}
+		summary := strings.TrimSpace(*resp.Assistant.Content)
 		if summary == "" {
 			return "", errors.New("local compaction summary was empty")
 		}
@@ -363,14 +371,14 @@ func handoffCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem,
 	}
 	items := llm.ItemsFromMessages([]llm.Message{{
 		Role:      llm.RoleAssistant,
-		Content:   resp.Assistant.Content,
+		Content:   textutil.Pointer(resp.Assistant.Content),
 		ToolCalls: calls,
 	}})
 	for _, call := range calls {
 		items = append(items, llm.ResponseItem{
 			Type:   llm.ToolOutputItemType(call.Custom),
-			CallID: strings.TrimSpace(call.ID),
-			Name:   call.Name,
+			CallID: textutil.OptionalTrimmedString(call.ID),
+			Name:   textutil.OptionalExactString(call.Name),
 			Output: mustJSON(map[string]any{"error": handoffCompactionToolsDisabledMessage}),
 		})
 	}
@@ -397,7 +405,8 @@ func isCompactionBoundaryItem(item llm.ResponseItem) bool {
 		return true
 	}
 	if item.Type == llm.ResponseItemTypeMessage {
-		return item.MessageType == llm.MessageTypeCompactionSummary
+		return item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeCompactionSummary
 	}
 	return false
 }

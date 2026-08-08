@@ -1,102 +1,51 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { WorkflowDefinition, WorkflowEdge } from "@/api";
-import { appI18n, initializeI18n } from "@/i18n";
-import { groupableWorkflowDefinition, workflowDefinition } from "./workflowEditorGraphMutationFixtures";
-import {
-  contextSourceFromSelectValue,
-  contextSourceOptions,
-  contextSourceSelectValue,
-  immediateContextSourceOption,
-  previousTargetContextSourceOption,
-  previousTargetOrNewContextSourceOption,
-} from "./workflowInspectorWiring";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "@/api";
+import { groupableWorkflowDefinition } from "./workflowEditorGraphMutationFixtures";
+import { edgePromptPlaceholderParameters } from "./workflowInspectorWiring";
 
-const translate = appI18n.t;
-
-describe("workflowInspectorWiring context sources", () => {
-  beforeAll(async () => {
-    await initializeI18n();
-  });
-
-  it("keeps unavailable context-source options visible with disabled reasons", () => {
-    const edge = edgeByID(groupableWorkflowDefinition, "edge-source-agent");
-
-    const options = contextSourceOptions(groupableWorkflowDefinition, edge, translate);
-
-    expect(optionByValue(options, previousTargetContextSourceOption)).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
-    expect(optionByValue(options, previousTargetOrNewContextSourceOption)).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
-    expect(optionByValue(options, "node-source")).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
-    expect(optionByValue(options, "node-agent")).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
-  });
-
-  it("enables fallback previous target for non-dominating continuation edges", () => {
+describe("edgePromptPlaceholderParameters", () => {
+  it("omits protected parameters that the server marks as not materialized", () => {
+    const sourceEdge = groupableWorkflowDefinition.edges.find((item) => item.id === "edge-source-agent");
+    if (sourceEdge === undefined) {
+      throw new Error("workflow fixture is missing the source-agent edge");
+    }
     const edge = {
-      ...edgeByID(groupableWorkflowDefinition, "edge-source-agent"),
-      contextMode: "continue_session",
-      contextSource: { kind: "previous_target_or_new", nodeKey: "" },
+      ...sourceEdge,
+      assigneeSelection: "previous_node" as const,
+      parameters: [
+        { key: "agent_role", description: "", purpose: "target_assignee" as const },
+        { key: "summary", description: "Summary", purpose: "ordinary" as const },
+      ],
+    } satisfies WorkflowDefinition["edges"][number];
+    const definition = {
+      ...groupableWorkflowDefinition,
+      derivedWiring: {
+        ...emptyWorkflowDerivedWiring,
+        edges: [
+          {
+            edgeID: edge.id,
+            inputBindings: [],
+            requiredProviderFields: [],
+            requiredProvisionFields: [],
+            assigneeSelectionApplicability: {
+              available: true,
+              parameterVisible: false,
+              reason: "sole_callable_role" as const,
+            },
+            thinkingSelectionApplicability: {
+              available: false,
+              parameterVisible: false,
+              reason: "unavailable_configuration" as const,
+            },
+          },
+        ],
+      },
+      edges: groupableWorkflowDefinition.edges.map((item) => (item.id === edge.id ? edge : item)),
     };
 
-    const options = contextSourceOptions(groupableWorkflowDefinition, edge, translate);
-
-    expect(optionByValue(options, previousTargetContextSourceOption)).toMatchObject({ disabled: true });
-    expect(optionByValue(options, previousTargetOrNewContextSourceOption).disabled).toBeUndefined();
-    expect(optionByValue(options, "node-source").disabled).toBeUndefined();
-    expect(optionByValue(options, "node-agent")).toMatchObject({ disabled: true });
-    expect(contextSourceSelectValue(groupableWorkflowDefinition, edge)).toBe(
-      previousTargetOrNewContextSourceOption,
-    );
-    expect(
-      contextSourceFromSelectValue(groupableWorkflowDefinition, previousTargetOrNewContextSourceOption),
-    ).toEqual({
-      kind: "previous_target_or_new",
-      nodeKey: "",
-    });
-  });
-
-  it("disables source-based options for invalid preserved start continuation edges", () => {
-    const edge = {
-      ...edgeByID(workflowDefinition, "edge-start"),
-      contextMode: "continue_session",
-    };
-
-    const options = contextSourceOptions(workflowDefinition, edge, translate);
-
-    expect(optionByValue(options, immediateContextSourceOption)).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
-    expect(optionByValue(options, previousTargetOrNewContextSourceOption)).toMatchObject({
-      disabled: true,
-      disabledReason: "N/A for current configuration",
-    });
+    expect(edgePromptPlaceholderParameters(definition, edge)).toEqual([
+      { key: "summary", description: "Summary", purpose: "ordinary" },
+    ]);
   });
 });
-
-function edgeByID(definition: WorkflowDefinition, edgeID: string): WorkflowEdge {
-  const edge = definition.edges.find((item) => item.id === edgeID);
-  if (edge === undefined) {
-    throw new Error(`missing edge ${edgeID}`);
-  }
-  return edge;
-}
-
-function optionByValue(options: ReturnType<typeof contextSourceOptions>, value: string) {
-  const option = options.find((item) => item.value === value);
-  if (option === undefined) {
-    throw new Error(`missing option ${value}`);
-  }
-  return option;
-}

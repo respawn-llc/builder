@@ -18,7 +18,13 @@ import {
   subscriptionCompleteMethod,
   waitForSubscriptionEnd,
 } from "./jsonRpcSocket";
-import type { RpcCallOptions, RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
+import type {
+  RpcCallOptions,
+  RpcDedicatedCallOptions,
+  RpcEventHandler,
+  RpcSubscription,
+  RpcTransport,
+} from "./transport";
 
 const socketOpenTimeoutMs = 10_000;
 const rpcRequestTimeoutMs = 30_000;
@@ -54,6 +60,25 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   async call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
     const socket = await this.#open();
     return this.#send(socket, method, params, options);
+  }
+
+  async callDedicated(
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown> {
+    const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, options?.signal);
+    try {
+      await handshakeSubscription(socket, rpcRequestTimeoutMs, this.#expectedRootId, options?.signal);
+      const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
+      const requestOptions =
+        options?.signal === undefined
+          ? { timeoutMilliseconds: timeoutMs }
+          : { timeoutMilliseconds: timeoutMs, signal: options.signal };
+      return await sendSocketRequest(socket, method, params, requestOptions);
+    } finally {
+      socket.close();
+    }
   }
 
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
@@ -155,7 +180,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#resolveResponse(response.data.id, response.data.result, response.data.error);
   }
 
-  #resolveResponse(id: string, result: unknown, error: { code: number; message: string } | undefined): void {
+  #resolveResponse(
+    id: string,
+    result: unknown,
+    error: { code: number; message: string; data?: JsonValue | undefined } | undefined,
+  ): void {
     const pending = this.#pending.get(id);
     if (pending === undefined) {
       return;
@@ -251,7 +280,9 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       // socket connected to the wrong server while the reconnect loop opens more.
       await handshakeSubscription(socket, rpcRequestTimeoutMs, this.#expectedRootId);
       socket.addEventListener("message", subscriptionListener);
-      await sendSocketRequest(socket, method, params, rpcRequestTimeoutMs);
+      await sendSocketRequest(socket, method, params, {
+        timeoutMilliseconds: rpcRequestTimeoutMs,
+      });
       handler.onOpen?.();
       await waitForSubscriptionEnd(socket, signal);
       this.#throwNonZeroComplete(method, terminalCompleteRef.current);

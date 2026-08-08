@@ -8,6 +8,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -38,6 +39,9 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		}
 		if params.ProtocolVersion != protocol.Version {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
+		}
+		if params.ClientCapabilities != nil {
+			state.clientCapabilities = *params.ClientCapabilities
 		}
 		state.handshakeDone = true
 		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
@@ -111,6 +115,32 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
+	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		params, err := decodeParams[serverapi.PromptCommandCatalogRequest](req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		if err := params.Validate(); err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		projectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, params.SessionID)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		resp, err := catalog.GetPromptCommandCatalog(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, resp)
+	},
 	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := decodeParams[serverapi.OnboardingFinalizeRequest](req.Params)
 		if err != nil {
@@ -141,7 +171,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedProject = params.ProjectID
 			state.attachedWorkspaceID = attachedWorkspaceID
 			state.attachedWorkspaceRoot = attachedRoot
-			state.attachedSession = ""
+			state.attachedSession = nil
 			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
 		})
 	},
@@ -157,7 +187,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedProject = binding.ProjectID
 			state.attachedWorkspaceID = binding.WorkspaceID
 			state.attachedWorkspaceRoot = binding.CanonicalRoot
-			state.attachedSession = params.SessionID
+			parsedSessionID, parseErr := runtimeids.ParseSessionID(params.SessionID)
+			if parseErr != nil {
+				return protocol.AttachResponse{}, parseErr
+			}
+			state.attachedSession = &parsedSessionID
 			return protocol.SessionAttachResponse(
 				binding.ProjectID,
 				binding.WorkspaceID,
@@ -207,15 +241,25 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowGraphDeriveWiring:     gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowGraphDeriveWiringRequest, serverapi.WorkflowGraphDeriveWiringResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeriveWorkflowGraphWiring),
 	protocol.MethodWorkflowGraphSavePreview:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowGraphSavePreviewRequest, serverapi.WorkflowGraphSavePreviewResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.PreviewWorkflowGraphSave),
 	protocol.MethodWorkflowGraphSave:             gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowGraphSaveRequest, serverapi.WorkflowGraphSaveResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.SaveWorkflowGraph),
+	protocol.MethodWorkflowProjectLabelCreate:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectLabelCreateRequest, serverapi.WorkflowProjectLabelCreateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateWorkflowProjectLabel),
+	protocol.MethodWorkflowProjectLabelList:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectLabelCatalogRequest, serverapi.WorkflowProjectLabelCatalogResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowProjectLabels),
+	protocol.MethodWorkflowProjectLabelRename:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectLabelRenameRequest, serverapi.WorkflowProjectLabelRenameResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.RenameWorkflowProjectLabel),
+	protocol.MethodWorkflowProjectLabelDelete:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectLabelDeleteRequest, serverapi.WorkflowProjectLabelDeleteResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowProjectLabel),
+	protocol.MethodWorkflowProjectLabelReorder:   gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectLabelReorderRequest, serverapi.WorkflowProjectLabelReorderResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ReorderWorkflowProjectLabels),
+	protocol.MethodWorkflowTaskLabelsGet:         gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskLabelsGetRequest, serverapi.WorkflowTaskLabelsGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowTaskLabels),
+	protocol.MethodWorkflowTaskLabelsUpdate:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskLabelsUpdateRequest, serverapi.WorkflowTaskLabelsUpdateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.UpdateWorkflowTaskLabels),
 	protocol.MethodWorkflowTaskCreate:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskCreateRequest, serverapi.WorkflowTaskCreateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateWorkflowTask),
+	protocol.MethodWorkflowTaskDependencyAdd:     gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskDependencyAddRequest, serverapi.WorkflowTaskDependencyAddResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.AddWorkflowTaskDependency),
+	protocol.MethodWorkflowTaskDependencyRemove:  gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskDependencyRemoveRequest, serverapi.WorkflowTaskDependencyRemoveResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.RemoveWorkflowTaskDependency),
+	protocol.MethodWorkflowTaskDependencyList:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskDependencyListRequest, serverapi.WorkflowTaskDependencyListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskDependencies),
 	protocol.MethodWorkflowTaskUpdate:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskUpdateRequest, serverapi.WorkflowTaskUpdateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.UpdateWorkflowTask),
 	protocol.MethodWorkflowTaskStart:             gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskStartRequest, serverapi.WorkflowTaskStartResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.StartWorkflowTask),
 	protocol.MethodWorkflowTaskInterrupt:         gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskInterruptRequest, serverapi.WorkflowTaskInterruptResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.InterruptWorkflowTask),
 	protocol.MethodWorkflowTaskResume:            gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskResumeRequest, serverapi.WorkflowTaskResumeResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ResumeWorkflowTask),
 	protocol.MethodWorkflowTaskApprove:           gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskApproveRequest, serverapi.WorkflowTaskApproveResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ApproveWorkflowTask),
+	protocol.MethodWorkflowTaskMovePreview:       gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskMovePreviewRequest, serverapi.WorkflowTaskMovePreviewResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.PreviewWorkflowTaskMove),
 	protocol.MethodWorkflowTaskMove:              gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.MoveWorkflowTask),
 	protocol.MethodWorkflowTaskComplete:          gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskCompleteRequest, serverapi.WorkflowTaskCompleteResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CompleteWorkflowTask),
-	protocol.MethodWorkflowTaskCancel:            gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCancelRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CancelWorkflowTask),
 	protocol.MethodWorkflowTaskDelete:            gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskDeleteRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowTask),
 	protocol.MethodWorkflowAttentionList:         gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowAttentionListRequest, serverapi.WorkflowAttentionListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowAttention),
 	protocol.MethodWorkflowTaskAttentionList:     gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskAttentionListRequest, serverapi.WorkflowTaskAttentionListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskAttention),
@@ -226,9 +270,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskCommentDelete:     gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCommentDeleteRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowTaskComment),
 	protocol.MethodWorkflowTaskActivityList:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskActivityListRequest, serverapi.WorkflowTaskActivityListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskActivity),
 	protocol.MethodWorkflowTaskList:              gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTasks),
+	protocol.MethodWorkflowTaskSearch:            gatewayClientCall[apicontract.WorkflowService, serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.SearchWorkflowTasks),
 	protocol.MethodWorkflowBoardGet:              gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowBoardRequest, serverapi.WorkflowBoardResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowBoard),
 	protocol.MethodWorkflowBoardNodeCardsList:    gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowBoardNodeCardsListRequest, serverapi.WorkflowBoardNodeCardsListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowBoardNodeCards),
 	protocol.MethodWorkflowTaskGet:               gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowTask),
+	protocol.MethodWorkflowTaskObserve:           gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
 	protocol.MethodSessionPlan: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchClient, err := g.sessionLaunchClientForState(ctx, state)
@@ -250,6 +296,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorktreeList:                                  gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
 	protocol.MethodWorktreeWorkspaceList:                         gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorkspaceWorktrees),
 	protocol.MethodWorktreeSelectorResolve:                       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeSelector),
+	protocol.MethodWorktreeDeletePreview:                         gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.PreviewWorktreeDelete),
 	protocol.MethodWorktreeCreateTargetResolve:                   gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeCreateTarget),
 	protocol.MethodWorktreeCreate:                                gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.CreateWorktree),
 	protocol.MethodWorktreeEnter:                                 gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.EnterWorktree),
@@ -294,10 +341,10 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeHasQueuedUserWork:              gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.HasQueuedUserWork),
 	protocol.MethodRuntimeSubmitQueuedUserMessages:       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SubmitQueuedUserMessages),
 	protocol.MethodRuntimeInterrupt:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.Interrupt),
-	protocol.MethodRuntimeQueueUserMessage:               gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.QueueUserMessage),
 	protocol.MethodRuntimeLiveSteer:                      gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveSteer),
 	protocol.MethodRuntimeLiveStop:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveStop),
 	protocol.MethodRuntimeLiveWait:                       gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWait),
+	protocol.MethodRuntimeLiveWatch:                      gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWatch),
 	protocol.MethodRuntimeDiscardQueuedUserMessage:       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.DiscardQueuedUserMessage),
 	protocol.MethodRuntimeRecordPromptHistory:            gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeRecordPromptHistoryRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.RecordPromptHistory),
 	protocol.MethodRuntimeGoalShow:                       gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ShowGoal),
@@ -328,6 +375,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),
 	protocol.MethodAskAnswer:           gatewayClientCallNoResponse[apicontract.PromptControlService, serverapi.AskAnswerRequest](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerAsk),
+	protocol.MethodPromptAnswerBatch:   gatewayClientCall[apicontract.PromptControlService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerPromptBatch),
 	protocol.MethodApprovalListPending: gatewayClientCall[apicontract.ApprovalViewService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](GatewayDependencies.ApprovalViewClient, apicontract.ApprovalViewService.ListPendingApprovalsBySession),
 	protocol.MethodApprovalAnswer:      gatewayClientCallNoResponse[apicontract.PromptControlService, serverapi.ApprovalAnswerRequest](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerApproval),
 }

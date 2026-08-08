@@ -5,7 +5,7 @@ import { useEffect } from "react";
 import { errorMessage } from "@/api";
 import { clearLastProjectRoute } from "./projectRoutePersistence";
 import { queryKeys } from "./queryKeys";
-import type { SidebarController } from "./sidebarContext";
+import { removeProjectTaskSearches } from "./taskSearchQueries";
 import { useAppServices } from "./useAppServices";
 
 export function useProjectDeletedEvents(
@@ -42,22 +42,19 @@ export function useProjectDeletedEvents(
 }
 
 export async function completeProjectDeletion({
-  closeSidebar,
   navigateHome,
   projectID,
   pushDeletedToast,
   queryClient,
 }: Readonly<{
-  closeSidebar: SidebarController["closeSidebar"];
-  navigateHome: () => Promise<void>;
+  navigateHome?: (() => Promise<void>) | undefined;
   projectID: string;
   pushDeletedToast: () => void;
   queryClient: QueryClient;
 }>): Promise<void> {
   await invalidateProjectDeleteQueries(queryClient, projectID);
   clearLastProjectRoute(projectID);
-  closeSidebar("closed");
-  await navigateHome();
+  if (navigateHome !== undefined) await navigateHome();
   pushDeletedToast();
 }
 
@@ -65,8 +62,7 @@ export async function invalidateProjectDeleteQueries(
   queryClient: QueryClient,
   projectID: string,
 ): Promise<void> {
-  queryClient.removeQueries({ queryKey: queryKeys.projectEdit(projectID) });
-  queryClient.removeQueries({ queryKey: queryKeys.workspaces(projectID) });
+  await removeProjectTaskSearches(queryClient, projectID);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),
@@ -74,5 +70,6 @@ export async function invalidateProjectDeleteQueries(
     queryClient.invalidateQueries({ queryKey: queryKeys.allBoards }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allProjectWorkflowLinks, refetchType: "active" }),
   ]);
 }

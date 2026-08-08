@@ -2,18 +2,20 @@ package runtime
 
 import (
 	"core/server/llm"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"testing"
 )
 
 func TestNormalizeToolCallForTranscriptUsesCustomPatchInput(t *testing.T) {
+	t.Parallel()
 	patchText := "*** Begin Patch\n*** Update File: cli/app/ui_status.go\n@@\n type uiStatusAuthInfo struct {\n-\tSummary string\n+\tSummary string\n+\tReady bool\n }\n*** End Patch\n"
 	call := llm.ToolCall{
 		ID:          "call_patch",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: patchText,
+		CustomInput: textutil.Value(patchText),
 	}
 
 	normalized := normalizeToolCallForTranscript(call, "/workspace")

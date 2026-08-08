@@ -177,13 +177,10 @@ func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEv
 	if h == nil {
 		return
 	}
-	if evt.Type != clientui.AttentionNotificationEventPending || evt.Pending == nil {
+	if !tuiAcceptsAttentionNotification(evt) {
 		return
 	}
 	notification := evt.Pending
-	if !tuiSupportsAttentionNotification(*notification) {
-		return
-	}
 	body := ""
 	if projectedBody != nil {
 		body = strings.TrimSpace(*projectedBody)
@@ -218,7 +215,8 @@ func projectedQuestionNotificationPreview(rows []string) string {
 }
 
 func attentionNotificationTitle(notification clientui.AttentionNotification) string {
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
+	if notification.Kind == clientui.AttentionNotificationKindApproval ||
+		notification.Kind == clientui.AttentionNotificationKindWorkflowApproval {
 		return "Action required"
 	}
 	return "Question"
@@ -237,7 +235,8 @@ func attentionNotificationBody(notification clientui.AttentionNotification) stri
 }
 
 func attentionNotificationFallbackBody(notification clientui.AttentionNotification) string {
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
+	if notification.Kind == clientui.AttentionNotificationKindApproval ||
+		notification.Kind == clientui.AttentionNotificationKindWorkflowApproval {
 		return "action required"
 	}
 	return "question from agent"
@@ -251,10 +250,13 @@ func attentionNotificationQuestionPreview(notification clientui.AttentionNotific
 }
 
 func attentionNotificationApprovalMessage(notification clientui.AttentionNotification) string {
-	if notification.Approval == nil {
-		return ""
+	if notification.Approval != nil {
+		return notification.Approval.Message
 	}
-	return notification.Approval.Message
+	if notification.WorkflowApproval != nil {
+		return notification.WorkflowApproval.Message
+	}
+	return ""
 }
 
 func (h *bellHooks) recordToolCall(stepID runtimeids.StepID) {

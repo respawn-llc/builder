@@ -1,6 +1,8 @@
 package clientui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 )
 
@@ -11,8 +13,9 @@ const (
 	TranscriptMessageCommittedRow              TranscriptMessageKind = "committed_row"
 	TranscriptMessageAssistantDelta            TranscriptMessageKind = "assistant_delta"
 	TranscriptMessageAssistantStreamAbort      TranscriptMessageKind = "assistant_stream_abort"
-	TranscriptMessageReasoningUpdate           TranscriptMessageKind = "reasoning_update"
-	TranscriptMessageReasoningReset            TranscriptMessageKind = "reasoning_reset"
+	TranscriptMessageThinkingStatusUpdate      TranscriptMessageKind = "thinking_status_update"
+	TranscriptMessageReasoningTraceUpdate      TranscriptMessageKind = "reasoning_trace_update"
+	TranscriptMessageReasoningTraceReset       TranscriptMessageKind = "reasoning_trace_reset"
 	TranscriptMessageToolStart                 TranscriptMessageKind = "tool_start"
 	TranscriptMessageToolAbort                 TranscriptMessageKind = "tool_abort"
 	TranscriptMessageUserMessageFlushed        TranscriptMessageKind = "user_message_flushed"
@@ -26,42 +29,82 @@ const (
 	TranscriptMessageContextUsage              TranscriptMessageKind = "context_usage"
 	TranscriptMessageGoalStatus                TranscriptMessageKind = "goal_status"
 	TranscriptMessageBackgroundActivity        TranscriptMessageKind = "background_activity"
-	TranscriptMessagePromptPending             TranscriptMessageKind = "prompt_pending"
-	TranscriptMessagePromptResolved            TranscriptMessageKind = "prompt_resolved"
+	TranscriptMessagePrompt                    TranscriptMessageKind = "prompt"
 	TranscriptMessageWorktreeTransitionOutcome TranscriptMessageKind = "worktree_transition_outcome"
 	TranscriptMessageOperationalDiagnostic     TranscriptMessageKind = "operational_diagnostic"
+	TranscriptMessageLiveRunFinished           TranscriptMessageKind = "live_run_finished"
 )
+
+type transcriptEventPayload interface {
+	transcriptEventKind() TranscriptMessageKind
+	Validate() error
+}
+
+// TranscriptEventPayload is the closed set of payloads that may be published
+// on the session transcript feed.
+type TranscriptEventPayload interface{ transcriptEventPayload }
+
+type transcriptEventPayloadValue interface {
+	transcriptEventPayload
+	TranscriptHydration |
+		TranscriptCommittedRow |
+		TranscriptAssistantDelta |
+		TranscriptAssistantStreamAbort |
+		TranscriptThinkingStatusUpdate |
+		TranscriptReasoningTraceUpdate |
+		TranscriptReasoningTraceReset |
+		TranscriptToolStart |
+		TranscriptToolAbort |
+		TranscriptUserMessageFlushed |
+		TranscriptQueuedMessageState |
+		TranscriptStepState |
+		TranscriptReviewerState |
+		RuntimeReadModelUpdate |
+		TranscriptSessionStatus |
+		TranscriptSessionIdentity |
+		TranscriptCompactionStatus |
+		TranscriptContextUsage |
+		TranscriptGoalStatus |
+		TranscriptBackgroundActivity |
+		TranscriptPrompt |
+		TranscriptWorktreeTransitionOutcome |
+		TranscriptOperationalDiagnostic |
+		TranscriptLiveRunResult
+}
+
+type TranscriptEvent struct {
+	payload TranscriptEventPayload
+}
+
+func NewTranscriptEvent[T transcriptEventPayloadValue](payload T) TranscriptEvent {
+	return TranscriptEvent{payload: payload}
+}
+
+func (e TranscriptEvent) IsZero() bool {
+	return e.payload == nil
+}
+
+func (e TranscriptEvent) Payload() TranscriptEventPayload {
+	return e.payload
+}
+
+func (e TranscriptEvent) Kind() TranscriptMessageKind {
+	if e.payload == nil {
+		panic("uninitialized transcript event has no kind")
+	}
+	return e.payload.transcriptEventKind()
+}
+
+func (e TranscriptEvent) Validate() error {
+	if e.payload == nil {
+		return fmt.Errorf("transcript event payload is uninitialized")
+	}
+	return e.payload.Validate()
+}
 
 type TranscriptMessage struct {
 	Sequence uint64
-	Kind     TranscriptMessageKind
-	Payload  TranscriptPayload
-}
-
-type TranscriptPayload struct {
-	Hydration                 *TranscriptHydration
-	CommittedRow              *TranscriptCommittedRow
-	AssistantDelta            *TranscriptAssistantDelta
-	AssistantStreamAbort      *TranscriptAssistantStreamAbort
-	ReasoningUpdate           *TranscriptReasoningUpdate
-	ReasoningReset            *TranscriptReasoningReset
-	ToolStart                 *TranscriptToolStart
-	ToolAbort                 *TranscriptToolAbort
-	UserMessageFlushed        *TranscriptUserMessageFlushed
-	QueuedMessageState        *TranscriptQueuedMessageState
-	StepState                 *TranscriptStepState
-	ReviewerState             *TranscriptReviewerState
-	RuntimeReadModelUpdate    *RuntimeReadModelUpdate
-	SessionStatus             *TranscriptSessionStatus
-	SessionIdentity           *TranscriptSessionIdentity
-	CompactionStatus          *TranscriptCompactionStatus
-	ContextUsage              *TranscriptContextUsage
-	GoalStatus                *TranscriptGoalStatus
-	BackgroundActivity        *TranscriptBackgroundActivity
-	PromptPending             *TranscriptPrompt
-	PromptResolved            *TranscriptPrompt
-	WorktreeTransitionOutcome *TranscriptWorktreeTransitionOutcome
-	OperationalDiagnostic     *TranscriptOperationalDiagnostic
+	event    TranscriptEvent
 }
 
 type TranscriptHydration struct {
@@ -70,7 +113,8 @@ type TranscriptHydration struct {
 	RuntimeReadModelUpdate RuntimeReadModelUpdate
 	CommittedRows          []TranscriptCommittedRow
 	ActiveAssistant        *TranscriptAssistantStream
-	ActiveReasoning        *TranscriptReasoningUpdate
+	ActiveThinkingStatus   *TranscriptThinkingStatusUpdate
+	ActiveReasoningTraces  []TranscriptReasoningTraceUpdate
 	ActiveStep             *TranscriptStepState
 	ActiveReviewer         *TranscriptReviewerState
 	ActiveCompaction       *TranscriptCompactionStatus
@@ -82,32 +126,31 @@ type TranscriptHydration struct {
 	GoalStatus             *TranscriptGoalStatus
 }
 
+func NewTranscriptMessage(sequence uint64, event TranscriptEvent) TranscriptMessage {
+	return TranscriptMessage{Sequence: sequence, event: event}
+}
+
+func (m TranscriptMessage) Event() TranscriptEvent {
+	return m.event
+}
+
+func (m TranscriptMessage) Payload() TranscriptEventPayload {
+	return m.event.Payload()
+}
+
+func (m TranscriptMessage) Kind() TranscriptMessageKind {
+	return m.event.Kind()
+}
+
 func (m TranscriptMessage) ValidatePayload() error {
-	if err := m.Payload.validateCardinality(m.Kind); err != nil {
-		return err
-	}
-	validator, matched := m.Payload.validatorForKind(m.Kind)
-	if !matched {
-		return fmt.Errorf("transcript message kind %q does not match its payload", m.Kind)
-	}
-	switch m.Kind {
-	case TranscriptMessagePromptPending:
-		if m.Payload.PromptPending.State != TranscriptPromptStatePending {
-			return fmt.Errorf("prompt-pending payload has state %q", m.Payload.PromptPending.State)
-		}
-	case TranscriptMessagePromptResolved:
-		if m.Payload.PromptResolved.State != TranscriptPromptStateResolved {
-			return fmt.Errorf("prompt-resolved payload has state %q", m.Payload.PromptResolved.State)
-		}
-	}
-	return validator.Validate()
+	return m.event.Validate()
 }
 
 func (m TranscriptMessage) Validate() error {
 	if err := m.ValidatePayload(); err != nil {
 		return err
 	}
-	if m.Kind == TranscriptMessageHydration {
+	if m.Kind() == TranscriptMessageHydration {
 		if m.Sequence != 1 {
 			return fmt.Errorf("transcript hydration sequence = %d, want 1", m.Sequence)
 		}
@@ -117,96 +160,199 @@ func (m TranscriptMessage) Validate() error {
 	return nil
 }
 
-func (p TranscriptPayload) validateCardinality(kind TranscriptMessageKind) error {
-	count := 0
-	for _, present := range []bool{
-		p.Hydration != nil,
-		p.CommittedRow != nil,
-		p.AssistantDelta != nil,
-		p.AssistantStreamAbort != nil,
-		p.ReasoningUpdate != nil,
-		p.ReasoningReset != nil,
-		p.ToolStart != nil,
-		p.ToolAbort != nil,
-		p.UserMessageFlushed != nil,
-		p.QueuedMessageState != nil,
-		p.StepState != nil,
-		p.ReviewerState != nil,
-		p.RuntimeReadModelUpdate != nil,
-		p.SessionStatus != nil,
-		p.SessionIdentity != nil,
-		p.CompactionStatus != nil,
-		p.ContextUsage != nil,
-		p.GoalStatus != nil,
-		p.BackgroundActivity != nil,
-		p.PromptPending != nil,
-		p.PromptResolved != nil,
-		p.WorktreeTransitionOutcome != nil,
-		p.OperationalDiagnostic != nil,
-	} {
-		if present {
-			count++
-		}
+func (m TranscriptMessage) MarshalJSON() ([]byte, error) {
+	if m.event.IsZero() {
+		return nil, fmt.Errorf("cannot serialize uninitialized transcript message")
 	}
-	if count != 1 {
-		return fmt.Errorf("transcript message kind %q has %d payloads, want exactly one", kind, count)
+	return json.Marshal(struct {
+		Sequence uint64                 `json:"sequence"`
+		Kind     TranscriptMessageKind  `json:"kind"`
+		Payload  TranscriptEventPayload `json:"payload"`
+	}{
+		Sequence: m.Sequence,
+		Kind:     m.Kind(),
+		Payload:  m.Payload(),
+	})
+}
+
+func (m *TranscriptMessage) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		Sequence uint64                 `json:"sequence"`
+		Kind     *TranscriptMessageKind `json:"kind"`
+		Payload  json.RawMessage        `json:"payload"`
 	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if envelope.Kind == nil {
+		return fmt.Errorf("transcript message kind is required")
+	}
+	if len(envelope.Payload) == 0 || bytes.Equal(envelope.Payload, []byte("null")) {
+		return fmt.Errorf("transcript message payload is required")
+	}
+	event, err := unmarshalTranscriptEvent(*envelope.Kind, envelope.Payload)
+	if err != nil {
+		return err
+	}
+	*m = NewTranscriptMessage(envelope.Sequence, event)
 	return nil
 }
 
-type transcriptPayloadValidator interface {
-	Validate() error
-}
-
-func (p TranscriptPayload) validatorForKind(kind TranscriptMessageKind) (transcriptPayloadValidator, bool) {
+func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (TranscriptEvent, error) {
 	switch kind {
 	case TranscriptMessageHydration:
-		return p.Hydration, p.Hydration != nil
+		return decodeTranscriptPayload[TranscriptHydration](data)
 	case TranscriptMessageCommittedRow:
-		return p.CommittedRow, p.CommittedRow != nil
+		return decodeTranscriptPayload[TranscriptCommittedRow](data)
 	case TranscriptMessageAssistantDelta:
-		return p.AssistantDelta, p.AssistantDelta != nil
+		return decodeTranscriptPayload[TranscriptAssistantDelta](data)
 	case TranscriptMessageAssistantStreamAbort:
-		return p.AssistantStreamAbort, p.AssistantStreamAbort != nil
-	case TranscriptMessageReasoningUpdate:
-		return p.ReasoningUpdate, p.ReasoningUpdate != nil
-	case TranscriptMessageReasoningReset:
-		return p.ReasoningReset, p.ReasoningReset != nil
+		return decodeTranscriptPayload[TranscriptAssistantStreamAbort](data)
+	case TranscriptMessageThinkingStatusUpdate:
+		return decodeTranscriptPayload[TranscriptThinkingStatusUpdate](data)
+	case TranscriptMessageReasoningTraceUpdate:
+		return decodeTranscriptPayload[TranscriptReasoningTraceUpdate](data)
+	case TranscriptMessageReasoningTraceReset:
+		return decodeTranscriptPayload[TranscriptReasoningTraceReset](data)
 	case TranscriptMessageToolStart:
-		return p.ToolStart, p.ToolStart != nil
+		return decodeTranscriptPayload[TranscriptToolStart](data)
 	case TranscriptMessageToolAbort:
-		return p.ToolAbort, p.ToolAbort != nil
+		return decodeTranscriptPayload[TranscriptToolAbort](data)
 	case TranscriptMessageUserMessageFlushed:
-		return p.UserMessageFlushed, p.UserMessageFlushed != nil
+		return decodeTranscriptPayload[TranscriptUserMessageFlushed](data)
 	case TranscriptMessageQueuedMessageState:
-		return p.QueuedMessageState, p.QueuedMessageState != nil
+		return decodeTranscriptPayload[TranscriptQueuedMessageState](data)
 	case TranscriptMessageStepState:
-		return p.StepState, p.StepState != nil
+		return decodeTranscriptPayload[TranscriptStepState](data)
 	case TranscriptMessageReviewerState:
-		return p.ReviewerState, p.ReviewerState != nil
+		return decodeTranscriptPayload[TranscriptReviewerState](data)
 	case TranscriptMessageRuntimeReadModelUpdate:
-		return p.RuntimeReadModelUpdate, p.RuntimeReadModelUpdate != nil
+		return decodeTranscriptPayload[RuntimeReadModelUpdate](data)
 	case TranscriptMessageSessionStatus:
-		return p.SessionStatus, p.SessionStatus != nil
+		return decodeTranscriptPayload[TranscriptSessionStatus](data)
 	case TranscriptMessageSessionIdentity:
-		return p.SessionIdentity, p.SessionIdentity != nil
+		return decodeTranscriptPayload[TranscriptSessionIdentity](data)
 	case TranscriptMessageCompactionStatus:
-		return p.CompactionStatus, p.CompactionStatus != nil
+		return decodeTranscriptPayload[TranscriptCompactionStatus](data)
 	case TranscriptMessageContextUsage:
-		return p.ContextUsage, p.ContextUsage != nil
+		return decodeTranscriptPayload[TranscriptContextUsage](data)
 	case TranscriptMessageGoalStatus:
-		return p.GoalStatus, p.GoalStatus != nil
+		return decodeTranscriptPayload[TranscriptGoalStatus](data)
 	case TranscriptMessageBackgroundActivity:
-		return p.BackgroundActivity, p.BackgroundActivity != nil
-	case TranscriptMessagePromptPending:
-		return p.PromptPending, p.PromptPending != nil
-	case TranscriptMessagePromptResolved:
-		return p.PromptResolved, p.PromptResolved != nil
+		return decodeTranscriptPayload[TranscriptBackgroundActivity](data)
+	case TranscriptMessagePrompt:
+		return decodeTranscriptPayload[TranscriptPrompt](data)
 	case TranscriptMessageWorktreeTransitionOutcome:
-		return p.WorktreeTransitionOutcome, p.WorktreeTransitionOutcome != nil
+		return decodeTranscriptPayload[TranscriptWorktreeTransitionOutcome](data)
 	case TranscriptMessageOperationalDiagnostic:
-		return p.OperationalDiagnostic, p.OperationalDiagnostic != nil
+		return decodeTranscriptPayload[TranscriptOperationalDiagnostic](data)
+	case TranscriptMessageLiveRunFinished:
+		return decodeTranscriptPayload[TranscriptLiveRunResult](data)
 	default:
-		return nil, false
+		return TranscriptEvent{}, fmt.Errorf("unknown transcript message kind %q", kind)
 	}
+}
+
+func decodeTranscriptPayload[T transcriptEventPayloadValue](data []byte) (TranscriptEvent, error) {
+	var payload T
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return TranscriptEvent{}, err
+	}
+	return NewTranscriptEvent(payload), nil
+}
+
+func (TranscriptHydration) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageHydration
+}
+
+func (TranscriptCommittedRow) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageCommittedRow
+}
+
+func (TranscriptAssistantDelta) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageAssistantDelta
+}
+
+func (TranscriptAssistantStreamAbort) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageAssistantStreamAbort
+}
+
+func (TranscriptThinkingStatusUpdate) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageThinkingStatusUpdate
+}
+
+func (TranscriptReasoningTraceUpdate) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageReasoningTraceUpdate
+}
+
+func (TranscriptReasoningTraceReset) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageReasoningTraceReset
+}
+
+func (TranscriptToolStart) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageToolStart
+}
+
+func (TranscriptToolAbort) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageToolAbort
+}
+
+func (TranscriptUserMessageFlushed) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageUserMessageFlushed
+}
+
+func (TranscriptQueuedMessageState) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageQueuedMessageState
+}
+
+func (TranscriptStepState) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageStepState
+}
+
+func (TranscriptReviewerState) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageReviewerState
+}
+
+func (RuntimeReadModelUpdate) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageRuntimeReadModelUpdate
+}
+
+func (TranscriptSessionStatus) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageSessionStatus
+}
+
+func (TranscriptSessionIdentity) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageSessionIdentity
+}
+
+func (TranscriptCompactionStatus) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageCompactionStatus
+}
+
+func (TranscriptContextUsage) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageContextUsage
+}
+
+func (TranscriptGoalStatus) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageGoalStatus
+}
+
+func (TranscriptBackgroundActivity) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageBackgroundActivity
+}
+
+func (TranscriptPrompt) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessagePrompt
+}
+
+func (TranscriptWorktreeTransitionOutcome) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageWorktreeTransitionOutcome
+}
+
+func (TranscriptOperationalDiagnostic) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageOperationalDiagnostic
+}
+
+func (TranscriptLiveRunResult) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageLiveRunFinished
 }

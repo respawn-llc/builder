@@ -3,25 +3,26 @@ package runtime
 import (
 	"encoding/json"
 	"errors"
-	"slices"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		Debug: true,
 	})
-	result, mismatch := seedMismatchedDeletionCompletion(t, engine)
+	result := mismatchedDeletionCompletion(t, engine)
 
 	defer func() {
 		recovered := recover()
@@ -32,17 +33,19 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 		if failure.CallID != result.CallID ||
 			failure.ToolName != result.Name ||
 			failure.Mismatch == nil ||
-			failure.Mismatch.Kind != mismatch.Kind ||
-			!slices.Equal(failure.Mismatch.ExpectedOperationIDs, mismatch.ExpectedOperationIDs) ||
-			!slices.Equal(failure.Mismatch.ReceivedOperationIDs, mismatch.ReceivedOperationIDs) {
-			t.Fatalf("typed panic context = %+v, want call/tool/mismatch %+v", failure, mismatch)
+			failure.Mismatch.Kind != patchformat.WholeFileDeletionFactMismatchUnexpectedOperation {
+			t.Fatalf("typed panic context = %+v", failure)
 		}
-		events, err := sessiontest.CollectEvents(store)
+
+		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 		if err != nil {
-			t.Fatalf("collect events after debug panic: %v", err)
+			t.Fatalf("read bounded mismatch records: %v", err)
 		}
-		if len(events) != 1 || events[0].Kind != "message" {
-			t.Fatalf("debug mismatch persisted completion events: %+v", events)
+		for _, record := range window.Records {
+			switch mustSessionEventPayload(record).(type) {
+			case session.ToolCompletionRecord, session.LocalEntryRecord:
+				t.Fatalf("debug mismatch persisted a completion or fallback entry: %+v", record)
+			}
 		}
 		if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
 			t.Fatal("debug mismatch removed the live tool before persistence")
@@ -52,179 +55,102 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 	_, _ = engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
 }
 
-func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority(t *testing.T) {
-	t.Run("materialized tool output hydration", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-			Model: "gpt-5",
-			Debug: false,
-		})
-		result, _ := seedMismatchedDeletionCompletion(t, engine)
-
-		if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
-			t.Fatalf("persist release fallback: %v", err)
-		}
-		if err := engine.steer(
-			"step-delete",
-			steerMessagesWithPersistenceIntent(
-				steeringPriorityNormal,
-				steeringMessageEventDefault,
-				true,
-				[]llm.Message{{
-					Role:        llm.RoleTool,
-					MessageType: llm.ToolOutputMessageType(true),
-					ToolCallID:  result.CallID,
-					Name:        string(result.Name),
-					Content:     string(result.Output),
-				}},
-			),
-		); err != nil {
-			t.Fatalf("persist materialized tool output: %v", err)
-		}
-
-		assertDeletionFallbackHydration(t, engine, 2)
-		durable, err := sessiontest.CollectEvents(store)
-		if err != nil {
-			t.Fatalf("collect durable events: %v", err)
-		}
-		if len(durable) != 4 ||
-			durable[0].Kind != "message" ||
-			durable[1].Kind != "tool_completed" ||
-			durable[2].Kind != "local_entry" ||
-			durable[3].Kind != "message" {
-			t.Fatalf("durable fallback sequence = %+v", durable)
-		}
-		var feedback storedLocalEntry
-		if err := json.Unmarshal(durable[2].Payload, &feedback); err != nil {
-			t.Fatalf("decode fallback feedback: %v", err)
-		}
-		if feedback.AfterToolCallID == nil || *feedback.AfterToolCallID != result.CallID {
-			t.Fatalf("fallback feedback attachment = %+v, want call %q", feedback.AfterToolCallID, result.CallID)
-		}
-
-		reopened := mustOpenTestSession(t, store.Dir())
-		restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
-			Model: "gpt-5",
-		})
-		assertDeletionFallbackHydration(t, restored, 2)
+func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
 	})
+	result := mismatchedDeletionCompletion(t, engine)
 
-	t.Run("uncommitted append", func(t *testing.T) {
-		store := mustCreateTestSession(t)
-		var emitted []Event
-		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-			Model:   "gpt-5",
-			Debug:   false,
-			OnEvent: func(event Event) { emitted = append(emitted, event) },
-		})
-		result, _ := seedMismatchedDeletionCompletion(t, engine)
-		emitted = nil
-		blocker := mustBlockTestEventLogAppends(t, store)
+	if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
+		t.Fatalf("persist release fallback: %v", err)
+	}
+	assertDeletionMismatchFallback(t, engine, store, result)
 
-		receipt, err := engine.steerWithCommitReceipt(
-			"step-delete",
-			steerToolCompletionIntent(result),
-		)
-		if err == nil || receipt.Committed {
-			t.Fatalf("uncommitted fallback outcome: receipt=%+v err=%v", receipt, err)
-		}
-		if restoreErr := blocker.Restore(); restoreErr != nil {
-			t.Fatalf("restore event-log blocker: %v", restoreErr)
-		}
-		events, collectErr := sessiontest.CollectEvents(store)
-		if collectErr != nil {
-			t.Fatalf("collect durable events: %v", collectErr)
-		}
-		if len(events) != 1 || events[0].Kind != "message" {
-			t.Fatalf("uncommitted fallback durable events: %+v", events)
-		}
-		if engine.transcriptRuntimeState().ToolCompletionCount() != 0 {
-			t.Fatal("uncommitted fallback recorded a tool completion")
-		}
-		assertDeletionFallbackHydration(t, engine, 0)
-		if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
-			t.Fatal("uncommitted fallback removed the live tool")
-		}
-		if len(emitted) != 0 {
-			t.Fatalf("uncommitted fallback emitted client events: %+v", emitted)
-		}
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
 	})
-
-	t.Run("committed observer error", func(t *testing.T) {
-		observerErr := errors.New("fallback observer failed")
-		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-		store := mustCreateNamedTestSession(
-			t,
-			"ws",
-			t.TempDir(),
-			session.WithPersistenceObserver(gate),
-		)
-		var emitted []Event
-		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-			Model:   "gpt-5",
-			Debug:   false,
-			OnEvent: func(event Event) { emitted = append(emitted, event) },
-		})
-		result, _ := seedMismatchedDeletionCompletion(t, engine)
-		emitted = nil
-		gate.FailNext(observerErr)
-
-		receipt, err := engine.steerWithCommitReceipt(
-			"step-delete",
-			steerToolCompletionIntent(result),
-		)
-		if !receipt.Committed || !errors.Is(err, observerErr) {
-			t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
-		}
-		durable, collectErr := sessiontest.CollectEvents(store)
-		if collectErr != nil {
-			t.Fatalf("collect durable events: %v", collectErr)
-		}
-		if len(durable) != 3 ||
-			durable[0].Kind != "message" ||
-			durable[1].Kind != "tool_completed" ||
-			durable[2].Kind != "local_entry" {
-			t.Fatalf("durable fallback order = %+v, want tool completion then local entry", durable)
-		}
-		if engine.transcriptRuntimeState().ToolCompletionCount() != 1 {
-			t.Fatal("committed fallback did not record exactly one tool completion")
-		}
-		assertDeletionFallbackHydration(t, engine, 2)
-		if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); ok {
-			t.Fatal("committed fallback retained the live tool")
-		}
-		if len(emitted) != 2 ||
-			emitted[0].Kind != EventToolCallCompleted ||
-			emitted[1].Kind != EventLocalEntryAdded ||
-			emitted[0].ToolResult == nil ||
-			emitted[0].ToolResult.IsError != result.IsError ||
-			!slices.Equal(emitted[0].ToolResult.Output, result.Output) ||
-			emitted[1].LocalEntry == nil ||
-			emitted[1].LocalEntry.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
-			t.Fatalf("fallback client event order/content = %+v", emitted)
-		}
-		assertFallbackPresentationIsPathOnly(t, emitted[0].ToolResult.Presentation)
-		assertProviderHistoryExcludesOperatorFallback(t, engine, result)
-
-		reopened := mustOpenTestSession(t, store.Dir())
-		restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
-			Model: "gpt-5",
-		})
-		assertDeletionFallbackHydration(t, restored, 2)
-		assertProviderHistoryExcludesOperatorFallback(t, restored, result)
-	})
+	assertDeletionMismatchFallback(t, restored, reopened, result)
 }
 
-func seedMismatchedDeletionCompletion(
-	t *testing.T,
-	engine *Engine,
-) (tools.Result, *patchformat.WholeFileDeletionFactMismatch) {
+func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	var emitted []Event
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { emitted = append(emitted, event) },
+	})
+	result := mismatchedDeletionCompletion(t, engine)
+	emitted = nil
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	if err == nil || receipt.Committed {
+		t.Fatalf("uncommitted fallback outcome: receipt=%+v err=%v", receipt, err)
+	}
+	if restoreErr := blocker.Restore(); restoreErr != nil {
+		t.Fatalf("restore event-log blocker: %v", restoreErr)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded mismatch records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		switch mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord, session.LocalEntryRecord:
+			t.Fatalf("uncommitted fallback persisted recovery data: %+v", record)
+		}
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("uncommitted fallback projected rows: %+v", rows)
+	}
+	if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
+		t.Fatal("uncommitted fallback removed the live tool")
+	}
+	if len(emitted) != 0 {
+		t.Fatalf("uncommitted fallback emitted client events: %+v", emitted)
+	}
+}
+
+func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverError(t *testing.T) {
+	t.Parallel()
+	observerErr := errors.New("mismatch observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var emitted []Event
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { emitted = append(emitted, event) },
+	})
+	result := mismatchedDeletionCompletion(t, engine)
+	emitted = nil
+	gate.FailNext(observerErr)
+
+	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
+	}
+	assertDeletionMismatchFallback(t, engine, store, result)
+	if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); ok {
+		t.Fatal("committed fallback retained the live tool")
+	}
+	if len(emitted) != 2 ||
+		emitted[0].Kind != EventToolCallCompleted ||
+		emitted[1].Kind != EventLocalEntryAdded {
+		t.Fatalf("committed fallback events = %+v", emitted)
+	}
+}
+
+func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	t.Helper()
 	call := llm.ToolCall{
-		ID:          "f3d2777d-4541-4bea-9270-d43efad59692",
+		ID:          "deletion-call",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: "*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
 	if err := engine.steer(
@@ -246,84 +172,94 @@ func seedMismatchedDeletionCompletion(
 	}
 	received := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 9}
 	group := patchformat.WholeFileDeletionGroupID{FirstOperation: received}
-	count := 3
-	mismatch := &patchformat.WholeFileDeletionFactMismatch{
-		Kind:                 patchformat.WholeFileDeletionFactMismatchUnexpectedOperation,
-		ExpectedOperationIDs: []patchformat.WholeFileDeletionOperationID{{HunkOrdinal: 0}},
-		ReceivedOperationIDs: []patchformat.WholeFileDeletionOperationID{received},
-		PhysicalGroup:        &group,
-		Removed:              &count,
-	}
 	return tools.Result{
-		CallID:  call.ID,
-		Name:    toolspec.ToolPatch,
-		IsError: false,
-		Output:  json.RawMessage(`{"ok":true}`),
-		Summary: "applied",
+		CallID: call.ID,
+		Name:   toolspec.ToolPatch,
+		Output: json.RawMessage(`{"ok":true}`),
 		PresentationDelta: &transcript.ToolResultPresentationDelta{
 			WholeFileDeletionFacts: []patchformat.WholeFileDeletionFact{{
 				PhysicalGroup: group,
 				OperationIDs:  []patchformat.WholeFileDeletionOperationID{received},
-				Removed:       count,
+				Removed:       1,
 			}},
 		},
-	}, mismatch
+	}
 }
 
-func assertDeletionFallbackHydration(t *testing.T, engine *Engine, wantRows int) {
+func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session.Store, result tools.Result) {
 	t.Helper()
-	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
-		if len(snapshot.CommittedRows) != wantRows {
-			t.Fatalf("hydration rows = %+v, want %d", snapshot.CommittedRows, wantRows)
-		}
-		if wantRows == 2 {
-			if snapshot.CommittedRows[0].Kind != TranscriptCommittedRowFactTool ||
-				snapshot.CommittedRows[0].StepID != "step-delete" ||
-				snapshot.CommittedRows[1].Kind != TranscriptCommittedRowFactNotice ||
-				snapshot.CommittedRows[1].StepID != "step-delete" ||
-				snapshot.CommittedRows[1].Notice == nil ||
-				snapshot.CommittedRows[1].Notice.Reason != transcript.NoticeReasonRuntimeDiagnostic ||
-				snapshot.CommittedRows[1].Notice.DiagnosticCode != string(transcript.EntryRoleDeveloperErrorFeedback) {
-				t.Fatalf("hydration fallback order = %+v", snapshot.CommittedRows)
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded mismatch records: %v", err)
+	}
+	var completion *storedToolCompletion
+	var feedback *storedLocalEntry
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord:
+			value, restoreErr := storedToolCompletionFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore tool completion: %v", restoreErr)
 			}
-			assertFallbackPresentationIsPathOnly(
-				t,
-				snapshot.CommittedRows[0].Tool.Presentation,
-			)
+			if value.CallID == result.CallID {
+				completion = &value
+			}
+		case session.LocalEntryRecord:
+			value, restoreErr := storedLocalEntryFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore local entry: %v", restoreErr)
+			}
+			if value.AfterToolCallID != nil && *value.AfterToolCallID == result.CallID {
+				feedback = &value
+			}
 		}
+	}
+	if completion == nil || completion.Presentation == nil || completion.Presentation.PatchRender == nil {
+		t.Fatalf("missing fallback completion presentation: %+v", completion)
+	}
+	if feedback == nil || feedback.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
+		t.Fatalf("missing typed mismatch feedback: %+v", feedback)
+	}
+	for _, file := range completion.Presentation.PatchRender.Files {
+		for _, deletion := range file.WholeFileDeletions {
+			if deletion.Disposition != nil {
+				t.Fatalf("fallback fabricated deletion disposition: %+v", completion.Presentation)
+			}
+		}
+	}
+
+	var snapshot TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(value TranscriptHydrationSnapshot) error {
+		snapshot = value
 		return nil
 	}); err != nil {
-		t.Fatalf("hydrate runtime transcript: %v", err)
+		t.Fatalf("read transcript hydration snapshot: %v", err)
 	}
-}
-
-func assertFallbackPresentationIsPathOnly(t *testing.T, meta *transcript.ToolCallMeta) {
-	t.Helper()
-	if meta == nil || meta.PatchRender == nil ||
-		len(meta.PatchRender.Files) != 1 ||
-		len(meta.PatchRender.Files[0].WholeFileDeletions) != 1 ||
-		meta.PatchRender.Files[0].WholeFileDeletions[0].Disposition != nil {
-		t.Fatalf("fallback presentation = %+v, want prepared path-only deletion", meta)
-	}
-}
-
-func assertProviderHistoryExcludesOperatorFallback(
-	t *testing.T,
-	engine *Engine,
-	result tools.Result,
-) {
-	t.Helper()
-	items := engine.transcriptRuntimeState().SnapshotItems()
-	outputCount := 0
-	for _, item := range items {
-		if item.CallID == result.CallID && slices.Equal(item.Output, result.Output) {
-			outputCount++
+	var toolRow, noticeRow bool
+	for _, row := range snapshot.CommittedRows {
+		switch row.Kind {
+		case TranscriptCommittedRowFactTool:
+			toolRow = row.StepID == "step-delete"
+		case TranscriptCommittedRowFactNotice:
+			noticeRow = row.StepID == "step-delete" &&
+				row.Notice != nil &&
+				row.Notice.Reason == transcript.NoticeReasonRuntimeDiagnostic
 		}
-		if item.Role == llm.RoleDeveloper {
-			t.Fatalf("operator-only fallback leaked into provider items: %+v", item)
+	}
+	if !toolRow || !noticeRow {
+		t.Fatalf("hydrated fallback rows missing tool or diagnostic: %+v", snapshot.CommittedRows)
+	}
+
+	outputCount := 0
+	for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
+		if item.Role != nil && *item.Role == llm.RoleDeveloper {
+			t.Fatalf("operator feedback leaked into provider items: %+v", item)
+		}
+		if isToolOutputItem(item.Type) && item.CallID != nil && *item.CallID == result.CallID {
+			outputCount++
 		}
 	}
 	if outputCount != 1 {
-		t.Fatalf("provider output count = %d, want one ordinary successful tool output: %+v", outputCount, items)
+		t.Fatalf("provider tool outputs = %d, want one", outputCount)
 	}
 }

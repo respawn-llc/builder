@@ -19,28 +19,135 @@ func TestLoadWorkflowConfigDefaults(t *testing.T) {
 	if cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 5 {
 		t.Fatalf("max invalid completion attempts = %d, want 5", cfg.Settings.Workflow.MaxInvalidCompletionAttempts)
 	}
+	if !cfg.Settings.Workflow.UseRequiredToolCalls {
+		t.Fatal("workflow required tool calls = false, want default true")
+	}
 	if cfg.Settings.Workflow.Subagents {
 		t.Fatal("workflow subagents = true, want default false")
 	}
 }
 
-func TestDefaultSettingsTOMLRendersWorkflowDefaults(t *testing.T) {
-	rendered := settingsTOMLWithRenderingOptions(configRegistry.defaultState().Settings, true, nil, nil)
-	if !strings.Contains(rendered, "[workflow]") {
-		t.Fatalf("default TOML missing workflow section:\n%s", rendered)
+func TestResolveWorkflowPreCompactionTokensDefaultsToSeventyPercentOfThreshold(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, `model_context_window = 100000
+context_compaction_threshold_tokens = 90001
+`, LoadOptions{})
+
+	if cfg.Settings.Workflow.PreCompactionTokens != nil {
+		t.Fatalf("pre-compaction tokens = %v, want authored absence", cfg.Settings.Workflow.PreCompactionTokens)
 	}
-	for _, want := range []string{
-		"completion_mode = \"auto\"",
-		"concurrency = 5",
-		"max_invalid_completion_attempts = 5",
-		"subagents = false",
+	if got := ResolveWorkflowPreCompactionTokens(cfg.Settings); got != 63000 {
+		t.Fatalf("resolved pre-compaction tokens = %d, want floor(90001*70%%) = 63000", got)
+	}
+}
+
+func TestResolveWorkflowPreCompactionTokensDefaultRemainsPositive(t *testing.T) {
+	settings := Settings{ContextCompactionThresholdTokens: 1}
+
+	if got := ResolveWorkflowPreCompactionTokens(settings); got != 1 {
+		t.Fatalf("resolved pre-compaction tokens = %d, want 1", got)
+	}
+}
+
+func TestLoadWorkflowPreCompactionTokensAcceptsPositiveValueIncludingThreshold(t *testing.T) {
+	_, _, cfg := loadConfigTestFileApp(t, `model_context_window = 100000
+context_compaction_threshold_tokens = 90000
+
+[workflow]
+pre_compaction_tokens = 90000
+`, LoadOptions{})
+
+	if cfg.Settings.Workflow.PreCompactionTokens == nil || *cfg.Settings.Workflow.PreCompactionTokens != 90000 {
+		t.Fatalf("pre-compaction tokens = %v, want 90000", cfg.Settings.Workflow.PreCompactionTokens)
+	}
+	if got := cfg.Source.Sources["workflow.pre_compaction_tokens"]; got != "file" {
+		t.Fatalf("pre-compaction tokens source = %q, want file", got)
+	}
+	if got := ResolveWorkflowPreCompactionTokens(cfg.Settings); got != 90000 {
+		t.Fatalf("resolved pre-compaction tokens = %d, want 90000", got)
+	}
+}
+
+func TestLoadWorkflowPreCompactionTokensRejectsNonPositiveAndAboveThreshold(t *testing.T) {
+	for name, payload := range map[string]string{
+		"zero": `[workflow]
+pre_compaction_tokens = 0
+`,
+		"negative": `[workflow]
+pre_compaction_tokens = -1
+`,
+		"above threshold": `context_compaction_threshold_tokens = 90000
+model_context_window = 100000
+
+[workflow]
+pre_compaction_tokens = 90001
+`,
 	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("default TOML missing %q:\n%s", want, rendered)
+		t.Run(name, func(t *testing.T) {
+			if err := loadConfigTestFileError(t, payload, LoadOptions{}); err == nil {
+				t.Fatal("expected invalid workflow pre-compaction threshold error")
+			}
+		})
+	}
+}
+
+func TestWorkflowPreCompactionTokensIsRootOnlyAndHasNoEnvironmentSource(t *testing.T) {
+	_, workspace := newConfigTestEnv(t)
+	t.Setenv("KENT_WORKFLOW_PRE_COMPACTION_TOKENS", "12345")
+
+	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
+	if cfg.Settings.Workflow.PreCompactionTokens != nil {
+		t.Fatalf("environment configured pre-compaction tokens = %v, want authored absence", cfg.Settings.Workflow.PreCompactionTokens)
+	}
+	if got := cfg.Source.Sources["workflow.pre_compaction_tokens"]; got != "default" {
+		t.Fatalf("pre-compaction tokens source = %q, want default", got)
+	}
+
+	err := loadConfigTestFileError(t, `[subagents.fast.workflow]
+pre_compaction_tokens = 12345
+`, LoadOptions{})
+	if err == nil {
+		t.Fatal("expected root-only workflow pre-compaction setting to be rejected in a role")
+	}
+	if !unknownSettingsKeyReported(err, "subagents.fast.workflow.pre_compaction_tokens") {
+		t.Fatalf("Load error = %v, want root-only pre-compaction setting rejection", err)
+	}
+}
+
+func TestDefaultSettingsTOMLRendersWorkflowDefaults(t *testing.T) {
+	lines := configRegistry.defaultLines(configRegistry.defaultState())
+	values := make(map[string]any, len(lines))
+	for _, line := range lines {
+		values[strings.Join(line.Path, ".")] = line.Value
+	}
+	for key, want := range map[string]any{
+		"workflow.completion_mode":                 WorkflowCompletionModeAuto,
+		"workflow.concurrency":                     5,
+		"workflow.max_invalid_completion_attempts": 5,
+		"workflow.use_required_tool_calls":         true,
+		"workflow.subagents":                       false,
+	} {
+		if got, ok := values[key]; !ok || got != want {
+			t.Fatalf("default registry value %q = %#v, want %#v", key, got, want)
 		}
 	}
-	if strings.Contains(rendered, "max_final_answer_violations") {
-		t.Fatalf("default TOML should not render removed final-answer cap:\n%s", rendered)
+	var defaultValue any
+	for _, setting := range configRegistry.settings {
+		keyed, ok := setting.(keyedRegistrySetting)
+		if !ok || keyed.registryKey() != "workflow.pre_compaction_tokens" {
+			continue
+		}
+		root, ok := setting.(rootOnlySetting[*int])
+		if !ok {
+			t.Fatalf("pre-compaction registry setting = %T, want root-only optional integer", setting)
+		}
+		defaultValue = root.defaultDocValue(configRegistry.defaultState())
+		break
+	}
+	if defaultValue != 247380 {
+		t.Fatalf("default registry pre-compaction threshold = %#v, want 247380", defaultValue)
+	}
+	if _, ok := values["workflow.max_final_answer_violations"]; ok {
+		t.Fatal("default registry should not contain removed final-answer cap")
 	}
 }
 
@@ -70,13 +177,21 @@ func TestLoadWorkflowConfigFromFile(t *testing.T) {
 completion_mode = "shell_command"
 concurrency = 7
 max_invalid_completion_attempts = 6
+use_required_tool_calls = false
 subagents = true
 `, LoadOptions{})
-	if cfg.Settings.Workflow.CompletionMode != WorkflowCompletionModeShellCommand || cfg.Settings.Workflow.Concurrency != 7 || cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 6 || !cfg.Settings.Workflow.Subagents {
+	if cfg.Settings.Workflow.CompletionMode != WorkflowCompletionModeShellCommand ||
+		cfg.Settings.Workflow.Concurrency != 7 ||
+		cfg.Settings.Workflow.MaxInvalidCompletionAttempts != 6 ||
+		cfg.Settings.Workflow.UseRequiredToolCalls ||
+		!cfg.Settings.Workflow.Subagents {
 		t.Fatalf("workflow settings = %+v", cfg.Settings.Workflow)
 	}
 	if got := cfg.Source.Sources["workflow.completion_mode"]; got != "file" {
 		t.Fatalf("workflow.completion_mode source = %q, want file", got)
+	}
+	if got := cfg.Source.Sources["workflow.use_required_tool_calls"]; got != "file" {
+		t.Fatalf("workflow.use_required_tool_calls source = %q, want file", got)
 	}
 }
 

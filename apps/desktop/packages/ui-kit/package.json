@@ -1,0 +1,31 @@
+{
+  "name": "@app/ui-kit",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/ReorderableList.d.ts",
+      "import": "./dist/ReorderableList.js"
+    }
+  },
+  "scripts": {
+    "build": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
+    "test": "cd ../.. && vitest --config tooling/vite.config.ts run src/shared/labels/LabelChooser.test.tsx",
+    "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^7.0.2",
+    "typescript7": "npm:typescript@7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

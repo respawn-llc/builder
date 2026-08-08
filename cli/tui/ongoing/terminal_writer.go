@@ -18,8 +18,14 @@ func redrawableSemanticPromptSequence() string {
 }
 
 func writeMutableBandErase(builder *strings.Builder, terminalHeight, bandHeight int) {
-	startRow := terminalHeight - bandHeight + 1
-	for row := startRow; row <= terminalHeight; row++ {
+	if bandHeight <= 0 {
+		return
+	}
+	writeMutableRowsErase(builder, terminalHeight-bandHeight+1, terminalHeight)
+}
+
+func writeMutableRowsErase(builder *strings.Builder, startRow, endRow int) {
+	for row := startRow; row <= endRow; row++ {
 		fmt.Fprintf(builder, "\x1b[%d;1H", row)
 		// Retire semantic prompt metadata before this row can rejoin the
 		// immutable area; erasing cells alone does not clear that metadata.
@@ -34,28 +40,53 @@ func writeImmutableRegionScrollForLiveBandGrowth(builder *strings.Builder, termi
 		return
 	}
 	oldImmutableBottom := terminalHeight - previousBandHeight
-	if oldImmutableBottom < 1 {
+	writeImmutableRegionScroll(builder, oldImmutableBottom, delta)
+}
+
+func writeImmutableRegionScrollForTerminalExpansion(
+	builder *strings.Builder,
+	previousTerminalHeight int,
+	terminalHeight int,
+	previousBandHeight int,
+) {
+	writeImmutableRegionScroll(
+		builder,
+		terminalHeight-previousBandHeight,
+		terminalHeight-previousTerminalHeight,
+	)
+}
+
+func writeImmutableRegionScroll(builder *strings.Builder, immutableBottom, rows int) {
+	if immutableBottom < 1 || rows <= 0 {
 		return
 	}
-	if delta > oldImmutableBottom {
-		delta = oldImmutableBottom
+	if rows > immutableBottom {
+		rows = immutableBottom
 	}
-	fmt.Fprintf(builder, "\x1b[1;%dr\x1b[%d;1H", oldImmutableBottom, oldImmutableBottom)
-	for range delta {
+	fmt.Fprintf(builder, "\x1b[1;%dr\x1b[%d;1H", immutableBottom, immutableBottom)
+	for range rows {
 		builder.WriteString("\r\n")
 	}
 	builder.WriteString(resetScrollRegionAndOriginMode())
 }
 
-func writeRetainedMutableBand(builder *strings.Builder, terminalHeight, retainedHeight int, lines []string) {
+func writeRetainedMutableBand(
+	builder *strings.Builder,
+	terminalHeight int,
+	retainedHeight int,
+	lines []string,
+	redrawableSemanticPrompt bool,
+) {
 	if retainedHeight <= 0 {
 		return
 	}
 	retainedStartRow := terminalHeight - retainedHeight + 1
 	fmt.Fprintf(builder, "\x1b[%d;1H", retainedStartRow)
-	// At the left margin OSC 133 A marks the complete retained region without
-	// advancing. Supporting terminals clear the region before resize reflow.
-	builder.WriteString(redrawableSemanticPromptSequence())
+	if redrawableSemanticPrompt {
+		// At the left margin OSC 133 A marks the complete retained region without
+		// advancing. Supporting terminals clear the region before resize reflow.
+		builder.WriteString(redrawableSemanticPromptSequence())
+	}
 	startRow := terminalHeight - len(lines) + 1
 	for index, line := range lines {
 		row := startRow + index

@@ -11,6 +11,9 @@ const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
+	ScopeSessionPersistence   Scope = "session_persistence"
+	ScopeWorkflowExecution    Scope = "workflow_execution"
+	ScopeWorktreeContract     Scope = "worktree_contract"
 )
 
 type Field string
@@ -18,6 +21,7 @@ type Field string
 const (
 	FieldOperation                Field = "operation"
 	FieldSessionID                Field = "session_id"
+	FieldPromptID                 Field = "prompt_id"
 	FieldCachedServerActivity     Field = "cached_server_activity"
 	FieldLocalProjection          Field = "local_projection"
 	FieldPendingInterrupt         Field = "pending_interrupt"
@@ -46,12 +50,34 @@ const (
 	FieldProposedStepID           Field = "proposed_step_id"
 	FieldProcessID                Field = "process_id"
 	FieldBackgroundState          Field = "background_state"
+	FieldRawOwner                 Field = "raw_owner"
+	FieldValidationCause          Field = "validation_cause"
 )
 
 type Diagnostic struct {
 	Scope  Scope
 	Fields map[Field]string
 	Stack  string
+}
+
+func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
+	causeText := ""
+	if cause != nil {
+		causeText = cause.Error()
+	}
+	return Diagnostic{
+		Scope: scope,
+		Fields: fields(map[Field]string{
+			FieldOperation:      operation,
+			FieldInvariantError: causeText,
+		}),
+	}
+}
+
+func WorkflowPromptDiagnostic(operation string, promptID string, cause error) Diagnostic {
+	diagnostic := FailureDiagnostic(ScopeWorkflowExecution, operation, cause)
+	diagnostic.Fields[FieldPromptID] = promptID
+	return diagnostic
 }
 
 type TUIProjectionDiagnosticInput struct {
@@ -137,6 +163,10 @@ func (d Diagnostic) withStack() Diagnostic {
 		d.Stack = string(debug.Stack())
 	}
 	return d
+}
+
+func (d Diagnostic) WithStack() Diagnostic {
+	return d.withStack()
 }
 
 func fields(values map[Field]string) map[Field]string {

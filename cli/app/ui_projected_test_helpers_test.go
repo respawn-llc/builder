@@ -7,14 +7,17 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/sessionview"
+	"core/server/tools"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -64,8 +67,18 @@ func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
 }
 
 type recordingPromptControl struct {
+	singlePromptOnlyControl
 	askRequests      chan serverapi.AskAnswerRequest
 	approvalRequests chan serverapi.ApprovalAnswerRequest
+}
+
+type singlePromptOnlyControl struct{}
+
+func (singlePromptOnlyControl) AnswerPromptBatch(
+	context.Context,
+	serverapi.PromptAnswerBatchRequest,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	panic("unexpected prompt batch answer")
 }
 
 func newRecordingPromptControl() *recordingPromptControl {
@@ -173,8 +186,14 @@ func newProjectedAuthorityRuntime(
 	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Meta().WorkspaceRoot,
-		Client:   client,
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: client,
 	})
 	if err != nil {
 		t.Fatalf("new projected runtime plan: %v", err)
@@ -208,7 +227,15 @@ func newProjectedAuthorityRuntime(
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}
 	err = authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
+		view, err := runtimeview.MainViewFromRuntimeActivity(
+			engine,
+			snapshot.Version,
+			snapshot.Activity,
+		)
+		if err != nil {
+			return err
+		}
+		runtimeClient.storeMainView(view)
 		return nil
 	})
 	if err != nil {
@@ -238,7 +265,7 @@ func newTestSessionRuntimeClientWithControls(controls apicontract.RuntimeControl
 func testQuestionPrompt(id, question string, suggestions ...string) clientui.TranscriptPrompt {
 	return clientui.TranscriptPrompt{
 		Kind:        clientui.TranscriptPromptKindQuestion,
-		State:       clientui.TranscriptPromptStatePending,
+		Status:      clientui.TranscriptPromptStatusPending,
 		PromptID:    clientui.PromptID(id),
 		SessionID:   ongoingTestSessionID(),
 		StepID:      ongoingTestStepID(),
@@ -251,7 +278,7 @@ func testQuestionPrompt(id, question string, suggestions ...string) clientui.Tra
 func testApprovalPrompt(id, question string, decisions ...clientui.ApprovalDecision) clientui.TranscriptPrompt {
 	return clientui.TranscriptPrompt{
 		Kind:            clientui.TranscriptPromptKindApproval,
-		State:           clientui.TranscriptPromptStatePending,
+		Status:          clientui.TranscriptPromptStatusPending,
 		PromptID:        clientui.PromptID(id),
 		SessionID:       ongoingTestSessionID(),
 		StepID:          ongoingTestStepID(),

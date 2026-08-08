@@ -74,10 +74,15 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 		{
 			name: "reasoning",
 			mutate: func(hydration *TranscriptHydration) {
-				hydration.ActiveReasoning = &TranscriptReasoningUpdate{
+				hydration.ActiveReasoningTraces = []TranscriptReasoningTraceUpdate{{
 					StepID: otherStepID,
-					Key:    "reasoning",
-				}
+					Identity: TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+						id := runtimeids.NewReasoningTraceID()
+						return &id
+					}()},
+					CompactText: "reasoning",
+					Text:        "reasoning",
+				}}
 			},
 		},
 		{
@@ -114,7 +119,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			mutate: func(hydration *TranscriptHydration) {
 				hydration.PendingPrompts = []TranscriptPrompt{{
 					Kind:      TranscriptPromptKindQuestion,
-					State:     TranscriptPromptStatePending,
+					Status:    TranscriptPromptStatusPending,
 					PromptID:  PromptID("prompt-1"),
 					SessionID: hydration.SessionIdentity.SessionID,
 					StepID:    otherStepID,
@@ -128,7 +133,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			mutate: func(hydration *TranscriptHydration) {
 				hydration.PendingPrompts = []TranscriptPrompt{{
 					Kind:      TranscriptPromptKindQuestion,
-					State:     TranscriptPromptStatePending,
+					Status:    TranscriptPromptStatusPending,
 					PromptID:  PromptID("prompt-1"),
 					SessionID: otherSessionID,
 					StepID:    stepID,
@@ -170,7 +175,7 @@ func TestTranscriptHydrationRejectsTerminalOrNondeterministicLedgerState(t *test
 
 	resolvedPrompt := TranscriptPrompt{
 		Kind:      TranscriptPromptKindQuestion,
-		State:     TranscriptPromptStateResolved,
+		Status:    TranscriptPromptStatusResolved,
 		PromptID:  PromptID("prompt-1"),
 		SessionID: transcriptTestSessionID(t),
 		StepID:    transcriptTestStepID(t),
@@ -225,7 +230,7 @@ func TestTranscriptHydrationRequiresPromptsOrderedByCreationThenID(t *testing.T)
 	prompt := func(id PromptID, created time.Time) TranscriptPrompt {
 		return TranscriptPrompt{
 			Kind:      TranscriptPromptKindQuestion,
-			State:     TranscriptPromptStatePending,
+			Status:    TranscriptPromptStatusPending,
 			PromptID:  id,
 			SessionID: transcriptTestSessionID(t),
 			StepID:    transcriptTestStepID(t),

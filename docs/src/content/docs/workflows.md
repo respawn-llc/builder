@@ -40,9 +40,9 @@ From a project, create or link a workflow, open the workflow editor, then edit t
 
 ## 2. Set Up Agent Roles
 
-Workflow agent nodes run existing Kent subagent roles. Create roles for the specialists you want in your process, then choose those roles in the node's Assignee field.
-Roles hidden from workflow-agent delegation remain valid node assignees.
-Every agent-node role, including default and built-in roles, must effectively enable `ask_question`; see [Tools](../config/#tools) for tool configuration.
+Workflow Agent Nodes run existing Kent subagent roles. Each Agent Node requires a concrete configured fallback Assignee, and that fallback role must effectively enable `ask_question`; see [Tools](../config/#tools) for tool configuration.
+Roles hidden from workflow-agent delegation remain valid Node Assignees.
+Eligible serial transitions into Agent Nodes can select an Assignee from roles explicitly configured with `agent_callable = true`; Kent force-enables `ask_question` for that transition-selected execution, and `workflow_subagent` does not restrict the selection.
 
 ```toml
 [subagents.implementer]
@@ -69,9 +69,10 @@ See [Headless runs](../headless/#subagent-roles) for the role configuration refe
 - A workflow is the reusable graph definition.
 - A project links workflows, provides workspaces, and owns the task board.
 - A task is the durable unit of work that moves through one workflow.
-- A run is one execution attempt for one executable node. Agent runs start or continue Kent sessions. Script runs execute a local server-side script.
+- A task directly owns its Current Nodes: normally one node, or several while a transition fans out into parallel branches. Current Nodes have no independent identity.
+- An Agent Current Node can bind to a retained Kent Session. A Script Current Node has no Session and retains only the state needed to resume its script.
 
-Creating a task puts it in Backlog. Starting the task applies the workflow's start transition and begins automation. This makes it safe to collect work in Backlog before the workflow is fully executable.
+Creating a task puts it in Backlog. Starting the task applies the workflow's start transition and creates its first executable Current Node. Leaving a node removes its execution state; retained Sessions remain available to the task.
 
 ### Nodes
 
@@ -103,7 +104,7 @@ Use transition descriptions for choice criteria. For example, a Review node migh
 
 ### Parallelism, Node Groups, And Joins
 
-Use a node group when one source agent should fan out into parallel branches. Parallel branches are ordinary workflow nodes, not subtasks: one task temporarily has multiple active placements, one per branch, until the branches reach the group's join.
+Use a node group when one source agent should fan out into parallel branches. Parallel branches are ordinary workflow nodes, not subtasks: one task temporarily owns one Current Node per branch until the branches reach the group's join.
 
 For example, an SWE workflow can send implementation output to Code Review and QA at the same time, join both results, then continue to an Approval Gate node that decides whether to ship or send the task back for changes.
 
@@ -173,13 +174,14 @@ The node script receiver JSON as stdin:
 {
   "plan_file": "docs/plan.md",
   "_kent": {
-    "run_id": "run_123",
-    "placement_id": "placement_123"
+    "task_id": "task_123",
+    "node_id": "node_456",
+    "transition_branch_key": "release_notes"
   }
 }
 ```
 
-Top-level properties are the incoming workflow parameter values. `_kent` object contains meta-info about the agent run & other parameters.
+Top-level properties are incoming workflow parameter values. `_kent` contains only the Task and Node identity, plus `transition_branch_key` when the Current Node belongs to a parallel branch.
 
 Stdout must be the workflow completion JSON. Stderr is diagnostics only. For example:
 
@@ -191,7 +193,7 @@ Stdout must be the workflow completion JSON. Stderr is diagnostics only. For exa
 }
 ```
 
-If the script exits non-zero, writes invalid completion JSON, omits required parameters, or becomes unavailable, Kent interrupts the run. Resume reruns the script with the same incoming parameter values and the current workflow script path and transition contracts.
+If the script exits non-zero, writes invalid completion JSON, omits required parameters, or becomes unavailable, Kent interrupts the Current Node. Resume reruns the script with the same incoming parameter values and the current workflow script path and transition contracts.
 
 ### Parameters
 
@@ -208,6 +210,14 @@ Declare parameters on the transition whose source agent can produce them. In fan
 
 For each transition, the source agent must provide the declared parameters before it can complete that branch. The target agent receives those values where the transition prompt references them with placeholders such as `{{.Params.findings}}`.
 
+### Transition Assignee And Thinking Selection
+
+Each eligible serial Agent or Script transition into an Agent Node can independently enable **Let the previous node choose** for the target Assignee and **Let the previous node select thinking level** for thinking. A disabled selector uses the target Agent Node's configured fallback Assignee or configured thinking; Fan-Out transitions do not support either selector.
+
+Transition-selected Assignees must be explicitly agent-callable roles. With no eligible role, Assignee selection is unavailable; with one eligible role, Kent applies it automatically and hides the Assignee Parameter; with several eligible roles, the source must provide the selected role as an ordinary required value. Thinking selection similarly hides its value when the applicable model catalog has zero or one supported level; with several finite levels it requires a value, while an open catalog accepts a nonblank custom value after a custom description is authored.
+
+Enabled selectors own Protected Parameters in the transition's ordinary ordered Parameters list. Assignee uses the default key `agent_role`, and thinking uses `thinking_level`; operators may edit each key, description, and order, but cannot delete an enabled Protected Parameter. Disabling a selector or making it inapplicable hides its Protected Parameter while retaining its saved settings, and separate incoming transitions keep independent selector state.
+
 ### Context Modes
 
 Context mode controls how the target agent starts its session.
@@ -217,16 +227,16 @@ It applies to transitions into agent nodes; transitions into joins or terminal n
 | --- | --- | --- |
 | New session | Independent work, QA, code review, security review, release note drafting. | Lowest starting context and cleanest role boundary. The prompt and parameters must contain the context the target needs. |
 | Compact and continue session | A large phase handing off to another role or another direction. | Adds a handoff step and starts a new session from a summary. Good when full conversation history is unnecessary but a clean summary matters. |
-| Continue session | Tight loops and direct follow-up work by the same role. | Preserves conversation history and prompt-cache continuity. The target keeps the same subagent role and works through automatic compactions. |
+| Continue session | Tight loops and direct follow-up work with retained context. | Preserves conversation history and prompt-cache continuity. Retained target Sessions preserve their Assignee; a target-owned previous-session-or-new transition can select an Assignee when it creates a new Session. |
 
 Continuation modes also have a context source:
 
 - Immediate source uses the session from the node that just completed.
 - Selected node uses a previous node that is guaranteed to have run before this transition.
-- Previous run of this target is for loops where the workflow returns to a node and should continue that node's prior session.
-- Previous run of this target, or new session is for re-review loops where the first pass starts fresh and later passes continue the target's prior session.
+- Previous target uses the latest retained Session associated with this edge's target node. Use it for loops where the workflow returns to a node and should continue that node's prior Session.
+- Previous target, or new session uses the latest retained Session associated with this edge's target node when one exists. Use it for re-review loops where the first pass starts fresh and later passes continue the target's prior Session.
 
-Use `new_session` or `compact_and_continue_session` when you want to change subagent roles. Use `continue_session` when preserving the exact working context matters more than changing roles.
+Use `new_session` or `compact_and_continue_session` when a transition should establish its selected Assignee and thinking at a fresh Session boundary. Continue Session exposes Assignee selection only when **Previous session from this target, or new session** resolves to a new Session; retained target Sessions preserve their materialized Assignee, while eligible transitions may change thinking without rotating cache lineage.
 
 ### Human Approval
 
@@ -241,7 +251,7 @@ Only agent nodes have completion modes; Start, Join, and Terminal nodes do not e
 | --- | --- | --- |
 | Inherit global default | Use the workflow completion mode from [configuration](../config/#workflow). | Same behavior as the resolved configured mode. |
 | Auto | Best default for most nodes. Kent picks the effective mode from the workflow shape, provider support, and shell availability. | Usually gives the safest cache/cost trade-off automatically. |
-| Structured output | Provider-native structured output. Use it when the provider supports strict structured responses and the node is not part of a `continue_session` chain. | Lowest-friction on capable providers, but fails run start when unsupported and fully invalidates cache on continued sessions. |
+| Structured output | Provider-native structured output. Use it when the provider supports strict structured responses and the node is not part of a `continue_session` chain. | Lowest-friction on capable providers, but prevents the Current Node from starting when unsupported and fully invalidates cache on continued sessions. |
 | Tool call | Dedicated completion tool. Use it for providers without structured-output support. | Reliable tool-driven completion, but fully invalidates cache on continued sessions. |
 | Shell command | Completion through the agent's shell environment. Prefer this for `continue_session` chains. | Requires the shell tool for the target role and gives the agent shell access, but avoids completion-contract cache invalidation. |
 | Unstructured output | Best-effort raw JSON final answer. Use only when you need `continue_session` and cannot use shell command. | Most fragile mode. It avoids dynamic completion metadata, but depends on the model following exact final-answer instructions. |
@@ -252,11 +262,11 @@ Only agent nodes have completion modes; Start, Join, and Terminal nodes do not e
 
 Workflow design affects prompt-cache continuity and token spend:
 
-- `continue_session` gives the strongest cache continuity because it keeps the same session, role, tools, conversation history, and provider cache.
-- `new_session` starts clean and does not invalidate another session's cache. It gives the target agent the most free context, but the prompt and parameters must carry enough information because the agent may spend tokens re-orienting in the workspace.
-- `compact_and_continue_session` asks the previous agent for a handoff, then starts a new session from that summary. It frees context, but adds handoff cost and leaves the previous session cache behind.
+- `continue_session` gives the strongest cache continuity because it keeps the retained Session, conversation history, and provider cache; retained target Sessions preserve their Assignee, and a thinking change does not rotate the cache lineage.
+- `new_session` starts clean, establishes the transition's selected or fallback Assignee and thinking, and does not invalidate another Session's cache. The prompt and Parameters must carry enough context because the target agent may spend tokens re-orienting in the workspace.
+- `compact_and_continue_session` asks the previous agent for a handoff, then starts a fresh Session from that summary with the transition's selected or fallback Assignee and thinking. It frees context, adds handoff cost, and leaves the previous Session cache behind.
 
-The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node. A workflow can remain linked to a project while execution validation fails: drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every agent role enables `ask_question`.
+The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node. A workflow can remain linked to a project while execution validation fails: drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every Agent Node fallback role enables `ask_question`.
 
 ## 6. Manage Tasks
 
@@ -268,16 +278,62 @@ New tasks start in Backlog and follow the project's default workflow unless you 
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
 
+A workflow Session may start, interrupt, resume, approve, or manually move another Task. It cannot target its own Task; Kent derives that ownership from the invoking Session.
+
+### Current Work, Sessions, And Activity
+
+Task detail shows the task's Current Nodes, each Agent Current Node's effective Assignee and thinking when present, and retained Session count. `kent task show` reports the same effective fields; non-Agent Current Nodes omit them. A retained Session can outlive the Current Node that used it, so it remains available through the Session picker after the workflow moves on.
+
+Interrupt stops exact live work. Interrupting a Task stops every live Agent Session and Script for that Task; interrupting a Session selects one live Agent Session. Kent waits for the selected work to stop before returning. Resume waits for the prior scope to retire, resolves the latest workflow definition, then resumes the retained Session or current Script.
+
+Delete permanently removes a quiescent Task. Interrupt preserves the task for Resume.
+
+Task Activity is an infinite-scroll stream of durable comments and retained Session creation. It records a Session as `Session started`.
+
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
+
+### Project Labels
+
+A project owns a shared catalog of up to 100 reusable labels across its linked workflows. You can create and rename labels from the label chooser; deleting a label removes it from every task in the project.
+
+Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
+
+On the board, a named Label row cycles neutral → included → excluded. An included condition requires the Label; an excluded condition requires its absence. `--label-match any` matches when any included or excluded condition is true, while `all` requires every condition. `No labels` remains a binary filter for tasks without assignments and is mutually exclusive with named conditions. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
+
+In Desktop, the route-scoped `Unblocked` chip shows Tasks with zero unsatisfied direct dependencies across the board. It combines with the active Labels filter, and its selection resets when you leave or change the board.
+
+Desktop boards sort each column by Updated, Created, Labels, or Short ID. The default is Updated descending; sorting is applied per column after active Labels and Unblocked filters, and Labels follow the Project catalog order.
+
+The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
 
-CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.
+CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`.
 
 ```bash
 kent workflow list --project .
 workflow_uuid="<uuid-from-workflow-list>"
 kent workflow inspect "$workflow_uuid" --summary
+```
+
+#### Transition selector controls
+
+Edge creation and updates expose independent target Assignee and thinking selectors. Enabling a selector initializes its Protected Parameter when needed; `--target-assignee-param` and `--target-thinking-param` customize the protected key and description, including an empty description.
+
+```bash
+kent workflow edge add "$workflow_uuid" --from review --transition implement --edge-key implement --to implement --context new_session \
+  --assignee-selection previous_node --target-assignee-param 'agent_role=Role for the next node' \
+  --thinking-selection previous_node --target-thinking-param 'thinking_level='
+kent workflow edge update "$workflow_uuid" <edge-id> --assignee-selection configured --thinking-selection configured
+```
+
+Repeatable `--param` and `--clear-params` edit ordinary Parameters only; they retain Protected Parameters and cannot convert or delete them. Node commands continue to edit the required fallback with `--agent`; selector flags belong to Edge commands.
+
+Workflow deletion cascades through the workflow definition, Project links, and Tasks. Run the command without `--confirm` to inspect the impact, then repeat it with `--confirm`; Kent deletes nothing if the impact changes or blockers remain.
+
+```bash
+kent workflow delete "$workflow_uuid"
+kent workflow delete "$workflow_uuid" --confirm
 ```
 
 Project-filtered workflow listing returns the default first, followed by project activity and name. Task creation uses an explicit linked `--workflow` when supplied, otherwise the project default, or the lone linked workflow when no default exists. Several links without a default require an explicit selector.
@@ -293,6 +349,82 @@ Task listing is always project-scoped. Omitting `--workflow` lists tasks across 
 kent task list --project .
 kent task list --project . --workflow "$workflow_uuid" --column review
 ```
+
+Use `--unblocked` to select Tasks with no unsatisfied direct dependencies or `--blocked` to select Tasks with at least one unsatisfied direct dependency. The flags are mutually exclusive and apply across the selected workflow scope.
+
+```bash
+kent task list --project . --unblocked
+kent task list --project . --workflow "$workflow_uuid" --blocked
+```
+
+Task sorting accepts `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id` selectors with explicit `asc` or `desc` directions. A command may provide up to seven distinct selectors in one or repeated `--sort` flags.
+
+### Task Dependencies
+
+Task dependencies connect a Blocker Task to a Blocked Task within one Project.
+
+A Task is unblocked when every direct Blocker Task is done; a Task with no direct dependencies is also unblocked.
+
+```bash
+kent task dep add --project . --blocker <blocker-task> --blocked <blocked-task>
+kent task dep remove --project . --blocker <blocker-task> --blocked <blocked-task>
+kent task dep list --project . <task>
+kent task dep list --project . <task> --direction blocks
+```
+
+Dependency lists include both direct directions unless `--direction blocks` or
+`--direction blocked-by` selects one. Add and remove are idempotent; plain
+mutation output is `done`, and `--json` returns the typed outcome and both Task
+identities.
+
+Starting a Task or moving it into executable work reports unsatisfied direct
+Blocker Tasks before execution-target selection. Rerun the same command with
+`--ignore-dependencies` to acknowledge that one operation:
+
+```bash
+kent task start <task> --ignore-dependencies
+kent task move <task> <target-node-id> --ignore-dependencies
+```
+
+### Search Tasks
+
+Literal Search matches case-insensitive Task Short ID substrings plus Task titles and bodies. Complete Short IDs and canonical numeric suffixes rank before partial Short ID matches, while `--include-comments` adds Task Comments.
+
+Raw `--fts5` Search remains limited to the public `title`, `body`, and `comment` columns.
+
+```bash
+kent task search "retry policy"
+kent task search "retry policy" --project . --status backlog,running
+```
+
+Run `kent task search --help` for matching modes, filters, result pagination, output contracts, and validation behavior.
+
+### Manually Move A Task
+
+Manual Move evaluates the destination through the workflow server before changing the task. Agent and Script destinations use a usable incoming Transition even when the destination is not connected to the task's Current Node. A single usable Transition is selected automatically; multiple choices require `--transition` with the authored Transition key. Fan-out Transitions move the whole Task-wide parallel group and create every branch.
+
+```bash
+kent task move <task> <target-node-id> --transition <transition-key> \
+  --values-json '{"plan":{"summary":"Approved plan"}}'
+kent task move <task> <target-node-id> --values-file ./move-values.json
+```
+
+Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
+
+Desktop shows the server's Transition choices and required values, including exposed Assignee and thinking Protected Parameters and resolved values that can be edited. Manual Move applies the same selector rules as automatic completion: hidden zero/one-option or retained-Session values are omitted or ignored, and supplied values are validated before the target is created. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
+
+### Complete Work From The CLI
+
+An Agent completing its own workflow Session runs `kent task complete` with its transition result. Kent resolves that completion through the Session identity supplied to the agent.
+
+Human-forced completion requires exactly one selector: a Session, or a Task with one unambiguous idle executable Current Node.
+
+```bash
+kent task complete --force --session <session-id> --transition done
+kent task complete --force --task <task-id-or-short-id> --project . --transition done
+```
+
+Completion has no Current Node selector. Use `--json` or `--json-file` to submit a JSON transition result instead of individual completion fields.
 
 ### Choose The Execution Target
 
@@ -313,14 +445,14 @@ Target selection occurs on the first executable start, manual move, or approval.
 Configure a workflow policy or select a concrete target when starting, approving, or manually moving a task:
 
 ```bash
-kent workflow update <workflow> --execution-target ask-on-first-execution
-kent workflow update <workflow> --execution-target none|head|default-branch|ref:<revision>
+kent workflow update <uuid> --execution-target ask-on-first-execution
+kent workflow update <uuid> --execution-target none|head|default-branch|ref:<revision>
 
 kent task start <task> --execution-target none|head|default-branch|ref:<revision>
 kent task approve <transition-id> --execution-target none|head|default-branch|ref:<revision>
 kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
 ```
 
-These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.
 
 More about worktrees on the [Worktree](../worktrees/) page.

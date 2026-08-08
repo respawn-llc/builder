@@ -28,8 +28,8 @@ type SubagentLaunchPolicyError struct {
 func NewMaxDepthExceededSubagentLaunchPolicyError(attemptedDepth int, maxDepth int) *SubagentLaunchPolicyError {
 	return &SubagentLaunchPolicyError{
 		Kind:           SubagentLaunchPolicyMaxDepthExceeded,
-		AttemptedDepth: textutil.Int(attemptedDepth),
-		MaxDepth:       textutil.Int(maxDepth),
+		AttemptedDepth: textutil.Value(attemptedDepth),
+		MaxDepth:       textutil.Value(maxDepth),
 	}
 }
 

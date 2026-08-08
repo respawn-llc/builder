@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@source "../../../node_modules/streamdown/dist/*.js";
+
 @custom-variant dark (&:is(.dark *));
 
 @font-face {
@@ -140,6 +142,7 @@
   --space-5: 24px;
   --space-6: 32px;
   --space-7: 48px;
+  --button-primary-min-width: calc(var(--space-7) + var(--space-5));
   --radius-s: 8px;
   --radius-m: 12px;
   --radius-l: 16px;
@@ -291,6 +294,16 @@
     --motion-morph-stage-delay: 0ms;
     --motion-morph-stage: 0ms ease-in-out;
   }
+
+  .label-filter-condition-indicator {
+    transition: none;
+  }
+}
+
+.label-filter-condition-indicator {
+  transition:
+    opacity var(--motion-fast),
+    transform var(--motion-fast);
 }
 
 @keyframes surface-reveal {
@@ -407,6 +420,12 @@
 
   button {
     cursor: pointer;
+  }
+
+  .dialog-placement-command-palette {
+    align-items: start;
+    justify-items: center;
+    padding-top: max(var(--space-4), calc((100vh - min(560px, calc(100vh - 48px))) / 2));
   }
 
   a {
@@ -527,6 +546,10 @@
   animation: sidebar-slide-out var(--motion-fast) both;
 }
 
+.app-sidebar-page {
+  will-change: opacity, transform;
+}
+
 .task-detail-island-stack {
   container-type: inline-size;
 }
@@ -546,6 +569,18 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .app-sidebar-page[data-direction="push"] {
+    animation: sidebar-page-push var(--motion-fast) both;
+  }
+
+  .app-sidebar-page[data-direction="back"] {
+    animation: sidebar-page-back var(--motion-fast) both;
+  }
+
+  .command-palette-size-motion {
+    transition: height var(--motion-morph);
+  }
+
   .floating-notice-morph {
     contain: layout paint;
     transform-origin: right bottom;
@@ -571,6 +606,50 @@
     transform-origin: center;
   }
 
+  .dialog-backdrop-motion-enter {
+    opacity: 1;
+    backdrop-filter: blur(6px);
+    transition:
+      opacity var(--motion-fast),
+      backdrop-filter var(--motion-fast);
+  }
+
+  .dialog-surface-motion-enter {
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity var(--motion-fast),
+      transform var(--motion-fast);
+  }
+
+  .dialog-backdrop-motion-exit {
+    opacity: 0;
+    backdrop-filter: blur(0);
+    transition:
+      opacity var(--motion-fast),
+      backdrop-filter var(--motion-fast);
+  }
+
+  .dialog-surface-motion-exit {
+    opacity: 0;
+    transform: translateY(30px);
+    transition:
+      opacity var(--motion-fast),
+      transform var(--motion-fast);
+  }
+
+  @starting-style {
+    .dialog-backdrop-motion-enter {
+      opacity: 0;
+      backdrop-filter: blur(0);
+    }
+
+    .dialog-surface-motion-enter {
+      opacity: 0;
+      transform: translateY(30px);
+    }
+  }
+
   .task-detail-feed-row {
     animation: task-detail-feed-row-enter var(--motion-normal) both;
     transform-origin: top center;
@@ -582,5 +661,19 @@
 
   .view-transition-route::view-transition-new(root) {
     animation: route-fade-scale var(--motion-fast) both;
+  }
+}
+
+@keyframes sidebar-page-push {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes sidebar-page-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
   }
 }

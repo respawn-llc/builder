@@ -1,6 +1,10 @@
 package clientui
 
-import "time"
+import (
+	"time"
+
+	"core/shared/runtimeids"
+)
 
 type AttentionNotificationEventType string
 
@@ -20,9 +24,10 @@ const (
 type AttentionNotificationKind string
 
 const (
-	AttentionNotificationKindQuestion       AttentionNotificationKind = "question"
-	AttentionNotificationKindApproval       AttentionNotificationKind = "approval"
-	AttentionNotificationKindInterruptedRun AttentionNotificationKind = "interrupted_run"
+	AttentionNotificationKindQuestion               AttentionNotificationKind = "question"
+	AttentionNotificationKindApproval               AttentionNotificationKind = "approval"
+	AttentionNotificationKindWorkflowApproval       AttentionNotificationKind = "workflow_approval"
+	AttentionNotificationKindInterruptedCurrentNode AttentionNotificationKind = "interrupted_current_node"
 )
 
 type AttentionNotificationTargetKind string
@@ -35,9 +40,9 @@ const (
 type AttentionNotificationFocusKind string
 
 const (
-	AttentionNotificationFocusQuestion       AttentionNotificationFocusKind = "question"
-	AttentionNotificationFocusApproval       AttentionNotificationFocusKind = "approval"
-	AttentionNotificationFocusInterruptedRun AttentionNotificationFocusKind = "interrupted_run"
+	AttentionNotificationFocusQuestion               AttentionNotificationFocusKind = "question"
+	AttentionNotificationFocusApproval               AttentionNotificationFocusKind = "approval"
+	AttentionNotificationFocusInterruptedCurrentNode AttentionNotificationFocusKind = "interrupted_current_node"
 )
 
 type AttentionNotificationEvent struct {
@@ -57,14 +62,15 @@ type AttentionNotificationID struct {
 }
 
 type AttentionNotification struct {
-	ID             AttentionNotificationID                   `json:"id"`
-	Kind           AttentionNotificationKind                 `json:"kind"`
-	OccurredAt     time.Time                                 `json:"occurred_at"`
-	Revision       uint64                                    `json:"revision"`
-	Question       *AttentionNotificationQuestionState       `json:"question,omitempty"`
-	Approval       *AttentionNotificationApprovalState       `json:"approval,omitempty"`
-	InterruptedRun *AttentionNotificationInterruptedRunState `json:"interrupted_run,omitempty"`
-	Target         AttentionNotificationTarget               `json:"target"`
+	ID                     AttentionNotificationID                           `json:"id"`
+	Kind                   AttentionNotificationKind                         `json:"kind"`
+	OccurredAt             time.Time                                         `json:"occurred_at"`
+	Revision               uint64                                            `json:"revision"`
+	Question               *AttentionNotificationQuestionState               `json:"question,omitempty"`
+	Approval               *AttentionNotificationApprovalState               `json:"approval,omitempty"`
+	WorkflowApproval       *AttentionNotificationWorkflowApprovalState       `json:"workflow_approval,omitempty"`
+	InterruptedCurrentNode *AttentionNotificationInterruptedCurrentNodeState `json:"interrupted_current_node,omitempty"`
+	Target                 AttentionNotificationTarget                       `json:"target"`
 }
 
 type AttentionNotificationQuestionState struct {
@@ -78,32 +84,35 @@ type AttentionNotificationQuestionState struct {
 }
 
 type AttentionNotificationApprovalState struct {
-	TaskTransitionID string `json:"task_transition_id"`
-	Message          string `json:"message,omitempty"`
+	Message string `json:"message"`
 }
 
-type AttentionNotificationInterruptedRunState struct {
-	RunID      string `json:"run_id"`
+type AttentionNotificationWorkflowApprovalState struct {
+	ApprovalID string `json:"approval_id"`
+	Message    string `json:"message,omitempty"`
+}
+
+type AttentionNotificationInterruptedCurrentNodeState struct {
 	Message    string `json:"message,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	DetailJSON string `json:"detail_json,omitempty"`
 }
 
 type AttentionNotificationTarget struct {
-	Kind        AttentionNotificationTargetKind       `json:"kind"`
-	ProjectID   string                                `json:"project_id,omitempty"`
-	WorkflowID  string                                `json:"workflow_id,omitempty"`
-	TaskID      string                                `json:"task_id,omitempty"`
-	TaskShortID string                                `json:"task_short_id,omitempty"`
-	TaskTitle   string                                `json:"task_title,omitempty"`
-	SessionID   string                                `json:"session_id,omitempty"`
-	RunID       string                                `json:"run_id,omitempty"`
-	Focus       *AttentionNotificationTaskDetailFocus `json:"focus,omitempty"`
+	Kind                 AttentionNotificationTargetKind       `json:"kind"`
+	ProjectID            string                                `json:"project_id,omitempty"`
+	WorkflowID           *runtimeids.WorkflowID                `json:"workflow_id,omitempty"`
+	TaskID               string                                `json:"task_id,omitempty"`
+	TaskShortID          string                                `json:"task_short_id,omitempty"`
+	TaskTitle            string                                `json:"task_title,omitempty"`
+	SessionID            string                                `json:"session_id,omitempty"`
+	CurrentNodeID        *string                               `json:"current_node_id,omitempty"`
+	CurrentNodeBranchKey *string                               `json:"current_node_branch_key,omitempty"`
+	Focus                *AttentionNotificationTaskDetailFocus `json:"focus,omitempty"`
 }
 
 type AttentionNotificationTaskDetailFocus struct {
-	Kind             AttentionNotificationFocusKind `json:"kind"`
-	AskIDs           []string                       `json:"ask_ids,omitempty"`
-	TaskTransitionID string                         `json:"task_transition_id,omitempty"`
-	RunID            string                         `json:"run_id,omitempty"`
+	Kind       AttentionNotificationFocusKind `json:"kind"`
+	AskIDs     []string                       `json:"ask_ids,omitempty"`
+	ApprovalID string                         `json:"approval_id,omitempty"`
 }

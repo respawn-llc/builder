@@ -37,22 +37,11 @@ const (
 )
 
 type WorkflowExecutionTarget struct {
-	Mode            WorkflowExecutionTargetMode       `json:"mode"`
-	EffectiveRoot   *string                           `json:"effective_root,omitempty"`
-	RequestedRef    *string                           `json:"requested_ref,omitempty"`
-	ResolvedRef     *string                           `json:"resolved_ref,omitempty"`
-	CommitOID       *string                           `json:"commit_oid,omitempty"`
-	Provenance      WorkflowExecutionTargetProvenance `json:"provenance"`
-	CurrentBranch   *string                           `json:"current_branch,omitempty"`
-	ManagedWorktree *WorkflowExecutionTargetWorktree  `json:"managed_worktree,omitempty"`
-}
-
-type WorkflowExecutionTargetWorktree struct {
-	WorktreeID    string                   `json:"worktree_id"`
-	DisplayName   string                   `json:"display_name"`
-	CanonicalRoot string                   `json:"canonical_root"`
-	Availability  WorktreePathAvailability `json:"availability"`
-	Managed       bool                     `json:"managed"`
+	Mode         WorkflowExecutionTargetMode       `json:"mode"`
+	RequestedRef *string                           `json:"requested_ref,omitempty"`
+	ResolvedRef  *string                           `json:"resolved_ref,omitempty"`
+	CommitOID    *string                           `json:"commit_oid,omitempty"`
+	Provenance   WorkflowExecutionTargetProvenance `json:"provenance"`
 }
 
 type WorkflowExecutionTargetConfiguredTarget struct {
@@ -86,8 +75,10 @@ type WorkflowExecutionTargetSelectionRequirement struct {
 type WorkflowExecutionTargetActionOutcome string
 
 const (
-	WorkflowExecutionTargetActionOutcomeApplied           WorkflowExecutionTargetActionOutcome = "applied"
-	WorkflowExecutionTargetActionOutcomeSelectionRequired WorkflowExecutionTargetActionOutcome = "selection_required"
+	WorkflowExecutionTargetActionOutcomeApplied                        WorkflowExecutionTargetActionOutcome = "applied"
+	WorkflowExecutionTargetActionOutcomeNoOp                           WorkflowExecutionTargetActionOutcome = "no_op"
+	WorkflowExecutionTargetActionOutcomeSelectionRequired              WorkflowExecutionTargetActionOutcome = "selection_required"
+	WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired WorkflowExecutionTargetActionOutcome = "dependency_confirmation_required"
 )
 
 type WorkflowExecutionTargetResolutionErrorCode string
@@ -235,20 +226,14 @@ func (s WorkflowExecutionTargetSelection) Validate() error {
 }
 
 func (t WorkflowExecutionTarget) Validate() error {
-	if t.EffectiveRoot != nil && strings.TrimSpace(*t.EffectiveRoot) == "" {
-		return errors.New("execution target effective_root must be non-blank when present")
-	}
 	if t.Provenance != WorkflowExecutionTargetProvenanceResolved && t.Provenance != WorkflowExecutionTargetProvenanceLegacyObserved {
 		return errors.New("execution target provenance is invalid")
 	}
 	if t.Mode == WorkflowExecutionTargetModeNone {
-		if t.EffectiveRoot == nil {
-			return errors.New("none execution target effective_root is required")
-		}
 		if t.Provenance != WorkflowExecutionTargetProvenanceResolved {
 			return errors.New("none execution target provenance must be resolved")
 		}
-		if t.RequestedRef != nil || t.ResolvedRef != nil || t.CommitOID != nil || t.CurrentBranch != nil || t.ManagedWorktree != nil {
+		if t.RequestedRef != nil || t.ResolvedRef != nil || t.CommitOID != nil {
 			return errors.New("none execution target cannot include managed target facts")
 		}
 		return nil
@@ -269,45 +254,6 @@ func (t WorkflowExecutionTarget) Validate() error {
 	}
 	if t.ResolvedRef != nil && strings.TrimSpace(*t.ResolvedRef) == "" {
 		return errors.New("execution target resolved_ref must be non-blank when present")
-	}
-	if t.CurrentBranch != nil && strings.TrimSpace(*t.CurrentBranch) == "" {
-		return errors.New("execution target current_branch must be non-blank when present")
-	}
-	if t.ManagedWorktree != nil {
-		if err := t.ManagedWorktree.Validate(); err != nil {
-			return fmt.Errorf("managed execution target managed_worktree: %w", err)
-		}
-		if !t.ManagedWorktree.Managed {
-			return errors.New("managed execution target managed_worktree must be managed")
-		}
-	}
-	if t.EffectiveRoot != nil {
-		if t.ManagedWorktree == nil {
-			return errors.New("managed execution target effective_root requires managed_worktree")
-		}
-		if t.ManagedWorktree.Availability != WorktreePathAvailabilityAvailable {
-			return errors.New("managed execution target effective_root requires an available managed_worktree")
-		}
-		if strings.TrimSpace(t.ManagedWorktree.CanonicalRoot) != strings.TrimSpace(*t.EffectiveRoot) {
-			return errors.New("managed execution target effective_root must match managed_worktree canonical_root")
-		}
-	}
-	if t.CurrentBranch != nil && t.EffectiveRoot == nil {
-		return errors.New("managed execution target current_branch requires effective_root")
-	}
-	return nil
-}
-
-func (t WorkflowExecutionTargetWorktree) Validate() error {
-	if strings.TrimSpace(t.WorktreeID) == "" ||
-		strings.TrimSpace(t.DisplayName) == "" ||
-		strings.TrimSpace(t.CanonicalRoot) == "" {
-		return errors.New("execution target worktree identity is required")
-	}
-	switch t.Availability {
-	case WorktreePathAvailabilityAvailable, WorktreePathAvailabilityMissing, WorktreePathAvailabilityInaccessible:
-	default:
-		return errors.New("execution target worktree availability is invalid")
 	}
 	return nil
 }
@@ -401,17 +347,23 @@ func validWorkflowLockedExecutionTargetCause(cause WorkflowLockedExecutionTarget
 }
 
 func (r WorkflowTaskStartResponse) Validate() error {
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil {
+	if r.Outcome == WorkflowTaskActionOutcomeApplied {
+		if r.Applied == nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("start action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskStartApplied(*r.Applied)
 	}
-	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil {
+	if r.Outcome == WorkflowTaskActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("start action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
+	}
+	if r.Outcome == WorkflowTaskActionOutcomeDependencyConfirmationRequired {
+		if r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
+			return errors.New("start action response dependency confirmation outcome requires only a positive count")
+		}
+		return nil
 	}
 	return errors.New("start action response outcome is invalid")
 }
@@ -432,39 +384,95 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 	return errors.New("approve action response outcome is invalid")
 }
 
-func (r WorkflowTaskMoveResponse) Validate() error {
+func (r WorkflowTaskResumeResponse) Validate() error {
 	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
 		if r.Applied == nil || r.SelectionRequired != nil {
+			return errors.New("resume action response applied outcome requires only applied payload")
+		}
+		return validateWorkflowTaskCurrentNodes(r.Applied.CurrentNodes, "resume applied payload")
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if r.Applied != nil || r.SelectionRequired == nil {
+			return errors.New("resume action response selection_required outcome requires only selection requirement")
+		}
+		return r.SelectionRequired.Validate()
+	}
+	return errors.New("resume action response outcome is invalid")
+}
+
+func (r WorkflowTaskMoveResponse) Validate() error {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
+		if r.NoOp == nil || r.Applied != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
+			return errors.New("move action response no_op outcome requires only no_op payload")
+		}
+		return validateWorkflowTaskMoveNoOp(*r.NoOp)
+	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
+		if r.Applied == nil || r.NoOp != nil || r.SelectionRequired != nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskMoveApplied(*r.Applied)
 	}
 	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired == nil || r.UnsatisfiedDependencyCount != nil {
 			return errors.New("move action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()
 	}
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeDependencyConfirmationRequired {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired != nil ||
+			r.UnsatisfiedDependencyCount == nil || *r.UnsatisfiedDependencyCount <= 0 {
+			return errors.New("move action response dependency confirmation outcome requires only a positive count")
+		}
+		return nil
+	}
 	return errors.New("move action response outcome is invalid")
 }
 
+func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
+	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload")
+}
+
+func validateWorkflowTaskCurrentNodes(currentNodes []WorkflowTaskCurrentNode, payload string) error {
+	if len(currentNodes) == 0 {
+		return fmt.Errorf("%s requires current_nodes", payload)
+	}
+	for index, currentNode := range currentNodes {
+		if err := validateWorkflowTaskCurrentNode(currentNode); err != nil {
+			return fmt.Errorf("%s current node at index %d: %w", payload, index, err)
+		}
+	}
+	return nil
+}
+
 func validateWorkflowTaskStartApplied(applied WorkflowTaskStartApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.PlacementID) == "" || strings.TrimSpace(applied.RunID) == "" {
-		return errors.New("start applied payload requires transition_id, placement_id, and run_id")
+	if len(applied.CurrentNodes) == 0 {
+		return errors.New("start applied payload requires current_nodes")
+	}
+	for index, currentNode := range applied.CurrentNodes {
+		if strings.TrimSpace(currentNode.NodeID) == "" {
+			return fmt.Errorf("start applied current node at index %d requires node_id", index)
+		}
+		if currentNode.TransitionBranchKey != nil && strings.TrimSpace(*currentNode.TransitionBranchKey) == "" {
+			return fmt.Errorf("start applied current node at index %d has blank transition_branch_key", index)
+		}
+		if currentNode.SessionID != nil && strings.TrimSpace(*currentNode.SessionID) == "" {
+			return fmt.Errorf("start applied current node at index %d has blank session_id", index)
+		}
 	}
 	return nil
 }
 
 func validateWorkflowTaskApproveApplied(applied WorkflowTaskApproveApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.TaskID) == "" || strings.TrimSpace(applied.State) == "" {
-		return errors.New("approve applied payload requires transition_id, task_id, and state")
+	if strings.TrimSpace(applied.TaskID) == "" || len(applied.CurrentNodes) == 0 {
+		return errors.New("approve applied payload requires task_id and current_nodes")
 	}
 	return nil
 }
 
 func validateWorkflowTaskMoveApplied(applied WorkflowTaskMoveApplied) error {
-	if strings.TrimSpace(applied.TransitionID) == "" || strings.TrimSpace(applied.State) == "" {
-		return errors.New("move applied payload requires transition_id and state")
+	if len(applied.CurrentNodes) == 0 {
+		return errors.New("move applied payload requires current_nodes")
 	}
 	return nil
 }
