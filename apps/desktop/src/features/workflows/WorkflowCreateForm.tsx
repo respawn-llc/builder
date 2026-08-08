@@ -1,9 +1,9 @@
-import { useState, type SyntheticEvent } from "react";
+import { useEffect, useState, type SyntheticEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
-import { errorMessage } from "@/api";
+import { errorMessage, isProjectMissingError } from "@/api";
 import { queryKeys, useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, ErrorState, TextArea, TextInput } from "@/ui";
 
@@ -14,9 +14,11 @@ export type WorkflowCreateResult = Readonly<{
 
 export function WorkflowCreateForm({
   onCreated,
+  onProjectMissing,
   projectID = "",
 }: Readonly<{
   onCreated: (result: WorkflowCreateResult) => void;
+  onProjectMissing?: (() => void) | undefined;
   projectID?: string | undefined;
 }>) {
   const { t } = useTranslation();
@@ -42,6 +44,9 @@ export function WorkflowCreateForm({
       onCreated(result);
     },
   });
+  useEffect(() => {
+    if (create.isError && isProjectMissingError(create.error)) onProjectMissing?.();
+  }, [create.error, create.isError, onProjectMissing]);
   const canSubmit = name.trim().length > 0 && !create.isPending;
   const formShortcut = useTextFieldSubmitShortcut({
     available: canSubmit,

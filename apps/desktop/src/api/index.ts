@@ -46,6 +46,8 @@ export {
   decodeTaskSearchError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
+  isProjectMissingError,
+  isTaskMissingError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,

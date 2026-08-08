@@ -4,9 +4,15 @@ import { Trash2 } from "lucide-react";
 import { useWorkflowDeleteLauncher } from "@/shared/workflow-deletion";
 import { Button } from "@/ui";
 
-export function WorkflowDeleteButton({ workflowID }: Readonly<{ workflowID: string }>) {
+export function WorkflowDeleteButton({
+  onDeleted,
+  workflowID,
+}: Readonly<{
+  onDeleted?: (() => void) | undefined;
+  workflowID: string;
+}>) {
   const { t } = useTranslation();
-  const deleteLauncher = useWorkflowDeleteLauncher(workflowID);
+  const deleteLauncher = useWorkflowDeleteLauncher(workflowID, onDeleted);
 
   return (
     <>

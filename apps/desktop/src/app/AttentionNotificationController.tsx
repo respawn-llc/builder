@@ -26,13 +26,17 @@ import {
 } from "./attentionNotificationSurfaces";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 
 export function AttentionNotificationController() {
+  return <SidebarRootOwner><OwnedAttentionNotificationController /></SidebarRootOwner>;
+}
+
+function OwnedAttentionNotificationController() {
   const { t } = useTranslation();
   const { api, logger, nativeBridge: bridge } = useAppServices();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const status = useStatusController();
   const connection = useConnectionSnapshot();
   const focusedRef = useRef<boolean | null>(null);
@@ -49,13 +53,13 @@ export function AttentionNotificationController() {
         });
       }
       try {
-        await openSidebar({
+        await open({
           kind: "taskDetail",
           initialFocus: taskDetailInitialFocus(target.focus),
           inboxNav: true,
           mode: "overlay",
           taskID: target.taskID,
-        });
+        }).lifecycle;
       } catch (error) {
         await logger.append("warn", "Opening attention notification target failed.", {
           error: errorMessage(error),
@@ -64,7 +68,7 @@ export function AttentionNotificationController() {
         throw error;
       }
     },
-    [bridge.window, logger, openSidebar],
+    [bridge.window, logger, open],
   );
 
   const showAttentionToast = useCallback(

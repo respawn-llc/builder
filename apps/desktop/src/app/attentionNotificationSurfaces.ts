@@ -12,9 +12,7 @@ import type {
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "@/api";
-import { errorMessage } from "@/api";
-import { RpcError } from "@/api";
-import { rpcErrorCodes } from "@/api";
+import { errorMessage, isTaskMissingError } from "@/api";
 import type { AppServices } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import type { StatusController } from "@/app-facade";
@@ -115,7 +113,7 @@ export async function reconcileActiveSurfaces(
         staleIDs.push(id);
       }
     } catch (error) {
-      if (isTaskNotFoundError(error)) {
+      if (isTaskMissingError(error)) {
         staleIDs.push(id);
         continue;
       }
@@ -389,8 +387,4 @@ function interruptedCurrentNodeFallback(notification: AttentionNotification, t: 
     workflow_startup_recovery: t("app.attention.interruptedCurrentNodeStartupRecovery"),
   };
   return reasonCopy[reason] ?? fallback;
-}
-
-function isTaskNotFoundError(error: unknown): boolean {
-  return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
 }
