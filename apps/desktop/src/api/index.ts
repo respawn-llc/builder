@@ -44,7 +44,6 @@ export {
   WorkflowTaskDependencyError,
   TaskSearchError,
   decodeTaskSearchError,
-  decodeWorktreeSetupRetainedError,
   decodeWorkflowTaskMovePreparationError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
@@ -54,7 +53,6 @@ export {
   StartupConfigurationError,
   TransportError,
   errorMessage,
-  WorktreeSetupRetainedError,
   WorkflowTaskMovePreparationError,
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";

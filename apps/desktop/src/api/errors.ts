@@ -3,17 +3,8 @@ import { z } from "zod";
 import type { JsonValue } from "./json";
 import { labelIDSchema } from "./schemas/workflowLabels";
 import { workflowLabelMaxIDs } from "./workflowLabelContract";
-import {
-  worktreeSetupFailureWireSchema,
-  type WorktreeSetupFailure,
-} from "./worktreeSetupFailure";
+import { worktreeSetupFailureWireSchema, type WorktreeSetupFailure } from "./worktreeSetupFailure";
 import { rpcErrorCodes } from "./rpcErrorCodes";
-import {
-  registeredWorktreeTopologySchema,
-  retainedPreviousWorktreeSchema,
-  type RegisteredWorktreeTopology,
-  type RetainedPreviousWorktree,
-} from "./worktreeTopology";
 
 export type RpcErrorInfo = Readonly<{
   code: number;
@@ -49,65 +40,6 @@ export function isProjectMissingError(error: unknown): boolean {
   );
 }
 
-export class WorktreeSetupRetainedError extends RpcError {
-  readonly worktree: RegisteredWorktreeTopology;
-  readonly scriptPath: string;
-  readonly diagnostic: string;
-  readonly retainedPreviousWorktree: RetainedPreviousWorktree | null;
-
-  constructor(
-    rpcError: RpcError,
-    facts: Readonly<{
-      worktree: RegisteredWorktreeTopology;
-      scriptPath: string;
-      diagnostic: string;
-      retainedPreviousWorktree: RetainedPreviousWorktree | null;
-    }>,
-  ) {
-    super({
-      code: rpcError.code,
-      message: rpcError.message,
-      method: rpcError.method,
-      data: rpcError.data,
-    });
-    this.name = "WorktreeSetupRetainedError";
-    this.worktree = facts.worktree;
-    this.scriptPath = facts.scriptPath;
-    this.diagnostic = facts.diagnostic;
-    this.retainedPreviousWorktree = facts.retainedPreviousWorktree;
-  }
-}
-
-const worktreeSetupRetainedErrorDataSchema = z
-  .object({
-    type: z.literal("worktree_setup_retained"),
-    worktree: registeredWorktreeTopologySchema,
-    script_path: z.string().refine((value) => value.trim().length > 0),
-    diagnostic: z.string().trim().min(1),
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
-  })
-  .strict();
-
-export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
-  if (
-    !(error instanceof RpcError) ||
-    error.code !== rpcErrorCodes.worktreeSetupRetained ||
-    error.method !== "workflow.task.move"
-  ) {
-    return null;
-  }
-  const parsed = worktreeSetupRetainedErrorDataSchema.safeParse(error.data);
-  if (!parsed.success) {
-    return null;
-  }
-  return new WorktreeSetupRetainedError(error, {
-    worktree: parsed.data.worktree,
-    scriptPath: parsed.data.script_path,
-    diagnostic: parsed.data.diagnostic,
-    retainedPreviousWorktree: parsed.data.retained_previous_worktree ?? null,
-  });
-}
-
 export class WorkflowTaskMovePreparationError extends RpcError {
   readonly failure: WorktreeSetupFailure;
   readonly setupScriptPath: string | null;
@@ -135,7 +67,10 @@ const workflowTaskMovePreparationErrorDataSchema = z
   .object({
     type: z.literal("workflow_task_move_preparation"),
     failure: worktreeSetupFailureWireSchema,
-    setup_script_path: z.string().refine((value) => value.trim().length > 0).optional(),
+    setup_script_path: z
+      .string()
+      .refine((value) => value.trim().length > 0)
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -180,6 +115,18 @@ export function decodeWorkflowTaskMovePreparationError(
     failure: parsed.data.failure,
     setupScriptPath: parsed.data.setup_script_path ?? null,
   });
+}
+
+export function isTaskMissingError(error: unknown): boolean {
+  return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
+}
+
+const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_found") });
+export function isProjectMissingError(error: unknown): boolean {
+  return (
+    error instanceof RpcError &&
+    (error.code === rpcErrorCodes.projectNotFound || projectMissingDataSchema.safeParse(error.data).success)
+  );
 }
 
 export type TaskSearchErrorReason = "normalized_too_short";

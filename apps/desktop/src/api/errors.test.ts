@@ -1,5 +1,4 @@
 import {
-  decodeWorktreeSetupRetainedError,
   decodeWorkflowTaskMovePreparationError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
@@ -8,7 +7,6 @@ import {
   RpcError,
   WorkflowLabelError,
   WorkflowTaskDependencyError,
-  WorktreeSetupRetainedError,
   WorkflowTaskMovePreparationError,
 } from "./errors";
 import { registeredWorktreeWire } from "@/test-support/api";
@@ -24,110 +22,6 @@ describe("sidebar missing-entity errors", () => {
     expect(isProjectMissingError(error(-32000, { reason: "project_not_found" }))).toBe(true);
     expect(isProjectMissingError(error(rpcErrorCodes.projectNotFound))).toBe(true);
     expect(isProjectMissingError(new Error("project_not_found"))).toBe(false);
-  });
-});
-
-describe("worktree setup retained RPC errors", () => {
-  it("decodes required primary facts and optional previous worktree without text parsing", () => {
-    const error = new RpcError({
-      code: -32039,
-      method: "workflow.task.move",
-      message: "human text is not the contract",
-      data: {
-        type: "worktree_setup_retained",
-        worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-        script_path: "/repo/setup.sh",
-        diagnostic: "setup failed after retry",
-        retained_previous_worktree: {
-          worktree: registeredWorktreeWire("/repo/previous", "worktree-previous"),
-        },
-      },
-    });
-    const decoded = decodeWorktreeSetupRetainedError(error);
-    expect(decoded).toBeInstanceOf(WorktreeSetupRetainedError);
-    expect(decoded).toMatchObject({
-      scriptPath: "/repo/setup.sh",
-      diagnostic: "setup failed after retry",
-      worktree: { registered: { kent: { canonicalRoot: "/repo/current" } } },
-      retainedPreviousWorktree: {
-        worktree: { registered: { kent: { canonicalRoot: "/repo/previous" } } },
-      },
-    });
-  });
-
-  it("rejects malformed topology and blank diagnostics", () => {
-    for (const data of [
-      {
-        type: "worktree_setup_retained",
-        worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-        script_path: "/repo/setup.sh",
-        diagnostic: " ",
-      },
-      {
-        type: "worktree_setup_retained",
-        worktree: { variant: "registered", registered: {} },
-        script_path: "/repo/setup.sh",
-        diagnostic: "setup failed",
-      },
-      {
-        type: "worktree_setup_retained",
-        worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-        script_path: " ",
-        diagnostic: "setup failed",
-      },
-      {
-        type: "worktree_setup_retained",
-        worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-        diagnostic: "setup failed",
-      },
-    ]) {
-      expect(
-        decodeWorktreeSetupRetainedError(
-          new RpcError({
-            code: -32039,
-            method: "workflow.task.move",
-            message: "setup failed",
-            data,
-          }),
-        ),
-      ).toBeNull();
-    }
-  });
-
-  it("preserves the exact nonblank setup script identity", () => {
-    const scriptPath = " /repo/setup.sh ";
-    const decoded = decodeWorktreeSetupRetainedError(
-      new RpcError({
-        code: -32039,
-        method: "workflow.task.move",
-        message: "setup failed",
-        data: {
-          type: "worktree_setup_retained",
-          worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-          script_path: scriptPath,
-          diagnostic: "setup failed",
-        },
-      }),
-    );
-    expect(decoded?.scriptPath).toBe(scriptPath);
-  });
-
-  it("does not classify another RPC method as Manual Move recovery", () => {
-    expect(
-      decodeWorktreeSetupRetainedError(
-        new RpcError({
-          code: -32039,
-          method: "worktree.create",
-          message: "setup failed",
-          data: {
-            type: "worktree_setup_retained",
-            worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-            script_path: "/repo/setup.sh",
-            diagnostic: "setup failed",
-          },
-        }),
-      ),
-    ).toBeNull();
   });
 });
 
@@ -184,6 +78,17 @@ describe("Workflow Task Move preparation RPC errors", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("sidebar missing-entity errors", () => {
+  it("recognizes typed Task and Project missing errors without parsing messages", () => {
+    const error = (code: number, data?: Readonly<Record<string, string>>) =>
+      new RpcError({ code, data, message: "changed", method: "owner.operation" });
+    expect(isTaskMissingError(error(rpcErrorCodes.workflowTaskNotFound))).toBe(true);
+    expect(isProjectMissingError(error(-32000, { reason: "project_not_found" }))).toBe(true);
+    expect(isProjectMissingError(error(rpcErrorCodes.projectNotFound))).toBe(true);
+    expect(isProjectMissingError(new Error("project_not_found"))).toBe(false);
   });
 });
 
