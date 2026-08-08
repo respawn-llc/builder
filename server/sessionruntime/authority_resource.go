@@ -410,17 +410,18 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 }
 
 func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.Engine) error {
-	settle := func() {
+	settle := func() error {
+		var engineErr error
 		if engine != nil {
-			engine.CloseBoundaryAgenda()
+			engineErr = engine.CloseRuntimeState()
 		}
 		r.mu.Lock()
 		r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))
 		r.mu.Unlock()
+		return engineErr
 	}
 	if r.events == nil {
-		settle()
-		return nil
+		return settle()
 	}
 	deferred, err := runtimecommand.Submit(
 		context.Background(),
@@ -431,22 +432,19 @@ func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.E
 			_ struct{},
 			complete func(struct{}, error),
 		) error {
-			settle()
-			complete(struct{}{}, nil)
+			complete(struct{}{}, settle())
 			return nil
 		},
 	)
 	if err != nil {
 		if errors.Is(err, runtimecommand.ErrUnavailable) {
-			settle()
-			return nil
+			return settle()
 		}
 		return err
 	}
 	_, err = deferred.Await(ctx)
 	if errors.Is(err, runtimecommand.ErrUnavailable) {
-		settle()
-		return nil
+		return settle()
 	}
 	return err
 }

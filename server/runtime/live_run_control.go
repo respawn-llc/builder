@@ -242,10 +242,10 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 		return QueuedUserMessage{}, false, context.Canceled
 	}
 	committed = true
-	e.outputMutationMu.Lock()
+	e.pendingWorkMu.Lock()
 	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
 	if queueErr != nil {
-		e.outputMutationMu.Unlock()
+		e.pendingWorkMu.Unlock()
 		queueItemID := mustQueueItemID(item.ID)
 		e.liveRun.finishQueueItemPublication(queueItemID)
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
@@ -254,7 +254,7 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	}
 	item = queuedItem
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.outputMutationMu.Unlock()
+	e.pendingWorkMu.Unlock()
 	queueItemID := mustQueueItemID(item.ID)
 	if e.liveRun.finishQueueItemPublication(queueItemID) {
 		e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -321,13 +321,13 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 		rawIDs = append(rawIDs, id)
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
-	e.outputMutationMu.Lock()
+	e.pendingWorkMu.Lock()
 	failed := map[runtimeids.QueueItemID]struct{}{}
 	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 	}
-	e.outputMutationMu.Unlock()
+	e.pendingWorkMu.Unlock()
 	e.liveRun.clearStoppedQueueItems(failed)
 }
 
@@ -344,7 +344,7 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queue
 		return items
 	}
 	filtered := items[:0]
-	e.outputMutationMu.Lock()
+	e.pendingWorkMu.Lock()
 	for _, item := range items {
 		id := mustQueueItemID(item.message.ID)
 		if _, ok := stopped[id]; ok {
@@ -354,7 +354,7 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queue
 		}
 		filtered = append(filtered, item)
 	}
-	e.outputMutationMu.Unlock()
+	e.pendingWorkMu.Unlock()
 	return filtered
 }
 

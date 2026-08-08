@@ -109,7 +109,7 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		},
 		"appendMessageRaw":             {"applySteeringItem": true},
 		"appendQueuedUserMessageFlush": {"applySteeringItem": true},
-		"applySteeringItem":            {"steerOrdered": true},
+		"applySteeringItem":            {"applySteeringBatch": true},
 	}
 	sessionRuntimeBannedCalls := map[string]bool{
 		"AppendCommittedEntry":                  true,

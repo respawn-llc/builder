@@ -160,15 +160,16 @@ type Engine struct {
 	mu               sync.Mutex
 	workflowTerminal WorkflowTerminalState
 
-	lifecycleMu     sync.Mutex
-	lifecycleOnce   sync.Once
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-	lifecycleWG     sync.WaitGroup
-	lifecycleClosed bool
-	closed          atomic.Bool
-	runtimeEvents   *runtimecommand.Queue
-	boundaryAgenda  *boundaryAgenda
+	lifecycleMu      sync.Mutex
+	lifecycleOnce    sync.Once
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
+	lifecycleWG      sync.WaitGroup
+	lifecycleClosed  bool
+	closed           atomic.Bool
+	runtimeEvents    *runtimecommand.Queue
+	boundaryAgenda   *boundaryAgenda
+	streamMutationMu sync.Mutex
 
 	store    *session.Store
 	eventLog session.MaterializedEventLog
@@ -178,9 +179,9 @@ type Engine struct {
 	// controlMutationMu serializes multi-step control mutations that need to
 	// persist transcript feedback before applying in-memory runtime state.
 	controlMutationMu sync.Mutex
-	// outputMutationMu keeps durable transcript writes, runtime projections, and
-	// event emission in one order for concurrent steering producers.
-	outputMutationMu           sync.Mutex
+	// pendingWorkMu owns the legacy Pending Work store until the Boundary Agenda
+	// cutover removes that secondary store.
+	pendingWorkMu              sync.Mutex
 	workflowAssignmentMu       sync.Mutex
 	pendingWorkflowAssignments []queuedWorkflowAssignment
 	// queuedUserWorkMu serializes the server-owned continuation that drains
@@ -315,6 +316,9 @@ func New(
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)
+	}
+	if cfg.RuntimeEvents == nil {
+		return nil, errors.New("runtime event queue is required")
 	}
 	eng.cfg.ProviderCapabilitiesOverride = &providerCapabilities
 	eng.ensureLifecycle()
@@ -465,14 +469,11 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
-	if e.boundaryAgenda != nil {
-		e.boundaryAgenda.close()
-	}
+	runtimeStateErr := e.CloseRuntimeState()
 	if e.runtimeEvents != nil {
 		e.runtimeEvents.Close()
 	}
-	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
-	return interruptErr
+	return errors.Join(interruptErr, runtimeStateErr)
 }
 
 func (e *Engine) closeAdmissionAfterRuntimeAbort() {
@@ -483,11 +484,11 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	e.failPendingWorkflowAssignments(ErrEngineClosed)
 }
 
-func (e *Engine) CloseBoundaryAgenda() {
-	if e == nil || e.boundaryAgenda == nil {
-		return
+func (e *Engine) CloseRuntimeState() error {
+	if e == nil || e.boundaryAgenda == nil || !e.boundaryAgenda.close() {
+		return nil
 	}
-	e.boundaryAgenda.close()
+	return e.applySteeringBatch("runtime_close", steerLiveToolAbortIntent("canceled"))
 }
 
 func (e *Engine) ensureLifecycle() {
@@ -550,8 +551,8 @@ func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestI
 func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
-		e.outputMutationMu.Lock()
-		defer e.outputMutationMu.Unlock()
+		e.pendingWorkMu.Lock()
+		defer e.pendingWorkMu.Unlock()
 		item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
 		if err != nil {
 			return QueuedUserMessage{}, err
@@ -565,14 +566,14 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
-			e.outputMutationMu.Lock()
+			e.pendingWorkMu.Lock()
 			item, err := e.messageFlow.QueueUserMessageWithID(liveItem)
 			if err != nil {
-				e.outputMutationMu.Unlock()
+				e.pendingWorkMu.Unlock()
 				return QueuedUserMessage{}, err
 			}
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			e.outputMutationMu.Unlock()
+			e.pendingWorkMu.Unlock()
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
 				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -588,19 +589,19 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
-		e.outputMutationMu.Lock()
+		e.pendingWorkMu.Lock()
 		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-		e.outputMutationMu.Unlock()
+		e.pendingWorkMu.Unlock()
 		return liveItem, nil
 	}
-	e.outputMutationMu.Lock()
+	e.pendingWorkMu.Lock()
 	item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
 	if err != nil {
-		e.outputMutationMu.Unlock()
+		e.pendingWorkMu.Unlock()
 		return QueuedUserMessage{}, err
 	}
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.outputMutationMu.Unlock()
+	e.pendingWorkMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
 	return item, nil
@@ -632,8 +633,8 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
+	e.pendingWorkMu.Lock()
+	defer e.pendingWorkMu.Unlock()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)

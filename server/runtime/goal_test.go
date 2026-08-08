@@ -314,11 +314,11 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		},
 	})
 
-	engine.outputMutationMu.Lock()
-	outputLocked := true
+	releaseAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	admissionBlocked := true
 	defer func() {
-		if outputLocked {
-			engine.outputMutationMu.Unlock()
+		if admissionBlocked {
+			releaseAdmission()
 		}
 	}()
 	firstDone := make(chan error, 1)
@@ -343,8 +343,8 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 	}
 	eventsMu.Unlock()
 
-	engine.outputMutationMu.Unlock()
-	outputLocked = false
+	releaseAdmission()
+	admissionBlocked = false
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first SetGoal: %v", err)
 	}
@@ -935,11 +935,11 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	}
 	client.waitStarted(t, 1)
 
-	engine.outputMutationMu.Lock()
-	outputLocked := true
+	releaseAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	admissionBlocked := true
 	defer func() {
-		if outputLocked {
-			engine.outputMutationMu.Unlock()
+		if admissionBlocked {
+			releaseAdmission()
 		}
 	}()
 	released := map[int]bool{}
@@ -967,8 +967,8 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 		t.Fatalf("accepted status = %q, want active", accepted.Status)
 	}
 
-	engine.outputMutationMu.Unlock()
-	outputLocked = false
+	releaseAdmission()
+	admissionBlocked = false
 	select {
 	case err := <-interruptDone:
 		if err != nil {

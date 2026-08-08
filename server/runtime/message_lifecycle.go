@@ -491,7 +491,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserMessage
-	m.engine.outputMutationMu.Lock()
+	m.engine.pendingWorkMu.Lock()
 	switch selected := selection.(type) {
 	case allPendingUserInjectionSelection:
 		pending = m.queue.Drain()
@@ -500,10 +500,10 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 			pending = m.queue.DrainByID(selected.queueItemIDs)
 		}
 	default:
-		m.engine.outputMutationMu.Unlock()
+		m.engine.pendingWorkMu.Unlock()
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
-	m.engine.outputMutationMu.Unlock()
+	m.engine.pendingWorkMu.Unlock()
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -545,7 +545,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 			return result, err
 		}
 		if !publishAllowed {
-			e.outputMutationMu.Lock()
+			e.pendingWorkMu.Lock()
 			tailItems := make([]QueuedUserMessage, 0)
 			for _, remaining := range groups[groupIndex:] {
 				tailItems = append(tailItems, remaining.queueItems...)
@@ -554,7 +554,7 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 				e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 				e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
-			e.outputMutationMu.Unlock()
+			e.pendingWorkMu.Unlock()
 			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
 			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
 			result.disposition = userInjectionFlushStopped

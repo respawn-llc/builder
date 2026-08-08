@@ -377,7 +377,7 @@ func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *test
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if !errors.Is(err, errUnknownTool) {

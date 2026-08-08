@@ -11,11 +11,15 @@ func newBoundaryAgenda() *boundaryAgenda {
 	return &boundaryAgenda{}
 }
 
-func (a *boundaryAgenda) close() {
+func (a *boundaryAgenda) close() bool {
 	if a == nil {
-		return
+		return false
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return false
+	}
 	a.closed = true
-	a.mu.Unlock()
+	return true
 }

@@ -64,8 +64,6 @@ func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnap
 		}
 		return fn(TranscriptHydrationSnapshot{})
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
 	if fn == nil {
 		return nil
 	}

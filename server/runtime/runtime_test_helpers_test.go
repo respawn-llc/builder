@@ -12,6 +12,7 @@ import (
 
 	"core/internal/testharness/filemode"
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -230,6 +231,9 @@ func mustOpenTestSession(t *testing.T, dir string) *session.Store {
 
 func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, registry *tools.Registry, cfg Config) *Engine {
 	t.Helper()
+	if cfg.RuntimeEvents == nil {
+		cfg.RuntimeEvents = runtimecommand.NewQueue(context.Background())
+	}
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
 	}
