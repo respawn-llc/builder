@@ -768,7 +768,7 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		_, registered := e.registry.Get(toolspec.ToolExecCommand)
 		results, execErr := e.executeToolCalls(stepCtx, stepID, []llm.ToolCall{call})
 		if len(results) == 0 {
-			return errors.New("shell tool execution returned no result")
+			return errors.Join(execErr, errors.New("shell tool execution returned no result"))
 		}
 		result = results[0]
 		if !registered {
@@ -1204,20 +1204,22 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 				if fatal := collector.fatalSnapshot(); fatal != nil {
 					break
 				}
-				panic(fmt.Sprintf(
-					"semantic close failed to report interrupted tool result (call_id=%q tool=%q error=%v)",
+				e.abortResultGroupForOperationalFailure(stepID, collector, fmt.Errorf(
+					"semantic close failed to report interrupted tool result (call_id=%s tool=%s): %w",
 					call.ID,
 					call.Name,
 					err,
 				))
+				break
 			}
 			if outcome == nil || *outcome != resultGroupReportAccepted {
-				panic(fmt.Sprintf(
-					"semantic close result group ignored interrupted tool result without fatal (call_id=%q tool=%q outcome=%v)",
+				e.abortResultGroupForOperationalFailure(stepID, collector, fmt.Errorf(
+					"semantic close result group ignored interrupted tool result without fatal (call_id=%s tool=%s outcome=%v)",
 					call.ID,
 					call.Name,
 					outcome,
 				))
+				break
 			}
 			results[index] = interrupted
 		}

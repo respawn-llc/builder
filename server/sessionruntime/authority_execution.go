@@ -173,7 +173,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	if drainErr != nil {
 		executionErr = errors.Join(executionErr, drainErr)
 	}
-	abort := runtimeAbortFromError(runErr)
+	abort, abortErr := runtimeAbortFromError(runErr)
+	if abortErr != nil {
+		executionErr = errors.Join(executionErr, abortErr)
+	}
 	var closeErr error
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
@@ -207,7 +210,7 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.resultMu.Lock()
 	e.result = result
 	e.runErr = finalErr
-	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
+	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
 	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
 		authority.executionFinalized.ExecutionFinalized(e.scope)
@@ -215,19 +218,22 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	close(e.done)
 }
 
-func runtimeAbortFromError(err error) bool {
+func runtimeAbortFromError(err error) (bool, error) {
 	type runtimeAbort interface {
 		RuntimeAbortDisposition() (committed bool, cause error)
 	}
 	var abort runtimeAbort
 	if !errors.As(err, &abort) {
-		return false
+		return false, nil
 	}
 	_, cause := abort.RuntimeAbortDisposition()
 	if cause == nil || !errors.Is(err, cause) {
-		panic("runtime abort disposition must expose its exact cause through the error chain")
+		return true, fmt.Errorf(
+			"runtime abort disposition %T must expose its exact cause through the error chain",
+			abort,
+		)
 	}
-	return true
+	return true, nil
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {

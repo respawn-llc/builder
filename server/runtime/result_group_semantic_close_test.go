@@ -507,6 +507,78 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 	}
 }
 
+func TestSemanticCloseSteeringFailureAbortsResultGroupWithoutPanicking(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	call := llm.ToolCall{
+		ID:    "semantic-close-steer-failure",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"true"}`),
+	}
+	collector, err := newResultGroupCollector([]resultGroupCallIdentity{
+		resultGroupIdentityFromToolCall(call),
+	})
+	if err != nil {
+		t.Fatalf("new semantic-close collector: %v", err)
+	}
+	engine.closed.Store(true)
+
+	_, err = engine.coordinateAcceptedResponsePostJoin(
+		"step",
+		[]executorToolCall{{call: call, toolID: toolspec.ToolExecCommand, knownTool: true}},
+		[]*completedToolResult{nil},
+		collector,
+		context.Canceled,
+	)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrEngineClosed) {
+		t.Fatalf("semantic-close steering failure = %v, want uncommitted engine-closed fatal", err)
+	}
+}
+
+func TestFinishRunErrorFeedbackPersistsOnlyUnpersistedLifecycleBranch(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	countFeedback := func() int {
+		count := 0
+		for _, entry := range engine.ChatSnapshot().Entries {
+			if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+				count++
+			}
+		}
+		return count
+	}
+	callbackErr := errors.New("goal callback failed")
+	if engine.persistRunErrorFeedback(callbackErr) == "" {
+		t.Fatal("goal callback failure produced no durable feedback")
+	}
+	before := countFeedback()
+	clearErr := &pendingModelRecoveryClearError{cause: errors.New("clear failed")}
+
+	engine.finishRunErrorFeedback(errors.Join(
+		&persistedRunCallbackError{cause: callbackErr},
+		clearErr,
+	))
+
+	if after := countFeedback(); after != before+1 {
+		t.Fatalf("goal final feedback records = %d after %d, want one lifecycle diagnostic", after, before)
+	}
+}
+
 type semanticCloseFailureKind uint8
 
 const (

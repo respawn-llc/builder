@@ -112,6 +112,10 @@ type lifecycleRuntimeAbort struct {
 	cause     error
 }
 
+type lifecycleMalformedRuntimeAbort struct {
+	cause error
+}
+
 type lifecycleBarrierFailureObserver struct {
 	armed   atomic.Bool
 	failure error
@@ -184,6 +188,23 @@ func (e *lifecycleRuntimeAbort) Unwrap() error {
 
 func (e *lifecycleRuntimeAbort) RuntimeAbortDisposition() (bool, error) {
 	return e.committed, e.cause
+}
+
+func (e *lifecycleMalformedRuntimeAbort) Error() string {
+	return e.cause.Error()
+}
+
+func (e *lifecycleMalformedRuntimeAbort) RuntimeAbortDisposition() (bool, error) {
+	return false, errors.New("unexposed abort cause")
+}
+
+func TestRuntimeAbortContractViolationReturnsDiagnostic(t *testing.T) {
+	abort, err := runtimeAbortFromError(&lifecycleMalformedRuntimeAbort{
+		cause: errors.New("runtime failed"),
+	})
+	if !abort || err == nil {
+		t.Fatalf("malformed runtime abort = abort:%t error:%v, want true diagnostic", abort, err)
+	}
 }
 
 func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {

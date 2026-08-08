@@ -86,6 +86,7 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 		textutil.EqualOptional(left.SourcePath, right.SourcePath) &&
 		transcriptWorktreeContextEqual(left.Worktree, right.Worktree) &&
 		textutil.EqualOptional(left.CacheWarning, right.CacheWarning) &&
+		textutil.EqualOptional(left.ToolOutputRepair, right.ToolOutputRepair) &&
 		textutil.EqualOptional(left.Diagnostic, right.Diagnostic) &&
 		textutil.EqualOptional(left.Background, right.Background) &&
 		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&

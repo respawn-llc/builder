@@ -45,7 +45,7 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 
 	var (
 		equivalentOutput  json.RawMessage
-		equivalentWarning *string
+		equivalentWarning *transcript.ToolOutputRepairKind
 	)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -131,9 +131,9 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 			}
 			warning := freshResourceRepairWarning(t, reopened)
 			if equivalentWarning == nil {
-				equivalentWarning = textutil.Value(warning)
+				equivalentWarning = textutil.Value(warning.Kind)
 			}
-			if warning != *equivalentWarning {
+			if warning.Kind != *equivalentWarning || warning.Count != 1 {
 				t.Fatalf(
 					"fresh repair warning for %s differs by recovery cause",
 					test.name,
@@ -323,13 +323,13 @@ func completionRecordCount(t *testing.T, store *session.Store, callID string) (i
 	return completions, warnings, found
 }
 
-func freshResourceRepairWarning(t *testing.T, store *session.Store) string {
+func freshResourceRepairWarning(t *testing.T, store *session.Store) transcript.ToolOutputRepairNotice {
 	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
 	if err != nil {
 		t.Fatalf("read bounded fresh-resource warning records: %v", err)
 	}
-	var warning *string
+	var warning *transcript.ToolOutputRepairNotice
 	for _, record := range window.Records {
 		payload, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
 		if !ok ||
@@ -339,7 +339,10 @@ func freshResourceRepairWarning(t *testing.T, store *session.Store) string {
 		if warning != nil {
 			t.Fatal("fresh-resource recovery persisted more than one typed warning")
 		}
-		warning = textutil.Value(payload.Text)
+		if payload.ToolOutputRepair == nil {
+			t.Fatal("fresh-resource recovery warning omitted typed repair facts")
+		}
+		warning = payload.ToolOutputRepair
 	}
 	if warning == nil {
 		t.Fatal("fresh-resource recovery persisted no typed warning")

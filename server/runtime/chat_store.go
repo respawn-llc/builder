@@ -38,6 +38,7 @@ type ChatEntry struct {
 	BackgroundActivityID string
 	BackgroundProcessID  string
 	BackgroundExitCode   *int
+	ToolOutputRepair     *transcript.ToolOutputRepairNotice
 	ToolCall             *transcript.ToolCallMeta
 	CommittedProvenance  *TranscriptCommittedRowProvenance
 	ReviewerFeedback     *ReviewerFeedbackChatEntry

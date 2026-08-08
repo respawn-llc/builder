@@ -10,6 +10,7 @@ import (
 
 	"core/shared/invariant"
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 const (
@@ -157,6 +158,10 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 			duration := *typed.DurationMs
 			typed.DurationMs = &duration
 		}
+		if typed.ToolOutputRepair != nil {
+			repair := *typed.ToolOutputRepair
+			typed.ToolOutputRepair = &repair
+		}
 		payload = typed
 	case ReviewerFeedbackRecord:
 		typed.Suggestions = append([]string(nil), typed.Suggestions...)
@@ -249,14 +254,15 @@ const (
 )
 
 type LocalEntryRecord struct {
-	Visibility      EntryVisibility `json:"visibility"`
-	Role            string          `json:"role"`
-	Text            string          `json:"text"`
-	DurationMs      *int64          `json:"duration_ms,omitempty"`
-	CondensedText   *string         `json:"condensed_text,omitempty"`
-	DiagnosticKey   *string         `json:"diagnostic_key,omitempty"`
-	NoticeID        *string         `json:"notice_id,omitempty"`
-	AfterToolCallID *string         `json:"after_tool_call_id,omitempty"`
+	Visibility       EntryVisibility                    `json:"visibility"`
+	Role             string                             `json:"role"`
+	Text             string                             `json:"text"`
+	DurationMs       *int64                             `json:"duration_ms,omitempty"`
+	CondensedText    *string                            `json:"condensed_text,omitempty"`
+	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
+	NoticeID         *string                            `json:"notice_id,omitempty"`
+	AfterToolCallID  *string                            `json:"after_tool_call_id,omitempty"`
+	ToolOutputRepair *transcript.ToolOutputRepairNotice `json:"tool_output_repair,omitempty"`
 }
 
 type ReviewerFeedbackRecord struct {
@@ -410,8 +416,11 @@ func (r LocalEntryRecord) validate() error {
 	if strings.TrimSpace(r.Role) == "" {
 		return fmt.Errorf("role is required")
 	}
-	if strings.TrimSpace(r.Text) == "" {
-		return fmt.Errorf("text is required")
+	if strings.TrimSpace(r.Text) == "" && r.ToolOutputRepair == nil {
+		return fmt.Errorf("text or tool-output repair facts are required")
+	}
+	if r.ToolOutputRepair != nil && !r.ToolOutputRepair.Valid() {
+		return fmt.Errorf("tool-output repair facts are invalid")
 	}
 	if r.DurationMs != nil && *r.DurationMs < 0 {
 		return fmt.Errorf("duration_ms must not be negative")

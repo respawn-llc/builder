@@ -661,6 +661,7 @@ func runSecondQuestionBarrierAttentionCase(
 	tracker := attentionnotify.NewQuestionBatchTracker(attentionBroker)
 	askBroker := tools.NewAskQuestionBroker()
 	var (
+		stateMu      sync.Mutex
 		engine       *Engine
 		handlerCalls int
 		skippedCalls int
@@ -673,6 +674,8 @@ func runSecondQuestionBarrierAttentionCase(
 		_ context.Context,
 		req tools.AskQuestionRequest,
 	) (tools.AskQuestionResponse, error) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
 		handlerCalls++
 		if handlerCalls != 1 {
 			handlerErr = fmt.Errorf("blocked second Question entered handler: %+v", req)
@@ -722,6 +725,8 @@ func runSecondQuestionBarrierAttentionCase(
 		Config{
 			Model: "gpt-5",
 			AskQuestionBatchSkipped: func(batch tools.AskQuestionBatchMetadata) {
+				stateMu.Lock()
+				defer stateMu.Unlock()
 				skippedCalls++
 				trackerErr = errors.Join(
 					trackerErr,
@@ -736,8 +741,17 @@ func runSecondQuestionBarrierAttentionCase(
 		"step",
 		twoQuestionBarrierAcceptedCalls(),
 	)
-	if restore != nil {
-		if err := restore(); err != nil {
+	stateMu.Lock()
+	restoreAfterExecution := restore
+	handlerCallsAfterExecution := handlerCalls
+	skippedCallsAfterExecution := skippedCalls
+	trackerErrAfterExecution := trackerErr
+	handlerErrAfterExecution := handlerErr
+	batchIDAfterExecution := batchID
+	secondAskIDAfterExecution := secondAskID
+	stateMu.Unlock()
+	if restoreAfterExecution != nil {
+		if err := restoreAfterExecution(); err != nil {
 			t.Fatalf("restore event-log blocker: %v", err)
 		}
 	}
@@ -749,17 +763,17 @@ func runSecondQuestionBarrierAttentionCase(
 	if fatal.Committed != wantCommitted {
 		t.Fatalf("collector fatal committed = %t, want %t", fatal.Committed, wantCommitted)
 	}
-	if trackerErr != nil {
-		t.Fatalf("attention tracker lifecycle: %v", trackerErr)
+	if trackerErrAfterExecution != nil {
+		t.Fatalf("attention tracker lifecycle: %v", trackerErrAfterExecution)
 	}
-	if handlerErr != nil {
-		t.Fatal(handlerErr)
+	if handlerErrAfterExecution != nil {
+		t.Fatal(handlerErrAfterExecution)
 	}
-	if handlerCalls != 1 || skippedCalls != 1 {
+	if handlerCallsAfterExecution != 1 || skippedCallsAfterExecution != 1 {
 		t.Fatalf(
 			"Question handler/skipped calls = %d/%d, want 1/1",
-			handlerCalls,
-			skippedCalls,
+			handlerCallsAfterExecution,
+			skippedCallsAfterExecution,
 		)
 	}
 	if len(results) != 0 {
@@ -772,13 +786,13 @@ func runSecondQuestionBarrierAttentionCase(
 	pending := nextQuestionBarrierAttentionEvent(t, attentionSub)
 	if pending.Type != clientui.AttentionNotificationEventPending ||
 		pending.Pending == nil ||
-		pending.Pending.ID.UUID != batchID {
+		pending.Pending.ID.UUID != batchIDAfterExecution {
 		t.Fatalf("pending Question attention = %+v", pending)
 	}
 	resolved := nextQuestionBarrierAttentionEvent(t, attentionSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved ||
 		resolved.ID == nil ||
-		resolved.ID.UUID != batchID {
+		resolved.ID.UUID != batchIDAfterExecution {
 		t.Fatalf("resolved Question attention = %+v", resolved)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -786,7 +800,7 @@ func runSecondQuestionBarrierAttentionCase(
 	if extra, err := attentionSub.Next(ctx); err == nil {
 		t.Fatalf("duplicate Question attention event = %+v", extra)
 	}
-	if err := tracker.MarkSkipped(batchID, secondAskID); !errors.Is(err, attentionnotify.ErrBatchNotFound) {
+	if err := tracker.MarkSkipped(batchIDAfterExecution, secondAskIDAfterExecution); !errors.Is(err, attentionnotify.ErrBatchNotFound) {
 		t.Fatalf("resolved Question batch remained registered: %v", err)
 	}
 }

@@ -61,6 +61,9 @@ func (o *callbackPersistenceObserver) ObserveEventLogReconciliation(
 	ctx context.Context,
 	reconciliation session.PersistedEventLogReconciliation,
 ) error {
+	if o.reconciler == nil {
+		return nil
+	}
 	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
@@ -596,7 +599,7 @@ func TestResultGroupFlushPreCommitFailureProjectsNothingAndDoesNotRetryOnClose(t
 	blocker := mustBlockTestEventLogAppends(t, store)
 
 	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "failed")
-	var fatal resultGroupFatal
+	var fatal *resultGroupFatal
 	if !errors.As(err, &fatal) || fatal.Committed {
 		t.Fatalf("pre-commit result group error = %v, want uncommitted fatal", err)
 	}
@@ -687,7 +690,7 @@ func TestResultGroupCommittedObserverFailureProjectsOnceAndStoresFatal(t *testin
 	gate.FailNext(observerErr)
 
 	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "observer")
-	var fatal resultGroupFatal
+	var fatal *resultGroupFatal
 	if !errors.As(err, &fatal) ||
 		!fatal.Committed ||
 		!errors.Is(fatal.Cause, observerErr) {
@@ -761,7 +764,7 @@ func TestResultGroupCommittedProjectionFailureEmitsNothingAndHydratesOnce(t *tes
 	})
 
 	err := reportAndFlushSimpleResultGroup(engine, "step", collector, "projection")
-	var fatal resultGroupFatal
+	var fatal *resultGroupFatal
 	if !errors.As(err, &fatal) || !fatal.Committed {
 		t.Fatalf("committed projection result group error = %v", err)
 	}

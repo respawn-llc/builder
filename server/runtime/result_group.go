@@ -322,12 +322,7 @@ func (e *Engine) abortResultGroupForOperationalFailure(
 	)
 	fatal := collector.fatalSnapshot()
 	if fatal == nil {
-		panic(fmt.Sprintf(
-			"result group operational failure was not stored (step_id=%q cause=%v steer_error=%v)",
-			stepID,
-			cause,
-			steerErr,
-		))
+		fatal, _ = collector.abortOperational(errors.Join(cause, steerErr))
 	}
 	return fatal
 }
@@ -365,15 +360,10 @@ func cloneResultGroupUnit(unit resultGroupUnit) resultGroupUnit {
 }
 
 type resultGroupPreparedUnit struct {
-	completion            finalizedToolCompletion
-	storedCompletion      storedToolCompletion
-	backgroundSessionID   string
-	hasBackgroundSession  bool
-	output                llm.Message
-	feedback              *storedLocalEntry
-	completionRecordIndex int
-	feedbackRecordIndex   *int
-	outputRecordIndex     int
+	completion        preparedFinalizedToolCompletion
+	completionStart   int
+	output            llm.Message
+	outputRecordIndex int
 }
 
 type resultGroupProjectionPlan struct {
@@ -452,7 +442,7 @@ func (e *Engine) flushResultGroup(
 			fatal.Cause = errors.New("result group append did not commit")
 		}
 		collector.abort(fatal)
-		return fatal
+		return collector.fatalSnapshot()
 	}
 	if err := collector.advanceReadyPrefix(len(ready)); err != nil {
 		panic(fmt.Sprintf(
@@ -466,12 +456,12 @@ func (e *Engine) flushResultGroup(
 	if projectionErr := e.applyResultGroupProjection(stepID, plan, records); projectionErr != nil {
 		fatal := resultGroupFatal{Committed: true, Cause: projectionErr}
 		collector.abort(fatal)
-		return fatal
+		return collector.fatalSnapshot()
 	}
 	if appendErr != nil {
 		fatal := resultGroupFatal{Committed: true, Cause: appendErr}
 		collector.abort(fatal)
-		return fatal
+		return collector.fatalSnapshot()
 	}
 	return nil
 }
@@ -542,52 +532,26 @@ func (e *Engine) prepareResultGroupProjection(
 				slot.ordinal,
 			)
 		}
-		completion := e.finalizeLiveToolCompletion(unit.result)
-		stored, backgroundSessionID, hasBackgroundSession :=
-			e.prepareStoredToolCompletion(completion.Result)
-		completionRecord, err := sessionToolCompletionRecordFromStored(stored)
+		completion, err := e.prepareFinalizedToolCompletion(
+			e.finalizeLiveToolCompletion(unit.result),
+		)
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"adapt result group completion %q: %w",
+				"prepare result group completion %q: %w",
 				slot.call.CallID,
 				err,
 			)
 		}
 		prepared := resultGroupPreparedUnit{
-			completion:            completion,
-			storedCompletion:      stored,
-			backgroundSessionID:   backgroundSessionID,
-			hasBackgroundSession:  hasBackgroundSession,
-			completionRecordIndex: len(plan.payloads),
+			completion:      completion,
+			completionStart: len(plan.payloads),
 		}
-		plan.payloads = append(plan.payloads, completionRecord)
-		if completion.OperatorFeedback != nil {
-			feedback, err := normalizeStoredLocalEntry(*completion.OperatorFeedback)
-			if err != nil {
-				return resultGroupProjectionPlan{}, fmt.Errorf(
-					"normalize result group feedback %q: %w",
-					slot.call.CallID,
-					err,
-				)
-			}
-			feedbackRecord, err := sessionLocalEntryRecordFromRuntime(feedback)
-			if err != nil {
-				return resultGroupProjectionPlan{}, fmt.Errorf(
-					"adapt result group feedback %q: %w",
-					slot.call.CallID,
-					err,
-				)
-			}
-			feedbackIndex := len(plan.payloads)
-			prepared.feedback = &feedback
-			prepared.feedbackRecordIndex = &feedbackIndex
-			plan.payloads = append(plan.payloads, feedbackRecord)
-		}
+		plan.payloads = append(plan.payloads, completion.records...)
 		output := llm.Message{
 			Role:        llm.RoleTool,
-			Content:     textutil.Value(string(completion.Result.Output)),
-			ToolCallID:  textutil.Value(completion.Result.CallID),
-			Name:        textutil.Value(string(completion.Result.Name)),
+			Content:     textutil.Value(string(completion.completion.Result.Output)),
+			ToolCallID:  textutil.Value(completion.completion.Result.CallID),
+			Name:        textutil.Value(string(completion.completion.Result.Name)),
 			MessageType: llm.ToolOutputMessageType(slot.call.OutputKind == session.ToolOutputKindCustom),
 		}
 		output = normalizeMessageForTranscript(output, e.transcriptWorkingDir())
@@ -642,54 +606,31 @@ func (e *Engine) applyResultGroupProjection(
 	projected := make([]projectedResultGroupUnit, 0, len(plan.units))
 	for _, unit := range plan.units {
 		if _, live := e.transcriptRuntimeState().liveToolLedger().Lookup(
-			unit.completion.Result.CallID,
+			unit.completion.completion.Result.CallID,
 		); !live {
 			return fmt.Errorf(
 				"project committed result group: live tool call %q is unavailable",
-				unit.completion.Result.CallID,
+				unit.completion.completion.Result.CallID,
 			)
 		}
 	}
 	for _, unit := range plan.units {
 		unitStart := e.CommittedTranscriptEntryCount()
-		completionProvenance, err := transcriptProvenanceFromRecord(
-			records[unit.completionRecordIndex],
-		)
-		if err != nil {
-			return err
-		}
 		outputProvenance, err := transcriptProvenanceFromRecord(
 			records[unit.outputRecordIndex],
 		)
 		if err != nil {
 			return err
 		}
-		var feedbackProvenance *TranscriptCommittedRowProvenance
-		if unit.feedbackRecordIndex != nil {
-			value, err := transcriptProvenanceFromRecord(
-				records[*unit.feedbackRecordIndex],
-			)
-			if err != nil {
-				return err
-			}
-			feedbackProvenance = &value
-		}
-		e.applyCommittedStoredToolCompletion(
-			unit.storedCompletion,
-			unit.backgroundSessionID,
-			unit.hasBackgroundSession,
-			&completionProvenance,
+		applied, err := e.applyPreparedFinalizedToolCompletion(
+			stepID,
+			unit.completion,
+			records[unit.completionStart:unit.outputRecordIndex],
 		)
-		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.Result.CallID)
-		completionCount := e.CommittedTranscriptEntryCount()
-		if unit.feedback != nil {
-			entry := localEntryChatEntryForStep(*unit.feedback, stepID)
-			e.appendResultGroupFeedbackProjection(
-				*entry,
-				unit.feedback.AfterToolCallID,
-				feedbackProvenance,
-			)
+		if err != nil {
+			return err
 		}
+		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.completion.Result.CallID)
 		if mutation := tokenUsageMutationForMessage(unit.output); mutation == tokenUsageMutationSignificant {
 			e.markCurrentRequestShapeDirtyForSignificantMutation()
 		} else {
@@ -702,22 +643,22 @@ func (e *Engine) applyResultGroupProjection(
 		); err != nil {
 			return fmt.Errorf(
 				"append result group output projection %q: %w",
-				unit.completion.Result.CallID,
+				unit.completion.completion.Result.CallID,
 				err,
 			)
 		}
 		projected = append(projected, projectedResultGroupUnit{
 			unit:                 unit,
-			completionProvenance: completionProvenance,
-			feedbackProvenance:   feedbackProvenance,
+			completionProvenance: applied.completionProvenance,
+			feedbackProvenance:   applied.feedbackProvenance,
 			completionStart:      unitStart,
-			completionCount:      completionCount,
-			feedbackStart:        completionCount,
-			feedbackCount:        e.CommittedTranscriptEntryCount(),
+			completionCount:      applied.completionCount,
+			feedbackStart:        applied.completionCount,
+			feedbackCount:        applied.feedbackCount,
 		})
 	}
 	for _, projection := range projected {
-		result := cloneToolResult(projection.unit.completion.Result)
+		result := cloneToolResult(projection.unit.completion.completion.Result)
 		if err := e.emitResultGroupProjectionEvent(Event{
 			Kind:                       EventToolCallCompleted,
 			StepID:                     stepID,
@@ -730,8 +671,8 @@ func (e *Engine) applyResultGroupProjection(
 		}); err != nil {
 			return err
 		}
-		if projection.unit.feedback != nil {
-			entry := localEntryChatEntryForStep(*projection.unit.feedback, stepID)
+		if projection.unit.completion.feedback != nil {
+			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, stepID)
 			if err := e.emitResultGroupProjectionEvent(Event{
 				Kind:                       EventLocalEntryAdded,
 				StepID:                     stepID,

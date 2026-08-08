@@ -78,8 +78,12 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	if !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
 		t.Fatalf("live generation repair selected the wrong typed disposition: %s", completion.Output)
 	}
-	if warning == nil || strings.TrimSpace(warning.Text) == "" {
-		t.Fatalf("missing operator-facing repair warning: %+v", warning)
+	if warning == nil ||
+		warning.ToolOutputRepair == nil ||
+		warning.ToolOutputRepair.Kind != transcript.ToolOutputRepairLiveProviderRejection ||
+		warning.ToolOutputRepair.Count != 1 ||
+		warning.Text != "" {
+		t.Fatalf("operator repair warning facts = %+v", warning)
 	}
 }
 

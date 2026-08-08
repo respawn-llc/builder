@@ -257,14 +257,15 @@ func sessionLocalEntryRecordFromRuntime(
 		return session.LocalEntryRecord{}, err
 	}
 	record := session.LocalEntryRecord{
-		Visibility:      visibility,
-		Role:            entry.Role,
-		Text:            entry.Text,
-		DurationMs:      textutil.Pointer(entry.DurationMs),
-		CondensedText:   textutil.Pointer(entry.CondensedText),
-		DiagnosticKey:   textutil.Pointer(entry.DiagnosticKey),
-		NoticeID:        textutil.Pointer(entry.NoticeID),
-		AfterToolCallID: textutil.Pointer(entry.AfterToolCallID),
+		Visibility:       visibility,
+		Role:             entry.Role,
+		Text:             entry.Text,
+		DurationMs:       textutil.Pointer(entry.DurationMs),
+		CondensedText:    textutil.Pointer(entry.CondensedText),
+		DiagnosticKey:    textutil.Pointer(entry.DiagnosticKey),
+		NoticeID:         textutil.Pointer(entry.NoticeID),
+		AfterToolCallID:  textutil.Pointer(entry.AfterToolCallID),
+		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
 	}
 	normalized, err := session.NewEventRecord(1, nil, record)
 	if err != nil {
@@ -323,14 +324,15 @@ func storedLocalEntryFromSessionRecord(
 		return storedLocalEntry{}, err
 	}
 	return storedLocalEntry{
-		Visibility:      runtimeEntryVisibilityFromSession(record.Visibility),
-		Role:            record.Role,
-		Text:            record.Text,
-		DurationMs:      textutil.Pointer(record.DurationMs),
-		CondensedText:   textutil.Pointer(record.CondensedText),
-		DiagnosticKey:   textutil.Pointer(record.DiagnosticKey),
-		NoticeID:        textutil.Pointer(record.NoticeID),
-		AfterToolCallID: textutil.Pointer(record.AfterToolCallID),
+		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
+		Role:             record.Role,
+		Text:             record.Text,
+		DurationMs:       textutil.Pointer(record.DurationMs),
+		CondensedText:    textutil.Pointer(record.CondensedText),
+		DiagnosticKey:    textutil.Pointer(record.DiagnosticKey),
+		NoticeID:         textutil.Pointer(record.NoticeID),
+		AfterToolCallID:  textutil.Pointer(record.AfterToolCallID),
+		ToolOutputRepair: textutil.Pointer(record.ToolOutputRepair),
 	}, nil
 }
 

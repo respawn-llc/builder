@@ -356,13 +356,13 @@ func removePersistedBackgroundCallbackError(
 	if persisted == nil {
 		return err
 	}
-	return removeBackgroundErrorBranches(err, func(candidate error) bool {
+	return removeErrorBranches(err, func(candidate error) bool {
 		return candidate == persisted
 	})
 }
 
 func removePendingModelRecoveryClearError(err error) error {
-	return removeBackgroundErrorBranches(err, func(candidate error) bool {
+	return removeErrorBranches(err, func(candidate error) bool {
 		_, matches := candidate.(*pendingModelRecoveryClearError)
 		return matches
 	})
@@ -376,7 +376,7 @@ func backgroundFinalFeedbackError(err error) error {
 	return err
 }
 
-func removeBackgroundErrorBranches(
+func removeErrorBranches(
 	err error,
 	remove func(error) bool,
 ) error {
@@ -392,7 +392,7 @@ func removeBackgroundErrorBranches(
 	}
 	remaining := make([]error, 0, len(joined.Unwrap()))
 	for _, child := range joined.Unwrap() {
-		if unpersisted := removeBackgroundErrorBranches(
+		if unpersisted := removeErrorBranches(
 			child,
 			remove,
 		); unpersisted != nil {

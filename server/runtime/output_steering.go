@@ -1102,18 +1102,6 @@ func resultGroupMessageRecord(output llm.Message) (session.EventRecordPayload, e
 	return sessionMessageRecordFromLLM(output)
 }
 
-func (e *Engine) appendResultGroupFeedbackProjection(
-	entry ChatEntry,
-	afterToolCallID *string,
-	provenance *TranscriptCommittedRowProvenance,
-) {
-	e.transcriptRuntimeState().AppendLocalEntryRecord(
-		entry,
-		afterToolCallID,
-		provenance,
-	)
-}
-
 func (e *Engine) appendResultGroupOutputProjection(
 	stepID string,
 	output llm.Message,

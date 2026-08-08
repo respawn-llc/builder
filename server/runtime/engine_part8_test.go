@@ -353,6 +353,27 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 	}
 }
 
+func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *testing.T) {
+	handler := &closeEngineBeforeResultReportHandler{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	handler.engine = engine
+
+	_, err := engine.SubmitUserShellCommand(context.Background(), "pwd")
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) || !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("shell command error = %v, want preserved engine-closed Result Group fatal", err)
+	}
+}
+
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 

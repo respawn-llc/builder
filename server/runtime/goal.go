@@ -688,11 +688,11 @@ func (e *Engine) setStreamingRunError(err error) {
 }
 
 func (e *Engine) finishRunErrorFeedback(err error) {
-	if errors.Is(err, errPendingModelRecoveryClear) {
-		e.surfaceRunError(err)
-		return
-	}
 	e.setStreamingRunError(err)
+	unpersisted := removePersistedRunCallbackErrors(err)
+	if errors.Is(unpersisted, errPendingModelRecoveryClear) {
+		e.persistRunErrorFeedback(unpersisted)
+	}
 }
 
 func runErrorFeedbackMessage(err error) (string, bool) {
@@ -734,9 +734,30 @@ func (e *Engine) withRunErrorFeedbackBeforeStepClose(
 	}
 	return func(ctx context.Context, stepID string) error {
 		err := run(ctx, stepID)
-		e.persistRunErrorFeedback(err)
+		if e.persistRunErrorFeedback(err) != "" {
+			return &persistedRunCallbackError{cause: err}
+		}
 		return err
 	}
+}
+
+type persistedRunCallbackError struct {
+	cause error
+}
+
+func (e *persistedRunCallbackError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *persistedRunCallbackError) Unwrap() error {
+	return e.cause
+}
+
+func removePersistedRunCallbackErrors(err error) error {
+	return removeErrorBranches(err, func(candidate error) bool {
+		_, persisted := candidate.(*persistedRunCallbackError)
+		return persisted
+	})
 }
 
 func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {

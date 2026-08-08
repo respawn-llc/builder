@@ -21,15 +21,6 @@ import (
 // merely interrupted; that is an unreachable state, not one to silently repair.
 const missingToolOutputAfterCollapseInvariant = "compaction request still has a tool call without an output after overflow collapse; collapse preserves output items, so a missing-tool-output provider error here is an invariant violation"
 
-const (
-	// missingToolOutputLiveRepairWarningTemplate is the operator-facing notice
-	// appended when a live provider rejection closes interrupted tool calls.
-	missingToolOutputLiveRepairWarningTemplate = "Closed %d interrupted tool call(s) with a synthetic result to repair the transcript after a provider error"
-	// missingToolOutputFreshRepairWarningTemplate is deliberately neutral about
-	// why a fresh resource found no committed output.
-	missingToolOutputFreshRepairWarningTemplate = "Closed %d tool call(s) with no committed output while restoring the session"
-)
-
 // missingToolOutputInterruptedOutput is the honest result recorded for a tool
 // call that was left unanswered (typically interrupted) and can no longer be
 // re-executed. It tells the model the call never produced a result rather than
@@ -59,7 +50,7 @@ const (
 
 type missingToolOutputRepairPolicy struct {
 	output                   json.RawMessage
-	warningTemplate          string
+	repairKind               transcript.ToolOutputRepairKind
 	deferToPendingToolStarts bool
 }
 
@@ -67,13 +58,13 @@ func missingToolOutputPolicy(disposition missingToolOutputRepairDisposition) (mi
 	switch disposition {
 	case missingToolOutputRepairFreshResource:
 		return missingToolOutputRepairPolicy{
-			output:          missingToolOutputUnavailableOutput,
-			warningTemplate: missingToolOutputFreshRepairWarningTemplate,
+			output:     missingToolOutputUnavailableOutput,
+			repairKind: transcript.ToolOutputRepairFreshResource,
 		}, nil
 	case missingToolOutputRepairLiveProvider400:
 		return missingToolOutputRepairPolicy{
 			output:                   missingToolOutputInterruptedOutput,
-			warningTemplate:          missingToolOutputLiveRepairWarningTemplate,
+			repairKind:               transcript.ToolOutputRepairLiveProviderRejection,
 			deferToPendingToolStarts: true,
 		}, nil
 	default:
@@ -154,7 +145,10 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	warning := steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-		Text:       fmt.Sprintf(policy.warningTemplate, len(dangling)),
+		ToolOutputRepair: &transcript.ToolOutputRepairNotice{
+			Kind:  policy.repairKind,
+			Count: len(dangling),
+		},
 	})
 	if repairStepID == nil {
 		if err := e.steer("", warning); err != nil {
