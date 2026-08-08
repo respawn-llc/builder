@@ -382,14 +382,6 @@ func taskMoveSetupFailurePresentation(
 	return presentation, nil
 }
 
-func optionalTaskLifecycleProjectRef(value string, provided bool) *string {
-	if !provided {
-		return nil
-	}
-	projectRef := value
-	return &projectRef
-}
-
 func optionalTaskLifecycleString(value string, provided bool) *string {
 	if !provided {
 		return nil

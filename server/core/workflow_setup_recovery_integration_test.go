@@ -123,14 +123,7 @@ func TestCoreWorkflowSetupFailureRecoversThroughTypedSubscriptionAndImmediateRes
 		firstEvents[2].Failed.Cause.Kind != serverapi.WorktreeSetupFailureProcessExit {
 		t.Fatalf("first setup events = %+v, want two attempts and retry-ready process failure", firstEvents)
 	}
-	if batches := appCore.bundles.Workflows.controller.Snapshot().PreparationBatches; len(batches) != 0 {
-		t.Fatalf("retry-ready setup event published while preparation batch remained owned: %+v", batches)
-	}
-
 	attention := nextCoreSetupRecoveryAttention(t, attentionSub, firstSetupID, string(taskID))
-	if batches := appCore.bundles.Workflows.controller.Snapshot().PreparationBatches; len(batches) != 0 {
-		t.Fatalf("live setup attention published before batch retirement: %+v", batches)
-	}
 	taskAttention, err := workflowClient.ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{
 		TaskID: string(taskID),
 	})

@@ -259,6 +259,81 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeControllerResolvesResumedAttentionBeforePreparationStarts(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-attention-order", "node-agent")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{{
+		Reference:  reference,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+	}}}
+	attention := &blockingTaskResolutionAttention{
+		resolutionStarted: make(chan struct{}),
+		resolutionRelease: make(chan struct{}),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+		attention,
+	)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	preparationStarted := make(chan struct{})
+	finalized := make(chan TaskPreparationFinalization, 1)
+	resumeReturned := make(chan error, 1)
+
+	go func() {
+		_, err := controller.ResumeTaskWithPreparation(
+			context.Background(),
+			reference.TaskID,
+			testTaskPreparation(func(context.Context) error {
+				close(preparationStarted)
+				return errors.New("setup failed")
+			}),
+			func(finalization TaskPreparationFinalization) {
+				finalized <- finalization
+			},
+		)
+		resumeReturned <- err
+	}()
+
+	select {
+	case <-attention.resolutionStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resumed interruption resolution was not published")
+	}
+	preparationStartedBeforeResolution := false
+	select {
+	case <-preparationStarted:
+		preparationStartedBeforeResolution = true
+	case <-time.After(75 * time.Millisecond):
+	}
+	close(attention.resolutionRelease)
+	select {
+	case err := <-resumeReturned:
+		if err != nil {
+			t.Fatalf("ResumeTaskWithPreparation: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ResumeTaskWithPreparation did not return after resolution publication")
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationFailed {
+			t.Fatalf("preparation finalization = %+v, want failed", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("failed preparation was not finalized")
+	}
+	if preparationStartedBeforeResolution {
+		t.Fatal("resumed preparation started before the old interruption resolution completed")
+	}
+}
+
 func TestCurrentNodeControllerResumeOwnershipConflictLeavesDurableInterruptionUntouched(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-resume-registration-conflict", "node-agent")
 	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{{
@@ -370,11 +445,12 @@ func TestCurrentNodeControllerPreparesMultiCurrentNodeResumeOnceBeforeAdmission(
 	if calls := preparationCalls.Load(); calls != 1 {
 		t.Fatalf("preparation calls = %d, want 1", calls)
 	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.PreparationBatches) != 1 || !snapshot.PreparationBatches[0].Running ||
-		len(snapshot.PreparationBatches[0].CurrentNodes) != 2 {
-		t.Fatalf("preparation snapshot = %+v, want one running two-Current-Node batch", snapshot.PreparationBatches)
+	preparationBatches := currentNodePreparationBatchesForTest(controller)
+	if len(preparationBatches) != 1 || !preparationBatches[0].Running ||
+		len(preparationBatches[0].CurrentNodes) != 2 {
+		t.Fatalf("preparation snapshot = %+v, want one running two-Current-Node batch", preparationBatches)
 	}
+	snapshot := controller.Snapshot()
 	if len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 ||
 		len(snapshot.LiveScopes) != 0 || runner.starts() != 0 || targetCommitted.Load() {
 		t.Fatalf("preparation leaked into ordinary admission before handoff: snapshot=%+v starts=%d", snapshot, runner.starts())
@@ -1013,8 +1089,8 @@ func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanoni
 	if pending := attention.pendingCount(); pending != 1 {
 		t.Fatalf("live interruption attention count = %d, want only the successfully persisted generic sibling", pending)
 	}
-	if snapshot := controller.Snapshot(); len(snapshot.PreparationBatches) != 0 {
-		t.Fatalf("failed preparation batch remained owned: %+v", snapshot.PreparationBatches)
+	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
+		t.Fatalf("failed preparation batch remained owned: %+v", batches)
 	}
 }
 
@@ -1113,8 +1189,8 @@ func TestCurrentNodeControllerRetryFromFailureFinalizerRegistersOneNewPreparatio
 				retryResult <- fmt.Errorf("first finalization = %+v, want preparation failure", finalization)
 				return
 			}
-			if snapshot := controller.Snapshot(); len(snapshot.PreparationBatches) != 0 {
-				retryResult <- fmt.Errorf("failed batch remained owned at terminal boundary: %+v", snapshot.PreparationBatches)
+			if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
+				retryResult <- fmt.Errorf("failed batch remained owned at terminal boundary: %+v", batches)
 				return
 			}
 			store.mu.Lock()
@@ -1179,11 +1255,15 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 		interruptRecordRelease: releaseCanonical,
 	}
 	attention := &currentNodeAttentionRecorder{}
+	admissionRelease := make(chan struct{})
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	controller := newCurrentNodeControllerWithAttentionForTest(
 		t,
 		store,
-		&countingCurrentNodeRunner{},
+		&blockingCurrentNodeRunner{
+			entered: make(chan struct{}),
+			release: admissionRelease,
+		},
 		authority,
 		2,
 		attention,
@@ -1194,6 +1274,7 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 		default:
 			close(releaseCanonical)
 		}
+		close(admissionRelease)
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})

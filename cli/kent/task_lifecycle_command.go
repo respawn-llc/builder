@@ -313,7 +313,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	recoveryProjectRef := optionalTaskLifecycleProjectRef(*projectRef, flagExplicit(fs, "project"))
+	recoveryProjectRef := optionalTaskLifecycleString(*projectRef, flagExplicit(fs, "project"))
 	recoveryCommand := taskLifecycleCommandContext{
 		TaskRef:    positionals[0],
 		ProjectRef: recoveryProjectRef,
@@ -509,7 +509,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	recoveryProjectRef := optionalTaskLifecycleProjectRef(*projectRef, flagExplicit(fs, "project"))
+	recoveryProjectRef := optionalTaskLifecycleString(*projectRef, flagExplicit(fs, "project"))
 	recoveryCommand := taskLifecycleCommandContext{
 		TaskRef:    positionals[0],
 		ProjectRef: recoveryProjectRef,
@@ -793,7 +793,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		moveRecoveryCommand, err := newTaskMoveRecoveryCommand(
 			positionals[0],
 			positionals[1],
-			optionalTaskLifecycleProjectRef(*projectRef, flagExplicit(fs, "project")),
+			optionalTaskLifecycleString(*projectRef, flagExplicit(fs, "project")),
 			optionalTaskLifecycleString(*commentary, flagExplicit(fs, "commentary")),
 			transitionKey,
 			values,

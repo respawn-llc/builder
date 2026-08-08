@@ -273,8 +273,11 @@ func TestCurrentNodeControllerTaskInterruptCancelsOneRunningPreparationBatch(t *
 		t.Fatalf("canceled preparation admitted Current Node %v", started)
 	default:
 	}
-	if snapshot := controller.Snapshot(); len(snapshot.PreparationBatches) != 0 ||
-		len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
+	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
+		t.Fatalf("controller retained preparation ownership after cancellation: %+v", batches)
+	}
+	if snapshot := controller.Snapshot(); len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
 		t.Fatalf("controller snapshot after preparation cancellation = %+v", snapshot)
 	}
 }
@@ -358,12 +361,12 @@ func TestCurrentNodeControllerShutdownRemovesQueuedPreparationWithoutTerminal(t 
 	); err != nil {
 		t.Fatalf("StartTask queued preparation: %v", err)
 	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.PreparationBatches) != runningBatchCount+1 {
-		t.Fatalf("preparation batches = %+v, want %d running and one queued", snapshot.PreparationBatches, runningBatchCount)
+	preparationBatches := currentNodePreparationBatchesForTest(controller)
+	if len(preparationBatches) != runningBatchCount+1 {
+		t.Fatalf("preparation batches = %+v, want %d running and one queued", preparationBatches, runningBatchCount)
 	}
 	queuedObserved := false
-	for _, batch := range snapshot.PreparationBatches {
+	for _, batch := range preparationBatches {
 		if batch.TaskID == queued.TaskID {
 			queuedObserved = true
 			if batch.Running {
@@ -388,7 +391,7 @@ func TestCurrentNodeControllerShutdownRemovesQueuedPreparationWithoutTerminal(t 
 		t.Fatalf("queued preparation published terminal %+v", terminal)
 	default:
 	}
-	for _, batch := range controller.Snapshot().PreparationBatches {
+	for _, batch := range currentNodePreparationBatchesForTest(controller) {
 		if batch.TaskID == queued.TaskID {
 			t.Fatalf("queued preparation remained owned after shutdown: %+v", batch)
 		}
@@ -454,9 +457,11 @@ func TestCurrentNodeControllerShutdownCancelsOneRunningFanoutPreparation(t *test
 		t.Fatalf("shutdown published duplicate terminal %+v", duplicate)
 	default:
 	}
+	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
+		t.Fatalf("controller retained preparation ownership after shutdown: %+v", batches)
+	}
 	snapshot := controller.Snapshot()
-	if len(snapshot.PreparationBatches) != 0 || len(snapshot.ExplicitStarts) != 0 ||
-		len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
+	if len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
 		t.Fatalf("controller leaked ownership after shutdown: %+v", snapshot)
 	}
 }

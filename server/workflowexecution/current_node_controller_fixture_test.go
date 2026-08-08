@@ -334,6 +334,50 @@ type currentNodeAttentionRecorder struct {
 	resolutions []workflowstore.TaskAttentionResolution
 }
 
+type blockingTaskResolutionAttention struct {
+	resolutionStarted chan struct{}
+	resolutionRelease chan struct{}
+	resolutionOnce    sync.Once
+}
+
+func (*blockingTaskResolutionAttention) PublishPendingInterruptedCurrentNode(context.Context, workflow.CurrentNodeReference) {
+}
+
+func (a *blockingTaskResolutionAttention) FinalizeTaskResolution(workflowstore.TaskAttentionResolution) {
+	a.resolutionOnce.Do(func() { close(a.resolutionStarted) })
+	<-a.resolutionRelease
+}
+
+type currentNodePreparationBatchSnapshotForTest struct {
+	TaskID       workflow.TaskID
+	CurrentNodes []workflow.CurrentNodeReference
+	Running      bool
+}
+
+func currentNodePreparationBatchesForTest(controller *CurrentNodeController) []currentNodePreparationBatchSnapshotForTest {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	batches := make(
+		[]currentNodePreparationBatchSnapshotForTest,
+		0,
+		len(controller.preparationQueue)+len(controller.preparationRunning),
+	)
+	for _, batch := range controller.preparationQueue {
+		batches = append(batches, currentNodePreparationBatchSnapshotForTest{
+			TaskID:       batch.taskID,
+			CurrentNodes: taskPreparationReferences(batch),
+		})
+	}
+	for _, batch := range controller.preparationRunning {
+		batches = append(batches, currentNodePreparationBatchSnapshotForTest{
+			TaskID:       batch.taskID,
+			CurrentNodes: taskPreparationReferences(batch),
+			Running:      true,
+		})
+	}
+	return batches
+}
+
 func (r *currentNodeAttentionRecorder) PublishPendingInterruptedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference) {
 	r.mu.Lock()
 	r.pending = append(r.pending, reference)

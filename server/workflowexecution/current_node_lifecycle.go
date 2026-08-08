@@ -181,8 +181,8 @@ func (c *CurrentNodeController) resumeTask(
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
 	}
-	var resolution workflowstore.TaskAttentionResolution
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+		var resolution workflowstore.TaskAttentionResolution
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
@@ -253,6 +253,7 @@ func (c *CurrentNodeController) resumeTask(
 			starts = append(starts, eligibleStarts[index])
 			resumed = append(resumed, currentNode)
 		}
+		c.finalizeTaskAttentionResolution(resolution)
 		c.mu.Lock()
 		if preparation == nil {
 			for _, start := range starts {
@@ -272,7 +273,6 @@ func (c *CurrentNodeController) resumeTask(
 		c.mu.Unlock()
 		return resumed, errors.Join(resumeErrs...)
 	})
-	c.finalizeTaskAttentionResolution(resolution)
 	return resumed, err
 }
 
