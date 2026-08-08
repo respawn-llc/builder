@@ -1,5 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 
 import {
   callParams,
@@ -7,6 +8,7 @@ import {
   mountTaskDetailSurface,
   taskDetailResponseWithInterruptedCurrentScript,
 } from "@/test-support/task-detail";
+import { parseSetupOperationID } from "@/api";
 
 it("reuses one Task Detail Resume continuation for target selection", async () => {
   let resumeCalls = 0;
@@ -24,9 +26,7 @@ it("reuses one Task Detail Resume continuation for target selection", async () =
             : {
                 outcome: "applied",
                 applied: {
-                  current_nodes: [
-                    { node_id: "node-script", transition_branch_key: null, session_id: null },
-                  ],
+                  current_nodes: [{ node_id: "node-script", transition_branch_key: null, session_id: null }],
                 },
               };
         },
@@ -54,5 +54,139 @@ it("reuses one Task Detail Resume continuation for target selection", async () =
   expect(requests[1]).toMatchObject({
     setup_operation_id: firstRequest.setup_operation_id,
     execution_target: { mode: "default_branch" },
+  });
+});
+
+it("gives only the exact canonical setup interruption a recoverable Resume control", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  const setupOperationID = "55555555-5555-4555-8555-555555555555";
+  let finishResume:
+    | ((value: {
+        outcome: "applied";
+        applied: {
+          current_nodes: {
+            node_id: string;
+            transition_branch_key: string;
+            session_id: null;
+          }[];
+        };
+      }) => void)
+    | undefined;
+  const resumeResponse = new Promise<{
+    outcome: "applied";
+    applied: {
+      current_nodes: {
+        node_id: string;
+        transition_branch_key: string;
+        session_id: null;
+      }[];
+    };
+  }>((resolve) => {
+    finishResume = resolve;
+  });
+  const attention = {
+    items: [
+      {
+        id: "generic-sibling",
+        kind: "interrupted_current_node",
+        project_id: "project-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
+        task_id: "task-1",
+        task_short_id: "T-1",
+        task_title: "Resolve blocker",
+        current_node: { node_id: "sibling-node", transition_branch_key: null, session_id: null },
+        session_id: null,
+        session_name: null,
+        detail_json: JSON.stringify({ code: "workflow_runtime_failed", fields: {} }),
+        occurred_at_unix_ms: 1,
+      },
+      {
+        id: "canonical-recovery",
+        kind: "interrupted_current_node",
+        project_id: "project-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
+        task_id: "task-1",
+        task_short_id: "T-1",
+        task_title: "Resolve blocker",
+        current_node: {
+          node_id: "canonical-node",
+          transition_branch_key: "branch-2",
+          session_id: null,
+        },
+        session_id: null,
+        session_name: null,
+        setup_operation_id: setupOperationID,
+        detail_json: JSON.stringify({
+          code: "workflow_setup_recovery",
+          fields: {},
+          setup_recovery: {
+            setup_operation_id: setupOperationID,
+            cause: "target_preparation",
+            diagnostic: "target preparation failed",
+          },
+        }),
+        occurred_at_unix_ms: 2,
+      },
+    ],
+    generated_at_unix_ms: 3,
+  };
+  const services = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
+    attention,
+    initialFocus: {
+      kind: "interrupted_current_node",
+      currentNodeID: "canonical-node",
+      currentNodeBranchKey: "branch-2",
+      setupOperationID: parseSetupOperationID(setupOperationID),
+    },
+    routes: [
+      {
+        method: "workflow.task.resume",
+        async handler() {
+          return resumeResponse;
+        },
+      },
+    ],
+  });
+  const user = userEvent.setup();
+
+  const resumeButtons = await screen.findAllByTestId("task-detail-resume");
+  expect(resumeButtons).toHaveLength(1);
+  const resumeButton = resumeButtons[0];
+  if (resumeButton === undefined) {
+    throw new Error("Expected canonical setup-recovery Resume.");
+  }
+  await user.click(resumeButton);
+  expect(await screen.findByTestId("setup-recovery-retry")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
+  await user.click(screen.getByTestId("task-detail-resume"));
+  await user.click(await screen.findByTestId("setup-recovery-retry"));
+
+  await waitFor(() => {
+    expect(getCallCount(services.transport.calls, "workflow.task.resume")).toBe(1);
+  });
+  expect(screen.getByTestId("setup-recovery-retry")).toBeDisabled();
+  await user.click(screen.getByTestId("setup-recovery-retry"));
+  expect(getCallCount(services.transport.calls, "workflow.task.resume")).toBe(1);
+  const request = callParams(services.transport.calls, "workflow.task.resume");
+  expect(request.setup_operation_id).not.toBe(setupOperationID);
+  expect(request.execution_target).toBeUndefined();
+  expect(
+    services.transport.subscriptionStarts.some(
+      (subscription) => subscription.method === "worktree.setup.subscribe",
+    ),
+  ).toBe(false);
+  await act(async () => {
+    finishResume?.({
+      outcome: "applied",
+      applied: {
+        current_nodes: [{ node_id: "canonical-node", transition_branch_key: "branch-2", session_id: null }],
+      },
+    });
+    await resumeResponse;
+  });
+  await waitFor(() => {
+    expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
   });
 });

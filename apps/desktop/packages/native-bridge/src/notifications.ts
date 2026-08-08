@@ -23,6 +23,9 @@ export type NativeNotificationApprovalFocus = Readonly<{
 
 export type NativeNotificationInterruptedCurrentNodeFocus = Readonly<{
   kind: "interrupted_current_node";
+  currentNodeID: string;
+  currentNodeBranchKey: string | null;
+  setupOperationID: string | null;
 }>;
 
 export type NativeNotificationTaskDetailTarget = Readonly<{
@@ -277,6 +280,9 @@ const nativeNotificationActivationSchema = z.object({
       }),
       z.object({
         kind: z.literal("interrupted_current_node"),
+        currentNodeID: nonEmptyID,
+        currentNodeBranchKey: nonEmptyID.nullable(),
+        setupOperationID: nonEmptyID.nullable(),
       }),
     ]),
   }),

@@ -1846,6 +1846,7 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 					},
 				},
 			},
+			ScriptPath: "/repo/setup.sh",
 			Diagnostic: "setup failed",
 		},
 		&serverapi.WorktreeDeletePreconditionError{
@@ -1884,7 +1885,10 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		}
 	case *serverapi.WorktreeSetupRetainedError:
 		var decoded *serverapi.WorktreeSetupRetainedError
-		if !errors.As(err, &decoded) || decoded.Worktree.Registered == nil || decoded.Worktree.Registered.Kent.DisplayName != "feature" {
+		if !errors.As(err, &decoded) ||
+			decoded.Worktree.Registered == nil ||
+			decoded.Worktree.Registered.Kent.DisplayName != "feature" ||
+			decoded.ScriptPath != source.(*serverapi.WorktreeSetupRetainedError).ScriptPath {
 			t.Fatalf("decoded retained setup = %+v (%v)", decoded, err)
 		}
 	case *serverapi.WorktreeDeletePreconditionError:
@@ -1899,6 +1903,24 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 		}
 	default:
 		t.Fatalf("unsupported structured worktree error %T", source)
+	}
+}
+
+func TestProtocolErrorPreservesWorkflowTaskStartConflict(t *testing.T) {
+	source := &serverapi.WorkflowTaskStartConflictError{
+		TaskID: "task-1",
+		Reason: serverapi.WorkflowTaskStartConflictAlreadyStarted,
+	}
+	decoded := protocolError(&protocol.ResponseError{
+		Code:    source.RPCErrorCode(),
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	var conflict *serverapi.WorkflowTaskStartConflictError
+	if !errors.As(decoded, &conflict) ||
+		conflict.TaskID != source.TaskID ||
+		conflict.Reason != source.Reason {
+		t.Fatalf("decoded start conflict = %+v (%v), want %+v", conflict, decoded, source)
 	}
 }
 

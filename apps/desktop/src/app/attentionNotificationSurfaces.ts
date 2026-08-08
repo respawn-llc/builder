@@ -9,7 +9,6 @@ import type {
   AttentionItem,
   AttentionNotification,
   AttentionNotificationID,
-  AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "@/api";
 import { errorMessage, isTaskMissingError } from "@/api";
@@ -82,15 +81,16 @@ export async function deliverPendingSurface({
   surfaced: Map<string, SurfaceRecord>;
   t: Translate;
 }>): Promise<SurfaceOutcome> {
+  const surfaceKey = attentionNotificationSurfaceKey(notification);
   await logger.append("info", "Resolving attention notification surface.", {
     focused: String(focused),
     hasNativeNotifications: String(hasNativeNotifications),
-    notificationID: attentionNotificationIDKey(notification.id),
+    notificationID: surfaceKey,
     notificationKind: notification.kind,
     notificationRevision: String(notification.revision),
   });
   if (focused || !hasNativeNotifications) {
-    removeActiveNotification(notifications, logger, attentionNotificationIDKey(notification.id));
+    removeActiveNotification(notifications, logger, surfaceKey);
     showToast(notification);
     return { status: "done" };
   }
@@ -166,14 +166,25 @@ export async function openNativeActivation(
   }
 }
 
-export function taskDetailInitialFocus(focus: AttentionNotificationTaskDetailFocus): TaskDetailInitialFocus {
+export function taskDetailInitialFocus(
+  target: AttentionNotificationWorkflowTaskTarget,
+): TaskDetailInitialFocus {
+  const { focus } = target;
   if (focus.kind === "question") {
     return { kind: "question", askIDs: focus.askIDs };
   }
   if (focus.kind === "approval") {
     return { kind: "approval", approvalID: focus.approvalID };
   }
-  return { kind: "interrupted_current_node" };
+  if (target.currentNodeID === undefined) {
+    throw new Error("Interrupted Current Node attention target requires an exact Current Node.");
+  }
+  return {
+    kind: "interrupted_current_node",
+    currentNodeID: target.currentNodeID,
+    currentNodeBranchKey: target.currentNodeBranchKey ?? null,
+    setupOperationID: focus.setupOperationID,
+  };
 }
 
 export function notificationTitle(notification: AttentionNotification, t: Translate): string {
@@ -213,6 +224,19 @@ export function attentionNotificationIDKey(id: AttentionNotificationID): string 
   return `k${String(id.kind.length)}_${id.kind}u${String(id.uuid.length)}_${id.uuid}`;
 }
 
+export function attentionNotificationSurfaceKey(notification: AttentionNotification): string {
+  const identity = attentionNotificationIDKey(notification.id);
+  if (
+    notification.target.kind !== "workflow_task" ||
+    notification.target.focus.kind !== "interrupted_current_node" ||
+    notification.target.focus.setupOperationID === null
+  ) {
+    return identity;
+  }
+  const setupOperationID = notification.target.focus.setupOperationID.toJSONValue();
+  return `${identity}o${String(setupOperationID.length)}_${setupOperationID}`;
+}
+
 async function resolveWindowFocus(
   windowControls: NativeWindow,
   focusedRef: RefObject<boolean | null>,
@@ -247,7 +271,7 @@ async function deliverNativePendingSurface({
   surfaced: Map<string, SurfaceRecord>;
   t: Translate;
 }>): Promise<SurfaceOutcome> {
-  const id = attentionNotificationIDKey(notification.id);
+  const id = attentionNotificationSurfaceKey(notification);
   await logger.append("info", "Sending native attention notification.", {
     notificationID: id,
     notificationKind: notification.kind,
@@ -287,7 +311,7 @@ async function handleNativeDeliveryError({
   notification: AttentionNotification;
   surfaced: Map<string, SurfaceRecord>;
 }>): Promise<void> {
-  const id = attentionNotificationIDKey(notification.id);
+  const id = attentionNotificationSurfaceKey(notification);
   const latest = surfaced.get(id);
   if (latest?.state !== "surfacing") {
     return;
@@ -329,7 +353,8 @@ function attentionTargetIsActive(
       item.kind === "interrupted_current_node" &&
       item.currentNode.nodeID === target.currentNodeID &&
       item.currentNode.transitionBranchKey === (target.currentNodeBranchKey ?? null) &&
-      item.sessionID === (target.sessionID ?? null),
+      item.sessionID === (target.sessionID ?? null) &&
+      item.setupOperationID?.toJSONValue() === focus.setupOperationID?.toJSONValue(),
   );
 }
 
@@ -339,7 +364,7 @@ function nativeNotification(notification: AttentionNotification, t: Translate): 
     throw new Error("Attention notification target is not native-openable.");
   }
   return {
-    id: attentionNotificationIDKey(notification.id),
+    id: attentionNotificationSurfaceKey(notification),
     title: notificationTitle(notification, t),
     body: notificationBody(notification, t),
     target,
@@ -350,7 +375,7 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
   if (target.kind !== "workflow_task") {
     return null;
   }
-  const focus = taskDetailInitialFocus(target.focus);
+  const focus = taskDetailInitialFocus(target);
   if (focus.kind === "question" && focus.askIDs.length === 0) {
     return null;
   }
@@ -363,7 +388,12 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
     focus:
       focus.kind === "question"
         ? { kind: "question", askIDs: [focus.askIDs[0] ?? "", ...focus.askIDs.slice(1)] }
-        : focus,
+        : focus.kind === "interrupted_current_node"
+          ? {
+              ...focus,
+              setupOperationID: focus.setupOperationID?.toJSONValue() ?? null,
+            }
+          : focus,
   };
 }
 

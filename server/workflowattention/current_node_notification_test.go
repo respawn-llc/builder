@@ -208,6 +208,39 @@ func TestFinalizerPublishesAndResolvesInterruptedCurrentNode(t *testing.T) {
 	}
 }
 
+func TestInterruptedCurrentNodeNotificationPreservesCanonicalSetupFocusIdentity(t *testing.T) {
+	currentNode, err := workflow.NewCurrentNodeReference("task-1", "node-1", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	setupOperationID := serverapi.NewWorktreeSetupOperationID().String()
+	projection := InterruptedCurrentNodeProjection{
+		CurrentNode:      currentNode,
+		ProjectID:        "project-1",
+		WorkflowID:       runtimeids.NewWorkflowID(),
+		TaskShortID:      "WOR-1",
+		TaskTitle:        "Interrupted task",
+		Reason:           "setup_failed",
+		DetailJSON:       `{"code":"workflow_setup_recovery","fields":{}}`,
+		SetupOperationID: &setupOperationID,
+		OccurredAtUnixMs: 1,
+	}
+	publisher := &notificationPublisher{}
+	finalizer := NewFinalizer(notificationProjectionProvider{interrupted: projection}, publisher)
+
+	finalizer.PublishPendingInterruptedCurrentNode(context.Background(), currentNode)
+
+	if len(publisher.pending) != 1 {
+		t.Fatalf("pending notifications = %+v, want one", publisher.pending)
+	}
+	target := publisher.pending[0].Target
+	if target.CurrentNodeID == nil || *target.CurrentNodeID != string(currentNode.NodeID) ||
+		target.Focus == nil || target.Focus.SetupOperationID == nil ||
+		*target.Focus.SetupOperationID != setupOperationID {
+		t.Fatalf("canonical setup focus = %+v", target)
+	}
+}
+
 type notificationProjectionProvider struct {
 	approval    ApprovalProjection
 	interrupted InterruptedCurrentNodeProjection

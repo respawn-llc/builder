@@ -99,7 +99,13 @@ function focusedAttentionItemID(
       (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
+  return attentionItems.find(
+    (item) =>
+      item.kind === "interrupted_current_node" &&
+      item.currentNode.nodeID === initialFocus.currentNodeID &&
+      item.currentNode.transitionBranchKey === initialFocus.currentNodeBranchKey &&
+      item.setupOperationID?.toJSONValue() === initialFocus.setupOperationID?.toJSONValue(),
+  )?.id;
 }
 
 function InboxItem({

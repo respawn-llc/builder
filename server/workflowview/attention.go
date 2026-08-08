@@ -186,12 +186,28 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			return serverapi.WorkflowAttentionItem{}, err
 		}
 		var detailJSON *string
+		var setupOperationID *serverapi.WorktreeSetupOperationID
 		if row.InterruptionDetailJson.Valid {
 			value := strings.TrimSpace(row.InterruptionDetailJson.String)
 			if value == "" {
 				return serverapi.WorkflowAttentionItem{}, fmt.Errorf("interrupted attention candidate %q has blank interruption detail", row.ID)
 			}
 			detailJSON = &value
+			detail, err := workflow.DecodeCurrentNodeInterruptionDetail(value)
+			if err != nil {
+				return serverapi.WorkflowAttentionItem{}, fmt.Errorf("decode interrupted attention detail %q: %w", row.ID, err)
+			}
+			setupUUID, err := detail.SetupOperationID()
+			if err != nil {
+				return serverapi.WorkflowAttentionItem{}, fmt.Errorf("decode interrupted attention setup operation %q: %w", row.ID, err)
+			}
+			if setupUUID != nil {
+				parsed, err := serverapi.ParseWorktreeSetupOperationID(setupUUID.String())
+				if err != nil {
+					return serverapi.WorkflowAttentionItem{}, fmt.Errorf("decode interrupted attention setup operation %q: %w", row.ID, err)
+				}
+				setupOperationID = &parsed
+			}
 		}
 		return serverapi.WorkflowAttentionItem{
 			ID:               row.ID,
@@ -204,6 +220,7 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 			CurrentNode:      &currentNode,
 			SessionID:        currentNode.SessionID,
 			DetailJSON:       detailJSON,
+			SetupOperationID: setupOperationID,
 			OccurredAtUnixMs: row.OccurredAtUnixMs,
 		}, nil
 	default:

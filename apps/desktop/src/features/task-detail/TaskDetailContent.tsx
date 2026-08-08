@@ -2,7 +2,13 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, type TaskDependencyDirection, type TaskDetail } from "@/api";
+import {
+  errorMessage,
+  type AttentionItem,
+  type TaskDependencyDirection,
+  type TaskDetail,
+  type TaskSetupRecovery,
+} from "@/api";
 import type {
   SidebarPageNavigator,
   SidebarMode,
@@ -148,6 +154,7 @@ export function TaskDetailContent({
   });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
+  const setupRecovery = canonicalSetupRecovery(attention.data?.items ?? []);
 
   // Reconcile the draft with the latest server snapshot during render (the
   // React "adjust state on prop change" pattern). Switching tasks resets to the
@@ -190,6 +197,7 @@ export function TaskDetailContent({
           taskID,
         });
       }}
+      setupRecovery={setupRecovery}
       taskID={detail.id}
     >
       <TaskDeleteProvider onDismiss={onDeleteDismiss} taskID={detail.id}>
@@ -406,6 +414,15 @@ const taskDetailRetainedStateSchema = z.object({
 
 function decodeTaskDetailRetainedState(state: unknown): TaskDetailRetainedState | undefined {
   return taskDetailRetainedStateSchema.safeParse(state).data;
+}
+
+function canonicalSetupRecovery(items: readonly AttentionItem[]): TaskSetupRecovery | null {
+  for (const item of items) {
+    if (item.kind === "interrupted_current_node" && item.setupRecovery !== null) {
+      return item.setupRecovery;
+    }
+  }
+  return null;
 }
 
 function taskDraft(detail: TaskDetail): TaskDraft {

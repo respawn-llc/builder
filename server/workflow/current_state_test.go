@@ -1,12 +1,14 @@
 package workflow_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"github.com/google/uuid"
 )
 
 func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T) {
@@ -25,6 +27,69 @@ func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T)
 	diagnostic = legacy.Diagnostic()
 	if diagnostic == nil || *diagnostic != "legacy failure" {
 		t.Fatalf("legacy diagnostic = %v", diagnostic)
+	}
+}
+
+func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
+	setupOperationID := uuid.New()
+	recovery := workflow.CurrentNodeSetupRecoveryDetail{
+		SetupOperationID: setupOperationID,
+		Cause:            workflow.CurrentNodeSetupRecoveryCauseProcessExit,
+		Diagnostic:       "setup failed after retry",
+		RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
+			WorktreeID: "worktree-1",
+			Root:       "/repo/worktree-1",
+		},
+	}
+	if err := recovery.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:          "workflow_setup_recovery",
+		SetupRecovery: &recovery,
+	}
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("marshal interruption detail: %v", err)
+	}
+	var decoded workflow.CurrentNodeInterruptionDetail
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal interruption detail: %v", err)
+	}
+	if decoded.SetupRecovery == nil ||
+		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
+		decoded.SetupRecovery.RetainedWorktree == nil ||
+		decoded.SetupRecovery.RetainedWorktree.Root != recovery.RetainedWorktree.Root {
+		t.Fatalf("decoded setup recovery = %+v, want %+v", decoded.SetupRecovery, recovery)
+	}
+}
+
+func TestCurrentNodeSetupRecoveryAllowsTargetPreparationWithoutRetainedWorktree(t *testing.T) {
+	setupOperationID := uuid.New()
+	recovery := workflow.CurrentNodeSetupRecoveryDetail{
+		SetupOperationID: setupOperationID,
+		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
+		Diagnostic:       "target resolution failed",
+	}
+	if err := recovery.Validate(); err != nil {
+		t.Fatalf("Validate target-preparation recovery without topology: %v", err)
+	}
+	raw, err := json.Marshal(workflow.CurrentNodeInterruptionDetail{
+		Code:          "workflow_target_preparation_failed",
+		SetupRecovery: &recovery,
+	})
+	if err != nil {
+		t.Fatalf("marshal interruption detail: %v", err)
+	}
+	decoded, err := workflow.DecodeCurrentNodeInterruptionDetail(string(raw))
+	if err != nil {
+		t.Fatalf("DecodeCurrentNodeInterruptionDetail: %v", err)
+	}
+	if decoded.SetupRecovery == nil ||
+		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
+		decoded.SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
+		decoded.SetupRecovery.RetainedWorktree != nil {
+		t.Fatalf("decoded target-preparation recovery = %+v", decoded.SetupRecovery)
 	}
 }
 

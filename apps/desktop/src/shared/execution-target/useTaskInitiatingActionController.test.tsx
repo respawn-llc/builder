@@ -1,6 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
+import { RpcError, type WorkflowExecutionTargetSelection } from "@/api";
+import { registeredWorktreeWire } from "@/test-support/api";
 import type { TaskInitiatingActionResult } from "./executionTargetContinuation";
 import {
   moveTaskInitiatingAction,
@@ -245,7 +247,177 @@ describe("task initiating action controller", () => {
       selection: { mode: "custom_ref", customRef: "feature/manual-move" },
     });
   });
+
+  it("preserves a fixed-policy Move and refreshes typed setup recovery until success", async () => {
+    const retry = deferred<TaskInitiatingActionResult>();
+    let callCount = 0;
+    const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
+      if (action.kind !== "move") {
+        throw new Error("Move recovery test requires a Move action.");
+      }
+      callCount += 1;
+      if (callCount === 1) {
+        throw setupFailure("first diagnostic", "/repo/current", "/repo/previous");
+      }
+      return retry.promise;
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = moveTaskInitiatingAction({
+      taskID: "task-1",
+      targetNodeID: "node-2",
+      transitionKey: "ship",
+      values: { agent: { result: "ready" } },
+      commentary: "operator override",
+      proceedDespiteDependencies: true,
+    });
+
+    await act(async () => {
+      expect(await result.current.run(action)).toBe("setup_recovery");
+    });
+    expect(result.current.pending).toMatchObject({
+      kind: "setup_recovery",
+      action,
+      targetIntent: { kind: "configured_policy" },
+      failure: {
+        kind: "setup_script",
+        diagnostic: "first diagnostic",
+        retainedWorktree: { root: "/repo/current" },
+        retainedPreviousWorktree: { root: "/repo/previous" },
+      },
+    });
+
+    let firstRetry: Promise<unknown> | undefined;
+    let duplicateRetry: Promise<unknown> | undefined;
+    act(() => {
+      firstRetry = result.current.run(action);
+      duplicateRetry = result.current.run(action);
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.current.running).toBe(true);
+    expect(result.current.pending?.kind).toBe("setup_recovery");
+
+    retry.resolve({
+      kind: "move",
+      action,
+      response: {
+        outcome: "applied",
+        applied: { currentNodes: [], retainedPreviousWorktree: null },
+      },
+    });
+    await act(async () => {
+      await Promise.all([firstRetry, duplicateRetry]);
+    });
+    expect(result.current.pending).toBeNull();
+    expect(result.current.running).toBe(false);
+  });
+
+  it("retains an explicit Move target through setup recovery and replaces only that intent", async () => {
+    const selections: (WorkflowExecutionTargetSelection | undefined)[] = [];
+    let callCount = 0;
+    const execute = vi.fn(
+      async (
+        action: TaskInitiatingAction,
+        selection?: WorkflowExecutionTargetSelection,
+      ): Promise<TaskInitiatingActionResult> => {
+        if (action.kind !== "move") {
+          throw new Error("Move recovery test requires a Move action.");
+        }
+        selections.push(selection);
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            kind: "move",
+            action,
+            response: {
+              outcome: "selection_required",
+              selectionRequired: { reason: "policy_requires_selection" },
+            },
+          };
+        }
+        if (callCount < 4) {
+          throw setupFailure(`diagnostic-${String(callCount)}`, "/repo/current");
+        }
+        return {
+          kind: "move",
+          action,
+          response: {
+            outcome: "no_op",
+            noOp: { currentNodes: [] },
+          },
+        };
+      },
+    );
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = moveTaskInitiatingAction({
+      taskID: "task-1",
+      targetNodeID: "node-2",
+      transitionKey: "ship",
+      values: { agent: { result: "ready" } },
+      commentary: "preserve me",
+      proceedDespiteDependencies: true,
+    });
+    const originalSelection = { mode: "custom_ref", customRef: "feature/original" } as const;
+
+    await act(async () => result.current.run(action));
+    await act(async () => {
+      expect(await result.current.run(action, originalSelection)).toBe("setup_recovery");
+    });
+    expect(result.current.pending).toMatchObject({
+      kind: "setup_recovery",
+      action,
+      targetIntent: { kind: "explicit_override", selection: originalSelection },
+      failure: { diagnostic: "diagnostic-2" },
+    });
+
+    await act(async () => {
+      expect(await result.current.run(action, originalSelection)).toBe("setup_recovery");
+    });
+    expect(result.current.pending).toMatchObject({
+      kind: "setup_recovery",
+      failure: { diagnostic: "diagnostic-3" },
+    });
+
+    const replacement = { mode: "none", customRef: null } as const;
+    await act(async () => {
+      expect(await result.current.run(action, replacement)).toBe("settled");
+    });
+    expect(selections).toEqual([undefined, originalSelection, originalSelection, replacement]);
+    expect(result.current.pending).toBeNull();
+  });
 });
+
+function setupFailure(diagnostic: string, root: string, previousRoot?: string): RpcError {
+  return new RpcError({
+    code: -32039,
+    method: "workflow.task.move",
+    message: "display-only setup error",
+    data: {
+      type: "worktree_setup_retained",
+      worktree: registeredWorktreeWire(root, "worktree-current"),
+      script_path: "/repo/setup.sh",
+      diagnostic,
+      ...(previousRoot === undefined
+        ? {}
+        : {
+            retained_previous_worktree: {
+              worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
+            },
+          }),
+    },
+  });
+}
 
 function deferred<T>(): Readonly<{
   promise: Promise<T>;

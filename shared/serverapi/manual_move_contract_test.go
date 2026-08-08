@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,10 +93,9 @@ func TestWorkflowTaskMoveRequestUsesStructuredTransitionValues(t *testing.T) {
 
 	transitionKey := "plan-to-implement"
 	request := WorkflowTaskMoveRequest{
-		SetupOperationID: NewWorktreeSetupOperationID(),
-		TaskID:           "task",
-		TargetNodeID:     "implement",
-		TransitionKey:    &transitionKey,
+		TaskID:        "task",
+		TargetNodeID:  "implement",
+		TransitionKey: &transitionKey,
 		Values: map[string]map[string]string{
 			"plan": {"summary": "manual plan"},
 		},
@@ -109,23 +109,20 @@ func TestWorkflowTaskMoveRequestRejectsBlankStructuredValues(t *testing.T) {
 	transitionKey := "plan-to-implement"
 	for _, request := range []WorkflowTaskMoveRequest{
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			TransitionKey:    &transitionKey,
-			Values:           map[string]map[string]string{"plan": {"summary": " "}},
+			TaskID:        "task",
+			TargetNodeID:  "implement",
+			TransitionKey: &transitionKey,
+			Values:        map[string]map[string]string{"plan": {"summary": " "}},
 		},
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			Values:           map[string]map[string]string{"": {"summary": "value"}},
+			TaskID:       "task",
+			TargetNodeID: "implement",
+			Values:       map[string]map[string]string{"": {"summary": "value"}},
 		},
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			Values:           map[string]map[string]string{"plan": {"": "value"}},
+			TaskID:       "task",
+			TargetNodeID: "implement",
+			Values:       map[string]map[string]string{"plan": {"": "value"}},
 		},
 	} {
 		if err := request.Validate(); err == nil {
@@ -137,15 +134,55 @@ func TestWorkflowTaskMoveRequestRejectsBlankStructuredValues(t *testing.T) {
 func TestWorkflowTaskMoveRequestRejectsOversizedStructuredValues(t *testing.T) {
 	transitionKey := "plan-to-implement"
 	request := WorkflowTaskMoveRequest{
-		SetupOperationID: NewWorktreeSetupOperationID(),
-		TaskID:           "task",
-		TargetNodeID:     "implement",
-		TransitionKey:    &transitionKey,
+		TaskID:        "task",
+		TargetNodeID:  "implement",
+		TransitionKey: &transitionKey,
 		Values: map[string]map[string]string{
 			"plan": {"summary": strings.Repeat("x", workflowcontract.MaxOutputValueBytes+1)},
 		},
 	}
 	if err := request.Validate(); err == nil {
 		t.Fatal("oversized structured move value validated")
+	}
+}
+
+func TestWorkflowTaskMoveContractHasNoSetupCorrelation(t *testing.T) {
+	requestType := reflect.TypeOf(WorkflowTaskMoveRequest{})
+	if _, exists := requestType.FieldByName("SetupOperationID"); exists {
+		t.Fatal("manual Move request still exposes Setup Operation correlation")
+	}
+	previewType := reflect.TypeOf(WorkflowTaskMovePreviewResponse{})
+	if _, exists := previewType.FieldByName("SetupOperationID"); exists {
+		t.Fatal("manual Move preview exposes Setup Operation correlation")
+	}
+	raw, err := json.Marshal(WorkflowTaskMoveRequest{TaskID: "task", TargetNodeID: "node"})
+	if err != nil {
+		t.Fatalf("marshal move request: %v", err)
+	}
+	if strings.Contains(string(raw), "setup_operation_id") {
+		t.Fatalf("manual Move serialized setup correlation: %s", raw)
+	}
+}
+
+func TestWorkflowTaskMoveAppliedValidatesOptionalRetainedPreviousWorktree(t *testing.T) {
+	valid := WorkflowTaskMoveResponse{
+		Outcome: WorkflowExecutionTargetActionOutcomeApplied,
+		Applied: &WorkflowTaskMoveApplied{
+			CurrentNodes:             []WorkflowTaskCurrentNode{{NodeID: "node"}},
+			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("move applied with retained previous worktree rejected: %v", err)
+	}
+	invalid := valid
+	invalid.Applied = &WorkflowTaskMoveApplied{
+		CurrentNodes: []WorkflowTaskCurrentNode{{NodeID: "node"}},
+		RetainedPreviousWorktree: &RetainedPreviousWorktree{
+			Worktree: WorktreeTopologyEntry{Variant: WorktreeTopologyVariantRegistered},
+		},
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("move applied accepted malformed retained previous worktree")
 	}
 }

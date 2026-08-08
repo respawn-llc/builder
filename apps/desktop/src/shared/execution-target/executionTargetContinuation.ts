@@ -19,7 +19,7 @@ export type TaskInitiatingAction =
     }>
   | Readonly<{
       kind: "move";
-      input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
+      input: TaskMoveInput;
     }>
   | Readonly<{
       kind: "resume";
@@ -64,13 +64,7 @@ export function startTaskInitiatingAction(
 export function moveTaskInitiatingAction(
   input: TaskMoveInput,
 ): Extract<TaskInitiatingAction, { kind: "move" }> {
-  return {
-    kind: "move",
-    input: {
-      ...input,
-      setupOperationID: input.setupOperationID ?? newSetupOperationID(),
-    },
-  };
+  return { kind: "move", input };
 }
 
 export function resumeTaskInitiatingAction(

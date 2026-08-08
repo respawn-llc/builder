@@ -52,6 +52,42 @@ func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	}
 }
 
+func TestTaskShowHumanPresentationOmitsProvisionalTargetFacts(t *testing.T) {
+	task := serverapi.WorkflowTaskDetail{
+		Summary: serverapi.WorkflowTaskSummary{
+			ShortID: "KNT-4", Title: "Task", ProjectID: "project-1", CreatedAtUnixMs: 1,
+		},
+		Project: serverapi.ProjectBoardProject{DisplayName: "Project"},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{
+			WorkflowID:  testsetup.WorkflowID(t, "task-show-provisional"),
+			DisplayName: "Workflow",
+		},
+		SourceWorkspace: serverapi.ProjectWorkspaceSummary{
+			WorkspaceID: "workspace-1",
+			RootPath:    "/repo",
+		},
+		Status: serverapi.WorkflowTaskStatus{
+			Kind:        serverapi.WorkflowTaskStatusKindBacklog,
+			NativeState: serverapi.WorkflowTaskNativeStateActive,
+		},
+		Actions: serverapi.WorkflowTaskActions{CanStart: true},
+	}
+
+	presentation, err := taskDetailHumanPresentationFromDetail(task, nil)
+	if err != nil {
+		t.Fatalf("taskDetailHumanPresentationFromDetail: %v", err)
+	}
+	if len(presentation.OptionalVariants) != 0 {
+		t.Fatalf("provisional Task presentation = %+v, want no target/worktree/setup recovery variants", presentation)
+	}
+	if presentation.Task.SourceWorkspace.RootPath != task.SourceWorkspace.RootPath || !presentation.Task.Actions.CanStart {
+		t.Fatalf("provisional Task presentation = %+v, want source workspace and Start action", presentation)
+	}
+	if err := renderTaskDetailHuman(bytes.NewBuffer(nil), presentation); err != nil {
+		t.Fatalf("renderTaskDetailHuman: %v", err)
+	}
+}
+
 func TestTaskShowJSONIncludesEffectiveCurrentNodeSelection(t *testing.T) {
 	thinking := "high"
 	assignee := "reviewer"

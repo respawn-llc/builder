@@ -1,10 +1,13 @@
 package workflowstore
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 
+	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 )
 
@@ -93,6 +96,78 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 	if targetContext.Task.ExecutionTarget == nil || targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("execution target after manual move = %+v, want locked none target", targetContext.Task.ExecutionTarget)
+	}
+}
+
+func TestManualMoveExecutableLocksPreparedManagedTargetProvenance(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	const worktreeID = "prepared-worktree"
+	const worktreeRoot = "/repo/prepared"
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	updated, err := store.queries.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   store.now().UnixMilli(),
+	})
+	if err != nil || updated != 1 {
+		t.Fatalf("bind provisional worktree: updated=%d error=%v", updated, err)
+	}
+	requestedRef := "HEAD"
+	resolvedRef := "refs/heads/main"
+	commitOID := strings.Repeat("a", 40)
+	_, err = store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+			Managed:             &ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	locked := targetContext.Task.ExecutionTarget
+	if locked == nil ||
+		locked.Mode != workflow.ExecutionTargetModeHead ||
+		locked.RequestedRef == nil || *locked.RequestedRef != requestedRef ||
+		locked.ResolvedRef == nil || *locked.ResolvedRef != resolvedRef ||
+		locked.CommitOID == nil || *locked.CommitOID != commitOID ||
+		locked.Provenance != ExecutionTargetProvenanceResolved {
+		t.Fatalf("locked target = %+v, want prepared managed provenance", locked)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,10 +230,15 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	})
 
 	prepared := make(chan struct{}, 1)
-	resumed, err := controller.ResumeTaskWithPreparation(context.Background(), reference.TaskID, func(context.Context) error {
-		prepared <- struct{}{}
-		return nil
-	})
+	resumed, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error {
+			prepared <- struct{}{}
+			return nil
+		}),
+		noOpTaskPreparationFinalizer,
+	)
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
@@ -250,6 +256,153 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
 		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
 		t.Fatalf("runner prompt deliveries = %+v, want Resume", deliveries)
+	}
+}
+
+func TestCurrentNodeControllerResumeOwnershipConflictLeavesDurableInterruptionUntouched(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-registration-conflict", "node-agent")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{{
+		Reference:  reference,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("reference key: %v", err)
+	}
+	controller.mu.Lock()
+	controller.explicitQueue = append(controller.explicitQueue, currentNodeQueuedStart{reference: reference})
+	controller.explicitQueued[key] = struct{}{}
+	controller.mu.Unlock()
+	var preparationCalls atomic.Int64
+
+	resumed, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error {
+			preparationCalls.Add(1)
+			return nil
+		}),
+		noOpTaskPreparationFinalizer,
+	)
+	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("ResumeTaskWithPreparation error = %v, want ownership conflict", err)
+	}
+	if len(resumed) != 0 {
+		t.Fatalf("resumed Current Nodes = %+v, want none", resumed)
+	}
+	store.mu.Lock()
+	resumeCalls := append([]workflow.CurrentNodeReference(nil), store.resumed...)
+	store.mu.Unlock()
+	if len(resumeCalls) != 0 {
+		t.Fatalf("durable ResumeCurrentNode calls = %+v, want none", resumeCalls)
+	}
+	if calls := preparationCalls.Load(); calls != 0 {
+		t.Fatalf("preparation calls = %d, want 0", calls)
+	}
+}
+
+func TestCurrentNodeControllerPreparesMultiCurrentNodeResumeOnceBeforeAdmission(t *testing.T) {
+	taskID := workflow.TaskID("task-shared-resume-preparation")
+	first := currentNodeReferenceForControllerTest(t, string(taskID), "node-first")
+	second := currentNodeReferenceForControllerTest(t, string(taskID), "node-second")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{
+		{Reference: first, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		{Reference: second, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+	}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 2)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	preparationStarted := make(chan struct{})
+	preparationRelease := make(chan struct{})
+	finalized := make(chan TaskPreparationFinalization, 1)
+	var preparationCalls atomic.Int64
+	var targetCommitted atomic.Bool
+
+	resumed, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		taskID,
+		TaskStartPreparation{
+			Prepare: func(ctx context.Context) error {
+				if preparationCalls.Add(1) == 1 {
+					close(preparationStarted)
+				}
+				select {
+				case <-preparationRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Commit: func(context.Context) error {
+				targetCommitted.Store(true)
+				return nil
+			},
+		},
+		func(finalization TaskPreparationFinalization) {
+			finalized <- finalization
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResumeTaskWithPreparation: %v", err)
+	}
+	if len(resumed) != 2 {
+		t.Fatalf("resumed Current Nodes = %d, want 2", len(resumed))
+	}
+	select {
+	case <-preparationStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shared preparation did not start")
+	}
+	if calls := preparationCalls.Load(); calls != 1 {
+		t.Fatalf("preparation calls = %d, want 1", calls)
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.PreparationBatches) != 1 || !snapshot.PreparationBatches[0].Running ||
+		len(snapshot.PreparationBatches[0].CurrentNodes) != 2 {
+		t.Fatalf("preparation snapshot = %+v, want one running two-Current-Node batch", snapshot.PreparationBatches)
+	}
+	if len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 || runner.starts() != 0 || targetCommitted.Load() {
+		t.Fatalf("preparation leaked into ordinary admission before handoff: snapshot=%+v starts=%d", snapshot, runner.starts())
+	}
+
+	close(preparationRelease)
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationHandedOff || finalization.Cause != nil {
+			t.Fatalf("preparation finalization = %+v, want handed off", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("successful preparation was not finalized")
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 2
+	}, "prepared Current Nodes did not enter ordinary admission")
+	if calls := preparationCalls.Load(); calls != 1 {
+		t.Fatalf("preparation calls after admission = %d, want 1", calls)
+	}
+	if !targetCommitted.Load() {
+		t.Fatal("prepared Current Nodes entered admission before target commit")
+	}
+	deliveries := runner.promptDeliveries()
+	if len(deliveries) != 2 ||
+		deliveries[0] != workflowruntime.TaskPromptDeliveryResume ||
+		deliveries[1] != workflowruntime.TaskPromptDeliveryResume {
+		t.Fatalf("runner prompt deliveries = %+v, want Resume for every handed-off Current Node", deliveries)
 	}
 }
 
@@ -611,7 +764,12 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTask(context.Background(), taskID, func(context.Context) error { return nil })
+		_, err := controller.StartTask(
+			context.Background(),
+			taskID,
+			testTaskPreparation(func(context.Context) error { return nil }),
+			noOpTaskPreparationFinalizer,
+		)
 		startDone <- err
 	}()
 	select {
@@ -682,15 +840,20 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTask(context.Background(), reference.TaskID, func(ctx context.Context) error {
-			close(preparationStarted)
-			select {
-			case <-preparationRelease:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		})
+		_, err := controller.StartTask(
+			context.Background(),
+			reference.TaskID,
+			testTaskPreparation(func(ctx context.Context) error {
+				close(preparationStarted)
+				select {
+				case <-preparationRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			}),
+			noOpTaskPreparationFinalizer,
+		)
 		started <- err
 	}()
 	select {
@@ -736,9 +899,12 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	})
 	cause := errors.New("worktree setup failed")
 
-	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error {
-		return cause
-	}); err != nil {
+	if _, err := controller.StartTask(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return cause }),
+		noOpTaskPreparationFinalizer,
+	); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -757,6 +923,377 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
+}
+
+func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanonicalRecovery(t *testing.T) {
+	taskID := workflow.TaskID("task-preparation-persistence-failure")
+	canonical := currentNodeReferenceForControllerTest(t, string(taskID), "node-a")
+	persistedSibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-b")
+	failedSibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-c")
+	failedSiblingKey, err := failedSibling.Key()
+	if err != nil {
+		t.Fatalf("failed sibling key: %v", err)
+	}
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: failedSibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: canonical, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: persistedSibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		},
+		interruptionErrors: map[workflow.CurrentNodeReferenceKey]error{
+			failedSiblingKey: errors.New("persist sibling interruption"),
+		},
+	}
+	attention := &currentNodeAttentionRecorder{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		3,
+		attention,
+	)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	setupID := uuid.New()
+	retainedRoot := t.TempDir()
+	cause := NewTaskStartPreparationError(
+		errors.New("setup failed"),
+		workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_task_setup_failed",
+			SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
+				SetupOperationID: setupID,
+				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
+				Diagnostic:       "setup failed twice",
+				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
+					WorktreeID: "worktree-primary",
+					Root:       retainedRoot,
+				},
+			},
+		},
+	)
+	finalized := make(chan TaskPreparationFinalization, 1)
+
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		taskID,
+		testTaskPreparation(func(context.Context) error { return cause }),
+		func(finalization TaskPreparationFinalization) {
+			finalized <- finalization
+		},
+	); err != nil {
+		t.Fatalf("ResumeTaskWithPreparation: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationInterruptionFailed ||
+			!errors.Is(finalization.Cause, cause) {
+			t.Fatalf("preparation finalization = %+v, want non-retryable interruption persistence failure", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preparation persistence failure was not finalized")
+	}
+	if _, interrupted := store.interruption(canonical); interrupted {
+		t.Fatal("canonical setup-recovery interruption was persisted after sibling failure")
+	}
+	persisted, interrupted := store.interruption(persistedSibling)
+	if !interrupted || persisted.detail.SetupRecovery != nil {
+		t.Fatalf("persisted sibling interruption = %+v, %t; want generic interruption", persisted, interrupted)
+	}
+	if _, interrupted := store.interruption(failedSibling); interrupted {
+		t.Fatal("failed sibling interruption was reported as persisted")
+	}
+	if pending := attention.pendingCount(); pending != 1 {
+		t.Fatalf("live interruption attention count = %d, want only the successfully persisted generic sibling", pending)
+	}
+	if snapshot := controller.Snapshot(); len(snapshot.PreparationBatches) != 0 {
+		t.Fatalf("failed preparation batch remained owned: %+v", snapshot.PreparationBatches)
+	}
+}
+
+func TestCurrentNodeControllerPersistsCanonicalTargetPreparationRecoveryWithoutTopology(t *testing.T) {
+	taskID := workflow.TaskID("task-target-preparation-recovery")
+	canonical := currentNodeReferenceForControllerTest(t, string(taskID), "node-a")
+	sibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-b")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{
+		{Reference: sibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		{Reference: canonical, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+	}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 2)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	setupID := uuid.New()
+	cause := NewTaskStartPreparationError(
+		errors.New("target resolution failed"),
+		workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_target_preparation_failed",
+			SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
+				SetupOperationID: setupID,
+				Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
+				Diagnostic:       "target resolution failed",
+			},
+		},
+	)
+	finalized := make(chan TaskPreparationFinalization, 1)
+
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		taskID,
+		testTaskPreparation(func(context.Context) error { return cause }),
+		func(finalization TaskPreparationFinalization) {
+			finalized <- finalization
+		},
+	); err != nil {
+		t.Fatalf("ResumeTaskWithPreparation: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationFailed {
+			t.Fatalf("preparation finalization = %+v, want retry-ready failure", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("target-preparation failure did not finalize")
+	}
+	interruption, interrupted := store.interruption(canonical)
+	if !interrupted || interruption.detail.SetupRecovery == nil ||
+		interruption.detail.SetupRecovery.SetupOperationID != setupID ||
+		interruption.detail.SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
+		interruption.detail.SetupRecovery.RetainedWorktree != nil {
+		t.Fatalf("canonical interruption = %+v, %t; want typed topology-free target recovery", interruption, interrupted)
+	}
+	siblingInterruption, interrupted := store.interruption(sibling)
+	if !interrupted || siblingInterruption.detail.SetupRecovery != nil {
+		t.Fatalf("sibling interruption = %+v, %t; want generic interruption", siblingInterruption, interrupted)
+	}
+}
+
+func TestCurrentNodeControllerRetryFromFailureFinalizerRegistersOneNewPreparationBatch(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-immediate-preparation-retry", "node-agent")
+	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	var retryPreparationCalls atomic.Int64
+	retryResult := make(chan error, 1)
+	retryFinalized := make(chan TaskPreparationFinalization, 1)
+	firstCause := errors.New("setup failed twice")
+
+	if _, err := controller.StartTask(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return firstCause }),
+		func(finalization TaskPreparationFinalization) {
+			if finalization.Kind != TaskPreparationFailed {
+				retryResult <- fmt.Errorf("first finalization = %+v, want preparation failure", finalization)
+				return
+			}
+			if snapshot := controller.Snapshot(); len(snapshot.PreparationBatches) != 0 {
+				retryResult <- fmt.Errorf("failed batch remained owned at terminal boundary: %+v", snapshot.PreparationBatches)
+				return
+			}
+			store.mu.Lock()
+			store.interrupted = []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+			}}
+			store.mu.Unlock()
+			_, err := controller.ResumeTaskWithPreparation(
+				context.Background(),
+				reference.TaskID,
+				testTaskPreparation(func(context.Context) error {
+					retryPreparationCalls.Add(1)
+					return nil
+				}),
+				func(retryFinalization TaskPreparationFinalization) {
+					retryFinalized <- retryFinalization
+				},
+			)
+			retryResult <- err
+		},
+	); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	select {
+	case err := <-retryResult:
+		if err != nil {
+			t.Fatalf("immediate Resume from failure terminal: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("failure terminal did not allow immediate Resume")
+	}
+	select {
+	case finalization := <-retryFinalized:
+		if finalization.Kind != TaskPreparationHandedOff {
+			t.Fatalf("retry finalization = %+v, want successful handoff", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry preparation was not finalized")
+	}
+	if calls := retryPreparationCalls.Load(); calls != 1 {
+		t.Fatalf("retry preparation calls = %d, want 1", calls)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 1
+	}, "retried Current Node did not enter ordinary admission")
+}
+
+func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBeforeResume(t *testing.T) {
+	taskID := workflow.TaskID("task-durable-recovery-boundary")
+	canonical := currentNodeReferenceForControllerTest(t, string(taskID), "node-a")
+	sibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-b")
+	canonicalRecorded := make(chan struct{})
+	releaseCanonical := make(chan struct{})
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: sibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: canonical, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		},
+		interruptAfterRecord:   &canonical,
+		interruptRecorded:      canonicalRecorded,
+		interruptRecordRelease: releaseCanonical,
+	}
+	attention := &currentNodeAttentionRecorder{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		2,
+		attention,
+	)
+	t.Cleanup(func() {
+		select {
+		case <-releaseCanonical:
+		default:
+			close(releaseCanonical)
+		}
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	setupID := uuid.New()
+	firstFinalized := make(chan TaskPreparationFinalization, 1)
+	cause := NewTaskStartPreparationError(
+		errors.New("setup failed"),
+		workflow.CurrentNodeInterruptionDetail{
+			Code: "workflow_task_setup_failed",
+			SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
+				SetupOperationID: setupID,
+				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
+				Diagnostic:       "setup failed twice",
+				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
+					WorktreeID: "worktree-primary",
+					Root:       t.TempDir(),
+				},
+			},
+		},
+	)
+
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		taskID,
+		testTaskPreparation(func(context.Context) error { return cause }),
+		func(finalization TaskPreparationFinalization) {
+			firstFinalized <- finalization
+		},
+	); err != nil {
+		t.Fatalf("first ResumeTaskWithPreparation: %v", err)
+	}
+	select {
+	case <-canonicalRecorded:
+	case <-time.After(3 * time.Second):
+		t.Fatal("canonical recovery interruption was not durably persisted")
+	}
+	canonicalInterruption, interrupted := store.interruption(canonical)
+	if !interrupted || canonicalInterruption.detail.SetupRecovery == nil ||
+		canonicalInterruption.detail.SetupRecovery.SetupOperationID != setupID {
+		t.Fatalf("canonical durable interruption = %+v, %t; want exact setup recovery", canonicalInterruption, interrupted)
+	}
+	siblingInterruption, interrupted := store.interruption(sibling)
+	if !interrupted || siblingInterruption.detail.SetupRecovery != nil {
+		t.Fatalf("sibling durable interruption = %+v, %t; want generic interruption", siblingInterruption, interrupted)
+	}
+	if pending := attention.pendingCount(); pending != 0 {
+		t.Fatalf("live attention count before retirement = %d, want 0", pending)
+	}
+
+	var retryPreparationCalls atomic.Int64
+	retryFinalized := make(chan TaskPreparationFinalization, 1)
+	retryReturned := make(chan error, 1)
+	go func() {
+		_, err := controller.ResumeTaskWithPreparation(
+			context.Background(),
+			taskID,
+			testTaskPreparation(func(context.Context) error {
+				retryPreparationCalls.Add(1)
+				return nil
+			}),
+			func(finalization TaskPreparationFinalization) {
+				retryFinalized <- finalization
+			},
+		)
+		retryReturned <- err
+	}()
+	select {
+	case err := <-retryReturned:
+		t.Fatalf("Resume crossed the failed batch mutation boundary: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	if calls := retryPreparationCalls.Load(); calls != 0 {
+		t.Fatalf("retry preparation calls before retirement = %d, want 0", calls)
+	}
+
+	close(releaseCanonical)
+	select {
+	case finalization := <-firstFinalized:
+		if finalization.Kind != TaskPreparationFailed {
+			t.Fatalf("first finalization = %+v, want retry-ready preparation failure", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first preparation did not finalize after retirement")
+	}
+	select {
+	case err := <-retryReturned:
+		if err != nil {
+			t.Fatalf("Resume after retirement: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Resume did not proceed after batch retirement")
+	}
+	select {
+	case finalization := <-retryFinalized:
+		if finalization.Kind != TaskPreparationHandedOff {
+			t.Fatalf("retry finalization = %+v, want handed off", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry preparation did not finalize")
+	}
+	if calls := retryPreparationCalls.Load(); calls != 1 {
+		t.Fatalf("retry preparation calls = %d, want 1", calls)
+	}
+	pending := attention.pendingReferences()
+	if len(pending) != 2 || !pending[0].Equal(canonical) || !pending[1].Equal(sibling) {
+		t.Fatalf("live attention order = %+v, want canonical then sibling", pending)
 	}
 }
 

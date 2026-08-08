@@ -349,7 +349,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,
-	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -413,8 +413,13 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 }
 
 type taskExecutionTargetInfrastructure struct {
-	service *worktree.Service
+	service taskWorktreeExecutionRootService
 	git     *worktree.GitInspector
+}
+
+type taskWorktreeExecutionRootService interface {
+	PrepareTaskExecutionRoot(context.Context, worktree.TaskExecutionRootPreparationRequest) (worktree.TaskExecutionRootPreparation, error)
+	RestoreLockedTaskWorktree(context.Context, worktree.LockedTaskWorktreeRestoreRequest) (worktree.TaskWorktreeMaterialization, error)
 }
 
 func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
@@ -457,44 +462,39 @@ func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Co
 	}, nil
 }
 
-func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetMaterializeRequest) (workflowsvc.ExecutionTargetMaterialization, error) {
+func (i taskExecutionTargetInfrastructure) PrepareTaskExecutionRoot(ctx context.Context, req workflowsvc.TaskExecutionRootPreparationRequest) (workflowsvc.TaskExecutionRootPreparation, error) {
 	if i.service == nil {
-		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("worktree service is required")
+		return workflowsvc.TaskExecutionRootPreparation{}, errors.New("worktree service is required")
 	}
-	if err := req.Snapshot.Validate(); err != nil {
-		return workflowsvc.ExecutionTargetMaterialization{}, err
+	var managedTarget *worktree.GitRevision
+	if req.ManagedSnapshot != nil {
+		if err := req.ManagedSnapshot.Validate(); err != nil {
+			return workflowsvc.TaskExecutionRootPreparation{}, err
+		}
+		if req.ManagedSnapshot.RequestedRef == nil || req.ManagedSnapshot.CommitOID == nil {
+			return workflowsvc.TaskExecutionRootPreparation{}, errors.New("managed execution target snapshot is incomplete")
+		}
+		managedTarget = &worktree.GitRevision{
+			RequestedRef: *req.ManagedSnapshot.RequestedRef,
+			CommitOID:    *req.ManagedSnapshot.CommitOID,
+			CanonicalRef: req.ManagedSnapshot.ResolvedRef,
+		}
 	}
-	if req.Snapshot.RequestedRef == nil || req.Snapshot.CommitOID == nil {
-		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("managed execution target snapshot is incomplete")
-	}
-	materialized, err := i.service.MaterializeInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
+	prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
-		ResolvedTarget: worktree.GitRevision{
-			RequestedRef: *req.Snapshot.RequestedRef,
-			CommitOID:    *req.Snapshot.CommitOID,
-			CanonicalRef: req.Snapshot.ResolvedRef,
-		},
+		ManagedTarget:    managedTarget,
 	})
-	if err != nil {
-		var retained *serverapi.WorktreeSetupRetainedError
-		if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
-			return workflowsvc.ExecutionTargetMaterialization{}, err
-		}
-		root := workflowstore.ManagedExecutionRoot{
-			WorktreeID: retained.Worktree.Registered.Kent.WorktreeID,
-			Root:       retained.Worktree.Registered.Git.CanonicalRoot,
-		}
-		return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, err
+	result := workflowsvc.TaskExecutionRootPreparation{
+		Root:                     prepared.Root,
+		SetupResult:              prepared.SetupResult,
+		RetainedPreviousWorktree: prepared.RetainedPreviousWorktree,
 	}
-	if materialized.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered || materialized.Worktree.Registered == nil {
-		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("materialized task worktree is not registered")
+	if result.Root.SourceWorkspaceID != req.SourceWorkspaceID ||
+		result.Root.SourceWorkspaceRoot != req.SourceWorkspaceRoot {
+		return workflowsvc.TaskExecutionRootPreparation{}, errors.Join(err, errors.New("prepared execution root does not match requested Task source workspace"))
 	}
-	root := workflowstore.ManagedExecutionRoot{
-		WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
-		Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
-	}
-	return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, nil
+	return result, err
 }
 
 func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetRestoreRequest) error {

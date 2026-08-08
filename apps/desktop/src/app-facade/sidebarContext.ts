@@ -1,4 +1,5 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { SetupOperationID } from "@/api";
 
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
@@ -19,7 +20,12 @@ export type WorkflowInspectorInitialFocus = "firstEditableControl";
 export type TaskDetailInitialFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
   | Readonly<{ kind: "approval"; approvalID: string }>
-  | Readonly<{ kind: "interrupted_current_node" }>
+  | Readonly<{
+      kind: "interrupted_current_node";
+      currentNodeID: string;
+      currentNodeBranchKey: string | null;
+      setupOperationID: SetupOperationID | null;
+    }>
   | Readonly<{ kind: "dependencies" }>;
 
 export type SidebarDestination =

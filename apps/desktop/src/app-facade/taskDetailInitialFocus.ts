@@ -11,7 +11,12 @@ export function taskDetailInitialFocusFromAttentionItem(
     return { kind: "approval", approvalID: item.approvalID };
   }
   if (item?.kind === "interrupted_current_node") {
-    return { kind: "interrupted_current_node" };
+    return {
+      kind: "interrupted_current_node",
+      currentNodeID: item.currentNode.nodeID,
+      currentNodeBranchKey: item.currentNode.transitionBranchKey,
+      setupOperationID: item.setupOperationID,
+    };
   }
   return undefined;
 }
@@ -27,17 +32,29 @@ export function sameTaskDetailInitialFocus(
   if (left?.kind !== right.kind) {
     return false;
   }
-  if (left.kind === "question") {
-    return (
-      right.kind === "question" &&
-      left.askIDs.length === right.askIDs.length &&
-      left.askIDs.every((askID, index) => askID === right.askIDs[index])
-    );
+  return sameTaskDetailFocusByKind(left, right);
+}
+
+function sameTaskDetailFocusByKind(left: TaskDetailInitialFocus, right: TaskDetailInitialFocus): boolean {
+  switch (left.kind) {
+    case "question":
+      return right.kind === left.kind && sameStrings(left.askIDs, right.askIDs);
+    case "approval":
+      return right.kind === left.kind && left.approvalID === right.approvalID;
+    case "interrupted_current_node":
+      return (
+        right.kind === left.kind &&
+        left.currentNodeID === right.currentNodeID &&
+        left.currentNodeBranchKey === right.currentNodeBranchKey &&
+        left.setupOperationID?.toJSONValue() === right.setupOperationID?.toJSONValue()
+      );
+    case "dependencies":
+      return right.kind === left.kind;
   }
-  if (left.kind === "approval") {
-    return right.kind === "approval" && left.approvalID === right.approvalID;
-  }
-  return right.kind === left.kind;
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
@@ -46,6 +63,14 @@ function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
   }
   if (focus.kind === "approval") {
     return `approval:${focus.approvalID}`;
+  }
+  if (focus.kind === "interrupted_current_node") {
+    return [
+      focus.kind,
+      focus.currentNodeID,
+      focus.currentNodeBranchKey ?? "serial",
+      focus.setupOperationID?.toJSONValue() ?? "ordinary",
+    ].join(":");
   }
   return focus.kind;
 }

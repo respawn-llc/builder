@@ -258,7 +258,68 @@ describe("attention notification API", () => {
     }
     expect(event.pending.kind).toBe("interrupted_current_node");
     expect(event.pending.question).toBeNull();
-    expect(event.pending.target.focus).toEqual({ kind: "interrupted_current_node" });
+    expect(event.pending.target.focus).toEqual({
+      kind: "interrupted_current_node",
+      setupOperationID: null,
+    });
+  });
+
+  it("preserves exact setup-recovery focus identity", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const events: AttentionNotificationEvent[] = [];
+    const setupOperationID = "33333333-3333-4333-8333-333333333333";
+    client.subscribeAttentionNotifications({
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        throw error;
+      },
+    });
+
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 1,
+        source: "snapshot",
+        pending: {
+          id: { kind: "interrupted_current_node", uuid: "canonical-attention" },
+          kind: "interrupted_current_node",
+          occurred_at: "2026-08-08T12:00:00Z",
+          revision: 4,
+          interrupted_current_node: { message: "Setup failed" },
+          target: {
+            kind: "workflow_task",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
+            task_id: "task-1",
+            current_node_id: "canonical-node",
+            current_node_branch_key: "branch-2",
+            focus: {
+              kind: "interrupted_current_node",
+              setup_operation_id: setupOperationID,
+            },
+          },
+        },
+      },
+    });
+
+    const event = events[0];
+    if (event?.type !== "pending" || event.pending.target.kind !== "workflow_task") {
+      throw new Error("Expected setup-recovery attention.");
+    }
+    expect(event.pending.target).toMatchObject({
+      currentNodeID: "canonical-node",
+      currentNodeBranchKey: "branch-2",
+    });
+    const focus = event.pending.target.focus;
+    if (focus.kind !== "interrupted_current_node") {
+      throw new Error("Expected interrupted Current Node focus.");
+    }
+    expect(focus.setupOperationID?.toJSONValue()).toBe(setupOperationID);
   });
 
   it("rejects incoherent attention payloads and targets", () => {

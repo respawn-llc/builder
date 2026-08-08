@@ -25,6 +25,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"github.com/google/uuid"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -112,6 +113,63 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
 	if len(started.CurrentNodes) != 1 || strings.TrimSpace(started.CurrentNodes[0].NodeID) == "" {
 		t.Fatalf("start response = %+v, want one Current Node", started)
+	}
+}
+
+func TestServiceTaskStartAfterLeavingStartNodeReturnsPublicTypedConflict(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("store.StartTask: %v", err)
+	}
+
+	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var conflict *serverapi.WorkflowTaskStartConflictError
+	if !errors.As(err, &conflict) ||
+		conflict.TaskID != task.Task.ID ||
+		conflict.Reason != serverapi.WorkflowTaskStartConflictAlreadyStarted {
+		t.Fatalf("StartWorkflowTask error = %T %+v, want public already-started conflict", err, err)
+	}
+}
+
+func TestServiceTaskStartRejectsPrelockedTargetBeforeDurablePlacement(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if err := service.store.LockTaskExecutionTarget(ctx, workflow.TaskID(taskID), &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           taskID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if !errors.Is(err, workflowstore.ErrExecutionTargetAlreadyLocked) {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want pre-placement target-lock conflict", response, err)
+	}
+	if err := service.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
+		t.Fatalf("Task left Start Node despite pre-placement conflict: %v", err)
+	}
+	if events := recorder.recordedEvents(); len(events) != 0 {
+		t.Fatalf("pre-placement conflict published setup events: %+v", events)
 	}
 }
 
@@ -321,9 +379,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask selection: %v", err)
@@ -339,9 +396,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 
 	applied, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -360,6 +416,253 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 	if len(execution.interruptTaskIDs) != 1 || execution.interruptTaskIDs[0] != workflow.TaskID(task.Task.ID) {
 		t.Fatalf("interruptions after target selection = %v, want selected task", execution.interruptTaskIDs)
+	}
+}
+
+func TestServiceManualMoveExecutableManagedTargetLocksSelectedProvenance(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	requestedRef := "HEAD"
+	resolvedRef := "refs/heads/main"
+	commitOID := strings.Repeat("e", 40)
+	const worktreeID = "manual-move-managed-worktree"
+	worktreeRoot := filepath.Join(t.TempDir(), "manual-move-managed")
+	infrastructure := &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			bindWorkflowServiceProvisionalWorktree(
+				t,
+				ctx,
+				metadataStore,
+				binding,
+				req.TaskID,
+				worktreeID,
+				worktreeRoot,
+			)
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+			}, nil
+		},
+	}
+	service.executionTargets = infrastructure
+	service.currentNodeExecution = newManualMoveExecutionStub(service)
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if response.Applied == nil ||
+		len(response.Applied.CurrentNodes) != 1 ||
+		response.Applied.CurrentNodes[0].NodeID != targetNodeID {
+		t.Fatalf("move response = %+v, want applied executable target", response)
+	}
+	if infrastructure.setupOperationID != nil {
+		t.Fatalf("manual move setup operation id = %v, want no setup correlation", infrastructure.setupOperationID)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	locked := targetContext.Task.ExecutionTarget
+	if locked == nil ||
+		locked.Mode != workflow.ExecutionTargetModeHead ||
+		locked.RequestedRef == nil || *locked.RequestedRef != requestedRef ||
+		locked.ResolvedRef == nil || *locked.ResolvedRef != resolvedRef ||
+		locked.CommitOID == nil || *locked.CommitOID != commitOID ||
+		locked.Provenance != workflowstore.ExecutionTargetProvenanceResolved ||
+		targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("locked target = %+v, worktree = %q; want selected managed provenance", locked, targetContext.Task.ManagedWorktreeID)
+	}
+}
+
+func TestServiceManualMoveDirectNonExecutableSkipsExecutionRootPreparation(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKind(t, definition.Definition, "terminal")
+	infrastructure := &recordingExecutionTargetInfrastructure{}
+	service.executionTargets = infrastructure
+	service.currentNodeExecution = newManualMoveExecutionStub(service)
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if response.Applied == nil ||
+		len(response.Applied.CurrentNodes) != 1 ||
+		response.Applied.CurrentNodes[0].NodeID != targetNodeID {
+		t.Fatalf("move response = %+v, want applied direct target", response)
+	}
+	if infrastructure.prepareTaskID != "" || infrastructure.setupOperationID != nil {
+		t.Fatalf("direct move prepared execution root: %+v", infrastructure)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("direct non-executable move locked target = %+v", targetContext.Task.ExecutionTarget)
+	}
+}
+
+func TestServiceManualMoveAppliedCarriesRetainedPreviousWorktree(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
+	infrastructure := &recordingExecutionTargetInfrastructure{
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+				},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
+	service.executionTargets = infrastructure
+	service.currentNodeExecution = newManualMoveExecutionStub(service)
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if response.Applied == nil || response.Applied.RetainedPreviousWorktree != previous {
+		t.Fatalf("move response = %+v, want retained previous worktree", response)
+	}
+	if infrastructure.setupOperationID != nil {
+		t.Fatalf("manual move setup operation id = %v, want no setup correlation", infrastructure.setupOperationID)
+	}
+}
+
+func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	before, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListCurrentNodes before move: %v", err)
+	}
+	setupCause := errors.New("setup failed after retry")
+	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
+	setupErr, err := serverapi.NewWorktreeSetupRetainedError(
+		registeredWorktreeTopologyFixture("/repo/retained", "retained-worktree"),
+		"/repo/setup.sh",
+		"setup failed after retry",
+		setupCause,
+	)
+	if err != nil {
+		t.Fatalf("NewWorktreeSetupRetainedError: %v", err)
+	}
+	setupErr.RetainedPreviousWorktree = previous
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("d", 40)
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: "retained-worktree",
+						Root:       "/repo/retained",
+					},
+				},
+			}, setupErr
+		},
+	}
+	execution := newManualMoveExecutionStub(service)
+	service.currentNodeExecution = execution
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	var retainedError *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retainedError) ||
+		!errors.Is(err, setupCause) ||
+		retainedError.ScriptPath != "/repo/setup.sh" ||
+		retainedError.RetainedPreviousWorktree != previous {
+		t.Fatalf("MoveWorkflowTask = %+v, %v; want setup failure", response, err)
+	}
+	after, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after move: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("current nodes after failed move = %+v, want unchanged %+v", after, before)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("execution target after failed move = %+v, want unlocked", targetContext.Task.ExecutionTarget)
+	}
+	if len(execution.interruptTaskIDs) != 0 {
+		t.Fatalf("interruptions after failed setup = %v, want none", execution.interruptTaskIDs)
 	}
 }
 
@@ -564,10 +867,9 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	execution.started = nil
 
 	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
-		Values:           map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		Values:       map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
@@ -607,9 +909,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	service.currentNodeExecution = execution
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -874,7 +1175,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
-		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
 			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 				ID:            worktreeID,
 				WorkspaceID:   binding.WorkspaceID,
@@ -885,7 +1186,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 				t.Fatalf("UpsertWorktreeRecord: %v", err)
 			}
 			updated, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID:                string(taskID),
+				ID:                string(req.TaskID),
 				ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
 				UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
 			})
@@ -896,7 +1197,13 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 				t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
 			}
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
-			return ExecutionTargetMaterialization{RetainedRoot: &root}, nil
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed:             &root,
+				},
+			}, nil
 		},
 	}
 	service.executionTargets = infrastructure
@@ -913,8 +1220,11 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 		t.Fatalf("start response = %+v, want applied", response)
 	}
 	if infrastructure.resolveSelection.Mode != workflow.ExecutionTargetModeHead ||
-		infrastructure.materializeTaskID != workflow.TaskID(task.Task.ID) ||
-		infrastructure.setupOperationID != setupID {
+		infrastructure.prepareTaskID != workflow.TaskID(task.Task.ID) ||
+		infrastructure.managedSnapshot == nil ||
+		infrastructure.managedSnapshot.Mode != workflow.ExecutionTargetModeHead ||
+		infrastructure.setupOperationID == nil ||
+		*infrastructure.setupOperationID != setupID {
 		t.Fatalf("execution target infrastructure = %+v, want resolved and materialized HEAD for task", infrastructure)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
@@ -930,7 +1240,485 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 	}
 }
 
-func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
+func TestServiceTaskResumeWithoutQueuedPreparationPublishesNotRequired(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if err := service.store.LockTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID), &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		started.Mutation.Created[0].Reference,
+		workflow.CurrentNodeInterruptionReason("workflow_runtime_start_failed"),
+		workflow.NewCurrentNodeInterruptionDetail("workflow_runtime_start_failed", errors.New("runtime failed")),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+	setupID := serverapi.NewWorktreeSetupOperationID()
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: setupID,
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied {
+		t.Fatalf("resume response = %+v, want applied", response)
+	}
+	events := recorder.recordedEvents()
+	if len(events) != 1 || events[0].SetupOperationID != setupID ||
+		events[0].Phase != serverapi.WorktreeSetupPhaseNotRequired ||
+		events[0].NotRequired == nil ||
+		events[0].NotRequired.Reason != serverapi.WorktreeSetupNotRequiredNoTargetPreparation {
+		t.Fatalf("setup events = %+v, want no-target-preparation terminal", events)
+	}
+}
+
+func TestServiceTaskStartPublishesNotRequiredWhenManagedPreparationHasNoSetupScript(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("d", 40)
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	previous := retainedPreviousWorktreeFixture(filepath.Join(t.TempDir(), "previous"), "worktree-previous")
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			bindWorkflowServiceProvisionalWorktree(
+				t, ctx, metadataStore, binding, req.TaskID, worktreeID, worktreeRoot,
+			)
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+				SetupResult: &worktree.WorktreeSetupResult{
+					NotRequired: &serverapi.WorktreeSetupNotRequired{
+						Reason: serverapi.WorktreeSetupNotRequiredNoConfiguredScript,
+					},
+				},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+	setupID := serverapi.NewWorktreeSetupOperationID()
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: setupID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
+		t.Fatalf("start response = %+v, want applied", response)
+	}
+	events := recorder.recordedEvents()
+	if len(events) != 1 || events[0].Phase != serverapi.WorktreeSetupPhaseNotRequired ||
+		events[0].NotRequired == nil ||
+		events[0].NotRequired.Reason != serverapi.WorktreeSetupNotRequiredNoConfiguredScript ||
+		events[0].NotRequired.RetainedPreviousWorktree == nil ||
+		events[0].NotRequired.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID !=
+			previous.Worktree.Registered.Kent.WorktreeID {
+		t.Fatalf("setup events = %+v, want no-configured-script terminal with retained previous worktree", events)
+	}
+}
+
+func TestTaskSetupObservationPreservesPayloadRetainedPreviousWorktree(t *testing.T) {
+	for _, terminal := range []struct {
+		name   string
+		result worktree.WorktreeSetupResult
+		phase  serverapi.WorktreeSetupPhase
+	}{
+		{
+			name: "completed",
+			result: worktree.WorktreeSetupResult{
+				Completed: &serverapi.WorktreeSetupCompleted{
+					RetainedPreviousWorktree: retainedPreviousWorktreeFixture("/previous-completed", "worktree-completed"),
+				},
+			},
+			phase: serverapi.WorktreeSetupPhaseCompleted,
+		},
+		{
+			name: "not required",
+			result: worktree.WorktreeSetupResult{
+				NotRequired: &serverapi.WorktreeSetupNotRequired{
+					Reason:                   serverapi.WorktreeSetupNotRequiredNoConfiguredScript,
+					RetainedPreviousWorktree: retainedPreviousWorktreeFixture("/previous-not-required", "worktree-not-required"),
+				},
+			},
+			phase: serverapi.WorktreeSetupPhaseNotRequired,
+		},
+	} {
+		t.Run(terminal.name, func(t *testing.T) {
+			recorder := &workflowTaskSetupEventRecorder{}
+			observation, err := newTaskSetupObservation(serverapi.NewWorktreeSetupOperationID(), recorder)
+			if err != nil {
+				t.Fatalf("newTaskSetupObservation: %v", err)
+			}
+			observation.record(&terminal.result, nil, nil)
+			observation.finalize(workflowexecution.TaskPreparationFinalization{
+				Kind: workflowexecution.TaskPreparationHandedOff,
+			})
+			events := recorder.recordedEvents()
+			if len(events) != 1 || events[0].Phase != terminal.phase {
+				t.Fatalf("events = %+v, want one %s terminal", events, terminal.phase)
+			}
+			var retained *serverapi.RetainedPreviousWorktree
+			if events[0].Completed != nil {
+				retained = events[0].Completed.RetainedPreviousWorktree
+			}
+			if events[0].NotRequired != nil {
+				retained = events[0].NotRequired.RetainedPreviousWorktree
+			}
+			if retained == nil {
+				t.Fatal("terminal payload lost its retained previous worktree")
+			}
+		})
+	}
+}
+
+func TestServiceTaskStartPublishesCompletedAfterTwoAttemptsWithRetainedPreviousWorktree(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("e", 40)
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	previous := retainedPreviousWorktreeFixture(filepath.Join(t.TempDir(), "previous"), "worktree-previous")
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			bindWorkflowServiceProvisionalWorktree(
+				t, ctx, metadataStore, binding, req.TaskID, worktreeID, worktreeRoot,
+			)
+			for attempt := 0; attempt < 2; attempt++ {
+				recorder.PublishWorkflowTaskSetupEvent(serverapi.WorktreeSetupEvent{
+					SetupOperationID: setupID,
+					Phase:            serverapi.WorktreeSetupPhaseStarted,
+					Started: &serverapi.WorktreeSetupStarted{
+						SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+						WorktreeRoot:        worktreeRoot,
+						ScriptPath:          filepath.Join(req.SourceWorkspaceRoot, "setup.sh"),
+					},
+				})
+			}
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+				SetupResult:              &worktree.WorktreeSetupResult{Completed: &serverapi.WorktreeSetupCompleted{}},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: setupID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
+		t.Fatalf("start response = %+v, want applied", response)
+	}
+	events := recorder.recordedEvents()
+	if len(events) != 3 ||
+		events[0].Phase != serverapi.WorktreeSetupPhaseStarted ||
+		events[1].Phase != serverapi.WorktreeSetupPhaseStarted ||
+		events[2].Phase != serverapi.WorktreeSetupPhaseCompleted ||
+		events[2].Completed == nil ||
+		events[2].Completed.RetainedPreviousWorktree == nil ||
+		events[2].Completed.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID !=
+			previous.Worktree.Registered.Kent.WorktreeID {
+		t.Fatalf("setup events = %+v, want two attempts then completed with retained previous worktree", events)
+	}
+}
+
+func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResponse(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("f", 40)
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	retained := registeredWorktreeTopologyFixture(worktreeRoot, worktreeID)
+	setupErr := errors.New("setup failed twice")
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			bindWorkflowServiceProvisionalWorktree(
+				t, ctx, metadataStore, binding, req.TaskID, worktreeID, worktreeRoot,
+			)
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+				SetupResult: &worktree.WorktreeSetupResult{
+					Failed: &serverapi.WorktreeSetupFailed{
+						RetryReadiness: serverapi.WorktreeSetupRetryReady,
+						Cause: serverapi.WorktreeSetupFailureCause{
+							Kind:        serverapi.WorktreeSetupFailureOperational,
+							Operational: &serverapi.WorktreeSetupOperationalFailure{},
+						},
+						Diagnostic:       setupErr.Error(),
+						RetainedWorktree: &retained,
+					},
+				},
+			}, nil
+		},
+		prepareErr: setupErr,
+	}
+	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
+	finalizers := make(chan workflowexecution.TaskPreparationFinalizer, 1)
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
+		store:             service.store,
+		startPreparations: preparations,
+		startFinalizers:   finalizers,
+	}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+	setupID := serverapi.NewWorktreeSetupOperationID()
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: setupID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil || response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want applied before setup failure", response, err)
+	}
+	preparation := <-preparations
+	preparationErr := preparation.Prepare(ctx)
+	var typed *workflowexecution.TaskStartPreparationError
+	if !errors.As(preparationErr, &typed) ||
+		typed.InterruptionDetail().SetupRecovery == nil ||
+		typed.InterruptionDetail().SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
+		t.Fatalf("preparation error = %T %v, want typed setup recovery", preparationErr, preparationErr)
+	}
+	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+	events := recorder.recordedEvents()
+	if len(events) != 1 || events[0].Phase != serverapi.WorktreeSetupPhaseFailed ||
+		events[0].Failed == nil ||
+		events[0].Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		events[0].Failed.RetainedWorktree == nil ||
+		events[0].Failed.RetainedWorktree.Registered.Kent.WorktreeID != worktreeID {
+		t.Fatalf("setup events = %+v, want retry-ready retained setup failure", events)
+	}
+}
+
+func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolveErr: &worktree.GitRevisionResolutionError{
+			Kind:         worktree.GitRevisionResolutionErrorInvalidRevision,
+			RequestedRef: "HEAD",
+		},
+	}
+	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
+	finalizers := make(chan workflowexecution.TaskPreparationFinalizer, 1)
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
+		store:             service.store,
+		startPreparations: preparations,
+		startFinalizers:   finalizers,
+	}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           taskID,
+		SetupOperationID: setupID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil || response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want applied before target resolution failure", response, err)
+	}
+	preparationErr := (<-preparations).Prepare(ctx)
+	var typed *workflowexecution.TaskStartPreparationError
+	if !errors.As(preparationErr, &typed) ||
+		typed.InterruptionDetail().SetupRecovery == nil ||
+		typed.InterruptionDetail().SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
+		typed.InterruptionDetail().SetupRecovery.RetainedWorktree != nil ||
+		typed.InterruptionDetail().SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
+		t.Fatalf("target preparation error = %T %v, want canonical typed recovery without retained topology", preparationErr, preparationErr)
+	}
+	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+	events := recorder.recordedEvents()
+	if len(events) != 1 || events[0].Phase != serverapi.WorktreeSetupPhaseFailed ||
+		events[0].Failed == nil ||
+		events[0].Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		events[0].Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		events[0].Failed.RetainedWorktree != nil {
+		t.Fatalf("setup events = %+v, want retry-ready target-preparation failure without retained worktree", events)
+	}
+}
+
+func TestServiceTaskStartPublishesTargetPreparationFailureWhenLockCommitFails(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	previous := retainedPreviousWorktreeFixture(filepath.Join(t.TempDir(), "previous"), "worktree-previous")
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+				},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
+	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
+	finalizers := make(chan workflowexecution.TaskPreparationFinalizer, 1)
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
+		store:             service.store,
+		startPreparations: preparations,
+		startFinalizers:   finalizers,
+	}
+	recorder := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = recorder
+
+	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           taskID,
+		SetupOperationID: setupID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil || response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want applied before target lock", response, err)
+	}
+	preparation := <-preparations
+	if err := preparation.Prepare(ctx); err != nil {
+		t.Fatalf("prepare execution root: %v", err)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if err := service.store.LockTaskExecutionTarget(ctx, workflow.TaskID(taskID), &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+		},
+	}); err != nil {
+		t.Fatalf("preempt target lock: %v", err)
+	}
+	commitErr := preparation.Commit(ctx)
+	var typed *workflowexecution.TaskStartPreparationError
+	if !errors.As(commitErr, &typed) ||
+		typed.InterruptionDetail().SetupRecovery == nil ||
+		typed.InterruptionDetail().SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
+		typed.InterruptionDetail().SetupRecovery.RetainedWorktree != nil ||
+		typed.InterruptionDetail().SetupRecovery.RetainedPreviousWorktree == nil ||
+		typed.InterruptionDetail().SetupRecovery.RetainedPreviousWorktree.WorktreeID !=
+			previous.Worktree.Registered.Kent.WorktreeID {
+		t.Fatalf("target lock commit error = %T %v, want typed topology-free recovery with previous orphan", commitErr, commitErr)
+	}
+	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: commitErr,
+	})
+	events := recorder.recordedEvents()
+	if len(events) != 1 || events[0].Phase != serverapi.WorktreeSetupPhaseFailed ||
+		events[0].Failed == nil ||
+		events[0].Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		events[0].Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		events[0].Failed.RetainedWorktree != nil ||
+		events[0].Failed.RetainedPreviousWorktree == nil ||
+		events[0].Failed.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID !=
+			previous.Worktree.Registered.Kent.WorktreeID {
+		t.Fatalf("setup events = %+v, want retry-ready target lock failure", events)
+	}
+}
+
+func TestServiceTaskStartLeavesRetainedTargetUnlockedWhenSetupFails(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -951,20 +1739,26 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
-		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
 			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
 				ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, Managed: true,
 			}); err != nil {
-				return ExecutionTargetMaterialization{}, err
+				return TaskExecutionRootPreparation{}, err
 			}
 			_, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+				ID: string(req.TaskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
 				UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
 			})
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
-			return ExecutionTargetMaterialization{RetainedRoot: &root}, err
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed:             &root,
+				},
+			}, err
 		},
-		materializeErr: setupErr,
+		prepareErr: setupErr,
 	}
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -976,17 +1770,211 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 	if err != nil || response.Applied == nil {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
-	if err := (<-preparations)(ctx); !errors.Is(err, setupErr) {
+	if err := (<-preparations).Prepare(ctx); !errors.Is(err, setupErr) {
 		t.Fatalf("asynchronous preparation error = %v, want setup failure", err)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+	if targetContext.Task.ExecutionTarget != nil ||
 		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("execution target = %+v, worktree = %q; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		t.Fatalf("execution target = %+v, worktree = %q; want retained provisional root without target lock", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+	}
+}
+
+func TestServiceSetupFailureRecoverySequenceKeepsTaskReadableAndLocksOnlyAfterResume(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	setupEvents := &workflowTaskSetupEventRecorder{}
+	service.setupEvents = setupEvents
+
+	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
+	finalizers := make(chan workflowexecution.TaskPreparationFinalizer, 1)
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
+		store:             service.store,
+		startPreparations: preparations,
+		startFinalizers:   finalizers,
+	}
+
+	requestedRef := "HEAD"
+	resolvedRef := "refs/heads/main"
+	commitOID := strings.Repeat("9", 40)
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	scriptPath := filepath.Join(binding.CanonicalRoot, "setup-worktree.sh")
+	retained := registeredWorktreeTopologyFixture(worktreeRoot, worktreeID)
+	setupErr := errors.New("setup failed after automatic retry")
+	prepareCalls := 0
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				bindWorkflowServiceProvisionalWorktree(
+					t, ctx, metadataStore, binding, req.TaskID, worktreeID, worktreeRoot,
+				)
+				for range 2 {
+					setupEvents.PublishWorkflowTaskSetupEvent(serverapi.WorktreeSetupEvent{
+						SetupOperationID: *req.SetupOperationID,
+						Phase:            serverapi.WorktreeSetupPhaseStarted,
+						Started: &serverapi.WorktreeSetupStarted{
+							SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+							WorktreeRoot:        worktreeRoot,
+							ScriptPath:          scriptPath,
+						},
+					})
+				}
+				return TaskExecutionRootPreparation{
+					Root: workflowstore.ExecutionRoot{
+						SourceWorkspaceID:   req.SourceWorkspaceID,
+						SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+						Managed: &workflowstore.ManagedExecutionRoot{
+							WorktreeID: worktreeID,
+							Root:       worktreeRoot,
+						},
+					},
+					SetupResult: &worktree.WorktreeSetupResult{
+						Failed: &serverapi.WorktreeSetupFailed{
+							RetryReadiness: serverapi.WorktreeSetupRetryReady,
+							Cause: serverapi.WorktreeSetupFailureCause{
+								Kind:        serverapi.WorktreeSetupFailureProcessExit,
+								ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
+							},
+							Diagnostic:       setupErr.Error(),
+							RetainedWorktree: &retained,
+						},
+					},
+				}, setupErr
+			}
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+				SetupResult: &worktree.WorktreeSetupResult{
+					Completed: &serverapi.WorktreeSetupCompleted{},
+				},
+			}, nil
+		},
+	}
+	firstSetupID := serverapi.NewWorktreeSetupOperationID()
+
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: firstSetupID,
+	})
+	if err != nil || started.Outcome != serverapi.WorkflowTaskActionOutcomeApplied || started.Applied == nil {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want durable applied response before setup", started, err)
+	}
+	preparationErr := (<-preparations).Prepare(ctx)
+	var typedPreparationErr *workflowexecution.TaskStartPreparationError
+	if !errors.As(preparationErr, &typedPreparationErr) {
+		t.Fatalf("preparation error = %T %v, want typed setup failure", preparationErr, preparationErr)
+	}
+	if len(started.Applied.CurrentNodes) != 1 {
+		t.Fatalf("started Current Nodes = %+v, want one", started.Applied.CurrentNodes)
+	}
+	reference, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID(task.Task.ID),
+		workflow.NodeID(started.Applied.CurrentNodes[0].NodeID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		reference,
+		workflow.CurrentNodeInterruptionReason("workflow_task_setup_failed"),
+		typedPreparationErr.InterruptionDetail(),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode after setup failure: %v", err)
+	}
+	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+
+	detail, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflowTask with provisional worktree: %v", err)
+	}
+	if detail.Task.ExecutionTarget != nil || detail.Task.WorktreePath != nil {
+		t.Fatalf(
+			"provisional Task detail target = %+v, worktree path = %v; want hidden unlocked facts",
+			detail.Task.ExecutionTarget,
+			detail.Task.WorktreePath,
+		)
+	}
+	if target, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext before Resume: %v", err)
+	} else if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf(
+			"target before Resume = %+v, worktree = %q; want unlocked provisional root",
+			target.Task.ExecutionTarget,
+			target.Task.ManagedWorktreeID,
+		)
+	}
+
+	_, err = service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var startConflict *serverapi.WorkflowTaskStartConflictError
+	if !errors.As(err, &startConflict) ||
+		startConflict.Reason != serverapi.WorkflowTaskStartConflictAlreadyStarted {
+		t.Fatalf("repeated Start error = %T %v, want typed already-started conflict", err, err)
+	}
+
+	events := setupEvents.recordedEvents()
+	if len(events) != 3 ||
+		events[0].Phase != serverapi.WorktreeSetupPhaseStarted ||
+		events[1].Phase != serverapi.WorktreeSetupPhaseStarted ||
+		events[2].Phase != serverapi.WorktreeSetupPhaseFailed ||
+		events[2].Failed == nil ||
+		events[2].Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
+		t.Fatalf("first setup events = %+v, want two attempts and retry-ready failure", events)
+	}
+
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil ||
+		resumed.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
+		resumed.Applied == nil {
+		t.Fatalf("immediate ResumeWorkflowTask = %+v, %v; want applied", resumed, err)
+	}
+	if prepareCalls != 2 {
+		t.Fatalf("execution-root preparation calls = %d, want failure then successful Resume", prepareCalls)
+	}
+	target, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext after Resume: %v", err)
+	}
+	if target.Task.ExecutionTarget == nil ||
+		target.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+		target.Task.ExecutionTarget.CommitOID == nil ||
+		*target.Task.ExecutionTarget.CommitOID != commitOID ||
+		target.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("target after Resume = %+v, worktree = %q; want locked successful target", target.Task.ExecutionTarget, target.Task.ManagedWorktreeID)
 	}
 }
 
@@ -1017,7 +2005,7 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *worktree.GitRevisionResolutionError
-	preparationErr := (<-preparations)(ctx)
+	preparationErr := (<-preparations).Prepare(ctx)
 	if !errors.As(preparationErr, &resolutionErr) {
 		t.Fatalf("asynchronous preparation error = %v, want revision failure", preparationErr)
 	}
@@ -1091,7 +2079,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
 	}
 
-	service.executionTargets = &recordingExecutionTargetInfrastructure{}
+	noneTargets := &recordingExecutionTargetInfrastructure{}
+	service.executionTargets = noneTargets
 	response, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -1112,6 +2101,9 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 		t.Fatalf("execution target = %+v, want locked none target", targetContext.Task.ExecutionTarget)
+	}
+	if noneTargets.prepareTaskID != workflow.TaskID(task.Task.ID) || noneTargets.managedSnapshot != nil {
+		t.Fatalf("none execution-root preparation = %+v, want unmanaged preparation for task", noneTargets)
 	}
 }
 
@@ -1144,7 +2136,7 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 			CommitOID:    &commitOID,
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
-		materializeErr: &worktree.GitRevisionResolutionError{
+		prepareErr: &worktree.GitRevisionResolutionError{
 			Kind:         worktree.GitRevisionResolutionErrorGitFailure,
 			RequestedRef: requestedRef,
 		},
@@ -1213,7 +2205,7 @@ func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *serverapi.WorkflowExecutionTargetResolutionError
-	if err := (<-preparations)(ctx); !errors.As(err, &resolutionErr) ||
+	if err := (<-preparations).Prepare(ctx); !errors.As(err, &resolutionErr) ||
 		resolutionErr.Code != serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision ||
 		resolutionErr.RequestedRef != customRef {
 		t.Fatalf("StartWorkflowTask error = %v, want typed invalid custom ref", err)
@@ -1663,15 +2655,16 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 }
 
 type recordingExecutionTargetInfrastructure struct {
-	resolution        workflowstore.ExecutionTargetSnapshot
-	resolveSelection  workflow.ExecutionTargetSelection
-	materializeTaskID workflow.TaskID
-	restoreTaskID     workflow.TaskID
-	setupOperationID  serverapi.WorktreeSetupOperationID
-	materialize       func(workflow.TaskID) (ExecutionTargetMaterialization, error)
-	resolveErr        error
-	materializeErr    error
-	restoreErr        error
+	resolution       workflowstore.ExecutionTargetSnapshot
+	resolveSelection workflow.ExecutionTargetSelection
+	prepareTaskID    workflow.TaskID
+	restoreTaskID    workflow.TaskID
+	setupOperationID *serverapi.WorktreeSetupOperationID
+	managedSnapshot  *workflowstore.ExecutionTargetSnapshot
+	prepare          func(TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error)
+	resolveErr       error
+	prepareErr       error
+	restoreErr       error
 }
 
 type manualMoveExecutionStub struct {
@@ -1691,6 +2684,79 @@ type manualMoveExecutionStub struct {
 type workflowAttentionRecorder struct {
 	resolutions []workflowstore.TaskAttentionResolution
 	pending     []workflow.ApprovalID
+}
+
+type workflowTaskSetupEventRecorder struct {
+	mu     sync.Mutex
+	events []serverapi.WorktreeSetupEvent
+}
+
+func (r *workflowTaskSetupEventRecorder) PublishWorkflowTaskSetupEvent(event serverapi.WorktreeSetupEvent) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *workflowTaskSetupEventRecorder) recordedEvents() []serverapi.WorktreeSetupEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]serverapi.WorktreeSetupEvent(nil), r.events...)
+}
+
+func retainedPreviousWorktreeFixture(root, worktreeID string) *serverapi.RetainedPreviousWorktree {
+	return &serverapi.RetainedPreviousWorktree{
+		Worktree: registeredWorktreeTopologyFixture(root, worktreeID),
+	}
+}
+
+func registeredWorktreeTopologyFixture(root, worktreeID string) serverapi.WorktreeTopologyEntry {
+	return serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantRegistered,
+		Registered: &serverapi.WorktreeRegisteredFacts{
+			Git: serverapi.WorktreeGitFacts{
+				CanonicalRoot: root,
+				HeadObject:    "abc123",
+				PathAvailable: true,
+			},
+			Kent: serverapi.WorktreeKentFacts{
+				WorktreeID:    worktreeID,
+				CanonicalRoot: root,
+				DisplayName:   worktreeID,
+				Managed:       true,
+			},
+		},
+	}
+}
+
+func bindWorkflowServiceProvisionalWorktree(
+	t *testing.T,
+	ctx context.Context,
+	metadataStore *metadata.Store,
+	binding metadata.Binding,
+	taskID workflow.TaskID,
+	worktreeID string,
+	worktreeRoot string,
+) {
+	t.Helper()
+	if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID:            worktreeID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot,
+		Managed:       true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	updated, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(taskID),
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
+	}
 }
 
 func (r *workflowAttentionRecorder) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
@@ -1721,8 +2787,9 @@ func (s *manualMoveExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
+	finalizer workflowexecution.TaskPreparationFinalizer,
 ) (workflowstore.StartTaskResult, error) {
-	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation)
+	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation, finalizer)
 	if err == nil {
 		s.recordStarted(started.Mutation.Created)
 	}
@@ -1841,18 +2908,29 @@ func (i *recordingExecutionTargetInfrastructure) ResolveExecutionTarget(_ contex
 	return i.resolution, nil
 }
 
-func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error) {
-	i.materializeTaskID = req.TaskID
+func (i *recordingExecutionTargetInfrastructure) PrepareTaskExecutionRoot(_ context.Context, req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+	i.prepareTaskID = req.TaskID
 	i.setupOperationID = req.SetupOperationID
-	var materialization ExecutionTargetMaterialization
-	if i.materialize != nil {
+	if req.ManagedSnapshot != nil {
+		snapshot := *req.ManagedSnapshot
+		i.managedSnapshot = &snapshot
+	} else {
+		i.managedSnapshot = nil
+	}
+	prepared := TaskExecutionRootPreparation{
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   req.SourceWorkspaceID,
+			SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+		},
+	}
+	if i.prepare != nil {
 		var err error
-		materialization, err = i.materialize(req.TaskID)
+		prepared, err = i.prepare(req)
 		if err != nil {
-			return materialization, err
+			return prepared, err
 		}
 	}
-	return materialization, i.materializeErr
+	return prepared, i.prepareErr
 }
 
 func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
@@ -2609,6 +3687,8 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
+	service.executionTargets = &recordingExecutionTargetInfrastructure{}
+	service.setupEvents = &workflowTaskSetupEventRecorder{}
 	return service, binding, metadataStore
 }
 

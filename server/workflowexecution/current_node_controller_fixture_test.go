@@ -206,8 +206,22 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTask(ctx, reference.TaskID, func(context.Context) error { return nil })
+	_, err := controller.StartTask(
+		ctx,
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return nil }),
+		noOpTaskPreparationFinalizer,
+	)
 	return err
+}
+
+func noOpTaskPreparationFinalizer(TaskPreparationFinalization) {}
+
+func testTaskPreparation(prepare func(context.Context) error) TaskStartPreparation {
+	return TaskStartPreparation{
+		Prepare: prepare,
+		Commit:  func(context.Context) error { return nil },
+	}
 }
 
 func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID string) workflow.CurrentNodeReference {
@@ -280,33 +294,38 @@ var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {
 }()
 
 type currentNodeControllerStore struct {
-	mu                    sync.Mutex
-	started               workflowstore.StartTaskResult
-	interrupted           []workflow.CurrentNode
-	pendingApproval       workflow.PendingApproval
-	approvalApplied       workflowstore.PendingApprovalApplyResult
-	manualMoved           workflowstore.ManualMoveResult
-	admitted              []workflow.CurrentNodeReference
-	resumed               []workflow.CurrentNodeReference
-	resumeErrors          map[workflow.CurrentNodeReferenceKey]error
-	resumeClassifications []workflowstore.CurrentNodeResumeClassification
-	interruptions         map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
-	interruptionCalls     map[workflow.CurrentNodeReferenceKey]int
-	recovered             []workflow.CurrentNodeReference
-	completion            workflowstore.CurrentNodeCompletionResult
-	completions           int
-	startTaskStarted      chan struct{}
-	startTaskRelease      chan struct{}
-	startTaskOnce         sync.Once
-	completionStarted     chan struct{}
-	completionRelease     chan struct{}
-	completionOnce        sync.Once
-	bindingErr            error
-	bindings              []currentNodeSessionBindingCall
-	interruptStarted      chan struct{}
-	interruptRelease      chan struct{}
-	interruptOnce         sync.Once
-	idleResolved          *workflow.CurrentNode
+	mu                     sync.Mutex
+	started                workflowstore.StartTaskResult
+	interrupted            []workflow.CurrentNode
+	pendingApproval        workflow.PendingApproval
+	approvalApplied        workflowstore.PendingApprovalApplyResult
+	manualMoved            workflowstore.ManualMoveResult
+	admitted               []workflow.CurrentNodeReference
+	resumed                []workflow.CurrentNodeReference
+	resumeErrors           map[workflow.CurrentNodeReferenceKey]error
+	resumeClassifications  []workflowstore.CurrentNodeResumeClassification
+	interruptions          map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
+	interruptionCalls      map[workflow.CurrentNodeReferenceKey]int
+	interruptionErrors     map[workflow.CurrentNodeReferenceKey]error
+	recovered              []workflow.CurrentNodeReference
+	completion             workflowstore.CurrentNodeCompletionResult
+	completions            int
+	startTaskStarted       chan struct{}
+	startTaskRelease       chan struct{}
+	startTaskOnce          sync.Once
+	completionStarted      chan struct{}
+	completionRelease      chan struct{}
+	completionOnce         sync.Once
+	bindingErr             error
+	bindings               []currentNodeSessionBindingCall
+	interruptStarted       chan struct{}
+	interruptRelease       chan struct{}
+	interruptOnce          sync.Once
+	interruptAfterRecord   *workflow.CurrentNodeReference
+	interruptRecorded      chan struct{}
+	interruptRecordRelease chan struct{}
+	interruptRecordOnce    sync.Once
+	idleResolved           *workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
@@ -331,6 +350,12 @@ func (r *currentNodeAttentionRecorder) pendingCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.pending)
+}
+
+func (r *currentNodeAttentionRecorder) pendingReferences() []workflow.CurrentNodeReference {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]workflow.CurrentNodeReference(nil), r.pending...)
 }
 
 func (r *currentNodeAttentionRecorder) resolvedInterruptions() []workflowstore.InterruptedCurrentNodeAttentionProjection {
@@ -441,13 +466,16 @@ func (s *currentNodeControllerStore) ResumeCurrentNode(_ context.Context, refere
 	}, true, nil
 }
 
-func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
+func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
 	key, err := reference.Key()
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.interruptionErrors[key]; err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	if s.interruptions == nil {
 		s.interruptions = make(map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord)
 	}
@@ -456,6 +484,21 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Cont
 	}
 	s.interruptions[key] = currentNodeInterruptionRecord{reason: reason, detail: detail}
 	s.interruptionCalls[key]++
+	blockAfterRecord := s.interruptAfterRecord != nil &&
+		reference.Equal(*s.interruptAfterRecord) &&
+		s.interruptRecorded != nil &&
+		s.interruptRecordRelease != nil
+	if blockAfterRecord {
+		s.interruptRecordOnce.Do(func() { close(s.interruptRecorded) })
+	}
+	s.mu.Unlock()
+	if blockAfterRecord {
+		select {
+		case <-s.interruptRecordRelease:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
 	return nil
 }
 

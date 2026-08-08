@@ -13,9 +13,7 @@ type BoardInitiatingActionControllerOptions = Readonly<{
   connected: boolean;
   onActionError(id: string, title: string, error: unknown): void;
   onApplied(): void | Promise<void>;
-  onPendingMoveChange(
-    update: (current: PendingBoardCardMove | null) => PendingBoardCardMove | null,
-  ): void;
+  onPendingMoveChange(update: (current: PendingBoardCardMove | null) => PendingBoardCardMove | null): void;
   startErrorTitle: string;
   moveErrorTitle: string;
   refreshErrorTitle: string;
@@ -46,6 +44,9 @@ export function useBoardInitiatingActionController({
     execute,
     onApplied,
     onAppliedError,
+    onClosed: () => {
+      onPendingMoveChange(() => null);
+    },
   });
   const { pending, run, running } = initiatingAction;
   const clearPendingMove = useCallback(
@@ -66,25 +67,21 @@ export function useBoardInitiatingActionController({
     ): void => {
       onPendingMoveChange(() => pendingMove);
       void run(action, selection)
+        .then((outcome) => {
+          if (outcome === "settled") {
+            clearPendingMove(pendingMove);
+          }
+        })
         .catch((error: unknown) => {
           onActionError(
             action.kind === "start" ? "board-start-error" : "board-move-error",
             action.kind === "start" ? startErrorTitle : moveErrorTitle,
             error,
           );
-        })
-        .finally(() => {
           clearPendingMove(pendingMove);
         });
     },
-    [
-      clearPendingMove,
-      moveErrorTitle,
-      onActionError,
-      onPendingMoveChange,
-      run,
-      startErrorTitle,
-    ],
+    [clearPendingMove, moveErrorTitle, onActionError, onPendingMoveChange, run, startErrorTitle],
   );
   return {
     actionsDisabled: !connected || running || pending !== null,

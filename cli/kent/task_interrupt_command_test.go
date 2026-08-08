@@ -19,11 +19,13 @@ import (
 
 type taskInterruptCommandRemote struct {
 	apicontract.WorkflowService
-	interruptRequests []serverapi.WorkflowTaskInterruptRequest
-	resumeRequests    []serverapi.WorkflowTaskResumeRequest
-	moveRequests      []serverapi.WorkflowTaskMoveRequest
-	previewResponse   *serverapi.WorkflowTaskMovePreviewResponse
-	moveResponse      *serverapi.WorkflowTaskMoveResponse
+	interruptRequests  []serverapi.WorkflowTaskInterruptRequest
+	resumeRequests     []serverapi.WorkflowTaskResumeRequest
+	moveRequests       []serverapi.WorkflowTaskMoveRequest
+	previewResponse    *serverapi.WorkflowTaskMovePreviewResponse
+	moveResponse       *serverapi.WorkflowTaskMoveResponse
+	moveError          error
+	setupSubscriptions int
 }
 
 type eofWorktreeSetupSubscription struct {
@@ -41,6 +43,21 @@ type eofWorktreeSetupRemote struct {
 	*taskInterruptCommandRemote
 	returned chan<- struct{}
 }
+
+type terminalWorktreeSetupSubscription struct {
+	event    serverapi.WorktreeSetupEvent
+	returned bool
+}
+
+func (s *terminalWorktreeSetupSubscription) Next(context.Context) (serverapi.WorktreeSetupEvent, error) {
+	if s.returned {
+		return serverapi.WorktreeSetupEvent{}, io.EOF
+	}
+	s.returned = true
+	return s.event, nil
+}
+
+func (*terminalWorktreeSetupSubscription) Close() error { return nil }
 
 func (r eofWorktreeSetupRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
 	return eofWorktreeSetupSubscription{returned: r.returned}, nil
@@ -93,8 +110,24 @@ func (r *taskInterruptCommandRemote) ResumeWorkflowTask(_ context.Context, req s
 	}, nil
 }
 
+func (r *taskInterruptCommandRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	r.setupSubscriptions++
+	return &terminalWorktreeSetupSubscription{
+		event: serverapi.WorktreeSetupEvent{
+			SetupOperationID: req.SetupOperationID,
+			Phase:            serverapi.WorktreeSetupPhaseNotRequired,
+			NotRequired: &serverapi.WorktreeSetupNotRequired{
+				Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation,
+			},
+		},
+	}, nil
+}
+
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	r.moveRequests = append(r.moveRequests, req)
+	if r.moveError != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, r.moveError
+	}
 	if r.moveResponse != nil {
 		return *r.moveResponse, nil
 	}
@@ -503,7 +536,7 @@ func TestWorktreeSetupProgressReportsEOFBeforeTerminalEvent(t *testing.T) {
 		taskInterruptCommandRemote: &taskInterruptCommandRemote{},
 		returned:                   returned,
 	}
-	stop, err := subscribeWorktreeSetupProgress(
+	observation, err := subscribeWorktreeSetupProgress(
 		context.Background(),
 		remote,
 		serverapi.NewWorktreeSetupOperationID(),
@@ -513,12 +546,12 @@ func TestWorktreeSetupProgressReportsEOFBeforeTerminalEvent(t *testing.T) {
 		t.Fatalf("subscribeWorktreeSetupProgress: %v", err)
 	}
 	<-returned
-	if err := stop(); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("setup progress stop error = %v, want unexpected EOF", err)
+	if result := <-observation.done; !errors.Is(result.err, io.ErrUnexpectedEOF) {
+		t.Fatalf("setup progress result error = %v, want unexpected EOF", result.err)
 	}
 }
 
-func TestTaskMoveCarriesExecutionTargetAndSetupOperation(t *testing.T) {
+func TestTaskMoveCarriesExecutionTargetWithoutSetupOperation(t *testing.T) {
 	allowHumanTaskActionForTest(t)
 	remote := &taskInterruptCommandRemote{}
 	previous := workflowCommandRemoteOpener
@@ -540,7 +573,7 @@ func TestTaskMoveCarriesExecutionTargetAndSetupOperation(t *testing.T) {
 		t.Fatalf("move requests = %+v, want one", remote.moveRequests)
 	}
 	request := remote.moveRequests[0]
-	if request.TaskID != "task-1" || request.TargetNodeID != "done" || request.SetupOperationID.Validate() != nil ||
+	if request.TaskID != "task-1" || request.TargetNodeID != "done" ||
 		request.ExecutionTarget == nil || request.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeHead {
 		t.Fatalf("move request = %+v", request)
 	}

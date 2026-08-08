@@ -471,8 +471,8 @@ func validateWorkflowTaskApproveApplied(applied WorkflowTaskApproveApplied) erro
 }
 
 func validateWorkflowTaskMoveApplied(applied WorkflowTaskMoveApplied) error {
-	if len(applied.CurrentNodes) == 0 {
-		return errors.New("move applied payload requires current_nodes")
+	if err := validateWorkflowTaskCurrentNodes(applied.CurrentNodes, "move applied payload"); err != nil {
+		return err
 	}
-	return nil
+	return validateRetainedPreviousWorktree(applied.RetainedPreviousWorktree)
 }

@@ -232,6 +232,95 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
 }
 
+func TestManualMoveRejectsStaleTargetKindFlipsWithoutLockingTarget(t *testing.T) {
+	t.Run("executable to non-executable", func(t *testing.T) {
+		ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+		workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+		definition, _, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		target := nodeByKey(t, definition, "implement")
+		prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+			TaskID:       task.ID,
+			TargetNodeID: workflow.NodeIDOf(target),
+			Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		})
+		if err != nil {
+			t.Fatalf("PrepareManualMove: %v", err)
+		}
+		if _, err := store.db.ExecContext(ctx, `
+UPDATE workflow_nodes
+SET kind = 'terminal', subagent_role = '', completion_mode = '', script_path = NULL
+WHERE id = ?`, workflow.NodeIDOf(target)); err != nil {
+			t.Fatalf("flip target kind: %v", err)
+		}
+		assertRejectedStaleManualMove(t, ctx, store, task.ID, source.Reference, func() (ManualMoveResult, error) {
+			return store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		})
+	})
+
+	t.Run("non-executable to executable", func(t *testing.T) {
+		ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+		workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+		definition, _, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		target := nodeByKind(t, definition, workflow.NodeKindTerminal)
+		prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+			TaskID:       task.ID,
+			TargetNodeID: workflow.NodeIDOf(target),
+		})
+		if err != nil {
+			t.Fatalf("PrepareManualMove: %v", err)
+		}
+		if _, err := store.db.ExecContext(ctx, `
+UPDATE workflow_nodes
+SET kind = 'agent', subagent_role = 'coder', completion_mode = 'tool', script_path = NULL
+WHERE id = ?`, workflow.NodeIDOf(target)); err != nil {
+			t.Fatalf("flip target kind: %v", err)
+		}
+		assertRejectedStaleManualMove(t, ctx, store, task.ID, source.Reference, func() (ManualMoveResult, error) {
+			return store.ApplyManualMove(ctx, prepared, nil)
+		})
+	})
+}
+
+func assertRejectedStaleManualMove(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	taskID workflow.TaskID,
+	source workflow.CurrentNodeReference,
+	apply func() (ManualMoveResult, error),
+) {
+	t.Helper()
+	if result, err := apply(); err == nil {
+		t.Fatalf("ApplyManualMove = %+v, nil; want stale-target error", result)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source) {
+		t.Fatalf("current nodes after stale move = %+v, want unchanged source", currentNodes)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("execution target after stale move = %+v, want unlocked", targetContext.Task.ExecutionTarget)
+	}
+}
+
 func assertManualMoveTargetShapeDriftRejected(
 	t *testing.T,
 	ctx context.Context,

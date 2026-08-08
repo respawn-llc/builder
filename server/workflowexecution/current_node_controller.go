@@ -61,6 +61,12 @@ type CurrentNodeExplicitStart struct {
 	CurrentNode workflow.CurrentNodeReference
 }
 
+type CurrentNodePreparationBatchSnapshot struct {
+	TaskID       workflow.TaskID
+	CurrentNodes []workflow.CurrentNodeReference
+	Running      bool
+}
+
 type CurrentNodeAdmissionGateSnapshot struct {
 	CurrentNode workflow.CurrentNodeReference
 	ScopeID     runtimeids.ExecutionScopeID
@@ -89,12 +95,13 @@ type currentNodePostTurnFinalization struct {
 // CurrentNodeExecutionSnapshot is immutable live controller state. Durable
 // Current Node scheduling rows are intentionally not inferred from this view.
 type CurrentNodeExecutionSnapshot struct {
-	AutomaticIntents  []CurrentNodeAutomaticIntent
-	ExplicitStarts    []CurrentNodeExplicitStart
-	HeldIntents       []CurrentNodeHeldIntentSnapshot
-	Gates             []CurrentNodeAdmissionGateSnapshot
-	LiveScopes        []CurrentNodeLiveScopeSnapshot
-	InterruptingTasks []workflow.TaskID
+	AutomaticIntents   []CurrentNodeAutomaticIntent
+	ExplicitStarts     []CurrentNodeExplicitStart
+	PreparationBatches []CurrentNodePreparationBatchSnapshot
+	HeldIntents        []CurrentNodeHeldIntentSnapshot
+	Gates              []CurrentNodeAdmissionGateSnapshot
+	LiveScopes         []CurrentNodeLiveScopeSnapshot
+	InterruptingTasks  []workflow.TaskID
 }
 
 // CurrentNodeController is the sole workflowruntime.Controller. Its mutex,
@@ -130,6 +137,7 @@ type CurrentNodeController struct {
 	workerWake       chan struct{}
 	workerWG         sync.WaitGroup
 	admissionWG      sync.WaitGroup
+	preparationWG    sync.WaitGroup
 
 	mu                    sync.Mutex
 	closed                bool
@@ -144,6 +152,8 @@ type CurrentNodeController struct {
 	explicitQueue         []currentNodeQueuedStart
 	explicitQueued        map[workflow.CurrentNodeReferenceKey]struct{}
 	explicitReservations  map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
+	preparationQueue      []*taskPreparationBatch
+	preparationRunning    []*taskPreparationBatch
 	automaticQueue        currentNodeAutomaticQueue
 	queued                map[workflow.CurrentNodeReferenceKey]struct{}
 	automaticReservations map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
@@ -871,10 +881,11 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snapshot := CurrentNodeExecutionSnapshot{
-		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
-		ExplicitStarts:   make([]CurrentNodeExplicitStart, 0, len(c.explicitQueue)+len(c.explicitReservations)),
-		Gates:            make([]CurrentNodeAdmissionGateSnapshot, 0, len(c.gates)),
-		LiveScopes:       make([]CurrentNodeLiveScopeSnapshot, 0, len(c.live)),
+		AutomaticIntents:   make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
+		ExplicitStarts:     make([]CurrentNodeExplicitStart, 0, len(c.explicitQueue)+len(c.explicitReservations)),
+		PreparationBatches: make([]CurrentNodePreparationBatchSnapshot, 0, len(c.preparationQueue)+len(c.preparationRunning)),
+		Gates:              make([]CurrentNodeAdmissionGateSnapshot, 0, len(c.gates)),
+		LiveScopes:         make([]CurrentNodeLiveScopeSnapshot, 0, len(c.live)),
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		start := entry.start
@@ -894,6 +905,16 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	}
 	for _, start := range c.explicitReservations {
 		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: start.reference})
+	}
+	for _, batch := range c.preparationQueue {
+		snapshot.PreparationBatches = append(snapshot.PreparationBatches, CurrentNodePreparationBatchSnapshot{
+			TaskID: batch.taskID, CurrentNodes: taskPreparationReferences(batch),
+		})
+	}
+	for _, batch := range c.preparationRunning {
+		snapshot.PreparationBatches = append(snapshot.PreparationBatches, CurrentNodePreparationBatchSnapshot{
+			TaskID: batch.taskID, CurrentNodes: taskPreparationReferences(batch), Running: true,
+		})
 	}
 	for _, gate := range c.gates {
 		snapshot.Gates = append(snapshot.Gates, CurrentNodeAdmissionGateSnapshot{
@@ -926,27 +947,51 @@ func (c *CurrentNodeController) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	var (
+		startedShutdown     bool
+		queuedPreparations  []*taskPreparationBatch
+		runningPreparations []*taskPreparationBatch
+		gates               []currentNodeAdmissionGate
+		liveScopes          []runtimeids.ExecutionScopeID
+	)
+	if err := c.permit.Run(context.Background(), func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed {
+			return nil
+		}
+		startedShutdown = true
+		c.closed = true
+		queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
+		c.preparationQueue = nil
+		runningPreparations = append([]*taskPreparationBatch(nil), c.preparationRunning...)
+		c.explicitQueue = nil
+		c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
+		c.automaticQueue.clear()
+		c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
+		c.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
+		c.postTurnFinalization = make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization)
+		gates = make([]currentNodeAdmissionGate, 0, len(c.gates))
+		for _, gate := range c.gates {
+			gates = append(gates, gate)
+		}
+		liveScopes = make([]runtimeids.ExecutionScopeID, 0, len(c.live))
+		for scopeID := range c.live {
+			liveScopes = append(liveScopes, scopeID)
+		}
+		for _, batch := range queuedPreparations {
+			closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
+		}
+		for _, batch := range runningPreparations {
+			batch.cancel(preparationShutdownCause())
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !startedShutdown {
 		return nil
 	}
-	c.closed = true
-	c.explicitQueue = nil
-	c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
-	c.automaticQueue.clear()
-	c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
-	c.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
-	c.postTurnFinalization = make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization)
-	gates := make([]currentNodeAdmissionGate, 0, len(c.gates))
-	for _, gate := range c.gates {
-		gates = append(gates, gate)
-	}
-	liveScopes := make([]runtimeids.ExecutionScopeID, 0, len(c.live))
-	for scopeID := range c.live {
-		liveScopes = append(liveScopes, scopeID)
-	}
-	c.mu.Unlock()
 
 	c.workerCancel()
 	for _, gate := range gates {
@@ -970,6 +1015,7 @@ func (c *CurrentNodeController) Close() error {
 		}
 	}
 	c.workerWG.Wait()
+	c.preparationWG.Wait()
 	c.admissionWG.Wait()
 	c.mu.Lock()
 	workerErr := c.workerErr

@@ -71,6 +71,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 				},
 			},
 		},
+		ScriptPath: "/repo/setup.sh",
 		Diagnostic: "setup exited unsuccessfully",
 	}
 	precondition := &WorktreeDeletePreconditionError{
@@ -129,6 +130,9 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 	}
 	if retainedError.Worktree.Registered == nil || retainedError.Worktree.Registered.Kent.WorktreeID != retained.Worktree.Registered.Kent.WorktreeID {
 		t.Fatalf("retained worktree facts changed: %+v", retainedError)
+	}
+	if retainedError.ScriptPath != retained.ScriptPath {
+		t.Fatalf("retained script path = %q, want %q", retainedError.ScriptPath, retained.ScriptPath)
 	}
 
 	decodedPrecondition := DecodeWorktreeRPCError(precondition.RPCErrorData(), precondition.Error())
@@ -349,7 +353,9 @@ func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
 				},
 			},
 		},
-		Diagnostic: "setup failed",
+		ScriptPath:               "/repo/setup.sh",
+		Diagnostic:               "setup failed",
+		RetainedPreviousWorktree: testRetainedPreviousWorktree(),
 	}
 	if source.RPCErrorCode() != protocol.ErrCodeWorktreeSetupRetained {
 		t.Fatalf("setup-retained RPC code = %d, want %d", source.RPCErrorCode(), protocol.ErrCodeWorktreeSetupRetained)
@@ -361,6 +367,64 @@ func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
 	}
 	if !errors.Is(decoded, ErrWorktreeSetupRetained) {
 		t.Fatalf("decoded error does not preserve setup-retained identity: %v", decoded)
+	}
+	if retained.RetainedPreviousWorktree == nil ||
+		retained.RetainedPreviousWorktree.Worktree.Registered == nil {
+		t.Fatalf("decoded retained previous worktree = %+v", retained.RetainedPreviousWorktree)
+	}
+	if retained.ScriptPath != source.ScriptPath {
+		t.Fatalf("decoded script path = %q, want %q", retained.ScriptPath, source.ScriptPath)
+	}
+
+	malformed := source.RPCErrorData()
+	var payload map[string]any
+	if err := json.Unmarshal(malformed, &payload); err != nil {
+		t.Fatalf("decode error payload: %v", err)
+	}
+	payload["diagnostic"] = " "
+	malformed, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode malformed payload: %v", err)
+	}
+	decoded = DecodeWorktreeRPCError(malformed, "remote setup failed")
+	if errors.As(decoded, &retained) {
+		t.Fatalf("malformed retained setup data decoded as typed error: %+v", retained)
+	}
+
+	payload["diagnostic"] = source.Diagnostic
+	payload["script_path"] = " "
+	malformed, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode blank script path payload: %v", err)
+	}
+	decoded = DecodeWorktreeRPCError(malformed, "remote setup failed")
+	if errors.As(decoded, &retained) {
+		t.Fatalf("blank script path decoded as typed error: %+v", retained)
+	}
+}
+
+func TestNewWorktreeSetupRetainedErrorRejectsBlankScriptPath(t *testing.T) {
+	source := &WorktreeSetupRetainedError{
+		Worktree: WorktreeTopologyEntry{
+			Variant: WorktreeTopologyVariantRegistered,
+			Registered: &WorktreeRegisteredFacts{
+				Git: WorktreeGitFacts{CanonicalRoot: "/repo/feature", HeadObject: "abc123"},
+				Kent: WorktreeKentFacts{
+					WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+					CanonicalRoot: "/repo/feature",
+					DisplayName:   "feature",
+				},
+			},
+		},
+		Diagnostic: "setup failed",
+	}
+	if _, err := NewWorktreeSetupRetainedError(
+		source.Worktree,
+		" ",
+		source.Diagnostic,
+		errors.New("setup failed"),
+	); err == nil {
+		t.Fatal("NewWorktreeSetupRetainedError accepted a blank script path")
 	}
 }
 

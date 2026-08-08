@@ -549,6 +549,12 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	}
 	current, err := currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return preparedTaskStart{}, TaskStartConflictError{
+				TaskID: taskID,
+				Reason: TaskStartConflictAlreadyStarted,
+			}
+		}
 		return preparedTaskStart{}, err
 	}
 	if current.SessionID != nil || current.Scheduling != nil {

@@ -121,6 +121,35 @@ func TestWorkflowTaskMutationSelfTargetErrorRoundTripsRPCData(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskStartConflictAlreadyStartedRoundTripsRPCData(t *testing.T) {
+	original := &WorkflowTaskStartConflictError{
+		TaskID: "task-1",
+		Reason: WorkflowTaskStartConflictAlreadyStarted,
+	}
+	if err := original.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	decoded := DecodeWorkflowTaskStartConflictError(original.RPCErrorData(), original.Error())
+	var conflict *WorkflowTaskStartConflictError
+	if !errors.As(decoded, &conflict) {
+		t.Fatalf("decoded error = %T %v", decoded, decoded)
+	}
+	if conflict.TaskID != original.TaskID || conflict.Reason != original.Reason {
+		t.Fatalf("decoded conflict = %+v, want %+v", conflict, original)
+	}
+	if original.RPCErrorCode() != protocol.ErrCodeWorkflowTaskStartConflict {
+		t.Fatalf("RPC error code = %d", original.RPCErrorCode())
+	}
+	for _, invalid := range []*WorkflowTaskStartConflictError{
+		{Reason: WorkflowTaskStartConflictAlreadyStarted},
+		{TaskID: "task-1", Reason: WorkflowTaskStartConflictReason("future")},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("invalid conflict validated: %+v", invalid)
+		}
+	}
+}
+
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{

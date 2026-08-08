@@ -8,10 +8,11 @@ import type {
   AttentionNotificationID,
   AttentionNotificationWorkflowTaskTarget,
 } from "@/api";
-import { errorMessage } from "@/api";
+import { errorMessage, parseSetupOperationID } from "@/api";
 import {
   attentionToastID,
   attentionNotificationIDKey,
+  attentionNotificationSurfaceKey,
   advancesAttentionNotificationRevision,
   deliverPendingSurface,
   dismissSurface,
@@ -28,6 +29,7 @@ import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
+import type { TaskDetailInitialFocus } from "@/app-facade";
 
 export function AttentionNotificationController() {
   return <SidebarRootOwner><OwnedAttentionNotificationController /></SidebarRootOwner>;
@@ -55,7 +57,10 @@ function OwnedAttentionNotificationController() {
       try {
         await open({
           kind: "taskDetail",
-          initialFocus: taskDetailInitialFocus(target.focus),
+          initialFocus:
+            target.kind === "task_detail"
+              ? nativeTaskDetailInitialFocus(target)
+              : taskDetailInitialFocus(target),
           inboxNav: true,
           mode: "overlay",
           taskID: target.taskID,
@@ -77,7 +82,7 @@ function OwnedAttentionNotificationController() {
         return;
       }
       const target = notification.target;
-      const notificationKey = attentionNotificationIDKey(notification.id);
+      const notificationKey = attentionNotificationSurfaceKey(notification);
       const toastID = attentionToastID(notificationKey);
       const markDismissed = () => {
         const existing = surfacedRef.current.get(notificationKey);
@@ -168,14 +173,9 @@ function OwnedAttentionNotificationController() {
       if (notification.target.kind !== "workflow_task") {
         return;
       }
-      const notificationKey = attentionNotificationIDKey(notification.id);
+      const notificationKey = attentionNotificationSurfaceKey(notification);
       const existing = surfacedRef.current.get(notificationKey);
-      if (
-        !advancesAttentionNotificationRevision(
-          existing?.notification.revision,
-          notification.revision,
-        )
-      ) {
+      if (!advancesAttentionNotificationRevision(existing?.notification.revision, notification.revision)) {
         return;
       }
       if (existing !== undefined) {
@@ -198,9 +198,14 @@ function OwnedAttentionNotificationController() {
 
   const handleResolved = useCallback(
     (id: AttentionNotificationID): void => {
-      const notificationKey = attentionNotificationIDKey(id);
-      dismissSurface(surfacedRef.current, status, notificationKey);
-      removeActiveNotification(bridge.notifications, logger, notificationKey);
+      const ordinaryIdentity = attentionNotificationIDKey(id);
+      for (const [surfaceKey, record] of surfacedRef.current) {
+        if (attentionNotificationIDKey(record.notification.id) !== ordinaryIdentity) {
+          continue;
+        }
+        dismissSurface(surfacedRef.current, status, surfaceKey);
+        removeActiveNotification(bridge.notifications, logger, surfaceKey);
+      }
     },
     [bridge.notifications, logger, status],
   );
@@ -357,4 +362,20 @@ function OwnedAttentionNotificationController() {
   }, [bridge.notifications, logger, openTarget]);
 
   return null;
+}
+
+function nativeTaskDetailInitialFocus(target: NativeNotificationTarget): TaskDetailInitialFocus {
+  const { focus } = target;
+  if (focus.kind === "question") {
+    return { kind: focus.kind, askIDs: focus.askIDs };
+  }
+  if (focus.kind === "approval") {
+    return { kind: focus.kind, approvalID: focus.approvalID };
+  }
+  return {
+    kind: focus.kind,
+    currentNodeID: focus.currentNodeID,
+    currentNodeBranchKey: focus.currentNodeBranchKey,
+    setupOperationID: focus.setupOperationID === null ? null : parseSetupOperationID(focus.setupOperationID),
+  };
 }

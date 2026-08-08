@@ -1,3 +1,5 @@
+import type { SetupOperationID } from "./setupOperationID";
+
 export type AttentionNotificationKind =
   "question" | "approval" | "workflow_approval" | "interrupted_current_node";
 
@@ -11,7 +13,7 @@ export type AttentionNotificationID = Readonly<{
 export type AttentionNotificationTaskDetailFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
   | Readonly<{ kind: "approval"; approvalID: string }>
-  | Readonly<{ kind: "interrupted_current_node" }>;
+  | Readonly<{ kind: "interrupted_current_node"; setupOperationID: SetupOperationID | null }>;
 
 export type AttentionNotificationWorkflowTaskTarget = Readonly<{
   kind: "workflow_task";

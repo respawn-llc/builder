@@ -28,6 +28,18 @@ type managedRootAllocator struct {
 	entropy io.Reader
 }
 
+type managedTaskWorktreeLocation struct {
+	Root       string
+	BranchName string
+}
+
+type managedTaskWorktreeLocationKind uint8
+
+const (
+	managedTaskWorktreeLocationInitial managedTaskWorktreeLocationKind = iota + 1
+	managedTaskWorktreeLocationReplacement
+)
+
 type managedRootExhaustionError struct {
 	Operation   string
 	Base        string
@@ -292,6 +304,72 @@ func (a *managedRootAllocator) reserveTaskRoot(workspaceRoot string, taskShortID
 	}
 	panic(&managedRootExhaustionError{
 		Operation:   "task-leaf",
+		Base:        a.base.path,
+		Parent:      parent,
+		TaskShortID: &leaf,
+		Candidates:  attempted,
+	})
+}
+
+func (a *managedRootAllocator) reserveTaskLocation(
+	workspaceRoot string,
+	taskShortID string,
+	kind managedTaskWorktreeLocationKind,
+	branchExists func(string) (bool, error),
+) (managedTaskWorktreeLocation, error) {
+	if kind == managedTaskWorktreeLocationInitial {
+		root, err := a.reserveTaskRoot(workspaceRoot, taskShortID)
+		if err != nil {
+			return managedTaskWorktreeLocation{}, err
+		}
+		return managedTaskWorktreeLocation{
+			Root:       root,
+			BranchName: strings.TrimSpace(taskShortID),
+		}, nil
+	}
+	if kind != managedTaskWorktreeLocationReplacement {
+		return managedTaskWorktreeLocation{}, errors.New("task worktree location kind is invalid")
+	}
+	if branchExists == nil {
+		return managedTaskWorktreeLocation{}, errors.New("task branch collision check is required")
+	}
+	parent, err := a.ensureWorkspaceParent(workspaceRoot)
+	if err != nil {
+		return managedTaskWorktreeLocation{}, err
+	}
+	leaf := strings.TrimSpace(taskShortID)
+	if leaf == "" || filepath.Base(filepath.Clean(leaf)) != leaf || filepath.IsAbs(leaf) {
+		return managedTaskWorktreeLocation{}, errors.New("task short id must be one path component")
+	}
+	attempted := make([]string, 0, 4)
+	for width := 3; width <= 6; width++ {
+		suffix, err := a.randomDecimal(width)
+		if err != nil {
+			return managedTaskWorktreeLocation{}, err
+		}
+		candidate := leaf + "-" + suffix
+		attempted = append(attempted, candidate)
+		root, collision, err := reserveManagedLeaf(parent, candidate)
+		if err != nil {
+			return managedTaskWorktreeLocation{}, err
+		}
+		if collision {
+			continue
+		}
+		exists, err := branchExists(candidate)
+		if err != nil {
+			return managedTaskWorktreeLocation{}, errors.Join(err, removeEmptyManagedRootAfterAddFailure(root))
+		}
+		if exists {
+			if err := removeEmptyManagedRootAfterAddFailure(root); err != nil {
+				return managedTaskWorktreeLocation{}, err
+			}
+			continue
+		}
+		return managedTaskWorktreeLocation{Root: root, BranchName: candidate}, nil
+	}
+	panic(&managedRootExhaustionError{
+		Operation:   "replacement-task-location",
 		Base:        a.base.path,
 		Parent:      parent,
 		TaskShortID: &leaf,

@@ -2,6 +2,7 @@ package serverapi
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -17,33 +18,145 @@ func TestWorktreeSetupOperationIDRequiresUUIDV4(t *testing.T) {
 	}
 }
 
-func TestWorktreeSetupEventValidation(t *testing.T) {
+func TestWorktreeSetupEventValidationUsesPhaseDiscriminatedPayloads(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	started := WorktreeSetupEvent{
-		SetupOperationID:    id,
-		SourceWorkspaceRoot: "/source",
-		WorktreeRoot:        "/worktree",
-		ScriptPath:          "/source/scripts/setup.sh",
-		Phase:               WorktreeSetupPhaseStarted,
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseStarted,
+		Started: &WorktreeSetupStarted{
+			SourceWorkspaceRoot: "/source",
+			WorktreeRoot:        "/worktree",
+			ScriptPath:          "/source/scripts/setup.sh",
+		},
 	}
 	if err := started.Validate(); err != nil {
 		t.Fatalf("started setup event validate: %v", err)
 	}
-	invalidStarted := started
-	invalidStarted.ScriptPath = ""
-	if err := invalidStarted.Validate(); err == nil {
-		t.Fatal("started setup event without script path validated")
+	completed := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseCompleted,
+		Completed: &WorktreeSetupCompleted{
+			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
+		},
 	}
-	failed := started
-	failed.Phase = WorktreeSetupPhaseFailed
-	failed.Error = "exit status 1"
+	if err := completed.Validate(); err != nil {
+		t.Fatalf("completed setup event validate: %v", err)
+	}
+	notRequired := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseNotRequired,
+		NotRequired: &WorktreeSetupNotRequired{
+			Reason:                   WorktreeSetupNotRequiredNoConfiguredScript,
+			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
+		},
+	}
+	if err := notRequired.Validate(); err != nil {
+		t.Fatalf("not-required setup event validate: %v", err)
+	}
+	failed := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind: WorktreeSetupFailureProcessExit,
+				ProcessExit: &WorktreeSetupProcessExit{
+					ExitCode: 7,
+					Stdout:   stringValuePointer(""),
+					Stderr:   stringValuePointer("failed"),
+				},
+			},
+			Diagnostic:               "setup exited with status 7",
+			RetainedWorktree:         testRegisteredWorktreeTopology(),
+			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
+		},
+	}
 	if err := failed.Validate(); err != nil {
 		t.Fatalf("failed setup event validate: %v", err)
 	}
-	invalidFailed := started
-	invalidFailed.Phase = WorktreeSetupPhaseFailed
-	if err := invalidFailed.Validate(); err == nil {
-		t.Fatal("failed setup event without terminal facts validated")
+
+	for name, invalid := range map[string]WorktreeSetupEvent{
+		"mixed payloads": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseStarted,
+			Started:          started.Started,
+			Completed:        &WorktreeSetupCompleted{},
+		},
+		"missing matching payload": {SetupOperationID: id, Phase: WorktreeSetupPhaseCompleted},
+		"blank started path": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseStarted,
+			Started: &WorktreeSetupStarted{
+				SourceWorkspaceRoot: "/source",
+				WorktreeRoot:        "",
+				ScriptPath:          "/source/scripts/setup.sh",
+			},
+		},
+		"blank failure diagnostic": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseFailed,
+			Failed: &WorktreeSetupFailed{
+				RetryReadiness: WorktreeSetupRetryReady,
+				Cause: WorktreeSetupFailureCause{
+					Kind:        WorktreeSetupFailureTargetPreparation,
+					Preparation: &WorktreeSetupPreparationFailure{},
+				},
+				Diagnostic: " ",
+			},
+		},
+		"empty inapplicable output sentinel": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseFailed,
+			Failed: &WorktreeSetupFailed{
+				RetryReadiness: WorktreeSetupNonRetryable,
+				Cause: WorktreeSetupFailureCause{
+					Kind:                    WorktreeSetupFailureInterruptionPersistence,
+					InterruptionPersistence: &WorktreeSetupInterruptionPersistenceFailure{},
+					ProcessExit:             &WorktreeSetupProcessExit{ExitCode: 1},
+				},
+				Diagnostic: "interruption persistence failed",
+			},
+		},
+		"retryable cause marked non-retryable": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseFailed,
+			Failed: &WorktreeSetupFailed{
+				RetryReadiness: WorktreeSetupNonRetryable,
+				Cause: WorktreeSetupFailureCause{
+					Kind:        WorktreeSetupFailureTargetPreparation,
+					Preparation: &WorktreeSetupPreparationFailure{},
+				},
+				Diagnostic: "target preparation failed",
+			},
+		},
+		"non-retryable cause marked retry-ready": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseFailed,
+			Failed: &WorktreeSetupFailed{
+				RetryReadiness: WorktreeSetupRetryReady,
+				Cause: WorktreeSetupFailureCause{
+					Kind:     WorktreeSetupFailureCanceled,
+					Canceled: &WorktreeSetupCanceled{},
+				},
+				Diagnostic: "preparation canceled",
+			},
+		},
+		"malformed not-required retained previous worktree": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseNotRequired,
+			NotRequired: &WorktreeSetupNotRequired{
+				Reason: WorktreeSetupNotRequiredNoConfiguredScript,
+				RetainedPreviousWorktree: &RetainedPreviousWorktree{
+					Worktree: WorktreeTopologyEntry{Variant: WorktreeTopologyVariantMissing},
+				},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := invalid.Validate(); err == nil {
+				t.Fatalf("invalid setup event validated: %#v", invalid)
+			}
+		})
 	}
 }
 
@@ -51,6 +164,61 @@ func TestWorktreeSetupOperationIDJSONRejectsNonV4(t *testing.T) {
 	var req WorktreeSetupSubscribeRequest
 	if err := json.Unmarshal([]byte(`{"setup_operation_id":"11111111-1111-1111-1111-111111111111"}`), &req); err == nil {
 		t.Fatal("expected non-v4 setup operation id to fail JSON decoding")
+	}
+}
+
+func TestWorktreeSetupOperationIDStringNeverEncodesAbsence(t *testing.T) {
+	if got := (WorktreeSetupOperationID{}).String(); got == "" {
+		t.Fatal("zero setup operation id formatted as an empty-string absence sentinel")
+	}
+	if _, err := json.Marshal(WorktreeSetupOperationID{}); err == nil {
+		t.Fatal("zero setup operation id serialized")
+	}
+}
+
+func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPresent(t *testing.T) {
+	id := NewWorktreeSetupOperationID()
+	notRequired := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseNotRequired,
+		NotRequired: &WorktreeSetupNotRequired{
+			Reason:                   WorktreeSetupNotRequiredNoTargetPreparation,
+			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
+		},
+	}
+	raw, err := json.Marshal(notRequired)
+	if err != nil {
+		t.Fatalf("marshal not-required event: %v", err)
+	}
+	for _, forbidden := range []string{"script_path", "stdout", "stderr", "failed", "completed"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("not-required event serialized inapplicable %q fact: %s", forbidden, raw)
+		}
+	}
+	if !strings.Contains(string(raw), `"retained_previous_worktree"`) {
+		t.Fatalf("not-required event omitted retained previous worktree: %s", raw)
+	}
+
+	failed := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind: WorktreeSetupFailureTimeout,
+				Timeout: &WorktreeSetupTimeout{
+					Stdout: stringValuePointer(""),
+				},
+			},
+			Diagnostic: "setup timed out",
+		},
+	}
+	raw, err = json.Marshal(failed)
+	if err != nil {
+		t.Fatalf("marshal failed event: %v", err)
+	}
+	if !strings.Contains(string(raw), `"stdout":""`) || strings.Contains(string(raw), `"stderr"`) {
+		t.Fatalf("nullable output presence was not preserved: %s", raw)
 	}
 }
 
@@ -74,4 +242,30 @@ func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 			t.Fatalf("%T Validate succeeded without setup operation id", req)
 		}
 	}
+}
+
+func testRetainedPreviousWorktree() *RetainedPreviousWorktree {
+	return &RetainedPreviousWorktree{Worktree: *testRegisteredWorktreeTopology()}
+}
+
+func testRegisteredWorktreeTopology() *WorktreeTopologyEntry {
+	return &WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantRegistered,
+		Registered: &WorktreeRegisteredFacts{
+			Git: WorktreeGitFacts{
+				CanonicalRoot: "/repo/feature",
+				HeadObject:    "abc123",
+				PathAvailable: true,
+			},
+			Kent: WorktreeKentFacts{
+				WorktreeID:    "c4aaf0cf-4c50-4560-b6a2-6c294d0b1495",
+				CanonicalRoot: "/repo/feature",
+				DisplayName:   "feature",
+			},
+		},
+	}
+}
+
+func stringValuePointer(value string) *string {
+	return &value
 }

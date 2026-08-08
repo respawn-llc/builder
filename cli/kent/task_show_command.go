@@ -38,6 +38,32 @@ type taskShowDependencySummary struct {
 	BlockedTaskCount        int `json:"blocked_task_count"`
 }
 
+type taskDetailHumanPresentation struct {
+	Task             serverapi.WorkflowTaskDetail
+	LabelNames       []string
+	OptionalVariants []taskDetailHumanPresentationVariant
+}
+
+type taskDetailHumanPresentationVariant interface {
+	renderTaskDetailHuman(io.Writer)
+}
+
+type taskDetailExecutionTargetPresentation struct {
+	target serverapi.WorkflowExecutionTarget
+}
+
+func (p taskDetailExecutionTargetPresentation) renderTaskDetailHuman(stdout io.Writer) {
+	writeTaskExecutionTarget(stdout, p.target)
+}
+
+type taskDetailWorktreePathPresentation struct {
+	path string
+}
+
+func (p taskDetailWorktreePathPresentation) renderTaskDetailHuman(stdout io.Writer) {
+	fmt.Fprintf(stdout, "Worktree: %s\n", p.path)
+}
+
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task show", stderr, taskShowUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
@@ -162,6 +188,34 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 }
 
 func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTaskDetail, labelNames []string) error {
+	presentation, err := taskDetailHumanPresentationFromDetail(task, labelNames)
+	if err != nil {
+		return err
+	}
+	return renderTaskDetailHuman(stdout, presentation)
+}
+
+func taskDetailHumanPresentationFromDetail(task serverapi.WorkflowTaskDetail, labelNames []string) (taskDetailHumanPresentation, error) {
+	if _, err := taskStatusText(task.Status); err != nil {
+		return taskDetailHumanPresentation{}, err
+	}
+	presentation := taskDetailHumanPresentation{
+		Task:       task,
+		LabelNames: append([]string(nil), labelNames...),
+	}
+	if task.ExecutionTarget != nil {
+		presentation.OptionalVariants = append(presentation.OptionalVariants, taskDetailExecutionTargetPresentation{target: *task.ExecutionTarget})
+		presentation.Task.ExecutionTarget = nil
+	}
+	if task.WorktreePath != nil {
+		presentation.OptionalVariants = append(presentation.OptionalVariants, taskDetailWorktreePathPresentation{path: *task.WorktreePath})
+		presentation.Task.WorktreePath = nil
+	}
+	return presentation, nil
+}
+
+func renderTaskDetailHuman(stdout io.Writer, presentation taskDetailHumanPresentation) error {
+	task := presentation.Task
 	statusText, err := taskStatusText(task.Status)
 	if err != nil {
 		return err
@@ -178,11 +232,8 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	if strings.TrimSpace(task.SourceWorkspace.RootPath) != "" {
 		fmt.Fprintf(stdout, "Main workspace: %s\n", task.SourceWorkspace.RootPath)
 	}
-	if task.ExecutionTarget != nil {
-		writeTaskExecutionTarget(stdout, *task.ExecutionTarget)
-	}
-	if task.WorktreePath != nil {
-		fmt.Fprintf(stdout, "Worktree: %s\n", *task.WorktreePath)
+	for _, variant := range presentation.OptionalVariants {
+		variant.renderTaskDetailHuman(stdout)
 	}
 	for _, session := range task.LiveSessions {
 		fmt.Fprintf(stdout, "Current session: %s\n", session.SessionID)
@@ -202,9 +253,9 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
-	if len(labelNames) > 0 {
+	if len(presentation.LabelNames) > 0 {
 		fmt.Fprintf(stdout, "Labels:")
-		for _, name := range labelNames {
+		for _, name := range presentation.LabelNames {
 			fmt.Fprintf(stdout, " %q", name)
 		}
 		fmt.Fprintln(stdout)
