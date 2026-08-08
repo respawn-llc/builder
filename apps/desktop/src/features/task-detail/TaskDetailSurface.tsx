@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssignment } from "@/api";
@@ -6,6 +6,7 @@ import type { TaskDetailInitialFocus } from "@/app-facade";
 import type { SidebarPageNavigator } from "@/app-facade";
 import type { SidebarMode } from "@/app-facade";
 import type { SidebarRootController } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
@@ -51,13 +52,13 @@ export function TaskDetailSurface({
   const attention = useTaskAttention(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
+  const taskMissing = detail.isError && isTaskMissingError(detail.error);
+  useSidebarBackWhen(taskMissing, navigator);
   if (detail.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
   if (detail.isError) {
-    if (navigator !== undefined && isTaskMissingError(detail.error)) {
-      return <MissingTaskDismissal navigator={navigator} />;
-    }
+    if (taskMissing && navigator !== undefined) return null;
     return <ErrorState body={errorMessage(detail.error)} reveal={false} title={t("states.error")} />;
   }
   const content = (
@@ -96,13 +97,6 @@ export function TaskDetailSurface({
       <div className="min-h-0">{content}</div>
     </div>
   );
-}
-
-function MissingTaskDismissal({ navigator }: Readonly<{ navigator: SidebarPageNavigator }>) {
-  useEffect(() => {
-    navigator.back();
-  }, [navigator]);
-  return null;
 }
 
 function TaskDetailAssignmentScope({

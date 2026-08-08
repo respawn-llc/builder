@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
@@ -9,6 +9,7 @@ import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { usePublishSidebarHeaderAction } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
@@ -35,12 +36,22 @@ import {
 
 const projectEditContentMaxWidthClassName = "max-w-[1200px]";
 
-export function ProjectEditRoute({ navigator, projectId }: Readonly<{ navigator?: SidebarPageNavigator; projectId: string }>) {
+export function ProjectEditRoute({
+  headerAccessory,
+  navigator,
+  projectId,
+}: Readonly<{
+  headerAccessory?: ReactNode;
+  navigator?: SidebarPageNavigator;
+  projectId: string;
+}>) {
   const { t } = useTranslation();
   const query = useProjectEdit(projectId);
   const pages = query.data?.pages;
   const project = pages?.[0];
   const workspaces = useMemo(() => pages?.flatMap((page) => page.workspaces) ?? [], [pages]);
+  const projectMissing = query.isError && isProjectMissingError(query.error);
+  useSidebarBackWhen(projectMissing, navigator);
   useWindowChromeTitle(project?.displayName ?? null);
 
   if (query.isPending) {
@@ -48,9 +59,7 @@ export function ProjectEditRoute({ navigator, projectId }: Readonly<{ navigator?
   }
 
   if (query.isError || project === undefined) {
-    if (navigator !== undefined && query.isError && isProjectMissingError(query.error)) {
-      return <MissingProjectDismissal navigator={navigator} />;
-    }
+    if (projectMissing && navigator !== undefined) return null;
     return (
       <ErrorState
         body={query.isError ? errorMessage(query.error) : t("projectEdit.missingProject")}
@@ -64,6 +73,7 @@ export function ProjectEditRoute({ navigator, projectId }: Readonly<{ navigator?
 
   return (
     <ProjectEditContent
+      headerAccessory={headerAccessory}
       hasNextPage={query.hasNextPage}
       isFetchingNextPage={query.isFetchingNextPage}
       key={project.projectID}
@@ -74,20 +84,15 @@ export function ProjectEditRoute({ navigator, projectId }: Readonly<{ navigator?
   );
 }
 
-function MissingProjectDismissal({ navigator }: Readonly<{ navigator: SidebarPageNavigator }>) {
-  useEffect(() => {
-    navigator.back();
-  }, [navigator]);
-  return null;
-}
-
 function ProjectEditContent({
+  headerAccessory,
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
   project,
   workspaces,
 }: Readonly<{
+  headerAccessory?: ReactNode;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadMore: () => void;
@@ -238,7 +243,16 @@ function ProjectEditContent({
       </Button>
     );
   }, [canSave, dirty, saveProject, t]);
-  usePublishSidebarHeaderAction(headerSaveAction);
+  const headerActions = useMemo(
+    () => (
+      <>
+        {headerSaveAction}
+        {headerAccessory}
+      </>
+    ),
+    [headerAccessory, headerSaveAction],
+  );
+  usePublishSidebarHeaderAction(headerActions);
 
   const header = (
     <ProjectEditListHeader

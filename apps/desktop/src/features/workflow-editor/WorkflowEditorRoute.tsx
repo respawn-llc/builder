@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { errorMessage, isProjectMissingError } from "@/api";
 import type { SidebarPageNavigator } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
 import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
@@ -99,11 +100,10 @@ function WorkflowEditorRouteContent({
   const { t } = useTranslation();
   const { push: pushStatus } = useStatusController();
   const data = useWorkflowEditorData(projectID, workflowID);
-  useEffect(() => {
-    if (navigator !== undefined && data.linksQuery.isError && isProjectMissingError(data.linksQuery.error)) {
-      navigator.back();
-    }
-  }, [data.linksQuery.error, data.linksQuery.isError, navigator]);
+  useSidebarBackWhen(
+    data.linksQuery.isError && isProjectMissingError(data.linksQuery.error),
+    navigator,
+  );
   const workflow = data.workflowQuery.data?.workflow;
   const [draftState, dispatch] = useReducer(workflowEditorDraftStateReducer, null);
   const dirty = useMemo(

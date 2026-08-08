@@ -190,3 +190,11 @@
 - [x] Reject the redundant distinct-Task-ID assertion because existing provider behavior already covers distinct destinations and the policy suite remains behavior-focused.
 - [x] Reject the navigation-rejection claim because `AppNavigation` already absorbs/logs failures; reject stale Project Back fallback because stale means a replacement owns the surface; keep post-unmount root-open guards deferred to KENT-457 because KENT-356 explicitly forbids cancel flags.
 - [x] Verify the complete remediation round and prepare its atomic commit, push, and thread resolutions.
+
+## Post-merge review remediation
+
+- [x] Compose Project Edit Save/Delete through one destination-owned header publisher.
+- [x] Close Workflow Inspector through its scoped navigator after committed Workflow deletion.
+- [x] Centralize conditional scoped Back for typed-missing mounted destinations.
+- [x] Replace the forbidden regex dependency-row lookup with structural Testing Library selection.
+- [x] Identify the prior CI failure as an unrelated `workflowrunner` timing failure from merged `main`; verify Desktop integration and prepare the commit, push, and thread resolutions.

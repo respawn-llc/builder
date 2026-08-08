@@ -169,3 +169,12 @@ export function useOwnedSidebarRoots(): SidebarRootController {
   if (value === null) throw new Error("SidebarRootOwner is required");
   return value;
 }
+
+export function useSidebarBackWhen(
+  condition: boolean,
+  navigator: SidebarPageNavigator | undefined,
+): void {
+  useEffect(() => {
+    if (condition) navigator?.back();
+  }, [condition, navigator]);
+}

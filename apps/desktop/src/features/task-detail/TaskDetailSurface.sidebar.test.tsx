@@ -30,8 +30,8 @@ vi.mock("@/shared/labels", () => ({
   useProjectLabelCatalog: () => ({ data: { labels: [] } }),
 }));
 
-vi.mock("@/app-facade", () => ({
-  useOpenExternalLink: () => vi.fn(),
+vi.mock("@/app-facade", async (importOriginal) => ({
+  ...(await importOriginal()),
   useStatusController: () => ({ push: vi.fn() }),
 }));
 

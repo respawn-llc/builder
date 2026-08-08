@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
@@ -7,6 +7,7 @@ import { errorMessage, isProjectMissingError } from "@/api";
 import { queryKeys } from "@/app-facade";
 import type { SidebarPageNavigator } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
+import { useSidebarBackWhen } from "@/app-facade";
 import { WorkflowActionsContextMenu, useWorkflowPages } from "@/shared/workflow-library";
 import {
   Button,
@@ -103,9 +104,7 @@ function LinkWorkflowPicker({
     },
   });
   const projectMissing = [linksQuery.error, linkMutation.error].some(isProjectMissingError);
-  useEffect(() => {
-    if (projectMissing) navigator?.back();
-  }, [navigator, projectMissing]);
+  useSidebarBackWhen(projectMissing, navigator);
 
   if (workflowsQuery.isPending || linksQuery.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} title={title} />;

@@ -12,7 +12,8 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [], error: null, isError: false, isPending: false }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
-vi.mock("@/app-facade", () => ({
+vi.mock("@/app-facade", async (importOriginal) => ({
+  ...(await importOriginal()),
   queryKeys: { allBoards: [], allProjectWorkflowLinks: [], allWorkflows: [], projectWorkflowLinks: () => [] },
   useAppServices: () => ({ api: {} }),
   useConnectionSnapshot: () => ({ phase: "connected" }),

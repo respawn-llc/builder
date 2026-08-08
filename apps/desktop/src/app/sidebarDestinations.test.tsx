@@ -63,7 +63,7 @@ vi.mock("@/features/workflows", () => ({
 
 vi.mock("@/features/workflow-editor", () => ({
   WorkflowEditorRoute: () => <div />,
-  WorkflowDeleteButton: ({ workflowID }: Readonly<{ workflowID: string }>) => <button data-testid={`workflow-delete-${workflowID}`} />,
+  WorkflowDeleteButton: ({ onDeleted, workflowID }: Readonly<{ onDeleted?: () => void; workflowID: string }>) => <button data-testid={`workflow-delete-${workflowID}`} onClick={onDeleted} />,
   WorkflowInspectorSidebar: ({ onMissingSelectedNode }: Readonly<{ onMissingSelectedNode: () => void }>) => <button data-testid="workflow-inspector-missing" onClick={onMissingSelectedNode} />,
 }));
 
@@ -148,13 +148,17 @@ describe("Sidebar destination completion ownership", () => {
     fireEvent.click(screen.getByTestId("workflow-inspector-missing"));
     expect(navigator.close).toHaveBeenCalledOnce();
   });
-  it("publishes Workflow Inspector delete and ID-copy actions", async () => {
-    mountDestination({ kind: "workflowInspect", selection: { kind: "workflow" }, workflowID: "workflow-1" });
+  it.each<Readonly<{ outcome: "accepted" | "stale" }>>([{ outcome: "accepted" }, { outcome: "stale" }])("scopes Workflow Inspector deletion completion when close is $outcome", ({ outcome }) => {
+    const navigator = createTestSidebarNavigator({ close: vi.fn(() => outcome) });
+    mountDestination({ kind: "workflowInspect", selection: { kind: "workflow" }, workflowID: "workflow-1" }, navigator);
     const deleteAction = headerAction.mock.lastCall?.[0];
     if (!isValidElement(deleteAction)) throw new Error("Expected Workflow delete.");
     render(deleteAction);
-    expect(screen.getByTestId("workflow-delete-workflow-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("workflow-delete-workflow-1"));
+    expect(navigator.close).toHaveBeenCalledOnce();
+  });
 
+  it("publishes Workflow Inspector ID-copy actions", async () => {
     mountDestination({ kind: "workflowInspect", selection: { kind: "node", nodeID: "node-1" }, workflowID: "workflow-1" });
     const copyAction = headerAction.mock.lastCall?.[0];
     if (!isValidElement(copyAction)) throw new Error("Expected Workflow ID copy.");

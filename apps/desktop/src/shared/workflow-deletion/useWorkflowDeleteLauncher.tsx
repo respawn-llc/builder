@@ -24,7 +24,10 @@ import {
 type DeleteOperation = Readonly<{ impact: WorkflowDeleteImpact; ownerWorkflowID: string }>;
 type PreviewAdmission = Readonly<{ ownerWorkflowID: string }>;
 
-export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
+export function useWorkflowDeleteLauncher(
+  workflowID: string,
+  onDeleted?: () => void,
+): Readonly<{
   disabled: boolean;
   dialog: ReactNode;
   openWorkflowDelete: () => Promise<void>;
@@ -110,6 +113,7 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
       setPending((current) => (current === operation ? null : current));
       try {
         await invalidateWorkflowDeleteQueries(queryClient, operation.ownerWorkflowID);
+        onDeleted?.();
         const routeMatches =
           matchRoute({
             to: "/workflows/$workflowId/editor",
@@ -146,7 +150,7 @@ export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
         });
       }
     },
-    [api, matchRoute, navigation, push, queryClient, t],
+    [api, matchRoute, navigation, onDeleted, push, queryClient, t],
   );
 
   const openWorkflowDelete = useCallback(async (): Promise<void> => {

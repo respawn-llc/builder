@@ -194,7 +194,11 @@ describe("TaskDependenciesArea", () => {
     );
 
     expect(screen.getByTestId("dependency-add-blocked-by")).toBeDisabled();
-    expect(screen.getByRole("button", { name: /KENT-2\s*Prepare release/ })).toBeDisabled();
+    const dependencyButton = screen.getAllByRole("button").find(
+      (button) => within(button).queryByTestId("dependency-row-task-2") !== null,
+    );
+    if (dependencyButton === undefined) throw new Error("Expected the dependency row button.");
+    expect(dependencyButton).toBeDisabled();
     expect(screen.getByTestId("dependency-remove-task-2")).toBeEnabled();
 
     await user.click(screen.getByTestId("dependency-remove-task-2"));

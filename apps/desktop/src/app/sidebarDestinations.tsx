@@ -114,8 +114,13 @@ function ProjectEditDestination({ destination, navigator }: Readonly<{
   destination: Extract<SidebarDestination, { kind: "projectEdit" }>;
   navigator: SidebarPageNavigator;
 }>): ReactElement {
-  usePublishSidebarHeaderAction(<ProjectDeleteButton navigator={navigator} projectID={destination.projectID} />);
-  return <ProjectEditRoute navigator={navigator} projectId={destination.projectID} />;
+  return (
+    <ProjectEditRoute
+      headerAccessory={<ProjectDeleteButton navigator={navigator} projectID={destination.projectID} />}
+      navigator={navigator}
+      projectId={destination.projectID}
+    />
+  );
 }
 
 function LinkWorkflowDestinationView({ destination, navigator }: Readonly<{
@@ -172,7 +177,7 @@ function WorkflowInspectorDestination({ destination, navigator }: Readonly<{
 }>): ReactElement {
   usePublishSidebarHeaderAction(
     destination.selection.kind === "workflow"
-      ? <WorkflowDeleteButton workflowID={destination.workflowID} />
+      ? <WorkflowDeleteButton onDeleted={navigator.close} workflowID={destination.workflowID} />
       : destination.selection.kind === "node"
         ? <WorkflowEntityIDHeader entityID={destination.selection.nodeID} entityKind="node" />
         : destination.selection.kind === "edge"
