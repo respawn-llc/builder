@@ -132,10 +132,10 @@ func (f joinedExecutionPromptFeed) PromptResolvedScope(
 	scope ExecutionScope,
 	requestID string,
 ) error {
-	return errors.Join(
-		f.first.PromptResolvedScope(scope, requestID),
-		f.second.PromptResolvedScope(scope, requestID),
-	)
+	if err := f.first.PromptResolvedScope(scope, requestID); err != nil {
+		return err
+	}
+	return f.second.PromptResolvedScope(scope, requestID)
 }
 
 type execution struct {
@@ -741,9 +741,19 @@ func (s *executionPromptStore) submit(
 	if s.authority == nil {
 		return PromptResponseAcceptance{}, errors.New("session runtime authority is required")
 	}
-	s.mu.Lock()
+	s.mu.RLock()
 	entry := s.pending[requestID]
+	s.mu.RUnlock()
 	if entry == nil {
+		return PromptResponseAcceptance{}, fmt.Errorf(
+			"prompt %q not found: %w",
+			requestID,
+			serverapi.ErrPromptNotFound,
+		)
+	}
+	<-entry.publicationDone
+	s.mu.Lock()
+	if s.pending[requestID] != entry {
 		s.mu.Unlock()
 		return PromptResponseAcceptance{}, fmt.Errorf(
 			"prompt %q not found: %w",
@@ -757,17 +767,14 @@ func (s *executionPromptStore) submit(
 			return PromptResponseAcceptance{}, err
 		}
 	}
-	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
-	if err != nil {
-		delete(s.pending, requestID)
+	successorIDs, preparationErr := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
+	publicationErr := s.publishResolved(entry.snapshot)
+	if publicationErr != nil {
 		s.mu.Unlock()
-		<-entry.publicationDone
-		publicationErr := s.publishResolved(entry.snapshot)
-		entry.response <- executionPromptResult{err: err}
-		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
+		return PromptResponseAcceptance{}, errors.Join(preparationErr, publicationErr)
 	}
 	acceptance := PromptResponseAcceptance{}
-	if latchSuccessor {
+	if preparationErr == nil && latchSuccessor {
 		observation := &promptSuccessorObservation{
 			done:         make(chan struct{}),
 			successorIDs: successorIDs,
@@ -777,10 +784,12 @@ func (s *executionPromptStore) submit(
 	}
 	delete(s.pending, requestID)
 	s.mu.Unlock()
-	<-entry.publicationDone
-	publicationErr := s.publishResolved(entry.snapshot)
+	if preparationErr != nil {
+		entry.response <- executionPromptResult{err: preparationErr}
+		return PromptResponseAcceptance{}, preparationErr
+	}
 	entry.response <- executionPromptResult{response: resp, err: submitErr}
-	return acceptance, publicationErr
+	return acceptance, nil
 }
 
 func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) ([]string, error) {

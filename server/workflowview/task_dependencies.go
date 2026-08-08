@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -112,16 +113,13 @@ func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID stri
 	}
 	var subject sqlitegen.TaskRecord
 	var facts taskDependencyFacts
-	err := d.projection.WithSnapshot(ctx, nil, func(
-		observation TaskStatusObservation,
+	err := d.captureFacts(ctx, trimmedTaskID, false, func(
+		captured taskDependencyFacts,
 		durable *TaskStatusDurableSnapshot,
 	) error {
 		var err error
 		subject, err = durable.Task(ctx, trimmedTaskID)
-		if err != nil {
-			return err
-		}
-		facts, err = d.loadFactsWithSnapshot(ctx, trimmedTaskID, false, observation, durable)
+		facts = captured
 		return err
 	})
 	if err != nil {
@@ -168,12 +166,59 @@ func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blocked
 		return taskDependencyFacts{}, errors.New("task status projection is required")
 	}
 	var facts taskDependencyFacts
-	err := d.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+	err := d.projection.WithSnapshot(ctx, nil, func(
+		observation TaskStatusObservation,
+		durable *TaskStatusDurableSnapshot,
+	) error {
 		var err error
 		facts, err = d.loadFactsWithSnapshot(ctx, taskID, blockedOnly, observation, durable)
 		return err
 	})
 	return facts, err
+}
+
+func (d *TaskDependencies) captureFacts(
+	ctx context.Context,
+	taskID string,
+	blockedOnly bool,
+	operation func(taskDependencyFacts, *TaskStatusDurableSnapshot) error,
+) error {
+	if d.projection == nil {
+		return errors.New("task status projection is required")
+	}
+	return d.projection.WithBoundedLifecycle(ctx, func(
+		_ string,
+		durable *TaskStatusDurableSnapshot,
+		reader workflowexecution.WorkflowTaskLifecycleReader,
+	) error {
+		rows, err := d.relationshipRowsWithQueries(ctx, durable.queries, taskID, blockedOnly)
+		if err != nil {
+			return err
+		}
+		taskIDs, err := dependencyRelatedTaskIDs(taskID, rows)
+		if err != nil {
+			return err
+		}
+		live, err := reader.ObserveSelected(ctx, taskIDs)
+		if err != nil {
+			return err
+		}
+		liveTaskStatesJSON, err := taskStatusLiveStatesJSON(live)
+		if err != nil {
+			return err
+		}
+		facts, err := d.loadFactRowsWithSnapshot(
+			ctx,
+			taskID,
+			rows,
+			TaskStatusObservation{Live: live, LiveTaskStatesJSON: liveTaskStatesJSON},
+			durable,
+		)
+		if err != nil {
+			return err
+		}
+		return operation(facts, durable)
+	})
 }
 
 func (d *TaskDependencies) projectTaskDependenciesWithSnapshot(
@@ -203,6 +248,16 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 	if err != nil {
 		return taskDependencyFacts{}, err
 	}
+	return d.loadFactRowsWithSnapshot(ctx, taskID, rows, observation, durable)
+}
+
+func (d *TaskDependencies) loadFactRowsWithSnapshot(
+	ctx context.Context,
+	taskID string,
+	rows []sqlitegen.ListTaskDependencyProjectionRowsRow,
+	observation TaskStatusObservation,
+	durable *TaskStatusDurableSnapshot,
+) (taskDependencyFacts, error) {
 	facts := taskDependencyFacts{
 		rows: map[serverapi.WorkflowTaskDependencyDirection][]taskDependencyFactRow{
 			serverapi.WorkflowTaskDependencyDirectionBlockedBy: {},
@@ -212,7 +267,10 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 	if len(rows) == 0 {
 		return facts, nil
 	}
-	taskIDs := make([]string, 0, len(rows))
+	taskIDs, err := dependencyRelatedTaskIDs(taskID, rows)
+	if err != nil {
+		return taskDependencyFacts{}, err
+	}
 	seen := make(map[taskDependencyRowKey]struct{}, len(rows))
 	workflowIDs := make(map[taskDependencyRowKey]runtimeids.WorkflowID, len(rows))
 	for _, row := range rows {
@@ -221,9 +279,6 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 		case serverapi.WorkflowTaskDependencyDirectionBlockedBy, serverapi.WorkflowTaskDependencyDirectionBlocks:
 		default:
 			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned invalid direction %q", taskID, row.Direction)
-		}
-		if strings.TrimSpace(row.TaskID) == "" || strings.TrimSpace(row.ShortID) == "" {
-			return taskDependencyFacts{}, fmt.Errorf("task %q dependency projection returned incomplete related Task %q", taskID, row.TaskID)
 		}
 		workflowID := runtimeids.WorkflowID{}
 		if err := workflowID.Scan(row.WorkflowID); err != nil {
@@ -235,7 +290,6 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 		}
 		seen[key] = struct{}{}
 		workflowIDs[key] = workflowID
-		taskIDs = append(taskIDs, row.TaskID)
 	}
 	statuses, err := d.projectDependencyStatuses(ctx, taskIDs, observation, durable)
 	if err != nil {
@@ -272,19 +326,41 @@ func (d *TaskDependencies) loadFactsWithSnapshot(
 
 func (d *TaskDependencies) projectDependencyStatuses(
 	ctx context.Context,
-	taskIDs []string,
+	ids []workflow.TaskID,
 	observation TaskStatusObservation,
 	durable *TaskStatusDurableSnapshot,
 ) (map[workflow.TaskID]workflowTaskStatusFact, error) {
-	ids := make([]workflow.TaskID, 0, len(taskIDs))
-	for _, taskID := range taskIDs {
-		ids = append(ids, workflow.TaskID(taskID))
-	}
 	projected, err := durable.ProjectedStatuses(ctx, ids, observation.LiveTaskStatesJSON)
 	if err != nil {
 		return nil, err
 	}
 	return projected, nil
+}
+
+func dependencyRelatedTaskIDs(
+	taskID string,
+	rows []sqlitegen.ListTaskDependencyProjectionRowsRow,
+) ([]workflow.TaskID, error) {
+	taskIDs := make([]workflow.TaskID, 0, len(rows))
+	seen := make(map[workflow.TaskID]struct{}, len(rows))
+	for _, row := range rows {
+		relatedTaskID := workflow.TaskID(strings.TrimSpace(row.TaskID))
+		if relatedTaskID == "" ||
+			string(relatedTaskID) != row.TaskID ||
+			strings.TrimSpace(row.ShortID) == "" {
+			return nil, fmt.Errorf(
+				"task %q dependency projection returned incomplete related Task %q",
+				taskID,
+				row.TaskID,
+			)
+		}
+		if _, exists := seen[relatedTaskID]; exists {
+			continue
+		}
+		seen[relatedTaskID] = struct{}{}
+		taskIDs = append(taskIDs, relatedTaskID)
+	}
+	return taskIDs, nil
 }
 
 func (d *TaskDependencies) relationshipRowsWithQueries(

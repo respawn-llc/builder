@@ -353,7 +353,7 @@ func cloneCurrentNodeScheduling(scheduling *CurrentNodeScheduling) *CurrentNodeS
 	cloned := *scheduling
 	if scheduling.Interruption != nil {
 		interruption := *scheduling.Interruption
-		interruption.Detail.Fields = cloneStringMap(interruption.Detail.Fields)
+		interruption.Detail.Fields = CloneStringMap(interruption.Detail.Fields)
 		if unavailable := interruption.Detail.ConfiguredExecutionTargetUnavailable; unavailable != nil {
 			clonedUnavailable := *unavailable
 			if unavailable.RequestedRef != nil {
@@ -367,7 +367,8 @@ func cloneCurrentNodeScheduling(scheduling *CurrentNodeScheduling) *CurrentNodeS
 	return &cloned
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
+// CloneStringMap preserves nil while detaching mutable Workflow string values.
+func CloneStringMap(values map[string]string) map[string]string {
 	if values == nil {
 		return nil
 	}

@@ -574,7 +574,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 					return errors.New("current node completion is already pending finalization")
 				}
 				copiedRequest := completionRequest
-				copiedRequest.OutputValues = cloneStringMap(completionRequest.OutputValues)
+				copiedRequest.OutputValues = workflow.CloneStringMap(completionRequest.OutputValues)
 				exact.pendingCompletionRequest = &copiedRequest
 				completed = preview
 				c.mu.Unlock()
@@ -1241,17 +1241,6 @@ func (c *CurrentNodeController) finishCurrentNodeFinalizationPublication(run *cu
 	}
 	run.finalizationPublishing = false
 	close(run.finalizationPublicationDone)
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	if source == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func (c *CurrentNodeController) publishCurrentNodeFinalizationFailure(

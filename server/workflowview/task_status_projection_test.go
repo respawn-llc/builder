@@ -417,11 +417,13 @@ func realTaskStatusApprovalRequest() tools.AskQuestionRequest {
 }
 
 type staticTaskStatusLiveObservationSource struct {
-	store         *workflowstore.Store
-	observation   workflowexecution.WorkflowTaskExecutionObservation
-	calls         *int
-	snapshotCalls *int
-	queryCalls    *int
+	store                  *workflowstore.Store
+	observation            workflowexecution.WorkflowTaskExecutionObservation
+	calls                  *int
+	snapshotCalls          *int
+	queryCalls             *int
+	capturedTaskIDs        *[][]workflow.TaskID
+	boundedSelectedTaskIDs *[][]workflow.TaskID
 }
 
 type countingTaskStatusLiveObservationSource struct {
@@ -464,7 +466,7 @@ func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskBoundedLifec
 
 func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
-	_ []workflow.TaskID,
+	taskIDs []workflow.TaskID,
 	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
 ) error {
 	if s.calls != nil {
@@ -472,6 +474,9 @@ func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	}
 	if s.snapshotCalls != nil {
 		*s.snapshotCalls++
+	}
+	if s.capturedTaskIDs != nil {
+		*s.capturedTaskIDs = append(*s.capturedTaskIDs, append([]workflow.TaskID(nil), taskIDs...))
 	}
 	return captureWorkflowViewTestObservation(ctx, s.store, s.observation, operation)
 }
@@ -507,18 +512,32 @@ func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskBoundedLifecyc
 	if s.queryCalls != nil {
 		*s.queryCalls++
 	}
-	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, s.observation, nil, operation)
+	return captureWorkflowViewTestBoundedLifecycle(
+		ctx,
+		s.store,
+		s.observation,
+		nil,
+		s.boundedSelectedTaskIDs,
+		operation,
+	)
 }
 
 type workflowViewTestLifecycleReader struct {
-	observation workflowexecution.WorkflowTaskExecutionObservation
-	questions   []workflowstore.LifecyclePendingQuestion
+	observation     workflowexecution.WorkflowTaskExecutionObservation
+	questions       []workflowstore.LifecyclePendingQuestion
+	selectedTaskIDs *[][]workflow.TaskID
 }
 
 func (r workflowViewTestLifecycleReader) ObserveSelected(
 	_ context.Context,
 	taskIDs []workflow.TaskID,
 ) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	if r.selectedTaskIDs != nil {
+		*r.selectedTaskIDs = append(
+			*r.selectedTaskIDs,
+			append([]workflow.TaskID(nil), taskIDs...),
+		)
+	}
 	selected := workflowexecution.WorkflowTaskExecutionObservation{
 		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
 		Quiescence: map[workflow.TaskID]bool{},
@@ -601,6 +620,7 @@ func captureWorkflowViewTestBoundedLifecycle(
 	store *workflowstore.Store,
 	observation workflowexecution.WorkflowTaskExecutionObservation,
 	questions []workflowstore.LifecyclePendingQuestion,
+	selectedTaskIDs *[][]workflow.TaskID,
 	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
 ) error {
 	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
@@ -616,8 +636,9 @@ func captureWorkflowViewTestBoundedLifecycle(
 		observation,
 		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
 			return operation(token, queries, workflowViewTestLifecycleReader{
-				observation: observation,
-				questions:   questions,
+				observation:     observation,
+				questions:       questions,
+				selectedTaskIDs: selectedTaskIDs,
 			})
 		},
 	)

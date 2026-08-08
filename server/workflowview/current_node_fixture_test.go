@@ -224,6 +224,7 @@ func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskBoundedLifecy
 		s.store,
 		observation,
 		currentNodeViewPendingQuestionsForTest(observation, s.prompts),
+		nil,
 		operation,
 	)
 }

@@ -192,6 +192,69 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	}
 }
 
+func TestListTaskDependenciesObservesOnlyRelatedTasks(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	subject := createViewTask(t, fixture, "Dependency subject")
+	related := createViewTask(t, fixture, "Dependency related")
+	unrelated := createViewTask(t, fixture, "Dependency unrelated")
+	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+		BlockerTaskID: related.ID,
+		BlockedTaskID: subject.ID,
+	}); err != nil {
+		t.Fatalf("AddTaskDependency: %v", err)
+	}
+	unrelatedReference, err := workflow.NewCurrentNodeReference(
+		unrelated.ID,
+		fixture.agentNodeID,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	var capturedTaskIDs [][]workflow.TaskID
+	var boundedSelectedTaskIDs [][]workflow.TaskID
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			store: fixture.store,
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
+					unrelated.ID: {
+						CurrentNodes:       []workflow.CurrentNode{{Reference: unrelatedReference}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{unrelatedReference},
+					},
+				},
+			},
+			capturedTaskIDs:        &capturedTaskIDs,
+			boundedSelectedTaskIDs: &boundedSelectedTaskIDs,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+
+	if _, err := dependencies.ListTaskDependencies(fixture.ctx, string(subject.ID), nil); err != nil {
+		t.Fatalf("ListTaskDependencies: %v", err)
+	}
+	if len(capturedTaskIDs) != 0 {
+		t.Fatalf("dependency list used unbounded lifecycle captures: %+v", capturedTaskIDs)
+	}
+	if len(boundedSelectedTaskIDs) != 1 ||
+		!slices.Equal(boundedSelectedTaskIDs[0], []workflow.TaskID{related.ID}) {
+		t.Fatalf(
+			"bounded dependency lifecycle selections = %+v, want only %q",
+			boundedSelectedTaskIDs,
+			related.ID,
+		)
+	}
+}
+
 func TestTaskDependenciesProjectsPinnedQueuedBlockerAsUnsatisfied(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	blocker := fixture.startTask(t, "Pinned dependency blocker")

@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +172,85 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 	}
 	if store.hasPendingID("ask-failed") {
 		t.Fatal("failed prompt remained pending in execution store")
+	}
+}
+
+type retryResolutionPromptFeed struct {
+	mu               sync.Mutex
+	resolutionErrors []error
+	resolutionCalls  int
+}
+
+func (f *retryResolutionPromptFeed) PromptPendingScope(
+	ExecutionScope,
+	tools.AskQuestionRequest,
+	time.Time,
+) error {
+	return nil
+}
+
+func (f *retryResolutionPromptFeed) PromptResolvedScope(ExecutionScope, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	call := f.resolutionCalls
+	f.resolutionCalls++
+	if call < len(f.resolutionErrors) {
+		return f.resolutionErrors[call]
+	}
+	return nil
+}
+
+func (f *retryResolutionPromptFeed) ResolutionCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolutionCalls
+}
+
+func TestExecutionPromptStoreRetainsAnswerWhenFirstResolutionFeedFails(t *testing.T) {
+	lifecycleErr := errors.New("lifecycle prompt resolution failed")
+	lifecycle := &retryResolutionPromptFeed{resolutionErrors: []error{lifecycleErr}}
+	registry := &retryResolutionPromptFeed{}
+	store := newExecutionPromptStoreForTest(t, joinExecutionPromptFeeds(lifecycle, registry))
+	request := tools.AskQuestionRequest{ID: "ask-retry-resolution", Question: "Proceed?"}
+	awaitDone := make(chan executionPromptResult, 1)
+	go func() {
+		response, err := store.Await(context.Background(), request)
+		awaitDone <- executionPromptResult{response: response, err: err}
+	}()
+	requirePromptPending(t, &store, request.ID)
+	response := tools.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}
+
+	if err := store.Submit(response, nil); !errors.Is(err, lifecycleErr) {
+		t.Fatalf("first Submit error = %v, want lifecycle failure", err)
+	}
+	if !store.hasPendingID(request.ID) {
+		t.Fatal("failed lifecycle resolution removed the pending prompt")
+	}
+	if calls := registry.ResolutionCalls(); calls != 0 {
+		t.Fatalf("registry resolution calls = %d, want 0 after lifecycle failure", calls)
+	}
+	select {
+	case result := <-awaitDone:
+		t.Fatalf("failed lifecycle resolution delivered the Agent answer: %+v", result)
+	default:
+	}
+
+	if err := store.Submit(response, nil); err != nil {
+		t.Fatalf("retry Submit: %v", err)
+	}
+	if store.hasPendingID(request.ID) {
+		t.Fatal("successful retry retained the pending prompt")
+	}
+	if calls := registry.ResolutionCalls(); calls != 1 {
+		t.Fatalf("registry resolution calls = %d, want 1 after successful retry", calls)
+	}
+	select {
+	case result := <-awaitDone:
+		if result.err != nil || result.response != response {
+			t.Fatalf("retried prompt result = %+v, want %+v", result, response)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("successful resolution retry did not deliver the Agent answer")
 	}
 }
 

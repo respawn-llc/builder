@@ -2841,6 +2841,65 @@ func (s workflowViewStatusObservationSource) CaptureWorkflowTaskLifecycleQuery(
 	return publication.CaptureQuery(ctx, operation)
 }
 
+func (s workflowViewStatusObservationSource) CaptureWorkflowTaskBoundedLifecycleRead(
+	ctx context.Context,
+	operation func(
+		string,
+		*sqlitegen.Queries,
+		workflowexecution.WorkflowTaskLifecycleReader,
+	) error,
+) (err error) {
+	publication, err := workflowstore.NewLifecyclePublication(s.store)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := publication.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return publication.CaptureBoundedRead(
+		ctx,
+		func(
+			token string,
+			capture workflowstore.LifecycleBoundedReadCapture,
+			queries *sqlitegen.Queries,
+		) error {
+			return operation(token, queries, workflowServiceLifecycleReader{
+				source:  s,
+				capture: capture,
+			})
+		},
+	)
+}
+
+type workflowServiceLifecycleReader struct {
+	source  workflowViewStatusObservationSource
+	capture workflowstore.LifecycleBoundedReadCapture
+}
+
+func (r workflowServiceLifecycleReader) ObserveSelected(
+	_ context.Context,
+	taskIDs []workflow.TaskID,
+) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	return r.source.ObserveWorkflowTaskExecutions(taskIDs)
+}
+
+func (r workflowServiceLifecycleReader) PendingQuestions(
+	ctx context.Context,
+	cursor workflowstore.LifecycleQuestionCursor,
+	limit int,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	return r.capture.PendingQuestions(ctx, cursor, limit)
+}
+
+func (r workflowServiceLifecycleReader) PendingQuestionsForTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	return r.capture.PendingQuestionsForTask(ctx, taskID)
+}
+
 func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
 	result := make(map[workflow.TaskID]bool, len(taskIDs))
 	for _, taskID := range taskIDs {
