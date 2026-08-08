@@ -120,6 +120,47 @@ func TestTaskLifecycleCoordinatorCancelsWaitingWriter(t *testing.T) {
 	}
 }
 
+func TestTaskLifecycleCoordinatorBroadcastsReleaseToEveryObserver(t *testing.T) {
+	coordinator := NewTaskLifecycleCoordinator()
+	first := coordinator.releasedSignal()
+	second := coordinator.releasedSignal()
+
+	if err := coordinator.Run(
+		context.Background(),
+		workflow.TaskID("task-release-broadcast"),
+		func(context.Context) error { return nil },
+	); err != nil {
+		t.Fatalf("run Task lifecycle writer: %v", err)
+	}
+
+	for index, signal := range []<-chan struct{}{first, second} {
+		select {
+		case <-signal:
+		case <-time.After(time.Second):
+			t.Fatalf("release observer %d did not receive the Task lifecycle release", index+1)
+		}
+	}
+
+	next := coordinator.releasedSignal()
+	select {
+	case <-next:
+		t.Fatal("next release generation was already closed")
+	default:
+	}
+	if err := coordinator.Run(
+		context.Background(),
+		workflow.TaskID("task-next-release-broadcast"),
+		func(context.Context) error { return nil },
+	); err != nil {
+		t.Fatalf("run next Task lifecycle writer: %v", err)
+	}
+	select {
+	case <-next:
+	case <-time.After(time.Second):
+		t.Fatal("next release observer did not receive the next Task lifecycle release")
+	}
+}
+
 func TestTaskLifecycleCoordinatorReusesSameTaskWriterFromContext(t *testing.T) {
 	coordinator := NewTaskLifecycleCoordinator()
 	taskID := workflow.TaskID("task-reentrant-writer")

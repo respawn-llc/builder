@@ -1188,12 +1188,7 @@ func (c *CurrentNodeController) wakeAdmissionWorker() {
 func (c *CurrentNodeController) runAdmissions() {
 	defer c.workerWG.Done()
 	for {
-		select {
-		case <-c.workerContext.Done():
-			return
-		case <-c.workerWake:
-		case <-c.lifecycle.releasedSignal():
-		}
+		released := c.lifecycle.releasedSignal()
 		for {
 			key, ok := c.takeExplicitStart()
 			if !ok {
@@ -1203,6 +1198,12 @@ func (c *CurrentNodeController) runAdmissions() {
 				}
 			}
 			go c.runAdmission(key)
+		}
+		select {
+		case <-c.workerContext.Done():
+			return
+		case <-c.workerWake:
+		case <-released:
 		}
 	}
 }

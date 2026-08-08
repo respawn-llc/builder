@@ -340,6 +340,7 @@ func (c *CurrentNodeController) waitStoppedTaskExecutionRetirement(
 	taskID workflow.TaskID,
 ) error {
 	for {
+		released := c.lifecycle.releasedSignal()
 		c.mu.Lock()
 		scopeIDs := make([]runtimeids.ExecutionScopeID, 0)
 		for _, run := range c.runs.byCurrentNode {
@@ -372,7 +373,7 @@ func (c *CurrentNodeController) waitStoppedTaskExecutionRetirement(
 			continue
 		}
 		select {
-		case <-c.lifecycle.releasedSignal():
+		case <-released:
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}

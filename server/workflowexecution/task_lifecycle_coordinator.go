@@ -43,7 +43,7 @@ type TaskLifecycleCoordinator struct {
 func NewTaskLifecycleCoordinator() *TaskLifecycleCoordinator {
 	return &TaskLifecycleCoordinator{
 		writers:  make(map[workflow.TaskID]*taskLifecycleWriter),
-		released: make(chan struct{}, 1),
+		released: make(chan struct{}),
 	}
 }
 
@@ -160,6 +160,8 @@ func (c *TaskLifecycleCoordinator) releasedSignal() <-chan struct{} {
 	if c == nil {
 		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.released
 }
 
@@ -197,10 +199,11 @@ func (c *TaskLifecycleCoordinator) referenceWriter(taskID workflow.TaskID) *task
 }
 
 func (c *TaskLifecycleCoordinator) notifyReleased() {
-	select {
-	case c.released <- struct{}{}:
-	default:
-	}
+	c.mu.Lock()
+	released := c.released
+	c.released = make(chan struct{})
+	close(released)
+	c.mu.Unlock()
 }
 
 func runTaskLifecycle[T any](
