@@ -708,6 +708,48 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 }
 
+func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	currentWorkspace := filepath.Join(currentRoot, "nested")
+	for _, dir := range []string{currentWorkspace, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, currentWorkspace, WithManagedWorktreePathContext(context))
+	currentTarget := filepath.Join(currentRoot, "current.txt")
+	foreignTarget := filepath.Join(foreignRoot, "foreign.txt")
+	state := &applyState{
+		tool: tool,
+		state: map[string]*patchFileState{
+			currentTarget: {NewPath: currentTarget, Content: []string{"current"}, Mode: 0o644},
+			foreignTarget: {NewPath: foreignTarget, Content: []string{"foreign"}, Mode: 0o644},
+		},
+	}
+
+	if _, err := state.prepareCommitStates(); err == nil || !strings.Contains(err.Error(), tools.ForeignManagedWorktreeEditDeniedMessage) {
+		t.Fatalf("expected managed-worktree staging error, got %v", err)
+	}
+	for _, root := range []string{currentRoot, foreignRoot} {
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", root, readErr)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".kent-patch-") {
+				t.Fatalf("staging left temporary file %s in %s", entry.Name(), root)
+			}
+		}
+	}
+}
+
 func TestOutsideWorkspaceEditAllowedWhenConfigured(t *testing.T) {
 	workspace := t.TempDir()
 	outsideRoot := outsideNonTempDir(t)

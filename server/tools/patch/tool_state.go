@@ -242,12 +242,17 @@ func (s *applyState) updateFile(op patchformat.UpdateFile) error {
 func (s *applyState) prepareCommitStates() ([]*patchFileState, error) {
 	states := sortedCommitStates(s.state)
 	for _, fileState := range states {
+		if err := revalidateCommitPath(s.tool, fileState.NewPath); err != nil {
+			cleanupStagedFiles(states)
+			return nil, err
+		}
 		text := strings.Join(fileState.Content, "\n")
 		if len(fileState.Content) > 0 && !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
 		staged, err := createStagedFile(fileState.NewPath, []byte(text), fileState.Mode)
 		if err != nil {
+			cleanupStagedFiles(states)
 			return nil, internalFailure(fileState.NewPath, fmt.Sprintf("stage write failed: %v", err))
 		}
 		fileState.StagedPath = staged
