@@ -562,8 +562,6 @@
 - Task search reuses the authoritative Task status defined above.
 - [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
 - Search returns Task status from the server-owned Task-status projection.
-- Each response selects one complete Lifecycle Publication view before Search applies lifecycle-sensitive filtering, status projection, sorting, or pagination.
-- A Workflow lifecycle publication that overlaps the request places the whole response on either the prior lifecycle view or the next lifecycle view. Search never combines durable lifecycle facts from one publication with runtime lifecycle facts from another.
 
 ## Execution Targets And Worktrees
 
