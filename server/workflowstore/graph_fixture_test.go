@@ -37,15 +37,11 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 			workflow.AgentNode{
 				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupID},
 				SubagentRole:   "coder",
-				PromptTemplate: "Legacy node prompt.",
 				CompletionMode: "tool",
-				InputFields:    []workflow.InputField{{Name: "input", Description: "Input."}},
-				OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Summary."}},
 			},
 			workflow.ScriptNode{
 				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: scriptID, Key: "script", DisplayName: "Script", GroupID: groupID},
 				ScriptPath:   workflow.MustPresentScriptPath("scripts/run"),
-				OutputFields: []workflow.OutputField{{Name: "result", Description: "Result."}},
 			},
 			workflow.JoinNode{
 				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupID},
@@ -90,12 +86,8 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		t.Fatalf("node groups = %+v, want canonical order with normalized sort values", req.NodeGroups)
 	}
 	agent := workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
-	if agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.PromptTemplate != "Legacy node prompt." || agent.CompletionMode != "tool" {
+	if agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.CompletionMode != "tool" {
 		t.Fatalf("agent record = %+v, want identity and execution fields preserved", agent)
-	}
-	if !reflect.DeepEqual(agent.InputFields, []workflow.InputField{{Name: "input", Description: "Input."}}) ||
-		!reflect.DeepEqual(agent.OutputFields, []workflow.OutputField{{Name: "summary", Description: "Summary."}}) {
-		t.Fatalf("agent contracts = inputs %+v outputs %+v", agent.InputFields, agent.OutputFields)
 	}
 	script := workflowGraphSaveNodeRecord(t, req.Nodes, scriptID)
 	if script.ScriptPath != "scripts/run" || script.GroupKey != "parallel" {
@@ -118,12 +110,14 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		TransitionGroupID:  "transition-review",
 		Key:                "review",
 		TargetNodeID:       scriptID,
+		AssigneeSelection:  workflow.AssigneeSelectionConfigured,
+		ThinkingSelection:  workflow.ThinkingSelectionConfigured,
 		RequiresApproval:   true,
 		ContextMode:        workflow.ContextModeContinueSession,
 		ContextSource:      workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "agent"},
 		InputBindings:      []workflow.InputBinding{{Name: "summary", Source: workflow.BindingSourceTransitionOutput, Field: "summary"}},
 		PromptTemplate:     "Review {{.Params.summary}}.",
-		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary."}},
+		Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary.", Purpose: workflow.ParameterPurposeOrdinary}},
 		OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 	}) {
 		t.Fatalf("edges = %+v, want invocation contract preserved", req.Edges)
@@ -185,6 +179,12 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 	def, record, err := store.GetDefinition(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetDefinition after fixture save: %v", err)
+	}
+	for _, edge := range def.Edges {
+		if edge.AssigneeSelection != workflow.AssigneeSelectionConfigured ||
+			edge.ThinkingSelection != workflow.ThinkingSelectionConfigured {
+			t.Fatalf("reloaded edge selectors = %+v, want configured defaults", edge)
+		}
 	}
 	noop := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
 	preview, err := store.PreviewWorkflowGraphSave(context.Background(), noop)

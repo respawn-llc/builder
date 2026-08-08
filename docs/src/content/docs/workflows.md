@@ -40,9 +40,9 @@ From a project, create or link a workflow, open the workflow editor, then edit t
 
 ## 2. Set Up Agent Roles
 
-Workflow agent nodes run existing Kent subagent roles. Create roles for the specialists you want in your process, then choose those roles in the node's Assignee field.
-Roles hidden from workflow-agent delegation remain valid node assignees.
-Every agent-node role, including default and built-in roles, must effectively enable `ask_question`; see [Tools](../config/#tools) for tool configuration.
+Workflow Agent Nodes run existing Kent subagent roles. Each Agent Node requires a concrete configured fallback Assignee, and that fallback role must effectively enable `ask_question`; see [Tools](../config/#tools) for tool configuration.
+Roles hidden from workflow-agent delegation remain valid Node Assignees.
+Eligible serial transitions into Agent Nodes can select an Assignee from roles explicitly configured with `agent_callable = true`; Kent force-enables `ask_question` for that transition-selected execution, and `workflow_subagent` does not restrict the selection.
 
 ```toml
 [subagents.implementer]
@@ -210,6 +210,14 @@ Declare parameters on the transition whose source agent can produce them. In fan
 
 For each transition, the source agent must provide the declared parameters before it can complete that branch. The target agent receives those values where the transition prompt references them with placeholders such as `{{.Params.findings}}`.
 
+### Transition Assignee And Thinking Selection
+
+Each eligible serial Agent or Script transition into an Agent Node can independently enable **Let the previous node choose** for the target Assignee and **Let the previous node select thinking level** for thinking. A disabled selector uses the target Agent Node's configured fallback Assignee or configured thinking; Fan-Out transitions do not support either selector.
+
+Transition-selected Assignees must be explicitly agent-callable roles. With no eligible role, Assignee selection is unavailable; with one eligible role, Kent applies it automatically and hides the Assignee Parameter; with several eligible roles, the source must provide the selected role as an ordinary required value. Thinking selection similarly hides its value when the applicable model catalog has zero or one supported level; with several finite levels it requires a value, while an open catalog accepts a nonblank custom value after a custom description is authored.
+
+Enabled selectors own Protected Parameters in the transition's ordinary ordered Parameters list. Assignee uses the default key `agent_role`, and thinking uses `thinking_level`; operators may edit each key, description, and order, but cannot delete an enabled Protected Parameter. Disabling a selector or making it inapplicable hides its Protected Parameter while retaining its saved settings, and separate incoming transitions keep independent selector state.
+
 ### Context Modes
 
 Context mode controls how the target agent starts its session.
@@ -219,7 +227,7 @@ It applies to transitions into agent nodes; transitions into joins or terminal n
 | --- | --- | --- |
 | New session | Independent work, QA, code review, security review, release note drafting. | Lowest starting context and cleanest role boundary. The prompt and parameters must contain the context the target needs. |
 | Compact and continue session | A large phase handing off to another role or another direction. | Adds a handoff step and starts a new session from a summary. Good when full conversation history is unnecessary but a clean summary matters. |
-| Continue session | Tight loops and direct follow-up work by the same role. | Preserves conversation history and prompt-cache continuity. The target keeps the same subagent role and works through automatic compactions. |
+| Continue session | Tight loops and direct follow-up work with retained context. | Preserves conversation history and prompt-cache continuity. Retained target Sessions preserve their Assignee; a target-owned previous-session-or-new transition can select an Assignee when it creates a new Session. |
 
 Continuation modes also have a context source:
 
@@ -228,7 +236,7 @@ Continuation modes also have a context source:
 - Previous target uses the latest retained Session associated with this edge's target node. Use it for loops where the workflow returns to a node and should continue that node's prior Session.
 - Previous target, or new session uses the latest retained Session associated with this edge's target node when one exists. Use it for re-review loops where the first pass starts fresh and later passes continue the target's prior Session.
 
-Use `new_session` or `compact_and_continue_session` when you want to change subagent roles. Use `continue_session` when preserving the exact working context matters more than changing roles.
+Use `new_session` or `compact_and_continue_session` when a transition should establish its selected Assignee and thinking at a fresh Session boundary. Continue Session exposes Assignee selection only when **Previous session from this target, or new session** resolves to a new Session; retained target Sessions preserve their materialized Assignee, while eligible transitions may change thinking without rotating cache lineage.
 
 ### Human Approval
 
@@ -254,11 +262,11 @@ Only agent nodes have completion modes; Start, Join, and Terminal nodes do not e
 
 Workflow design affects prompt-cache continuity and token spend:
 
-- `continue_session` gives the strongest cache continuity because it keeps the same session, role, tools, conversation history, and provider cache.
-- `new_session` starts clean and does not invalidate another session's cache. It gives the target agent the most free context, but the prompt and parameters must carry enough information because the agent may spend tokens re-orienting in the workspace.
-- `compact_and_continue_session` asks the previous agent for a handoff, then starts a new session from that summary. It frees context, but adds handoff cost and leaves the previous session cache behind.
+- `continue_session` gives the strongest cache continuity because it keeps the retained Session, conversation history, and provider cache; retained target Sessions preserve their Assignee, and a thinking change does not rotate the cache lineage.
+- `new_session` starts clean, establishes the transition's selected or fallback Assignee and thinking, and does not invalidate another Session's cache. The prompt and Parameters must carry enough context because the target agent may spend tokens re-orienting in the workspace.
+- `compact_and_continue_session` asks the previous agent for a handoff, then starts a fresh Session from that summary with the transition's selected or fallback Assignee and thinking. It frees context, adds handoff cost, and leaves the previous Session cache behind.
 
-The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node. A workflow can remain linked to a project while execution validation fails: drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every agent role enables `ask_question`.
+The editor shows draft validation and execution validation. Draft validation catches graph-shape problems such as duplicate keys, invalid prompt placeholders, bad parameter contracts, and incomplete node groups. Execution validation catches automation blockers such as missing prompts, missing roles, invalid start shape, unreachable nodes, and non-terminal nodes that cannot reach a terminal node. A workflow can remain linked to a project while execution validation fails: drafts, Backlog tasks, and comments remain available, but task start and manual movement from Backlog into executable work are blocked until every Agent Node fallback role enables `ask_question`.
 
 ## 6. Manage Tasks
 
@@ -274,7 +282,7 @@ A workflow Session may start, interrupt, resume, approve, or manually move anoth
 
 ### Current Work, Sessions, And Activity
 
-Task detail shows the task's Current Nodes and retained Session count. A retained Session can outlive the Current Node that used it, so it remains available through the Session picker after the workflow moves on.
+Task detail shows the task's Current Nodes, each Agent Current Node's effective Assignee and thinking when present, and retained Session count. `kent task show` reports the same effective fields; non-Agent Current Nodes omit them. A retained Session can outlive the Current Node that used it, so it remains available through the Session picker after the workflow moves on.
 
 Interrupt stops exact live work. Interrupting a Task stops every live Agent Session and Script for that Task; interrupting a Session selects one live Agent Session. Kent waits for the selected work to stop before returning. Resume waits for the prior scope to retire, resolves the latest workflow definition, then resumes the retained Session or current Script.
 
@@ -294,6 +302,8 @@ On the board, a named Label row cycles neutral → included → excluded. An inc
 
 In Desktop, the route-scoped `Unblocked` chip shows Tasks with zero unsatisfied direct dependencies across the board. It combines with the active Labels filter, and its selection resets when you leave or change the board.
 
+Desktop boards sort each column by Updated, Created, Labels, or Short ID. The default is Updated descending; sorting is applied per column after active Labels and Unblocked filters, and Labels follow the Project catalog order.
+
 The CLI manages the same Project catalog with `kent task label create`, `list`, `move`, `rename`, and `delete`. `move` accepts exactly one placement: first, last, before another label, or after another label. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. `kent task list` accepts repeatable `--label` included conditions and `--not-label` excluded conditions. Label selectors are literal: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `--unlabeled` cannot be combined with either selector flag or an explicit match mode.
 
 ### CLI Workflow And Task Scope
@@ -305,6 +315,19 @@ kent workflow list --project .
 workflow_uuid="<uuid-from-workflow-list>"
 kent workflow inspect "$workflow_uuid" --summary
 ```
+
+#### Transition selector controls
+
+Edge creation and updates expose independent target Assignee and thinking selectors. Enabling a selector initializes its Protected Parameter when needed; `--target-assignee-param` and `--target-thinking-param` customize the protected key and description, including an empty description.
+
+```bash
+kent workflow edge add "$workflow_uuid" --from review --transition implement --edge-key implement --to implement --context new_session \
+  --assignee-selection previous_node --target-assignee-param 'agent_role=Role for the next node' \
+  --thinking-selection previous_node --target-thinking-param 'thinking_level='
+kent workflow edge update "$workflow_uuid" <edge-id> --assignee-selection configured --thinking-selection configured
+```
+
+Repeatable `--param` and `--clear-params` edit ordinary Parameters only; they retain Protected Parameters and cannot convert or delete them. Node commands continue to edit the required fallback with `--agent`; selector flags belong to Edge commands.
 
 Workflow deletion cascades through the workflow definition, Project links, and Tasks. Run the command without `--confirm` to inspect the impact, then repeat it with `--confirm`; Kent deletes nothing if the impact changes or blockers remain.
 
@@ -386,7 +409,7 @@ kent task move <task> <target-node-id> --values-file ./move-values.json
 
 Values use nested Node-key/output-name identity so equal output names from different Nodes remain distinct. Direct Start and Terminal moves omit `--transition` and values. A destination already Current is a successful no-op. Waiting Questions, lifecycle conflicts, unavailable context Sessions, invalid workflows, unsupported destinations, and unusable incoming Transitions are rejected before mutation with a typed reason.
 
-Desktop shows the server's Transition choices and required values, including resolved values that can be edited. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
+Desktop shows the server's Transition choices and required values, including exposed Assignee and thinking Protected Parameters and resolved values that can be edited. Manual Move applies the same selector rules as automatic completion: hidden zero/one-option or retained-Session values are omitted or ignored, and supplied values are validated before the target is created. When Execution Target selection is required, the Manual Move dialog closes before that selection; canceling or failing target selection leaves live work unchanged. After target selection succeeds, confirming a move interrupts live Agent and Script work across the task's current parallel group, then applies the selected serial or fan-out Transition. If interruption succeeds but final workflow revalidation fails, the task remains interrupted and the move error is reported.
 
 ### Complete Work From The CLI
 

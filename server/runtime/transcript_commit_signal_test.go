@@ -244,11 +244,14 @@ func TestReviewerTranscriptPathsUseRichEventsWithoutCommittedConversationUpdated
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
 		t.Fatalf("committed conversation_updated count after user flush = %d, want 0; events=%+v", got, events)
 	}
-	if !hasReviewerLocalEntryRole(events, "reviewer_suggestions") {
-		t.Fatalf("expected reviewer_suggestions local entry event, got %+v", events)
+	hasFeedback := false
+	for _, event := range events {
+		if event.LocalEntry != nil && event.LocalEntry.ReviewerFeedback != nil {
+			hasFeedback = true
+		}
 	}
-	if !hasReviewerLocalEntryRole(events, "reviewer_status") {
-		t.Fatalf("expected reviewer_status local entry event, got %+v", events)
+	if !hasFeedback {
+		t.Fatalf("expected typed Reviewer feedback event, got %+v", events)
 	}
 	if !hasEventKind(events, EventReviewerCompleted) {
 		t.Fatalf("expected reviewer_completed event, got %+v", events)

@@ -26,7 +26,6 @@ export type AddWorkflowNodeInput = Readonly<{
   name?: string | undefined;
   key?: string | undefined;
   subagentRole?: string | undefined;
-  promptTemplate?: string | undefined;
 }>;
 
 export type CreatableWorkflowNodeKind = Extract<WorkflowNodeKind, "agent" | "script" | "terminal">;

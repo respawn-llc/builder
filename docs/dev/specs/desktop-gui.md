@@ -10,7 +10,7 @@
 - On connection loss, disable mutations while retaining cached content where available. Show persistent disconnected status until reconnection; closing that notice does not change connection state.
 - Keep unsent local drafts for new Tasks, comments, and editable Task or Project text while the window stays open. Do not queue or replay mutations. After reconnection, refresh server state and let the operator submit preserved drafts manually; a save overwrites remote changes.
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
-- Text input is plain multiline Markdown. Raw HTML is unavailable. Links allow only safe protocols and open externally. Code is styled distinctly.
+- Text input is plain multiline Markdown. Task Detail and Workflow Editor content use the approved rich Markdown presentation with sanitized raw-HTML and link behavior. Board previews are flattened text previews: they strip Markdown formatting and raw HTML without rendering rich structure or controls, preserve readable text labels, and remain bounded for dense boards. Completed supported code is syntax-highlighted and selectable in rich content; incomplete code remains selectable plain text.
 - When focus is in a Desktop text field outside the Workflow editor, Command+Enter on macOS and Ctrl+Enter on Windows or Linux must invoke that field's existing submit, save, or selection action. The shortcut must follow the same validation, disabled state, and confirmation behavior as that action.
 - The shortcut must do nothing when the focused text field has no existing submission action.
 - The shortcut must not change the field's ordinary Enter behavior.
@@ -66,7 +66,7 @@
   them from loaded relationship rows.
 - Selecting the dependency-progress chip opens Task Detail focused on
   Dependencies.
-- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's newest page without changing its expanded state.
+- Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's first page in the selected order without changing its expanded state.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
 - Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
@@ -108,30 +108,24 @@
 - A non-startable Backlog Task remains visible.
 - Dragging near a board or hovered-column edge scrolls that surface with increasing speed. Horizontal and vertical scrolling can run together; horizontal takes priority if both cannot be reliable.
 
-## Board Task Search
+## Desktop Task Search
 
-- A board has a `Search` chip immediately after the Labels chip. It uses the
-  same visual treatment and height as the Labels chip.
-- Selecting Search opens one centered command-palette dialog over a blurred
-  backdrop. The dialog uses a frosted-glass surface.
-- Opening Search animates the backdrop from unblurred to blurred. Its island
-  fades in while moving upward by 30 pixels into place.
-- Closing Search reverses that motion: the backdrop unblurs while the island
-  fades and moves 30 pixels downward. Search remains mounted until the complete
-  exit finishes. Search uses the fast motion duration. These motions are subject
-  to reduced-motion preference.
-- Search and its blurred backdrop appear above an open Task sidebar. Opening
-  Search does not close or otherwise change the sidebar.
-- The search input is an inline top row separated from the results by one thin
-  divider. The input is not a nested island.
+- The main window's application chrome always has a Search icon at the outer edge of its navigation controls. Search is the rightmost navigation control on macOS and the leftmost navigation control on other platforms. It is adjacent to the back and forward controls when they are visible.
+- Selecting the application-chrome Search icon opens global Search from every ordinary page in the main window.
+- `Command-S`, `Control-S`, and `Alt-Space` open global Search from every ordinary page in the main window. These shortcuts suppress their platform or browser default action.
+- Global Search covers every Project.
+- Separate native windows do not provide global Search.
+- A board has a `Search` chip immediately after the Unblocked chip. It uses the same visual treatment and height as the Labels chip.
+- The board Search chip opens Project-scoped Search that spans every Workflow linked to that Project.
+- Selecting either Search entry point opens the single centered command-palette dialog over a blurred backdrop. The board entry point filters results to the current Project, while the application-chrome entry point searches every Project. The dialog uses a frosted-glass surface.
+- Opening either entry point while Search is open replaces the dialog's navigation scope instead of opening another dialog.
+- Opening Search animates the backdrop from unblurred to blurred. Its island fades in while moving upward by 30 pixels into place.
+- Closing Search reverses that motion: the backdrop unblurs while the island fades and moves 30 pixels downward. Search remains mounted until the complete exit finishes. Search uses the fast motion duration. These motions are subject to reduced-motion preference.
+- Search and its blurred backdrop appear above the main content and an open Task sidebar. Opening Search does not close or otherwise change the sidebar.
+- The search input is an inline top row separated from the results by one thin divider. The input is not a nested island.
 - The dialog focuses the input when it opens.
-- `Command-S`, `Control-S`, and `Alt-Space` open Search from a board. These
-  shortcuts suppress their platform or browser default action while the board
-  is open.
 - Search uses the existing case-insensitive literal Task Search contract.
 - Search includes Task titles, complete bodies, and Comments.
-- Search is scoped to the board's Project and spans every Workflow linked to
-  that Project.
 - Desktop submits a nonblank searchable query 300 milliseconds after the last
   edit.
 - A blank query, a literal query without a searchable trigram, or a searchable
@@ -145,11 +139,8 @@
   subject to reduced-motion preference.
 - While a replacement query is debouncing or loading, the prior results remain
   visible and usable.
-- Desktop retains one search query in process memory across Projects. Opening a
-  different Project reruns that query with the new Project scope. Restarting
-  Desktop clears the query.
-- Closing and reopening Search retains the selected Task group while its result
-  set remains current.
+- Desktop retains one search query in process memory across global and Project-scoped Search. Changing scope reruns that query within the selected scope. Restarting Desktop clears the query.
+- Closing and reopening Search retains the selected Task group for that scope while its result set remains current.
 - Results use infinite scroll and preserve the server's Task grouping, hit
   pagination, and ordering. Desktop does not deduplicate repeated Task groups
   across pages.
@@ -188,16 +179,25 @@
 - At the last loaded result, Down Arrow is a no-op until another result arrives.
   At either loaded boundary, repeated navigation never wraps or resets
   selection to the first result.
-- Selecting a row with the pointer or pressing Enter for the selected row
-  closes Search and opens that Task in the board's Task Detail sidebar.
+- Selecting a row with the pointer or pressing Enter for the selected row closes Search and opens that Task in the Task Detail sidebar.
 - Escape and backdrop selection close Search without opening a Task.
 
-## Labels
+## Labels And Board Sorting
 
-- Boards have one transparent filter row. It provides Labels and Unblocked filters, but no status, attention, column, or sort filter.
+- Boards have one transparent filter-and-sort row. Its controls appear in this order: `Labels`, `Sort`, `Unblocked`, `Search`. It has no status, attention, or column filter.
+- `Sort` uses an icon followed by text and opens a popover styled like the Label chooser.
+- The Sort popover lists `Updated`, `Created`, `Labels`, and `Short ID`, in that order. An `Asc`/`Desc` segmented selector controls the direction.
+- The Sort popover has no Apply, Done, Clear, or Reset action. Sort changes apply immediately while the popover remains open, and changing the field retains the selected direction.
+- The default is `Updated Desc`. At that default, the chip is neutral and says `Sort`.
+- Any custom order makes the chip primary and changes its text to `Sort · Field · Asc` or `Sort · Field · Desc`.
+- Each newly opened Workflow board starts at `Updated Desc`. Switching away and back or relaunching Desktop resets the sort.
+- One selected sort applies inside every board column. Board field comparison and tie-breaking follow the Workflow orchestration specification.
+- Label filtering, Unblocked filtering, and sorting never change each other's selected state. Every active board filter combines with logical AND before the server sorts.
+- A sort change keeps rendered cards visible while replacement pages load. If replacement fails, Desktop keeps the selected sort and rendered cards and shows the existing retryable board or column error.
+- A sort replacement keeps each column mounted and uses the board's existing card movement animation, subject to reduced-motion preference. Desktop makes a best effort to retain the visible position, but that position may move as replacement card heights settle or normal bounds clamp it.
 - The Unblocked filter uses a two-state chip labeled `Unblocked`. Its inactive state applies no dependency restriction. Its selected state includes only Tasks with no direct Task Dependencies or no unsatisfied direct Task Dependencies.
 - The Unblocked chip uses the same styling and padding as the other filter chips. It appears after the other filters and before search.
-- The Unblocked filter applies to every board column and every column count. It combines with the Labels filter so a shown Task must satisfy both active filters.
+- The Unblocked filter applies to every board column and every column count.
 - The Unblocked selection belongs only to the current board route. Desktop resets it when the operator leaves the board or selects another Project or Workflow. Desktop does not persist it across relaunches.
 - Unblocked filter changes apply immediately through server filtering. Existing cards and counts remain visible until their corresponding replacement arrives, and each authoritative result applies as it arrives. If a replacement fails, Desktop retains the affected prior result and shows a persistent Retry error.
 - The trigger says `Labels` with no filter, `Labels · N` with named Label conditions, and `No labels` for the unlabeled filter. N counts included and excluded Label conditions. A clear action appears only for an active filter.
@@ -208,6 +208,7 @@
 - Deleting a participating Label removes its included or excluded condition from the saved filter. Removing the last named Label condition clears the named restriction; deleting another Label does not change an active `No labels` filter.
 - One chooser manages filtering, Task Label assignment, and Label creation, renaming, and deletion. There is no separate Project Label page.
 - Search is case-insensitive substring matching and preserves the Project's manual Label sequence. While search has text, the chooser hides reorder handles and does not permit reordering. When no exact case-insensitive name exists, offer `Create “…”`.
+- After a Project Label reorder succeeds locally or arrives from another client, active boards refresh their card pages and adopt the resulting server order while retaining rendered cards until replacement pages arrive.
 - A Project permits at most 100 Labels. At the limit, search and selection remain available and creation explains its unavailability; deletion restores creation.
 - The chooser shows at most 10 scrolling result rows, keeps search and context controls visible, remains open through selection and management actions, and discards an uncommitted rename on close.
 - In board filtering, activating a named Label row cycles from neutral to included, from included to excluded, and from excluded to neutral. Included shows a green checkmark. Excluded shows a red X. Neutral shows neither state icon. A Label created from the filter chooser remains neutral.

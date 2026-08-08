@@ -15,7 +15,12 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 	entry *authorityRuntimeEntry,
 	snapshot runtime.TranscriptHydrationSnapshot,
 ) (clientui.TranscriptHydration, error) {
-	hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
+	hydration, err := runtimeview.TranscriptHydrationFromSnapshotChecked(snapshot)
+	if err != nil {
+		return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{
+			cause: fmt.Errorf("project transcript hydration: %w", err),
+		}
+	}
 	readModel, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID, nil)
 	if err != nil {
 		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript runtime read model: %w", err)
@@ -43,7 +48,9 @@ func (r *RuntimeRegistry) composeTranscriptHydration(
 		return clientui.TranscriptHydration{}, fmt.Errorf("build transcript background activities: %w", err)
 	}
 	if err := hydration.Validate(); err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("validate canonical transcript hydration: %w", err)
+		return clientui.TranscriptHydration{}, transcriptHydrationProjectionError{
+			cause: fmt.Errorf("validate canonical transcript hydration: %w", err),
+		}
 	}
 	return hydration, nil
 }
@@ -71,7 +78,8 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 	active := hydration.RuntimeReadModelUpdate.Activity.ActiveStep
 	if active == nil {
 		hydration.ActiveAssistant = nil
-		hydration.ActiveReasoning = nil
+		hydration.ActiveThinkingStatus = nil
+		hydration.ActiveReasoningTraces = nil
 		hydration.ActiveStep = nil
 		hydration.ActiveReviewer = nil
 		hydration.ActiveCompaction = nil
@@ -81,8 +89,17 @@ func clearMismatchedActiveFacts(hydration *clientui.TranscriptHydration) {
 	if hydration.ActiveAssistant != nil && hydration.ActiveAssistant.StepID != active.StepID {
 		hydration.ActiveAssistant = nil
 	}
-	if hydration.ActiveReasoning != nil && hydration.ActiveReasoning.StepID != active.StepID {
-		hydration.ActiveReasoning = nil
+	if hydration.ActiveThinkingStatus != nil && hydration.ActiveThinkingStatus.StepID != active.StepID {
+		hydration.ActiveThinkingStatus = nil
+	}
+	if len(hydration.ActiveReasoningTraces) > 0 {
+		traces := hydration.ActiveReasoningTraces[:0]
+		for _, trace := range hydration.ActiveReasoningTraces {
+			if trace.StepID == active.StepID {
+				traces = append(traces, trace)
+			}
+		}
+		hydration.ActiveReasoningTraces = traces
 	}
 	if hydration.ActiveStep != nil &&
 		(hydration.ActiveStep.RunID != active.RunID ||

@@ -1,5 +1,6 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
+import { vi } from "vitest";
 
 import type { ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
@@ -26,6 +27,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -78,6 +80,7 @@ describe("Project label event effects", () => {
     });
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       projectID: "project-1",
       queryClient,
     });
@@ -97,6 +100,104 @@ describe("Project label event effects", () => {
     await reorderEvent;
   });
 
+  it("invalidates active board card queries after a committed local reorder without refreshing counts", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      onBackgroundError: vi.fn(),
+      projectID: "project-1",
+      queryClient,
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const catalog = {
+      projectID: "project-1",
+      labels: [{ id: alphaID, name: "Alpha" }],
+    };
+
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.projectBoardNodeCardsRoot("project-1"),
+      refetchType: "active",
+    });
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectBoardsRoot("project-1") }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectTaskListsRoot("project-1") }),
+    );
+  });
+
+  it("settles a local reorder before board refetch completion and reports refresh failures", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const refresh = deferred<undefined>();
+    const reportBackgroundError = vi.fn();
+    vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async () => refresh.promise);
+    const effects = createProjectLabelEffects({
+      authority,
+      onBackgroundError: reportBackgroundError,
+      projectID: "project-1",
+      queryClient,
+    });
+    const catalog = {
+      projectID: "project-1",
+      labels: [{ id: alphaID, name: "Alpha" }],
+    };
+
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(queryKeys.projectLabels("project-1"))).toEqual(
+      catalog,
+    );
+    expect(reportBackgroundError).not.toHaveBeenCalled();
+
+    const refreshFailure = new Error("board refresh failed");
+    vi.spyOn(queryClient, "invalidateQueries").mockRejectedValueOnce(refreshFailure);
+    await effects.applyLocalReorder(catalog, authority.supersedeReads());
+    await waitFor(() => {
+      expect(reportBackgroundError).toHaveBeenCalledWith(refreshFailure);
+    });
+    refresh.resolve(undefined);
+  });
+
+  it("invalidates active board card queries after a subscribed reorder event", async () => {
+    const queryClient = new QueryClient();
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => ({ projectID: "project-1", labels: [] }),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      onBackgroundError: vi.fn(),
+      projectID: "project-1",
+      queryClient,
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await effects.consumeProjectEvent(labelEvent("reordered", alphaID));
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.projectBoardNodeCardsRoot("project-1"),
+      refetchType: "active",
+    });
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectBoardsRoot("project-1") }),
+    );
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: queryKeys.projectTaskListsRoot("project-1") }),
+    );
+  });
+
   it("keeps local delete and its event echo pruned before membership refresh", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -110,6 +211,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onFilterAction: (action) => {
         filterActions.push(action);
       },
@@ -179,6 +281,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: (effect) => {
         membershipEffects.push(effect);
       },
@@ -254,6 +357,7 @@ describe("Project label event effects", () => {
     admittedTransportCalls = 0;
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: () => {
         admissionClosed = true;
       },
@@ -279,6 +383,7 @@ describe("Project label event effects", () => {
     const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
+      onBackgroundError: vi.fn(),
       onMembershipRefresh: (effect) => {
         membershipEffects.push(effect);
       },
@@ -335,7 +440,6 @@ describe("Project catalog authority projections", () => {
       ],
     });
   });
-
 });
 
 const pendingCatalog = deferred<ProjectLabelCatalog>();

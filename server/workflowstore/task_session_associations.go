@@ -205,6 +205,41 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 	return latestTaskSessionForNode(ctx, s.queries, currentNode)
 }
 
+// LoadSessionReuseAssociations resolves the bounded Current Node references
+// selected by Workflow execution through the existing latest-association
+// lookups. Missing references are omitted because context sources can
+// distinguish an absent retained Session from a selected one.
+func (s *Store) LoadSessionReuseAssociations(
+	ctx context.Context,
+	references []workflow.CurrentNodeReference,
+) ([]workflow.SessionReuseAssociation, error) {
+	associations := make([]workflow.SessionReuseAssociation, 0, len(references))
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
+	lookupCtx := sqlitegen.WithExpectedNoRows(ctx)
+	for _, reference := range references {
+		key, err := reference.Key()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		association, err := s.LatestTaskSessionForNode(lookupCtx, reference)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		associations = append(associations, workflow.SessionReuseAssociation{
+			SessionID:   association.SessionID,
+			CurrentNode: association.CurrentNode,
+		})
+	}
+	return associations, nil
+}
+
 // ResolveCurrentSessionStartContext resolves prompt state only from direct
 // Session ownership, the matching Current Node, and the latest definition.
 // Discarded execution history is not an input.
@@ -328,7 +363,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	transitionIDs, transitionOptions, err := currentNodeTransitionOptions(definition, node)
+	transitionIDs, transitionOptions, err := s.currentNodeTransitionOptions(ctx, s.queries, definition, currentNode, node)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
@@ -382,7 +417,7 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 		TransitionIDs:                  transitionIDs,
 		TransitionOptions:              transitionOptions,
 		HasContinueSessionOutgoingEdge: currentNodeHasContinueSessionOutgoingEdge(definition, workflow.NodeIDOf(node)),
-		PromptTemplate:                 strings.TrimSpace(enteringEdge.PromptTemplate),
+		TransitionPrompt:               strings.TrimSpace(enteringEdge.PromptTemplate),
 		ParameterValues:                values,
 		ExecutionRoot:                  executionRoot,
 	}, nil
@@ -409,7 +444,13 @@ func transitionGroupSourceNodeID(definition workflow.Definition, groupID workflo
 	return ""
 }
 
-func currentNodeTransitionOptions(definition workflow.Definition, source workflow.Node) ([]string, []TransitionOption, error) {
+func (s *Store) currentNodeTransitionOptions(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	currentSource workflow.CurrentNode,
+	source workflow.Node,
+) ([]string, []TransitionOption, error) {
 	transitionIDs := make([]string, 0)
 	options := make([]TransitionOption, 0)
 	for _, group := range definition.TransitionGroups {
@@ -420,36 +461,81 @@ func currentNodeTransitionOptions(definition workflow.Definition, source workflo
 		if transitionID == "" {
 			return nil, nil, fmt.Errorf("workflow %q has a blank transition id for current node %q", definition.ID, workflow.NodeIDOf(source))
 		}
+		parameters, err := s.currentNodeTransitionParameters(ctx, q, definition, group, currentSource, source)
+		if err != nil {
+			return nil, nil, err
+		}
 		transitionIDs = append(transitionIDs, transitionID)
 		options = append(options, TransitionOption{
 			ID:          transitionID,
 			DisplayName: strings.TrimSpace(group.DisplayName),
 			Description: strings.TrimSpace(group.Description),
-			Parameters:  currentNodeTransitionParameters(definition, group),
+			Parameters:  parameters,
 		})
 	}
 	return transitionIDs, options, nil
 }
 
-func currentNodeTransitionParameters(definition workflow.Definition, group workflow.TransitionGroup) []workflow.Parameter {
+func (s *Store) currentNodeTransitionParameters(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	group workflow.TransitionGroup,
+	currentSource workflow.CurrentNode,
+	source workflow.Node,
+) ([]workflow.Parameter, error) {
 	wiring := workflow.DeriveWiring(definition)
-	if source, err := currentNodeDefinitionNode(definition, group.SourceNodeID); err == nil && source.Kind() == workflow.NodeKindJoin {
-		return parametersFromOutputFields(wiring.JoinOutputFieldsForNode(group.SourceNodeID))
+	if source.Kind() == workflow.NodeKindJoin {
+		return parametersFromOutputFields(wiring.JoinOutputFieldsForNode(group.SourceNodeID)), nil
 	}
+	var parameters []workflow.Parameter
 	for _, edge := range definition.Edges {
 		if edge.TransitionGroupID == group.ID {
-			return append([]workflow.Parameter(nil), edge.Parameters...)
+			target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+			if err != nil {
+				return nil, err
+			}
+			planned, err := s.planTransitionParameterContract(
+				ctx,
+				q,
+				definition,
+				edge,
+				source,
+				target,
+				&currentSource,
+				transitionBranchKeyForCurrentNode(currentSource.Reference),
+				false,
+				true,
+				transitionContractContextResolutionDeferred,
+			)
+			if err != nil {
+				return nil, err
+			}
+			for _, parameter := range planned.Parameters {
+				if _, exists := parameterByKey(parameters, parameter.Key); !exists {
+					parameters = append(parameters, parameter)
+				}
+			}
 		}
 	}
-	return nil
+	return parameters, nil
 }
 
 func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parameter {
 	out := make([]workflow.Parameter, 0, len(fields))
 	for _, field := range fields {
-		out = append(out, workflow.Parameter{Key: field.Name, Description: field.Description})
+		out = append(out, workflow.Parameter{Key: field.Name, Description: field.Description, Purpose: workflow.ParameterPurposeOrdinary})
 	}
 	return out
+}
+
+func parameterByKey(parameters []workflow.Parameter, key string) (workflow.Parameter, bool) {
+	for _, parameter := range parameters {
+		if parameter.Key == key {
+			return parameter, true
+		}
+	}
+	return workflow.Parameter{}, false
 }
 
 func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
@@ -469,12 +555,9 @@ func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
 		DisplayName:        workflow.NodeDisplayName(node),
 		GroupID:            workflow.NodeGroupID(node),
 		SubagentRole:       workflow.NodeSubagentRole(node),
-		PromptTemplate:     workflow.NodePromptTemplate(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
 		ScriptPath:         scriptPath,
-		InputFields:        workflow.NodeInputFields(node),
 		JoinInputProviders: workflow.NodeJoinInputProviders(node),
-		OutputFields:       workflow.NodeOutputFields(node),
 	}, nil
 }
 

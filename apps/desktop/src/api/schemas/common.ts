@@ -198,8 +198,9 @@ export const workflowParameterSchema: z.ZodType<WorkflowParameter> = z
   .object({
     key: z.string(),
     description: emptyString,
+    purpose: z.enum(["ordinary", "target_assignee", "target_thinking"]),
   })
-  .transform((value) => ({ key: value.key, description: value.description }));
+  .transform((value) => ({ key: value.key, description: value.description, purpose: value.purpose }));
 
 export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
   .object({
@@ -406,19 +407,23 @@ export const currentNodeSchema: z.ZodType<TaskCurrentNode> = z
     node_id: nonBlankString,
     transition_branch_key: nullableNonBlankString,
     session_id: nullableNonBlankString,
+    effective_assignee: nullableNonBlankString,
+    effective_thinking: nullableNonBlankString,
   })
   .strict()
   .transform((value) => ({
     nodeID: value.node_id,
     transitionBranchKey: value.transition_branch_key,
     sessionID: value.session_id,
+    effectiveAssignee: value.effective_assignee,
+    effectiveThinking: value.effective_thinking,
   }));
 
 export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
   .object({
     node_id: nonBlankString,
     transition_branch_key: nullableNonBlankString,
-    session_id: z.null(),
+    session_id: z.null().optional().transform(() => null),
   })
   .strict()
   .transform((value) => ({

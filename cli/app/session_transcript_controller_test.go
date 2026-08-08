@@ -168,6 +168,7 @@ func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail
 		Visibility: transcript.EntryVisibilityOngoing,
 		Integrity:  transcript.RowIntegrityValid,
 		Kind:       clientui.TranscriptRowAssistant,
+		Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		Assistant: &clientui.TranscriptAssistantRow{
 			StepID:   ongoingTestStepID(),
 			StreamID: &streamID,
@@ -481,6 +482,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Visibility: transcript.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowUser,
+			Locator:    transcript.CommittedRowLocator{EventSequence: int64(sequence), RowOrdinal: 1},
 			User:       &clientui.TranscriptUserRow{StepID: ongoingTestStepID(), Text: "hello"},
 		})
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:

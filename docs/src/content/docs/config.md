@@ -66,6 +66,7 @@ postprocessing_mode = "all" # shell output token optimizations by Kent: none | b
 completion_mode = "auto"
 concurrency = 5 # Agent Node scheduling capacity; Script Nodes do not use it
 max_invalid_completion_attempts = 5
+pre_compaction_tokens = 247380 # defaults to 70% of context_compaction_threshold_tokens
 use_required_tool_calls = true
 subagents = false # TOML-only; workflow agents cannot launch custom roles unless enabled
 
@@ -158,6 +159,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `workflow.completion_mode` | string | `auto` | `KENT_WORKFLOW_COMPLETION_MODE` | Default completion mode for workflow agent nodes that inherit the global default. Allowed: `auto`, `structured_output`, `tool`, `shell_command`, `unstructured_output`. |
 | `workflow.concurrency` | int | `5` | `KENT_WORKFLOW_CONCURRENCY` | Agent Node scheduling capacity. Explicit workflow actions may exceed it. Script Nodes do not use it. Must be `> 0`. |
 | `workflow.max_invalid_completion_attempts` | int | `5` | `KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS` | Number of invalid workflow completion attempts allowed before Kent interrupts the run. Must be `> 0`. |
+| `workflow.pre_compaction_tokens` | int | `70%` of `context_compaction_threshold_tokens`, rounded down |  | Workflow Session pre-compaction threshold. Must be positive and no greater than `context_compaction_threshold_tokens`. File-only; not available in subagent role settings. |
 | `workflow.use_required_tool_calls` | bool | `true` |  | Uses provider-required tool selection for `tool` and `shell_command` workflow completion modes. Set to `false` to use automatic tool selection while preserving Kent's workflow completion validation. |
 | `workflow.subagents` | bool | `false` |  | Allows workflow agents to launch eligible custom roles. |
 
@@ -178,7 +180,7 @@ Configure the supervisor agent that oversees model changes ("reviewer" is the le
 | `reviewer.model_context_window` | int | inherits `model_context_window` | `KENT_REVIEWER_MODEL_CONTEXT_WINDOW` | Explicit reviewer context-window size sent to the reviewer provider. The effective value must be at least `40000`. |
 | `reviewer.system_prompt_file` | string | `""` |  | Path to a custom supervisor system prompt file. Relative paths resolve from the config file directory. Workspace config overrides global config; |
 | `reviewer.timeout_seconds` | int | `120` | `KENT_REVIEWER_TIMEOUT_SECONDS` | Reviewer HTTP timeout. Must be `> 0`. |
-| `reviewer.verbose_output` | bool | `false` | `KENT_REVIEWER_VERBOSE_OUTPUT` | Controls whether reviewer suggestion text is shown at all. When `false`, Kent only shows the concise reviewer result/status line. When `true`, Kent shows the full suggestion list at the moment the reviewer issues it, and the later reviewer status stays concise after the follow-up is applied or ignored. |
+| `reviewer.verbose_output` | bool | `false` | `KENT_REVIEWER_VERBOSE_OUTPUT` | Controls only whether the TUI initially expands Reviewer feedback. It never controls row existence or Desktop presentation. |
 
 
 

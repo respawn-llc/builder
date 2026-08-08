@@ -1,5 +1,7 @@
 
 
+
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -337,12 +339,9 @@ INSERT INTO workflow_nodes (
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 ) VALUES (
@@ -352,12 +351,9 @@ INSERT INTO workflow_nodes (
     sqlc.arg(kind),
     sqlc.arg(display_name),
     sqlc.arg(subagent_role),
-    sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
-    sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
-    sqlc.arg(output_fields_json),
     sqlc.narg(group_id),
     sqlc.arg(sort_order)
 );
@@ -411,7 +407,7 @@ ON CONFLICT(id) DO UPDATE SET
 WHERE workflow_node_groups.workflow_id = excluded.workflow_id;
 
 -- name: UpsertWorkflowNode :execrows
-INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, script_path, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode, script_path, join_input_providers_json, group_id, sort_order)
 VALUES (
     sqlc.arg(id),
     sqlc.arg(workflow_id),
@@ -419,12 +415,9 @@ VALUES (
     sqlc.arg(kind),
     sqlc.arg(display_name),
     sqlc.arg(subagent_role),
-    sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
     sqlc.narg(script_path),
-    sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
-    sqlc.arg(output_fields_json),
     sqlc.narg(group_id),
     sqlc.arg(sort_order)
 )
@@ -433,12 +426,9 @@ ON CONFLICT(id) DO UPDATE SET
     kind = excluded.kind,
     display_name = excluded.display_name,
     subagent_role = excluded.subagent_role,
-    prompt_template = excluded.prompt_template,
     completion_mode = excluded.completion_mode,
     script_path = excluded.script_path,
-    input_fields_json = excluded.input_fields_json,
     join_input_providers_json = excluded.join_input_providers_json,
-    output_fields_json = excluded.output_fields_json,
     group_id = excluded.group_id,
     sort_order = excluded.sort_order
 WHERE workflow_nodes.workflow_id = excluded.workflow_id;
@@ -476,12 +466,14 @@ WHERE EXISTS (
 );
 
 -- name: UpsertWorkflowEdge :execrows
-INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
+INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
     sqlc.arg(id),
     sqlc.arg(transition_group_id),
     sqlc.arg(edge_key),
     sqlc.arg(target_node_id),
+    sqlc.arg(assignee_selection),
+    sqlc.arg(thinking_selection),
     sqlc.arg(requires_approval),
     sqlc.arg(context_mode),
     sqlc.arg(context_source_kind),
@@ -504,6 +496,8 @@ ON CONFLICT(id) DO UPDATE SET
     transition_group_id = excluded.transition_group_id,
     edge_key = excluded.edge_key,
     target_node_id = excluded.target_node_id,
+    assignee_selection = excluded.assignee_selection,
+    thinking_selection = excluded.thinking_selection,
     requires_approval = excluded.requires_approval,
     context_mode = excluded.context_mode,
     context_source_kind = excluded.context_source_kind,
@@ -568,12 +562,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -588,12 +579,9 @@ SELECT
     kind,
     display_name,
     subagent_role,
-    prompt_template,
     completion_mode,
     script_path,
-    input_fields_json,
     join_input_providers_json,
-    output_fields_json,
     group_id,
     sort_order
 FROM workflow_nodes
@@ -646,6 +634,8 @@ INSERT INTO workflow_edges (
     transition_group_id,
     edge_key,
     target_node_id,
+    assignee_selection,
+    thinking_selection,
     requires_approval,
     context_mode,
     context_source_kind,
@@ -660,6 +650,8 @@ INSERT INTO workflow_edges (
     sqlc.arg(transition_group_id),
     sqlc.arg(edge_key),
     sqlc.arg(target_node_id),
+    sqlc.arg(assignee_selection),
+    sqlc.arg(thinking_selection),
     sqlc.arg(requires_approval),
     sqlc.arg(context_mode),
     sqlc.arg(context_source_kind),
@@ -678,6 +670,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -700,6 +694,8 @@ SELECT
     e.transition_group_id,
     e.edge_key,
     e.target_node_id,
+    e.assignee_selection,
+    e.thinking_selection,
     e.requires_approval,
     e.context_mode,
     e.context_source_kind,
@@ -726,12 +722,9 @@ SET
     kind = sqlc.arg(kind),
     display_name = sqlc.arg(display_name),
     subagent_role = sqlc.arg(subagent_role),
-    prompt_template = sqlc.arg(prompt_template),
     completion_mode = sqlc.arg(completion_mode),
     script_path = sqlc.narg(script_path),
-    input_fields_json = sqlc.arg(input_fields_json),
     join_input_providers_json = sqlc.arg(join_input_providers_json),
-    output_fields_json = sqlc.arg(output_fields_json),
     group_id = sqlc.narg(group_id)
 WHERE id = sqlc.arg(id)
   AND workflow_id = sqlc.arg(workflow_id);
@@ -763,6 +756,8 @@ SET
     transition_group_id = sqlc.arg(transition_group_id),
     edge_key = sqlc.arg(edge_key),
     target_node_id = sqlc.arg(target_node_id),
+    assignee_selection = sqlc.arg(assignee_selection),
+    thinking_selection = sqlc.arg(thinking_selection),
     requires_approval = sqlc.arg(requires_approval),
     context_mode = sqlc.arg(context_mode),
     context_source_kind = sqlc.arg(context_source_kind),
@@ -1094,6 +1089,36 @@ FROM (
     FROM task_pending_approval_branches branch
     WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = sqlc.arg(edge_id)
 );
+
+-- name: GetWorkflowEdgeParameterEditPolicyImpact :one
+SELECT
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = sqlc.arg(workflow_id)
+          AND current_node.entered_by_edge_id = sqlc.arg(edge_id)
+          AND (
+              current_node.scheduling_state IS NULL
+              OR current_node.scheduling_state != 'interrupted'
+          )
+    ) AS active_current_node_count,
+    (
+        SELECT CAST(COUNT(*) AS INTEGER)
+        FROM task_current_nodes current_node
+        JOIN task_records task ON task.id = current_node.task_id
+        WHERE task.workflow_id = sqlc.arg(workflow_id)
+          AND current_node.entered_by_edge_id = sqlc.arg(edge_id)
+          AND current_node.transition_branch_key IS NOT NULL
+    ) AS unresolved_parallel_branch_count,
+    (
+        SELECT CAST(COUNT(DISTINCT approval.id) AS INTEGER)
+        FROM task_pending_approvals approval
+        JOIN task_records task ON task.id = approval.source_task_id
+        JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
+        WHERE task.workflow_id = sqlc.arg(workflow_id)
+          AND json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = sqlc.arg(edge_id)
+    ) AS pending_approval_count;
 
 -- name: GetWorkflowGraphActiveWorkPolicyImpact :one
 SELECT
@@ -2000,399 +2025,6 @@ ORDER BY
     CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc = 0 THEN page.sort_7_value END ASC,
     CASE WHEN args.sort_selector_count >= 7 AND args.sort_7_desc != 0 THEN page.sort_7_value END DESC,
     page.id ASC;
-
-
-
--- name: ListBoardNodeTasksUpdatedDesc :many
-SELECT
-    task.id,
-    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
-  AND (
-      sqlc.arg(label_filter_kind) = 'none'
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(label_ids_json)) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = sqlc.arg(node_id)
-  )
-
-  AND (
-      sqlc.narg(cursor_task_seq) IS NULL
-      OR (
-          sqlc.arg(cursor_direction) = 'older'
-          AND (task.updated_at_unix_ms, task.task_seq) < (
-              CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
-              CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-          )
-      )
-  )
-
-ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
-LIMIT sqlc.arg(limit_rows);
-
--- name: ListBoardNodeTasksUpdatedDescPrevious :many
-SELECT
-    task.id,
-    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
-  AND (
-      sqlc.arg(label_filter_kind) = 'none'
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(label_ids_json)) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = sqlc.arg(node_id)
-  )
-
-  AND sqlc.narg(cursor_task_seq) IS NOT NULL
-  AND (task.updated_at_unix_ms, task.task_seq) > (
-      CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
-      CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-  )
-
-ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
-LIMIT sqlc.arg(limit_rows);
-
--- name: ListBoardNodeTasksUpdatedAsc :many
-SELECT
-    task.id,
-    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
-  AND (
-      sqlc.arg(label_filter_kind) = 'none'
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(label_ids_json)) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = sqlc.arg(node_id)
-  )
-
-  AND (
-      sqlc.narg(cursor_task_seq) IS NULL
-      OR (
-          sqlc.arg(cursor_direction) = 'older'
-          AND (task.updated_at_unix_ms, task.task_seq) > (
-              CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
-              CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-          )
-      )
-  )
-
-ORDER BY task.updated_at_unix_ms ASC, task.task_seq ASC
-LIMIT sqlc.arg(limit_rows);
-
--- name: ListBoardNodeTasksUpdatedAscPrevious :many
-SELECT
-    task.id,
-    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-    task.project_workflow_link_id,
-    CAST(sqlc.arg(workflow_id) AS BLOB) AS workflow_id,
-    task.workflow_revision_seen,
-    task.task_seq,
-    task.short_id,
-    task.title,
-    task.body,
-    task.source_url,
-    task.source_workspace_id,
-    task.managed_worktree_id,
-    task.execution_target_mode,
-    task.execution_target_requested_ref,
-    task.execution_target_resolved_ref,
-    task.execution_target_commit_oid,
-    task.execution_target_provenance,
-    task.created_at_unix_ms,
-    task.updated_at_unix_ms,
-    task.metadata_json
-FROM tasks task INDEXED BY tasks_project_workflow_link_updated_idx
-WHERE task.project_workflow_link_id = sqlc.arg(project_workflow_link_id)
-  AND (
-      sqlc.arg(label_filter_kind) = 'none'
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'any'
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = task.id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = excluded_label.value
-                        AND assignment.task_id = task.id
-                  )
-              )
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'named'
-          AND sqlc.narg(label_filter_mode) = 'all'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(label_ids_json)) selected_label
-              WHERE NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                  WHERE assignment.label_id = selected_label.value
-                    AND assignment.task_id = task.id
-              )
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM json_each(sqlc.arg(excluded_label_ids_json)) excluded_label
-              JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                ON assignment.label_id = excluded_label.value
-              WHERE assignment.task_id = task.id
-          )
-      )
-      OR (
-          sqlc.arg(label_filter_kind) = 'unlabeled'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM task_label_assignments assignment
-              WHERE assignment.task_id = task.id
-          )
-      )
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task.id
-        AND current_node.node_id = sqlc.arg(node_id)
-  )
-
-  AND sqlc.narg(cursor_task_seq) IS NOT NULL
-  AND (task.updated_at_unix_ms, task.task_seq) < (
-      CAST(sqlc.narg(cursor_updated_at_unix_ms) AS INTEGER),
-      CAST(sqlc.narg(cursor_task_seq) AS INTEGER)
-  )
-
-ORDER BY task.updated_at_unix_ms DESC, task.task_seq DESC
-LIMIT sqlc.arg(limit_rows);
-
 
 -- name: UpdateTaskEditableFields :execrows
 UPDATE tasks
@@ -3559,42 +3191,52 @@ ORDER BY
 
 -- name: ListTaskCurrentNodes :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id = sqlc.arg(task_id)
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id = sqlc.arg(task_id)
 ORDER BY
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key;
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key;
 
 -- name: ListTaskCurrentNodesByTasks :many
 SELECT
-    task_id,
-    node_id,
-    transition_branch_key,
-    entered_by_edge_id,
-    current_input_values_json,
-    prior_node_values_json,
-    session_id,
-    scheduling_state,
-    interruption_reason,
-    interruption_detail_json,
-    interrupted_at_unix_ms
-FROM task_current_nodes
-WHERE task_id IN (sqlc.slice('task_ids'))
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    current_node.entered_by_edge_id,
+    current_node.current_input_values_json,
+    current_node.prior_node_values_json,
+    current_node.session_id,
+    current_node.scheduling_state,
+    current_node.interruption_reason,
+    current_node.interruption_detail_json,
+    current_node.interrupted_at_unix_ms,
+    current_node.effective_assignee,
+    current_node.effective_thinking,
+    current_node.assignee_origin,
+    node.kind AS node_kind
+FROM task_current_nodes current_node
+JOIN workflow_nodes node ON node.id = current_node.node_id
+WHERE current_node.task_id IN (sqlc.slice('task_ids'))
 ORDER BY
-    task_id,
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key;
+    current_node.task_id,
+    CASE WHEN current_node.transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    current_node.transition_branch_key;
 
 -- name: AdmitSerialCurrentNode :execrows
 UPDATE task_current_nodes
@@ -3737,7 +3379,10 @@ INSERT INTO task_current_nodes (
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
-    interrupted_at_unix_ms
+    interrupted_at_unix_ms,
+    effective_assignee,
+    effective_thinking,
+    assignee_origin
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(node_id),
@@ -3749,7 +3394,10 @@ INSERT INTO task_current_nodes (
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
-    sqlc.arg(interrupted_at_unix_ms)
+    sqlc.arg(interrupted_at_unix_ms),
+    sqlc.narg(effective_assignee),
+    sqlc.narg(effective_thinking),
+    sqlc.narg(assignee_origin)
 );
 
 -- name: DeleteSerialTaskCurrentNode :execrows
@@ -4149,7 +3797,19 @@ WITH board_node_tasks AS (
         t.execution_target_provenance,
         t.created_at_unix_ms,
         t.updated_at_unix_ms,
-        t.metadata_json
+        t.metadata_json,
+
+(
+    SELECT group_concat(printf('%03d', ordered_label.ordinal), '')
+    FROM (
+        SELECT label.ordinal
+        FROM task_label_assignments assignment
+        JOIN project_labels label ON label.id = assignment.label_id
+        WHERE assignment.task_id = t.id
+        ORDER BY label.ordinal ASC, label.id ASC
+    ) ordered_label
+)
+ AS label_ordinals
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
@@ -4235,35 +3895,45 @@ WITH board_node_tasks AS (
           )
       )
 ),
-older_page AS (
-    SELECT *
-    FROM board_node_tasks t
-    WHERE sqlc.arg(cursor_direction) = 'older'
-      AND (
-          sqlc.narg(cursor_updated_at_unix_ms) IS NULL
-          OR t.updated_at_unix_ms < sqlc.narg(cursor_updated_at_unix_ms)
-          OR (
-              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
-              AND t.id < sqlc.narg(cursor_task_id)
-          )
-      )
-    ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT sqlc.arg(limit_rows)
+board_sort AS (
+    SELECT
+        CAST(sqlc.arg(sort_field) AS TEXT) AS sort_field,
+        CAST(sqlc.arg(sort_direction) AS TEXT) AS sort_direction
 ),
-newer_page AS (
-    SELECT *
+board_sort_keys AS (
+    SELECT
+        t.*,
+        CASE WHEN sort.sort_field = 'labels' AND t.label_ordinals IS NULL THEN 1 ELSE 0 END AS sort_null_labels,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'asc' THEN t.updated_at_unix_ms END AS sort_updated_ascending,
+        CASE WHEN sort.sort_field = 'updated' AND sort.sort_direction = 'desc' THEN t.updated_at_unix_ms END AS sort_updated_descending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'asc' THEN t.created_at_unix_ms END AS sort_created_ascending,
+        CASE WHEN sort.sort_field = 'created' AND sort.sort_direction = 'desc' THEN t.created_at_unix_ms END AS sort_created_descending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'asc' THEN t.label_ordinals END AS sort_labels_ascending,
+        CASE WHEN sort.sort_field = 'labels' AND sort.sort_direction = 'desc' THEN t.label_ordinals END AS sort_labels_descending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'asc' THEN t.task_seq END AS sort_short_id_ascending,
+        CASE WHEN sort.sort_field = 'short_id' AND sort.sort_direction = 'desc' THEN t.task_seq END AS sort_short_id_descending,
+        CASE WHEN sort.sort_direction = 'asc' THEN t.task_seq END AS sort_tiebreak_ascending,
+        CASE WHEN sort.sort_direction = 'desc' THEN t.task_seq END AS sort_tiebreak_descending
     FROM board_node_tasks t
-    WHERE sqlc.arg(cursor_direction) = 'newer'
-      AND sqlc.narg(cursor_updated_at_unix_ms) IS NOT NULL
-      AND (
-          t.updated_at_unix_ms > sqlc.narg(cursor_updated_at_unix_ms)
-          OR (
-              t.updated_at_unix_ms = sqlc.narg(cursor_updated_at_unix_ms)
-              AND t.id > sqlc.narg(cursor_task_id)
-          )
-      )
-    ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT sqlc.arg(limit_rows)
+    CROSS JOIN board_sort sort
+),
+paged_board_tasks AS (
+    SELECT *
+    FROM board_sort_keys
+    ORDER BY
+        sort_null_labels ASC,
+        sort_updated_ascending ASC,
+        sort_updated_descending DESC,
+        sort_created_ascending ASC,
+        sort_created_descending DESC,
+        sort_labels_ascending ASC,
+        sort_labels_descending DESC,
+        sort_short_id_ascending ASC,
+        sort_short_id_descending DESC,
+        sort_tiebreak_ascending ASC,
+        sort_tiebreak_descending DESC
+    LIMIT sqlc.arg(limit_rows) + 1
+    OFFSET sqlc.arg(offset_rows)
 ),
 dependency_progress AS (
     SELECT
@@ -4277,9 +3947,7 @@ dependency_progress AS (
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
     FROM task_dependencies td INDEXED BY task_dependencies_reverse_idx
     WHERE td.blocked_task_id IN (
-        SELECT id FROM older_page
-        UNION ALL
-        SELECT id FROM newer_page
+        SELECT id FROM paged_board_tasks
     )
     GROUP BY td.blocked_task_id
 )
@@ -4306,34 +3974,20 @@ SELECT
     page.metadata_json,
     dependency_progress.dependency_satisfied_count,
     dependency_progress.dependency_total_count
-FROM older_page page
+FROM paged_board_tasks page
 LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id
-UNION ALL
-SELECT
-    page.id,
-    page.project_id,
-    page.project_workflow_link_id,
-    page.workflow_id,
-    page.workflow_revision_seen,
-    page.task_seq,
-    page.short_id,
-    page.title,
-    page.body,
-    page.source_url,
-    page.source_workspace_id,
-    page.managed_worktree_id,
-    page.execution_target_mode,
-    page.execution_target_requested_ref,
-    page.execution_target_resolved_ref,
-    page.execution_target_commit_oid,
-    page.execution_target_provenance,
-    page.created_at_unix_ms,
-    page.updated_at_unix_ms,
-    page.metadata_json,
-    dependency_progress.dependency_satisfied_count,
-    dependency_progress.dependency_total_count
-FROM newer_page page
-LEFT JOIN dependency_progress ON dependency_progress.task_id = page.id;
+ORDER BY
+    page.sort_null_labels ASC,
+    page.sort_updated_ascending ASC,
+    page.sort_updated_descending DESC,
+    page.sort_created_ascending ASC,
+    page.sort_created_descending DESC,
+    page.sort_labels_ascending ASC,
+    page.sort_labels_descending DESC,
+    page.sort_short_id_ascending ASC,
+    page.sort_short_id_descending DESC,
+    page.sort_tiebreak_ascending ASC,
+    page.sort_tiebreak_descending DESC;
 
 
 -- name: CountWorktreesByWorkspace :one

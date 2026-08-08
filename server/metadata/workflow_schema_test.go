@@ -97,6 +97,11 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if !columnExists(t, store.db, "workflow_edges", "parameters_json") {
 		t.Fatal("workflow_edges.parameters_json should exist")
 	}
+	for _, column := range []string{"prompt_template", "input_fields_json", "output_fields_json"} {
+		if columnExists(t, store.db, "workflow_nodes", column) {
+			t.Fatalf("workflow_nodes.%s should not exist; Node-owned invocation contracts are deleted", column)
+		}
+	}
 	if !columnExists(t, store.db, "workflow_transition_groups", "description") {
 		t.Fatal("workflow_transition_groups.description should exist")
 	}
@@ -564,13 +569,13 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	execSeed(t, store.db, "other workflow", `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES (?, 'Other', 1, ?, ?)`, otherWorkflowID, now, now)
 	execSeed(t, store.db, "node groups", `INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name) VALUES ('group-workflow-1', ?, 'impl', 'Implementation'), ('group-other', ?, 'impl', 'Implementation')`, workflowID, otherWorkflowID)
 
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-second-start', ?, 'second_start', 'start', 'Second Start', '[]')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-invalid-kind', ?, 'bad', 'robot', 'Bad', '[]')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode, output_fields_json) VALUES ('node-terminal-completion-mode', ?, 'terminal_mode', 'terminal', 'Terminal Mode', 'tool', '[]')`, workflowID)
-	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-valid', ?, 'script_valid', 'script', 'Script Valid', '[]', 'scripts/complete')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-script-blank-path', ?, 'script_blank', 'script', 'Script Blank', '[]', '   ')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, script_path) VALUES ('node-agent-script-path', ?, 'agent_script_path', 'agent', 'Agent Script Path', '[]', 'scripts/complete')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json, group_id) VALUES ('node-cross-group', ?, 'cross_group', 'agent', 'Cross Group', '[]', 'group-other')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES ('node-second-start', ?, 'second_start', 'start', 'Second Start')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES ('node-invalid-kind', ?, 'bad', 'robot', 'Bad')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode) VALUES ('node-terminal-completion-mode', ?, 'terminal_mode', 'terminal', 'Terminal Mode', 'tool')`, workflowID)
+	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-script-valid', ?, 'script_valid', 'script', 'Script Valid', 'scripts/complete')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-script-blank-path', ?, 'script_blank', 'script', 'Script Blank', '   ')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-agent-script-path', ?, 'agent_script_path', 'agent', 'Agent Script Path', 'scripts/complete')`, workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, group_id) VALUES ('node-cross-group', ?, 'cross_group', 'agent', 'Cross Group', 'group-other')`, workflowID)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-empty-key', 'group-start', 'bad_context_empty', 'node-agent', 0, 'continue_session', 'selected_node', '', '{}', '{}')`)

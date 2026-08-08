@@ -72,7 +72,7 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 		_, _, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
 			SessionID: runtimeHandle.plan.sessionID,
 			SourceID:  req.ClientRequestID,
-			Text:      req.Prompt,
+			Text:      runtimeHandle.plan.PromptHistoryText(req.Prompt),
 		})
 		if err != nil {
 			return serverapi.RunPromptResponse{}, err

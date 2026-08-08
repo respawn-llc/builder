@@ -17,7 +17,6 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         group_id: node.groupID.length > 0 ? node.groupID : undefined,
         group_key: node.groupKey.length > 0 ? node.groupKey : undefined,
         subagent_role: node.subagentRole.length > 0 ? node.subagentRole : undefined,
-        prompt_template: node.promptTemplate.length > 0 ? node.promptTemplate : undefined,
         completion_mode:
           node.completionMode !== undefined && node.completionMode.length > 0
             ? node.completionMode
@@ -26,10 +25,6 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
           node.scriptPath !== undefined && node.scriptPath !== null && node.scriptPath.trim().length > 0
             ? node.scriptPath
             : undefined,
-        input_fields: node.inputFields.map((field) => ({
-          name: field.name,
-          description: field.description,
-        })),
         join_input_providers: node.joinInputProviders.map((provider) => ({
           input_name: provider.inputName,
           provider_edge_id: provider.providerEdgeID,
@@ -51,6 +46,8 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         transition_group_id: edge.transitionGroupID,
         key: edge.key,
         target_node_id: edge.targetNodeID,
+        assignee_selection: edge.assigneeSelection,
+        thinking_selection: edge.thinkingSelection,
         requires_approval: edge.requiresApproval,
         context_mode: edge.contextMode,
         context_source: {
@@ -61,6 +58,7 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         parameters: edge.parameters.map((parameter) => ({
           key: parameter.key,
           description: parameter.description,
+          purpose: parameter.purpose,
         })),
       }),
     ),

@@ -40,11 +40,8 @@ func testTerminalNode(workflowID runtimeids.WorkflowID, id workflow.NodeID, key 
 func testNodeFields(node workflow.Node) workflow.NodeFields {
 	return workflow.NodeFields{
 		SubagentRole:       workflow.NodeSubagentRole(node),
-		PromptTemplate:     workflow.NodePromptTemplate(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
-		InputFields:        workflow.NodeInputFields(node),
 		JoinInputProviders: workflow.NodeJoinInputProviders(node),
-		OutputFields:       workflow.NodeOutputFields(node),
 		ScriptPath:         workflow.NodeScriptPath(node),
 	}
 }
@@ -66,7 +63,7 @@ func updateNodeAt(def *workflow.Definition, index int, edit func(*workflow.NodeI
 }
 
 func joinParameterWorkflow(t *testing.T) workflow.Definition {
-	return workflow.Definition{
+	return normalizeWorkflowEdgeShape(workflow.Definition{
 		ID:          testsetup.WorkflowID(t, "workflow_join_parameters"),
 		DisplayName: "Join Parameter Workflow",
 		Nodes: []workflow.Node{
@@ -95,5 +92,24 @@ func joinParameterWorkflow(t *testing.T) workflow.Definition {
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_join_parameters"), ID: "edge_join_consume", Key: "consume", TransitionGroupID: "group_join_consume", TargetNodeID: "node_consume", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Use {{.Params.plan}} and {{.Params.risk}}."},
 			{WorkflowID: testsetup.WorkflowID(t, "workflow_join_parameters"), ID: "edge_consume_done", Key: "done", TransitionGroupID: "group_consume_done", TargetNodeID: "node_done", ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}},
 		},
+	})
+}
+
+func normalizeWorkflowEdgeShape(def workflow.Definition) workflow.Definition {
+	def.Edges = append([]workflow.Edge(nil), def.Edges...)
+	for index := range def.Edges {
+		if def.Edges[index].AssigneeSelection == "" {
+			def.Edges[index].AssigneeSelection = workflow.AssigneeSelectionConfigured
+		}
+		if def.Edges[index].ThinkingSelection == "" {
+			def.Edges[index].ThinkingSelection = workflow.ThinkingSelectionConfigured
+		}
+		def.Edges[index].Parameters = append([]workflow.Parameter(nil), def.Edges[index].Parameters...)
+		for parameterIndex := range def.Edges[index].Parameters {
+			if def.Edges[index].Parameters[parameterIndex].Purpose == "" {
+				def.Edges[index].Parameters[parameterIndex].Purpose = workflow.ParameterPurposeOrdinary
+			}
+		}
 	}
+	return def
 }

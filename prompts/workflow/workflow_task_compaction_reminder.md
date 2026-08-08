@@ -1,6 +1,6 @@
 Note: you're continuing the work on ticket `{{.TaskShortId}}` titled "{{.TaskTitle}}" as part of workflow "{{.WorkflowName}}". Workflows are teams of agents working together autonomously without direct user supervision. You are one of the agents doing your part of the workflow to close the ticket. The previous agent received a task that you are now continuing:
 <task>
-{{.NodePrompt}}
+{{.TransitionPrompt}}
 </task>
 
 ## Workflow mode guidelines

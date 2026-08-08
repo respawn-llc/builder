@@ -152,6 +152,7 @@ const (
 	WorktreeBranchCleanupModeRetain            WorktreeBranchCleanupMode = "retain"
 	WorktreeBranchCleanupModeAutoIfKentCreated WorktreeBranchCleanupMode = "auto_if_kent_created"
 	WorktreeBranchCleanupModeDeleteSafe        WorktreeBranchCleanupMode = "delete_safe"
+	WorktreeBranchCleanupModeDeleteForce       WorktreeBranchCleanupMode = "delete_force"
 )
 
 type WorktreeBranchCleanupOutcomeKind string
@@ -400,7 +401,8 @@ func (policy WorktreeBranchCleanupMode) Validate() error {
 	switch policy {
 	case WorktreeBranchCleanupModeRetain,
 		WorktreeBranchCleanupModeAutoIfKentCreated,
-		WorktreeBranchCleanupModeDeleteSafe:
+		WorktreeBranchCleanupModeDeleteSafe,
+		WorktreeBranchCleanupModeDeleteForce:
 		return nil
 	default:
 		return errors.New("worktree branch cleanup policy is invalid")

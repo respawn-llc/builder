@@ -60,7 +60,6 @@ export function TaskDetailList({
   onQuestionSelectionChange,
   onScrollElementChange,
   onSaveDraft,
-  openLink,
   pixelOffsetRequest,
   questionSelections,
   relationshipNavigationAvailable,
@@ -90,7 +89,6 @@ export function TaskDetailList({
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   relationshipNavigationAvailable: boolean;
@@ -213,7 +211,6 @@ export function TaskDetailList({
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
           onSaveDraft={onSaveDraft}
-          openLink={openLink}
           questionSelections={questionSelections}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
@@ -256,7 +253,6 @@ type TaskDetailListRowProps = Readonly<{
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
@@ -454,7 +450,6 @@ function CommentItemRow({
   item,
   mutations,
   onEditingCommentChange,
-  openLink,
 }: TaskDetailListRowProps): ReactNode {
   const comment = item.kind === "comment" ? item.comment : undefined;
   return comment === undefined ? null : (
@@ -466,7 +461,6 @@ function CommentItemRow({
       onEdit={(nextComment) => {
         onEditingCommentChange({ id: nextComment.id, body: nextComment.body });
       }}
-      openLink={openLink}
     />
   );
 }

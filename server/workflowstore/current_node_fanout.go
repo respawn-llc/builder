@@ -9,12 +9,14 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type currentNodeFanoutTarget struct {
 	BranchKey   workflow.TransitionBranchKey
 	CurrentNode workflow.CurrentNode
 	Node        workflow.Node
+	NodeKind    workflow.NodeKind
 }
 
 func completeCurrentNodeFanout(
@@ -28,6 +30,8 @@ func completeCurrentNodeFanout(
 	outputValues map[string]string,
 	workflowVersion int64,
 	group workflow.TransitionGroup,
+	catalog workflow.TargetAgentCatalog,
+	resolveRetainedSessionSelection func(context.Context, runtimeids.SessionID) (*workflow.AgentExecutionSelection, error),
 	createdAt time.Time,
 ) (CurrentNodeCompletionResult, error) {
 	if currentSource.Reference.IsBranchScoped() {
@@ -48,8 +52,11 @@ func completeCurrentNodeFanout(
 			target.Edge,
 			source,
 			target.Node,
+			catalog,
+			resolveRetainedSessionSelection,
 			currentSource,
 			outputValues,
+			commentary,
 			&branchKey,
 		)
 		if err != nil {
@@ -65,6 +72,7 @@ func completeCurrentNodeFanout(
 			Target: workflow.PendingApprovalTarget{
 				CurrentNode: targetCurrentNode,
 				DisplayName: workflow.NodeDisplayName(target.Node),
+				NodeKind:    target.Node.Kind(),
 			},
 			EffectiveEdge: target.Edge,
 			ContextSourceResolution: workflow.PendingApprovalContextSourceResolution{
@@ -140,7 +148,7 @@ func replaceCurrentNodeWithFanout(
 	if removed != 1 {
 		return errors.New("fan-out source current node is no longer current")
 	}
-	return insertTaskFanoutTargets(ctx, q, source.TaskID, created)
+	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets)
 }
 
 func validateFanoutTargets(taskID workflow.TaskID, targets []workflow.CurrentNode) error {
@@ -189,4 +197,49 @@ func insertTaskFanoutTargets(
 		}
 	}
 	return nil
+}
+
+func insertFrozenTaskFanoutTargets(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	taskID workflow.TaskID,
+	targets []currentNodeFanoutTarget,
+) error {
+	created := make([]workflow.CurrentNode, 0, len(targets))
+	for _, target := range targets {
+		created = append(created, target.CurrentNode)
+	}
+	if err := validateFanoutTargets(taskID, created); err != nil {
+		return err
+	}
+	if err := q.InsertTaskActiveFanout(ctx, string(taskID)); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		branchKey, _ := target.CurrentNode.Reference.TransitionBranchKey()
+		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
+			TaskID:              string(taskID),
+			TransitionBranchKey: string(branchKey),
+		}); err != nil {
+			return err
+		}
+		nodeKind, err := target.nodeKind()
+		if err != nil {
+			return err
+		}
+		if err := insertTaskCurrentNodeWithKind(ctx, q, target.CurrentNode, nodeKind); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (target currentNodeFanoutTarget) nodeKind() (workflow.NodeKind, error) {
+	if target.NodeKind != "" {
+		return target.NodeKind, nil
+	}
+	if target.Node != nil {
+		return target.Node.Kind(), nil
+	}
+	return "", errors.New("fan-out target node kind is required")
 }

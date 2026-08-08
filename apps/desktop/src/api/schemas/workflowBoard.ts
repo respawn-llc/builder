@@ -410,8 +410,7 @@ export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
     workflow_id: workflowIDSchema,
     node_id: z.string(),
     cards: boardCardsSchema,
-    previous_page_token: z.string().nullable(),
-    next_page_token: z.string().nullable(),
+    next_offset: z.number().int().nonnegative().nullable().optional().default(null),
     generated_at_unix_ms: z.number(),
   })
   .strict()
@@ -420,8 +419,7 @@ export const boardNodeCardsPageSchema: z.ZodType<BoardNodeCardsPage> = z
     workflowID: value.workflow_id,
     nodeID: value.node_id,
     cards: value.cards,
-    previousPageToken: value.previous_page_token,
-    nextPageToken: value.next_page_token,
+    nextOffset: value.next_offset,
     generatedAt: value.generated_at_unix_ms,
   }));
 

@@ -12,6 +12,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
@@ -19,6 +20,24 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 		return nil, fmt.Errorf("task id is required")
 	}
 	return listTaskCurrentNodes(ctx, s.queries, taskID)
+}
+
+func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) error {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return fmt.Errorf("read task for current node event: %w", err)
+	}
+	workflowID := task.WorkflowID
+	if err := s.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       &task.ProjectID,
+		WorkflowID:      &workflowID,
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          action,
+		PrimaryEntityID: string(taskID),
+	}); err != nil {
+		return fmt.Errorf("publish current node task event: %w", err)
+	}
+	return nil
 }
 
 // ListCurrentNodesByTask returns the exact durable Current Nodes for each
@@ -29,6 +48,33 @@ func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.T
 		return nil, errors.New("workflow store is required")
 	}
 	return ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+}
+
+func interruptCurrentNodeQuery(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	reference workflow.CurrentNodeReference,
+	reason workflow.CurrentNodeInterruptionReason,
+	detailJSON string,
+	now int64,
+) (int64, error) {
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		return q.InterruptBranchCurrentNode(ctx, sqlitegen.InterruptBranchCurrentNodeParams{
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
+			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+			InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+		})
+	}
+	return q.InterruptSerialCurrentNode(ctx, sqlitegen.InterruptSerialCurrentNodeParams{
+		TaskID:                 string(reference.TaskID),
+		NodeID:                 string(reference.NodeID),
+		InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+		InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
+		InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+	})
 }
 
 // ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
@@ -120,14 +166,19 @@ func newNonExecutableCurrentNodeWithPriorValues(
 	return workflow.NewCurrentNodeWithMaterializedValues(reference, nil, priorValues, nil, nil)
 }
 
-func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, enteredByEdgeID workflow.EdgeID) (workflow.CurrentNode, error) {
+func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, enteredByEdgeID workflow.EdgeID, selection *workflow.AgentExecutionSelection) (workflow.CurrentNode, error) {
 	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNodeWithEntry(reference, &enteredByEdgeID, nil, workflow.MaterializedPriorValues{}, nil, &workflow.CurrentNodeScheduling{
+	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, nil, workflow.MaterializedPriorValues{}, nil, &workflow.CurrentNodeScheduling{
 		State: workflow.CurrentNodeSchedulingReady,
-	})
+	}, selection)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	currentNode.EnteredByEdgeID = &enteredByEdgeID
+	return currentNode, nil
 }
 
 func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.CurrentNode, error) {
@@ -165,11 +216,53 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithEntry(reference, enteredByEdgeID, currentInputValues, priorValues, sessionID, scheduling)
+	selection, err := currentNodeExecutionSelectionFromRow(row)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, currentInputValues, priorValues, sessionID, scheduling, selection)
 	if err != nil {
 		return workflow.CurrentNode{}, fmt.Errorf("decode current node: %w", err)
 	}
+	currentNode.EnteredByEdgeID = enteredByEdgeID
 	return currentNode, nil
+}
+
+func currentNodeExecutionSelectionFromRow(row sqlitegen.ListTaskCurrentNodesRow) (*workflow.AgentExecutionSelection, error) {
+	kind := workflow.NodeKind(strings.TrimSpace(row.NodeKind))
+	assigneePresent := row.EffectiveAssignee.Valid
+	thinkingPresent := row.EffectiveThinking.Valid
+	originPresent := row.AssigneeOrigin.Valid
+	switch kind {
+	case workflow.NodeKindAgent:
+		if !assigneePresent || !originPresent {
+			return nil, errors.New("Agent current node requires effective assignee and origin")
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if assigneePresent || thinkingPresent || originPresent {
+			return nil, fmt.Errorf("%s current node cannot carry Agent execution selection", kind)
+		}
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("current node node kind %q is invalid", kind)
+	}
+	var thinking *workflow.ThinkingValue
+	if thinkingPresent {
+		value, err := workflow.NewThinkingValue(row.EffectiveThinking.String)
+		if err != nil {
+			return nil, fmt.Errorf("decode current node thinking: %w", err)
+		}
+		thinking = &value
+	}
+	selection, err := workflow.NewAgentExecutionSelection(
+		row.EffectiveAssignee.String,
+		thinking,
+		workflow.AssigneeOrigin(row.AssigneeOrigin.String),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("decode current node Agent execution selection: %w", err)
+	}
+	return &selection, nil
 }
 
 func currentNodeInputValuesFromJSON(raw string) (map[string]string, error) {
@@ -224,6 +317,31 @@ func currentNodeSchedulingFromRow(row sqlitegen.ListTaskCurrentNodesRow) (*workf
 }
 
 func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNode) error {
+	node, err := q.GetWorkflowNode(ctx, string(currentNode.Reference.NodeID))
+	if err != nil {
+		return fmt.Errorf("resolve current node kind: %w", err)
+	}
+	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind))
+}
+
+func insertTaskCurrentNodeWithKind(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+	nodeKind workflow.NodeKind,
+) error {
+	switch nodeKind {
+	case workflow.NodeKindAgent:
+		if currentNode.AgentExecutionSelection == nil {
+			return errors.New("Agent current node requires effective assignee and origin")
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if currentNode.AgentExecutionSelection != nil {
+			return fmt.Errorf("%s current node cannot carry Agent execution selection", nodeKind)
+		}
+	default:
+		return fmt.Errorf("current node node kind %q is invalid", nodeKind)
+	}
 	params, err := taskCurrentNodeInsertParams(currentNode)
 	if err != nil {
 		return err
@@ -354,31 +472,7 @@ func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID wo
 	if err != nil {
 		return nil, err
 	}
-	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	interrupted := make([]workflow.CurrentNode, 0, len(currentNodes))
-	for _, currentNode := range currentNodes {
-		if currentNode.Scheduling == nil || currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
-			continue
-		}
-		node, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
-		if err != nil {
-			return nil, err
-		}
-		if !executableNodeKind(node.Kind()) {
-			continue
-		}
-		eligible, err := s.IsCurrentNodeExecutionEligible(ctx, currentNode.Reference)
-		if err != nil {
-			return nil, err
-		}
-		if eligible {
-			interrupted = append(interrupted, currentNode)
-		}
-	}
-	return interrupted, nil
+	return s.interruptedExecutableCurrentNodesWithDefinition(ctx, taskID, definition)
 }
 
 // InterruptAdmittedCurrentNode records that a scope preparation or live
@@ -427,7 +521,7 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
 // InterruptCurrentNode records an interruption for ready or admitted
@@ -451,32 +545,14 @@ func (s *Store) InterruptCurrentNode(
 		return fmt.Errorf("encode current node interruption detail: %w", err)
 	}
 	now := s.now().UTC().UnixMilli()
-	var interrupted int64
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		interrupted, err = s.queries.InterruptBranchCurrentNode(ctx, sqlitegen.InterruptBranchCurrentNodeParams{
-			TaskID:                 string(reference.TaskID),
-			NodeID:                 string(reference.NodeID),
-			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
-			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
-			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		})
-	} else {
-		interrupted, err = s.queries.InterruptSerialCurrentNode(ctx, sqlitegen.InterruptSerialCurrentNodeParams{
-			TaskID:                 string(reference.TaskID),
-			NodeID:                 string(reference.NodeID),
-			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
-			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		})
-	}
+	interrupted, err := interruptCurrentNodeQuery(ctx, s.queries, reference, reason, string(detailJSON), now)
 	if err != nil {
 		return err
 	}
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -515,6 +591,16 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		}
 		references = append(references, reference)
 	}
+	seenTasks := make(map[workflow.TaskID]struct{}, len(references))
+	for _, reference := range references {
+		if _, seen := seenTasks[reference.TaskID]; seen {
+			continue
+		}
+		seenTasks[reference.TaskID] = struct{}{}
+		if err := s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted); err != nil {
+			return references, err
+		}
+	}
 	return references, nil
 }
 
@@ -539,6 +625,9 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		InterruptionReason:     sql.NullString{},
 		InterruptionDetailJson: sql.NullString{},
 		InterruptedAtUnixMs:    sql.NullInt64{},
+		EffectiveAssignee:      sql.NullString{},
+		EffectiveThinking:      sql.NullString{},
+		AssigneeOrigin:         sql.NullString{},
 	}
 	if branchKey, ok := currentNode.Reference.TransitionBranchKey(); ok {
 		params.TransitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
@@ -548,6 +637,22 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 	}
 	if currentNode.SessionID != nil {
 		params.SessionID = sql.NullString{String: currentNode.SessionID.String(), Valid: true}
+	}
+	if currentNode.AgentExecutionSelection != nil {
+		params.EffectiveAssignee = sql.NullString{
+			String: currentNode.AgentExecutionSelection.Assignee,
+			Valid:  true,
+		}
+		params.AssigneeOrigin = sql.NullString{
+			String: string(currentNode.AgentExecutionSelection.Origin),
+			Valid:  true,
+		}
+		if currentNode.AgentExecutionSelection.Thinking != nil {
+			params.EffectiveThinking = sql.NullString{
+				String: string(*currentNode.AgentExecutionSelection.Thinking),
+				Valid:  true,
+			}
+		}
 	}
 	if currentNode.Scheduling == nil {
 		return params, nil

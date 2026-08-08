@@ -69,6 +69,66 @@ func TestCompleteCurrentNodeMaterializesChainedInputsAndPriorTransitionParameter
 	}
 }
 
+func TestCompleteCurrentNodeMaterializesCurrentAndPriorTransitionCommentary(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-review-"+workflowID.String()),
+		).PromptTemplate = "Review {{.Params.commentary}}."
+		workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			workflow.EdgeID("edge-audit-"+workflowID.String()),
+		).PromptTemplate = "Audit {{.Params.review.commentary}}."
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+		Commentary:   "plan handoff",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode plan: %v", err)
+	}
+	review := reviewResult.Mutation.Created[0]
+	if review.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review current inputs = %+v, want direct commentary", review.CurrentInputValues)
+	}
+	if review.PriorValues.TransitionParameters["review"][workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review prior Transition values = %+v, want review commentary", review.PriorValues)
+	}
+	reviewStart, err := store.ResolveCurrentNodeStartContext(ctx, review.Reference)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext review: %v", err)
+	}
+	if reviewStart.ParameterValues[workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("review start parameters = %+v, want direct commentary", reviewStart.ParameterValues)
+	}
+
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Reference,
+		TransitionID: "audit",
+		Commentary:   "review handoff",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode review: %v", err)
+	}
+	audit := auditResult.Mutation.Created[0]
+	if audit.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "review handoff" {
+		t.Fatalf("audit current inputs = %+v, want direct commentary", audit.CurrentInputValues)
+	}
+	if audit.PriorValues.TransitionParameters["review"][workflow.RuntimePromptParameterCommentary] != "plan handoff" {
+		t.Fatalf("audit prior Transition values = %+v, want review commentary", audit.PriorValues)
+	}
+}
+
 func TestCompleteCurrentNodeRecoversEnteringTransitionParameterFromCurrentInput(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
@@ -119,12 +179,6 @@ func TestCompleteCurrentNodeUsesTransitionParametersInsteadOfTargetInputFields(t
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		review := nodeByKey(t, def, "review")
-		reviewRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(review))
-		reviewRecord.InputFields = []workflow.InputField{{
-			Name:        "changes",
-			Description: "Legacy target input.",
-		}}
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
@@ -233,19 +287,18 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		auditID := workflow.NodeID("node-audit-" + workflowID.String())
 		auditGroupID := workflow.TransitionGroupID("group-audit-" + workflowID.String())
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID:             auditID,
-			WorkflowID:     workflowID,
-			Key:            "audit",
-			Kind:           workflow.NodeKindAgent,
-			DisplayName:    "Audit",
-			SubagentRole:   "coder",
-			PromptTemplate: "Audit.",
+			ID:           auditID,
+			WorkflowID:   workflowID,
+			Key:          "audit",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Audit",
+			SubagentRole: "coder",
 		})
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
 			workflow.EdgeID("edge-join-synth-"+workflowID.String()),
-		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}}."
+		).PromptTemplate = "Synthesize {{.Params.joined}} from {{.Params.split.summary}} and {{.Params.split.commentary}}."
 		for index := range req.TransitionGroups {
 			if req.TransitionGroups[index].SourceNodeID == workflow.NodeIDOf(synth) {
 				req.TransitionGroups[index].TransitionID = "audit"
@@ -258,7 +311,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 			}
 			req.Edges[index].Key = "audit"
 			req.Edges[index].TargetNodeID = auditID
-			req.Edges[index].PromptTemplate = "Audit {{.Params.synthesize.joined}} from {{.Params.split.summary}}."
+			req.Edges[index].PromptTemplate = "Audit {{.Params.synthesize.joined}} from {{.Params.split.summary}} and {{.Params.split.commentary}}."
 		}
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           auditGroupID,
@@ -284,6 +337,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 		Source:       plan.Reference,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "approved plan"},
+		Commentary:   "implementation handoff",
 	})
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode split: %v", err)
@@ -317,6 +371,9 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 	if synth.PriorValues.TransitionParameters["split"]["summary"] != "approved plan" {
 		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split output retained across join", synth.PriorValues)
 	}
+	if synth.PriorValues.TransitionParameters["split"][workflow.RuntimePromptParameterCommentary] != "implementation handoff" {
+		t.Fatalf("synth prior parameter values = %+v, want pre-fanout split commentary retained across join", synth.PriorValues)
+	}
 	if synth.PriorValues.TransitionParameters["synthesize"]["joined"] != "joined implementation" {
 		t.Fatalf("synth prior parameter values = %+v, want join transition output under synthesize namespace", synth.PriorValues)
 	}
@@ -330,6 +387,7 @@ func TestCompleteCurrentNodeJoinCarriesPriorParametersAndMaterializesJoinOutput(
 	}
 	if len(auditResult.Mutation.Created) != 1 ||
 		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["split"]["summary"] != "approved plan" ||
+		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["split"][workflow.RuntimePromptParameterCommentary] != "implementation handoff" ||
 		auditResult.Mutation.Created[0].PriorValues.TransitionParameters["synthesize"]["joined"] != "joined implementation" {
 		t.Fatalf("audit current node = %+v, want propagated pre-fanout and join transition outputs", auditResult.Mutation.Created)
 	}
@@ -341,22 +399,18 @@ func TestCompleteCurrentNodeJoinDerivesProvidersFromThreeIncomingBranches(t *tes
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		branchCID := workflow.NodeID("node-impl-c-" + workflowID.String())
 		branchCGroupID := workflow.TransitionGroupID("group-join-c-" + workflowID.String())
-		synth := nodeByKey(t, def, "synth")
-		synthRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(synth))
-		synthRecord.InputFields = nil
 		workflowGraphSaveEdgeRecord(
 			t,
 			req.Edges,
 			workflow.EdgeID("edge-join-synth-"+workflowID.String()),
 		).PromptTemplate = "Synthesize {{.Params.joined}} {{.Params.compliance_findings}}."
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID:             branchCID,
-			WorkflowID:     workflowID,
-			Key:            "impl_c",
-			Kind:           workflow.NodeKindAgent,
-			DisplayName:    "Implement C",
-			SubagentRole:   "coder",
-			PromptTemplate: "C.",
+			ID:           branchCID,
+			WorkflowID:   workflowID,
+			Key:          "impl_c",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Implement C",
+			SubagentRole: "coder",
 		})
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           branchCGroupID,
@@ -455,33 +509,28 @@ func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, st
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes,
 			NodeRecord{
-				ID:             planID,
-				WorkflowID:     created.ID,
-				Key:            "plan",
-				Kind:           workflow.NodeKindAgent,
-				DisplayName:    "Plan",
-				SubagentRole:   "coder",
-				PromptTemplate: "Plan the work.",
-				OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Plan summary."}},
+				ID:           planID,
+				WorkflowID:   created.ID,
+				Key:          "plan",
+				Kind:         workflow.NodeKindAgent,
+				DisplayName:  "Plan",
+				SubagentRole: "coder",
 			},
 			NodeRecord{
-				ID:             reviewID,
-				WorkflowID:     created.ID,
-				Key:            "review",
-				Kind:           workflow.NodeKindAgent,
-				DisplayName:    "Review",
-				SubagentRole:   "coder",
-				PromptTemplate: "Review {{.Inputs.summary}}.",
-				InputFields:    []workflow.InputField{{Name: "summary", Description: "Plan summary."}},
+				ID:           reviewID,
+				WorkflowID:   created.ID,
+				Key:          "review",
+				Kind:         workflow.NodeKindAgent,
+				DisplayName:  "Review",
+				SubagentRole: "coder",
 			},
 			NodeRecord{
-				ID:             auditID,
-				WorkflowID:     created.ID,
-				Key:            "audit",
-				Kind:           workflow.NodeKindAgent,
-				DisplayName:    "Audit",
-				SubagentRole:   "coder",
-				PromptTemplate: "Audit {{.Params.review.summary}}.",
+				ID:           auditID,
+				WorkflowID:   created.ID,
+				Key:          "audit",
+				Kind:         workflow.NodeKindAgent,
+				DisplayName:  "Audit",
+				SubagentRole: "coder",
 			},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
@@ -492,7 +541,7 @@ func createMaterializedCurrentNodeWorkflow(t *testing.T, ctx context.Context, st
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the work."},
-			EdgeRecord{ID: workflow.EdgeID("edge-review-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: reviewGroupID, Key: "review", TargetNodeID: reviewID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Inputs.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Review summary."}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-review-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: reviewGroupID, Key: "review", TargetNodeID: reviewID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Review summary."}}},
 			EdgeRecord{ID: workflow.EdgeID("edge-audit-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: auditGroupID, Key: "audit", TargetNodeID: auditID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Audit {{.Params.review.summary}}."},
 			EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 		)

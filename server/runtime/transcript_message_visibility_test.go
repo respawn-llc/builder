@@ -25,6 +25,7 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 		{name: "active goal continuation", messageType: llm.MessageTypeActiveGoalContinuation, want: transcript.EntryVisibilityDetail},
 		{name: "background notice", messageType: llm.MessageTypeBackgroundNotice, want: transcript.EntryVisibilityOngoingCollapsed},
 		{name: "custom tool output", messageType: llm.MessageTypeCustomToolCallOutput, want: transcript.EntryVisibilityOngoing},
+		{name: "agent steer", messageType: llm.MessageTypeAgentSteer, want: transcript.EntryVisibilityOngoing},
 	}
 
 	for _, tt := range cases {

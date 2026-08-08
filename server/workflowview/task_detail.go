@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -50,6 +51,20 @@ func (d *TaskDetail) GetTask(ctx context.Context, taskID string) (serverapi.Work
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	return d.task(ctx, task)
+}
+
+func (d *TaskDetail) ListCurrentNodes(ctx context.Context, taskID string) ([]workflow.CurrentNode, error) {
+	if d == nil || d.queries == nil {
+		return nil, errors.New("task detail is required")
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return nil, ErrTaskIDRequired
+	}
+	nodesByTask, err := workflowstore.ListCurrentNodesByTaskWithQueries(ctx, d.queries, []workflow.TaskID{workflow.TaskID(taskID)})
+	if err != nil {
+		return nil, err
+	}
+	return nodesByTask[workflow.TaskID(taskID)], nil
 }
 
 func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
@@ -160,7 +175,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		SourceWorkspace:      sourceWorkspace,
 		ExecutionTarget:      executionTarget,
 		WorktreePath:         worktreePath,
-		CurrentNodes:         workflowCurrentNodes(projected.CurrentNodes),
+		CurrentNodes:         ProjectCurrentNodes(projected.CurrentNodes),
 		LiveSessionIDs:       append(make([]string, 0, len(projected.LiveSessionIDs)), projected.LiveSessionIDs...),
 		CurrentScripts:       append(make([]serverapi.WorkflowTaskCurrentScript, 0, len(projected.CurrentScripts)), projected.CurrentScripts...),
 		RetainedSessionCount: int(retainedSessionCount),

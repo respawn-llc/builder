@@ -249,6 +249,9 @@ type TaskCurrentNode struct {
 	InterruptionDetailJson sql.NullString
 	InterruptedAtUnixMs    sql.NullInt64
 	EnteredByEdgeID        sql.NullString
+	EffectiveAssignee      sql.NullString
+	EffectiveThinking      sql.NullString
+	AssigneeOrigin         sql.NullString
 }
 
 type TaskDependency struct {
@@ -351,6 +354,8 @@ type WorkflowEdge struct {
 	ContextSourceNodeKey   string
 	PromptTemplate         string
 	ParametersJson         string
+	AssigneeSelection      string
+	ThinkingSelection      string
 }
 
 type WorkflowNode struct {
@@ -360,11 +365,8 @@ type WorkflowNode struct {
 	Kind                   string
 	DisplayName            string
 	SubagentRole           string
-	PromptTemplate         string
-	OutputFieldsJson       string
 	GroupID                sql.NullString
 	SortOrder              int64
-	InputFieldsJson        string
 	JoinInputProvidersJson string
 	CompletionMode         string
 	ScriptPath             sql.NullString

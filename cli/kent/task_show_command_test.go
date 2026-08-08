@@ -52,6 +52,66 @@ func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	}
 }
 
+func TestTaskShowJSONIncludesEffectiveCurrentNodeSelection(t *testing.T) {
+	thinking := "high"
+	assignee := "reviewer"
+	task := serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: testsetup.WorkflowID(t, "task-show-effective")},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show-effective")},
+		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+			NodeID:            "node-1",
+			EffectiveAssignee: &assignee,
+			EffectiveThinking: &thinking,
+		}},
+	}
+
+	output := taskShowOutputFromDetail(task)
+	if output.CurrentNodes[0].EffectiveAssignee == nil || *output.CurrentNodes[0].EffectiveAssignee != assignee {
+		t.Fatalf("JSON projection effective assignee = %+v, want %q", output.CurrentNodes[0].EffectiveAssignee, assignee)
+	}
+	if output.CurrentNodes[0].EffectiveThinking == nil || *output.CurrentNodes[0].EffectiveThinking != thinking {
+		t.Fatalf("JSON projection effective thinking = %+v, want %q", output.CurrentNodes[0].EffectiveThinking, thinking)
+	}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal task show output: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"effective_assignee":"reviewer"`)) ||
+		!bytes.Contains(encoded, []byte(`"effective_thinking":"high"`)) {
+		t.Fatalf("task show JSON = %s, want effective selection fields", encoded)
+	}
+}
+
+func TestTaskShowHumanOutputReportsEffectiveCurrentNodeSelection(t *testing.T) {
+	thinking := "high"
+	assignee := "reviewer"
+	task := serverapi.WorkflowTaskDetail{
+		Summary: serverapi.WorkflowTaskSummary{
+			ShortID: "KNT-3", Title: "Task", ProjectID: "project-1", CreatedAtUnixMs: 1,
+		},
+		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show-effective-human"), DisplayName: "Workflow"},
+		CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+			NodeID:            "node-1",
+			EffectiveAssignee: &assignee,
+			EffectiveThinking: &thinking,
+		}},
+		Status: serverapi.WorkflowTaskStatus{
+			Kind: serverapi.WorkflowTaskStatusKindActive, NativeState: serverapi.WorkflowTaskNativeStateActive,
+		},
+	}
+
+	var output bytes.Buffer
+	if err := writeTaskDetail(&output, task); err != nil {
+		t.Fatalf("write task detail: %v", err)
+	}
+	text := output.String()
+	if !bytes.Contains([]byte(text), []byte("effective assignee: reviewer")) ||
+		!bytes.Contains([]byte(text), []byte("effective thinking: high")) {
+		t.Fatalf("task show human output = %q, want effective selection", text)
+	}
+}
+
 func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNodeIdentity(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{

@@ -63,17 +63,57 @@ func registryTestResource(ref runtimeids.SessionResourceRef) sessionruntime.Agen
 }
 
 func projectPendingPromptForTest(registry *RuntimeRegistry, sessionID string, request askquestion.AskQuestionRequest) {
-	registry.PromptPending(registryTestResourceRef(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, registryTestResourceRef(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
 }
 
 func resolvePendingPromptForTest(registry *RuntimeRegistry, sessionID string, requestID string) {
 	for _, prompt := range registry.ListPendingPrompts(sessionID) {
 		if prompt.Request.ID == requestID {
-			registry.PromptResolved(prompt.Resource, prompt.ScopeID, requestID)
+			resolvePendingPromptResourceForTest(registry, prompt.Resource, prompt.ScopeID, requestID)
 			return
 		}
 	}
 	panic("pending prompt not found")
+}
+
+func projectPendingPromptResourceForTest(
+	registry *RuntimeRegistry,
+	resource runtimeids.SessionResourceRef,
+	scopeID runtimeids.ExecutionScopeID,
+	request askquestion.AskQuestionRequest,
+	createdAt time.Time,
+) {
+	id := resource.SessionID().String()
+	projected := registry.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+		snapshot, admitted := registry.pendingPrompts.Begin(id, resource, scopeID, request, createdAt)
+		if !admitted {
+			return false
+		}
+		publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
+		registry.publishAttentionPending(id, snapshot)
+		return true
+	})
+	if projected {
+		_ = registry.publishCurrentRuntimeActivity(id)
+	}
+}
+
+func resolvePendingPromptResourceForTest(
+	registry *RuntimeRegistry,
+	resource runtimeids.SessionResourceRef,
+	scopeID runtimeids.ExecutionScopeID,
+	requestID string,
+) {
+	id := resource.SessionID().String()
+	snapshot, resolved := registry.pendingPrompts.Complete(id, resource, scopeID, requestID)
+	if !resolved {
+		return
+	}
+	entry := registry.authorityEntryByRef(resource)
+	if entry != nil {
+		registry.publishPromptResolution(entry, id, snapshot)
+	}
+	_ = registry.publishCurrentRuntimeActivity(id)
 }
 
 func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
@@ -125,7 +165,7 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	ref := registryTestResourceRef(engine.SessionID())
 	registerResource(t, registry, ref, engine)
 	scopeID := runtimeids.NewExecutionScopeID()
-	registry.PromptPending(ref, scopeID, askquestion.AskQuestionRequest{
+	projectPendingPromptResourceForTest(registry, ref, scopeID, askquestion.AskQuestionRequest{
 		ID:       "ask-1",
 		StepID:   registryTestStepID,
 		Question: "Continue?",
@@ -152,7 +192,7 @@ func TestSubscriptionAndPromptResolutionWithPendingPromptDoNotDeadlock(t *testin
 	<-hydrationResolverStarted
 	resolutionDone := make(chan struct{})
 	go func() {
-		registry.PromptResolved(ref, scopeID, "ask-1")
+		resolvePendingPromptResourceForTest(registry, ref, scopeID, "ask-1")
 		close(resolutionDone)
 	}()
 	select {
@@ -553,6 +593,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		StepID:                     registryTestStepID,
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
+		CommittedProvenance:        &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
 	})
 	message := nextTranscriptMessage(t, sub)
 	if message.Kind() != clientui.TranscriptMessageCommittedRow {
@@ -621,8 +662,21 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 		Kind:   runtime.EventReasoningDelta,
 		StepID: registryTestStepID,
 		ReasoningDelta: &llm.ReasoningSummaryDelta{
-			Key:  "planning",
+			SourceCoordinate: &llm.ReasoningSourceCoordinate{
+				OutputIndex: func() *int64 { value := int64(0); return &value }(),
+				PartIndex:   func() *int64 { value := int64(0); return &value }(),
+			},
+			ItemIdentity: func() *llm.ReasoningItemIdentity {
+				part := int64(0)
+				return &llm.ReasoningItemIdentity{ItemID: "planning", PartIndex: &part}
+			}(),
 			Text: "Planning the next action",
+		},
+		ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{
+			Provider: func() *llm.ReasoningItemIdentity {
+				part := int64(0)
+				return &llm.ReasoningItemIdentity{ItemID: "planning", PartIndex: &part}
+			}(),
 		},
 	}); err != nil {
 		t.Fatalf("publish active reasoning: %v", err)
@@ -663,10 +717,10 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 			payload.ActiveStep,
 		)
 	}
-	if payload.ActiveReasoning != nil {
+	if payload.ActiveThinkingStatus != nil || len(payload.ActiveReasoningTraces) != 0 {
 		t.Fatalf(
-			"hydrated active reasoning = %+v, want none after canonical runtime became idle",
-			payload.ActiveReasoning,
+			"hydrated active reasoning = status %+v traces %+v, want none after canonical runtime became idle",
+			payload.ActiveThinkingStatus, payload.ActiveReasoningTraces,
 		)
 	}
 	if payload.ActiveReviewer != nil {
@@ -703,15 +757,15 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 
 	engine := &runtime.Engine{}
 	registerResource(t, registry, predecessor, engine)
-	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, predecessor, predecessorScope, request, time.Now().UTC())
 	if err := registry.ResourceDraining(context.Background(), registryTestResource(predecessor)); err != nil {
 		t.Fatalf("drain predecessor: %v", err)
 	}
 	registerResource(t, registry, successor, engine)
 	t.Cleanup(func() { _ = registry.ResourceDraining(context.Background(), registryTestResource(successor)) })
-	registry.PromptPending(successor, successorScope, request, time.Now().UTC())
-	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
-	registry.PromptResolved(predecessor, predecessorScope, request.ID)
+	projectPendingPromptResourceForTest(registry, successor, successorScope, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, predecessor, predecessorScope, request, time.Now().UTC())
+	resolvePendingPromptResourceForTest(registry, predecessor, predecessorScope, request.ID)
 
 	items := registry.ListPendingPrompts(sessionID.String())
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
@@ -744,7 +798,7 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		StepID:   registryTestStepID,
 		Question: "Proceed?",
 	}
-	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
+	projectPendingPromptResourceForTest(registry, ref, scopeID, request, time.Now().UTC())
 	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePrompt)
 	pendingPrompt := transcriptPayload[clientui.TranscriptPrompt](t, pendingTranscript)
 	if pendingPrompt.Status != clientui.TranscriptPromptStatusPending || pendingPrompt.PromptID != "ask-draining" {
@@ -779,7 +833,7 @@ func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T)
 		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
 	}
 
-	registry.PromptResolved(ref, scopeID, request.ID)
+	resolvePendingPromptResourceForTest(registry, ref, scopeID, request.ID)
 }
 
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {

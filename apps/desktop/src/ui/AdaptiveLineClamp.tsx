@@ -15,10 +15,10 @@ export type AdaptiveLineClampProps = Readonly<{
   children: ReactNode;
   className?: string | undefined;
 }> &
-  Omit<HTMLAttributes<HTMLSpanElement>, "children" | "className">;
+  Omit<HTMLAttributes<HTMLDivElement>, "children" | "className">;
 
 export function AdaptiveLineClamp({ children, className, ...props }: AdaptiveLineClampProps) {
-  const viewportRef = useRef<HTMLSpanElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const lineProbeRef = useRef<HTMLSpanElement | null>(null);
   const [lineCount, setLineCount] = useState<number | null>(null);
   const measure = useCallback(() => {
@@ -56,8 +56,8 @@ export function AdaptiveLineClamp({ children, className, ...props }: AdaptiveLin
   }, [measure]);
 
   return (
-    <span {...props} className={cx("relative block min-h-0 overflow-hidden", className)} ref={viewportRef}>
-      <span style={lineClampStyle(lineCount)}>{children}</span>
+    <div {...props} className={cx("relative block min-h-0 overflow-hidden", className)} ref={viewportRef}>
+      <div style={lineClampStyle(lineCount)}>{children}</div>
       <span
         aria-hidden="true"
         className="pointer-events-none invisible absolute top-0 left-0 block whitespace-nowrap"
@@ -65,7 +65,7 @@ export function AdaptiveLineClamp({ children, className, ...props }: AdaptiveLin
       >
         M
       </span>
-    </span>
+    </div>
   );
 }
 

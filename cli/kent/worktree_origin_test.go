@@ -185,6 +185,48 @@ func TestExternalWorktreeTransitionCommandsHaveNoRuntimeOrigin(t *testing.T) {
 	}
 }
 
+func TestWorktreeDeleteForceBranchRequestsAuthoritativeForceCleanup(t *testing.T) {
+	remote := &worktreeOriginCaptureRemote{}
+	replaceWorktreeOriginRemote(t, remote)
+	unsetWorktreeOriginEnvironment(t)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := worktreeDeleteSubcommand([]string{
+		"--session", "cleanup-session",
+		"--delete-branch",
+		"--force-delete-branch",
+		"feature/a",
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	if remote.delete == nil {
+		t.Fatal("worktree delete request was not sent")
+	}
+	if remote.delete.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeDeleteForce {
+		t.Fatalf("branch cleanup policy = %q, want force delete", remote.delete.BranchCleanupPolicy)
+	}
+}
+
+func TestWorktreeDeleteForceBranchRequiresDeleteBranch(t *testing.T) {
+	remote := &worktreeOriginCaptureRemote{}
+	replaceWorktreeOriginRemote(t, remote)
+	unsetWorktreeOriginEnvironment(t)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := worktreeDeleteSubcommand([]string{
+		"--session", "cleanup-session",
+		"--force-delete-branch",
+		"feature/a",
+	}, &stdout, &stderr)
+	if exitCode != 2 {
+		t.Fatalf("exit=%d stderr=%s, want argument error", exitCode, stderr.String())
+	}
+	if remote.delete != nil {
+		t.Fatal("worktree delete request was sent without --delete-branch")
+	}
+}
+
 func unsetWorktreeOriginEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{sessionenv.RunIDEnv, sessionenv.StepIDEnv} {

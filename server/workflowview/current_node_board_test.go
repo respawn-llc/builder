@@ -1,8 +1,6 @@
 package workflowview
 
 import (
-	"errors"
-	"sort"
 	"testing"
 
 	"core/server/workflowstore"
@@ -64,11 +62,10 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 		fixture.setTaskUpdatedAt(t, task.task.ID, 1_000)
 	}
 	want := []string{
-		string(started[0].task.ID),
-		string(started[1].task.ID),
 		string(started[2].task.ID),
+		string(started[1].task.ID),
+		string(started[0].task.ID),
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(want)))
 
 	request := serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
@@ -80,8 +77,6 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 		},
 	}
 	var got []string
-	var firstPage serverapi.WorkflowBoardNodeCardsListResponse
-	var secondPage serverapi.WorkflowBoardNodeCardsListResponse
 	for pageIndex := 0; ; pageIndex++ {
 		page, err := fixture.board.ListNodeCards(fixture.ctx, request)
 		if err != nil {
@@ -92,41 +87,66 @@ func TestBoardListNodeCardsPaginatesDeterministically(t *testing.T) {
 		}
 		got = append(got, page.Cards[0].TaskID)
 		if pageIndex == 0 {
-			firstPage = page
-			if page.PreviousPageToken != nil || page.NextPageToken == nil {
-				t.Fatalf("first board page tokens = previous %v next %v", page.PreviousPageToken, page.NextPageToken)
+			if page.NextOffset == nil {
+				t.Fatal("first board page has no next offset")
 			}
 		}
-		if pageIndex == 1 {
-			secondPage = page
-			if page.PreviousPageToken == nil {
-				t.Fatal("second board page has no newer-page token")
-			}
-		}
-		if page.NextPageToken == nil {
+		if page.NextOffset == nil {
 			break
 		}
-		request.PageToken = page.NextPageToken
+		request.Offset = page.NextOffset
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("board pagination order = %v, want %v", got, want)
 	}
-	request.PageToken = secondPage.PreviousPageToken
-	newer, err := fixture.board.ListNodeCards(fixture.ctx, request)
+	request.Offset = nil
+	request.Sort = &serverapi.WorkflowTaskListSort{
+		Field:     serverapi.WorkflowTaskListSortFieldCreated,
+		Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+	}
+	page, err := fixture.board.ListNodeCards(fixture.ctx, request)
 	if err != nil {
-		t.Fatalf("Board.ListNodeCards newer: %v", err)
+		t.Fatalf("Board.ListNodeCards created sort: %v", err)
 	}
-	if len(newer.Cards) != 1 || newer.Cards[0].TaskID != firstPage.Cards[0].TaskID {
-		t.Fatalf("newer board page = %+v, want first page task %q", newer.Cards, firstPage.Cards[0].TaskID)
-	}
-	request.PageToken = firstPage.NextPageToken
-	request.LabelFilter = serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindUnlabeled}
-	if _, err := fixture.board.ListNodeCards(fixture.ctx, request); !errors.Is(err, ErrInvalidPageToken) {
-		t.Fatalf("board token replay with changed filter error = %v, want invalid page token", err)
+	if page.Cards[0].TaskID != string(started[0].task.ID) {
+		t.Fatalf("created ascending first card = %q, want %q", page.Cards[0].TaskID, started[0].task.ID)
 	}
 }
 
-func TestBoardListNodeCardsDependencyFilterRunsBeforePaginationAndBindsCursor(t *testing.T) {
+func TestBoardListNodeCardsAllowsMutationBetweenOffsetRequests(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := []startedCurrentNodeViewTask{
+		fixture.startTask(t, "Board A"),
+		fixture.startTask(t, "Board B"),
+		fixture.startTask(t, "Board C"),
+	}
+	fixture.setTaskUpdatedAt(t, started[0].task.ID, 3_000)
+	fixture.setTaskUpdatedAt(t, started[1].task.ID, 2_000)
+	fixture.setTaskUpdatedAt(t, started[2].task.ID, 1_000)
+	request := serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: fixture.workflowID,
+		NodeID:     string(fixture.agentNodeID),
+		PageSize:   1,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{
+			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
+		},
+	}
+	first, err := fixture.board.ListNodeCards(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("first board page: %v", err)
+	}
+	if first.NextOffset == nil {
+		t.Fatal("first board page has no next offset")
+	}
+	fixture.setTaskUpdatedAt(t, started[2].task.ID, 4_000)
+	request.Offset = first.NextOffset
+	if _, err := fixture.board.ListNodeCards(fixture.ctx, request); err != nil {
+		t.Fatalf("board page after task mutation: %v", err)
+	}
+}
+
+func TestBoardListNodeCardsDependencyFilterRunsBeforePagination(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	noDependencies := fixture.startTask(t, "No dependencies")
 	satisfied := fixture.startTask(t, "Satisfied")
@@ -191,16 +211,14 @@ func TestBoardListNodeCardsDependencyFilterRunsBeforePaginationAndBindsCursor(t 
 		}
 	}
 	filters := []*bool{nil, filterValue(true), filterValue(false)}
-	tokens := make([]string, len(filters))
 	for index, filter := range filters {
 		page, err := fixture.board.ListNodeCards(fixture.ctx, requestFor(filter))
 		if err != nil {
 			t.Fatalf("ListNodeCards filter %d: %v", index, err)
 		}
-		if len(page.Cards) != 1 || page.NextPageToken == nil {
-			t.Fatalf("filter %d page = %+v, want one card and next token", index, page)
+		if len(page.Cards) != 1 || page.NextOffset == nil {
+			t.Fatalf("filter %d page = %+v, want one card and next offset", index, page)
 		}
-		tokens[index] = *page.NextPageToken
 	}
 
 	unblockedPage, err := fixture.board.ListNodeCards(fixture.ctx, requestFor(filterValue(true)))
@@ -210,34 +228,13 @@ func TestBoardListNodeCardsDependencyFilterRunsBeforePaginationAndBindsCursor(t 
 	if unblockedPage.Cards[0].TaskID != string(noDependencies.task.ID) {
 		t.Fatalf("unblocked first page card = %q, want no-dependency task %q", unblockedPage.Cards[0].TaskID, noDependencies.task.ID)
 	}
-	unblockedPage, err = fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filterValue(true)), unblockedPage.NextPageToken))
+	unblockedRequest := requestFor(filterValue(true))
+	unblockedRequest.Offset = unblockedPage.NextOffset
+	unblockedPage, err = fixture.board.ListNodeCards(fixture.ctx, unblockedRequest)
 	if err != nil {
 		t.Fatalf("ListNodeCards unblocked second page: %v", err)
 	}
 	if len(unblockedPage.Cards) != 1 || unblockedPage.Cards[0].TaskID != string(satisfied.task.ID) {
 		t.Fatalf("unblocked second page = %+v, want satisfied task %q", unblockedPage.Cards, satisfied.task.ID)
 	}
-	newer, err := fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filterValue(true)), unblockedPage.PreviousPageToken))
-	if err != nil {
-		t.Fatalf("ListNodeCards unblocked newer page: %v", err)
-	}
-	if len(newer.Cards) != 1 || newer.Cards[0].TaskID != string(noDependencies.task.ID) {
-		t.Fatalf("unblocked newer page = %+v, want no-dependency task %q", newer.Cards, noDependencies.task.ID)
-	}
-
-	for sourceIndex, token := range tokens {
-		for targetIndex, filter := range filters {
-			if sourceIndex == targetIndex {
-				continue
-			}
-			if _, err := fixture.board.ListNodeCards(fixture.ctx, requestWithToken(requestFor(filter), &token)); !errors.Is(err, ErrInvalidPageToken) {
-				t.Fatalf("token from filter %d replayed under filter %d with error %v, want invalid page token", sourceIndex, targetIndex, err)
-			}
-		}
-	}
-}
-
-func requestWithToken(request serverapi.WorkflowBoardNodeCardsListRequest, token *string) serverapi.WorkflowBoardNodeCardsListRequest {
-	request.PageToken = token
-	return request
 }

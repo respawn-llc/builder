@@ -46,7 +46,6 @@ export function TaskDetailContent({
   detail,
   initialFocus,
   onMutated,
-  openLink,
   navigator,
   retainedState,
   sidebarMode,
@@ -58,7 +57,6 @@ export function TaskDetailContent({
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
-  openLink: (url: string) => void;
   navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
@@ -200,7 +198,6 @@ export function TaskDetailContent({
       }}
       onScrollElementChange={setScrollElement}
       onSaveDraft={saveDraft}
-      openLink={openLink}
       pixelOffsetRequest={pixelOffsetRequest}
       questionSelections={questionSelections}
       selectedTab={selectedTab}

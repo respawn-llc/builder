@@ -31,6 +31,31 @@ func TestVerboseReviewerSuggestionsRenderFullyInOngoingMode(t *testing.T) {
 	}
 }
 
+func TestAgentSteerRenderFullyInOngoingMode(t *testing.T) {
+	messageType := clientui.TranscriptMessageAgentSteer
+	row := clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoing,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			MessageType: &messageType,
+			Diagnostic:  &clientui.TranscriptDiagnostic{Detail: "first\nsecond"},
+		},
+	}
+	if got := ongoingRenderMode(row); got != transcriptrender.ModeOngoingFull {
+		t.Fatalf("agent steer render mode = %d, want full ongoing mode", got)
+	}
+	rendered := transcriptrender.RenderCommittedRowWithLinkPresentation(
+		row,
+		80,
+		"dark",
+		ongoingRenderMode(row),
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+	if got, want := len(rendered.Lines), 2; got != want {
+		t.Fatalf("agent steer ongoing rows = %d, want %d", got, want)
+	}
+}
+
 func reviewerNoticeRow(visibility transcript.EntryVisibility, code, detail string) clientui.TranscriptCommittedRow {
 	messageType := clientui.TranscriptMessageReviewerFeedback
 	return clientui.TranscriptCommittedRow{

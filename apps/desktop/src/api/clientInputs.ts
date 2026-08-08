@@ -7,6 +7,7 @@ import type {
   TaskStatusKind,
   WorkflowValidationMode,
 } from "./models";
+import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
 import type { TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
@@ -33,12 +34,7 @@ export type TaskListInput = Readonly<{
   statusKinds?: readonly TaskStatusKind[] | undefined;
   attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
   labelFilter: TaskLabelFilter;
-  sort?:
-    | readonly Readonly<{
-        field: "created" | "updated" | "status" | "column" | "title";
-        direction: "asc" | "desc";
-      }>[]
-    | undefined;
+  sort?: readonly WorkflowTaskListSort[] | undefined;
   offset?: number | undefined;
   limit?: number | undefined;
 }>;
@@ -48,7 +44,8 @@ export type BoardNodeCardsInput = Readonly<{
   workflowID: string;
   nodeID: string;
   filter: BoardFilter;
-  pageToken?: string | null | undefined;
+  sort?: BoardNodeCardsSort | undefined;
+  offset?: number | undefined;
 }>;
 
 export type WorkflowListInput = Readonly<{

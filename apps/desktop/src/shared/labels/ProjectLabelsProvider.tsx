@@ -71,11 +71,19 @@ export function ProjectLabelsProvider({
       createProjectLabelEffects({
         authority,
         onFilterAction: authorityLease.dispatchFilterAction,
+        onBackgroundError: reportBackgroundError,
         onMembershipRefresh: notifyMembershipRefresh,
         projectID,
         queryClient,
       }),
-    [authority, authorityLease.dispatchFilterAction, notifyMembershipRefresh, projectID, queryClient],
+    [
+      authority,
+      authorityLease.dispatchFilterAction,
+      notifyMembershipRefresh,
+      projectID,
+      queryClient,
+      reportBackgroundError,
+    ],
   );
   useEffect(() => {
     if (!subscribeToProject || projectID.length === 0 || connection.phase !== "connected") {

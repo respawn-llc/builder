@@ -14,7 +14,13 @@ describe("task detail execution target contract", () => {
     });
     expect(detail.worktreePath).toBe("/tmp/worktree");
     expect(detail.currentNodes).toEqual([
-      { nodeID: "node-1", transitionBranchKey: null, sessionID: "session-1" },
+      {
+        effectiveAssignee: null,
+        effectiveThinking: null,
+        nodeID: "node-1",
+        transitionBranchKey: null,
+        sessionID: "session-1",
+      },
     ]);
     expect(detail.liveSessionIDs).toEqual(["session-1"]);
     expect(detail.currentScripts).toEqual([]);
@@ -92,6 +98,8 @@ describe("task detail execution target contract", () => {
 
     expect(detail.currentNodes).toEqual(
       currentNodes.map((node) => ({
+        effectiveAssignee: null,
+        effectiveThinking: null,
         nodeID: node.node_id,
         transitionBranchKey: node.transition_branch_key,
         sessionID: node.session_id,
@@ -107,6 +115,25 @@ describe("task detail execution target contract", () => {
         path: script.path,
       })),
     );
+  });
+
+  it("normalizes an omitted Current Script Session ID to null", () => {
+    const detail = taskDetailSchema.parse({
+      task: {
+        ...taskDetailResponse.task,
+        current_scripts: [
+          {
+            current_node: {
+              node_id: "node-script",
+              transition_branch_key: null,
+            },
+            path: "scripts/run",
+          },
+        ],
+      },
+    });
+
+    expect(detail.currentScripts[0]?.currentNode.sessionID).toBeNull();
   });
 
   it("rejects a Current Script with a Session", () => {

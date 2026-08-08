@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/workflowruntime"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -24,9 +25,10 @@ type compactionInstructionsInput struct {
 }
 
 const (
-	compactionModeAuto    compactionMode = "auto"
-	compactionModeHandoff compactionMode = "handoff"
-	compactionModeManual  compactionMode = "manual"
+	compactionModeAuto                   compactionMode = "auto"
+	compactionModeHandoff                compactionMode = "handoff"
+	compactionModeManual                 compactionMode = "manual"
+	compactionModeWorkflowPostCompletion compactionMode = "workflow_post_completion"
 
 	defaultContextWindowTokens             = 200_000
 	autoCompactNearLimitMargin             = 8_000
@@ -35,12 +37,13 @@ const (
 	preciseTokenCountSupportDiagnostic     = "precise_token_count_support_failure"
 	preciseTokenCountFailureDiagnostic     = "precise_token_count_failure"
 
-	additionalCompactionInstructionsHeader = "# Additional user instructions or commentary for this task:"
-	compactionPreservedUserMessageHeader   = "# Last user message before handoff (work may have been done after it was sent):"
-	handoffDisabledByUserMessage           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later."
-	handoffTooEarlyMessage                 = "It's too early to handoff right now. Don't worry, you still have plenty of time and memory to finish your work, so continue the current task for now. Only retry trigger_handoff after an explicit developer message says handoff is enabled."
-	handoffCompactionToolsDisabledMessage  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
-	handoffCompactionToolCallRetries       = 3
+	additionalCompactionInstructionsHeader                 = "# Additional user instructions or commentary for this task:"
+	compactionPreservedUserMessageHeader                   = "# Last user message before handoff (work may have been done after it was sent):"
+	workflowPostCompletionCompactionAdditionalInstructions = "The current Workflow assignment is complete. Summarize the completed assignment and its durable handoff as completed work. Do not describe the assignment as ongoing, and do not add a current-assignment reminder."
+	handoffDisabledByUserMessage                           = "User disabled the handoff manually for now. They do not want you to hand off at this time, so please keep working or retry this tool later."
+	handoffTooEarlyMessage                                 = "It's too early to handoff right now. Don't worry, you still have plenty of time and memory to finish your work, so continue the current task for now. Only retry trigger_handoff after an explicit developer message says handoff is enabled."
+	handoffCompactionToolsDisabledMessage                  = "Tools are disabled during handoff. Do NOT attempt to call any tools. Produce only the requested summary."
+	handoffCompactionToolCallRetries                       = 3
 )
 
 var errRemoteCompactionMissingCheckpoint = errors.New("remote compaction output missing checkpoint item")
@@ -94,6 +97,42 @@ func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) erro
 	return err
 }
 
+func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextForWorkflowPostCompletion(ctx)
+}
+
+// SubmitWorkflowContinuationTurn runs the existing lazy CAC operation and
+// consumes a committed Workflow Pre-Compaction boundary only after the target
+// turn succeeds. A failed target attempt therefore preserves the boundary for
+// the existing Resume path.
+func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Message, error) {
+	if e == nil {
+		return llm.Message{}, errors.New("runtime engine is required")
+	}
+	if !e.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		if err := e.CompactContextForWorkflowContinuation(ctx); err != nil {
+			return llm.Message{}, err
+		}
+	}
+	assistant, err := e.SubmitWorkflowTurn(ctx)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity)
+	return assistant, nil
+}
+
+func (e *Engine) WorkflowPreCompactionTokenLimit() (int, error) {
+	if e == nil {
+		return 0, errors.New("runtime engine is required")
+	}
+	if e.cfg.WorkflowPreCompactionTokenLimit <= 0 {
+		return 0, errors.New("workflow pre-compaction token limit must be positive")
+	}
+	return e.cfg.WorkflowPreCompactionTokenLimit, nil
+}
+
 func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, onActive)
@@ -114,6 +153,22 @@ func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Conte
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
 	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
+}
+
+func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
+	receipt, err := c.compactContext(
+		ctx,
+		compactionModeWorkflowPostCompletion,
+		compactionInstructionsInput{},
+		false,
+		nil,
+		nil,
+		false,
+	)
+	return workflowruntime.PostCompletionCompactionResult{
+		CommitReceipt: receipt,
+		Diagnostic:    err,
+	}
 }
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
@@ -656,7 +711,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		return compactionResult{}, session.CommitReceipt{}, err
 	}
 
-	instructions := compactionInstructions(instructionsInput)
+	instructions := compactionInstructionsForMode(mode, instructionsInput)
 	preservedUserMessageText := ""
 	if mode == compactionModeManual && includePreservedUserMessage {
 		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
@@ -683,7 +738,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	postReplacementMeta, err := e.compactionReinjectedMetaMessages(ctx)
+	postReplacementMeta, err := e.compactionReinjectedMetaMessagesForMode(ctx, mode)
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
 		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
@@ -882,4 +937,15 @@ func compactionInstructions(input compactionInstructionsInput) string {
 	}
 	instructions = strings.TrimRight(instructions, "\n")
 	return instructions + "\n\n" + additionalCompactionInstructionsHeader + "\n " + *input.additional
+}
+
+func compactionInstructionsForMode(mode compactionMode, input compactionInstructionsInput) string {
+	if mode != compactionModeWorkflowPostCompletion {
+		return compactionInstructions(input)
+	}
+	additional := workflowPostCompletionCompactionAdditionalInstructions
+	if input.additional != nil {
+		additional = strings.TrimSpace(additional) + "\n\n" + strings.TrimSpace(*input.additional)
+	}
+	return compactionInstructions(compactionInstructionsInput{additional: &additional})
 }

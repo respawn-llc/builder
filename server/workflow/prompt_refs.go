@@ -17,15 +17,9 @@ type PromptPriorParameterReference struct {
 	Placeholder   string
 }
 
-type PromptInputReference struct {
-	Name        string
-	Placeholder string
-}
-
 type PromptTemplateReferences struct {
 	Params      []PromptParameterReference
 	PriorParams []PromptPriorParameterReference
-	Inputs      []PromptInputReference
 	Invalid     []PromptReferenceIssue
 }
 
@@ -159,11 +153,7 @@ func recordPromptFieldReference(ident []string, refs *PromptTemplateReferences) 
 	placeholder := "." + strings.Join(ident, ".")
 	switch ident[0] {
 	case "Inputs":
-		if len(ident) != 2 {
-			refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs references must use .Inputs.<input_name>"})
-			return
-		}
-		refs.Inputs = append(refs.Inputs, PromptInputReference{Name: ident[1], Placeholder: placeholder})
+		refs.Invalid = append(refs.Invalid, PromptReferenceIssue{Placeholder: placeholder, Message: ".Inputs prompt references are unsupported; use .Params.<parameter_key>"})
 	case "Params":
 		switch len(ident) {
 		case 2:

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssignment } from "@/api";
-import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import type { SidebarPageNavigator } from "@/app-facade";
 import type { SidebarMode } from "@/app-facade";
@@ -52,8 +51,6 @@ export function TaskDetailSurface({
   const attention = useTaskAttention(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
-  const openLink = useOpenExternalLink();
-
   if (detail.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
@@ -75,7 +72,6 @@ export function TaskDetailSurface({
           navigator={navigator}
           onMutated={onMutated}
           openSidebar={openSidebar}
-          openLink={openLink}
           retainedState={retainedState}
           sidebarMode={sidebarMode}
         />

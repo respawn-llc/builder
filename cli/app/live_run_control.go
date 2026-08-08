@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 )
 
 type RunLiveSteerResult struct {
@@ -20,10 +23,30 @@ type RunLiveStopResult struct {
 	Status serverapi.RuntimeLiveStopStatus
 }
 
+func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	defer func() { _ = closeFn() }()
+	response, err := liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	return response, nil
+}
+
 func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, text string) (RunLiveSteerResult, error) {
 	trimmedText := strings.TrimSpace(text)
 	if trimmedText == "" {
 		return RunLiveSteerResult{}, errors.New("text is required")
+	}
+	callerSessionID, err := LiveSteerCallerSessionID()
+	if err != nil {
+		return RunLiveSteerResult{}, err
 	}
 	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
 	if err != nil {
@@ -33,12 +56,29 @@ func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.
 	resp, err := liveClient.LiveSteer(ctx, serverapi.RuntimeLiveSteerRequest{
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       targetSessionID.String(),
+		CallerSessionID: callerSessionID,
 		Text:            trimmedText,
 	})
 	if err != nil {
 		return RunLiveSteerResult{}, err
 	}
 	return RunLiveSteerResult{QueueItemID: resp.QueueItemID, Text: resp.Text, ClientRequestID: resp.ClientRequestID}, nil
+}
+
+func LiveSteerCallerSessionID() (*string, error) {
+	raw, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	if !ok {
+		return nil, nil
+	}
+	sessionID, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid invoking Session ID %q: %w", raw, err)
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return nil, fmt.Errorf("invalid invoking Session ID %q: canonical UUIDv4 required", raw)
+	}
+	value := sessionID.String()
+	return &value, nil
 }
 
 func RunLiveStop(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (RunLiveStopResult, error) {

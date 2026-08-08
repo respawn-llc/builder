@@ -15,6 +15,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
@@ -158,6 +159,14 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 		Text:  "draft",
 		Phase: llm.MessagePhaseCommentary,
 	}}
+	rejectedOutput, rejectedPart := int64(0), int64(0)
+	rejected.ReasoningDeltas = []llm.ReasoningSummaryDelta{{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{
+			OutputIndex: &rejectedOutput,
+			PartIndex:   &rejectedPart,
+		},
+		Text: "rejected reasoning",
+	}}
 	accepted := scriptedllm.FinalAnswer(`{"transition":"done","summary":"done"}`)
 	accepted.StreamDeltas = []llm.AssistantDelta{{
 		Text:  "completed",
@@ -196,6 +205,15 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 	}
 	if got := controller.completions.Load(); got != 1 {
 		t.Fatalf("workflow completions = %d, want one", got)
+	}
+	reasoningResets := 0
+	for _, event := range events {
+		if event.Kind == EventReasoningDeltaReset {
+			reasoningResets++
+		}
+	}
+	if reasoningResets != 1 {
+		t.Fatalf("workflow preflight reasoning resets = %d, want one", reasoningResets)
 	}
 }
 
@@ -506,6 +524,22 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	step := scriptedllm.ToolBatch("completed", calls...)
 	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
 	step.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseFinal}}
+	reasoningOutput, reasoningPart := int64(0), int64(0)
+	step.ReasoningDeltas = []llm.ReasoningSummaryDelta{{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{
+			OutputIndex: &reasoningOutput,
+			PartIndex:   &reasoningPart,
+		},
+		Text: "final tools reasoning",
+	}}
+	step.Response.Reasoning = []llm.ReasoningEntry{{
+		Role: textutil.Value(string(transcript.EntryRoleReasoning)),
+		Text: "final tools reasoning",
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{
+			OutputIndex: &reasoningOutput,
+			PartIndex:   &reasoningPart,
+		},
+	}}
 	var events []Event
 	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}), Config{
@@ -517,7 +551,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 
 	starts, completions := map[string]int{}, map[string]int{}
-	finalIndex, terminalIndex := -1, -1
+	finalIndex, terminalIndex, reasoningRows := -1, -1, 0
 	for index, event := range events {
 		switch event.Kind {
 		case EventToolCallStarted:
@@ -537,10 +571,17 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 			}
 		case EventAssistantDeltaReset:
 			terminalIndex = index
+		case EventLocalEntryAdded:
+			if event.LocalEntry != nil && event.LocalEntry.Role == string(transcript.EntryRoleReasoning) {
+				reasoningRows++
+			}
 		}
 	}
 	if finalIndex < 0 || terminalIndex <= finalIndex {
 		t.Fatalf("final/terminal order = final:%d terminal:%d events:%+v", finalIndex, terminalIndex, events)
+	}
+	if reasoningRows != 1 {
+		t.Fatalf("final-answer-with-tools reasoning rows = %d, want one", reasoningRows)
 	}
 	for _, call := range calls {
 		start, started := starts[call.ID]
@@ -612,6 +653,14 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 		Input: json.RawMessage(`{}`),
 	})
 	step.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseCommentary}}
+	reasoningOutput, reasoningPart := int64(0), int64(0)
+	step.ReasoningDeltas = []llm.ReasoningSummaryDelta{{
+		SourceCoordinate: &llm.ReasoningSourceCoordinate{
+			OutputIndex: &reasoningOutput,
+			PartIndex:   &reasoningPart,
+		},
+		Text: "discarded reasoning",
+	}}
 	step.AfterResponse = func(context.Context) error {
 		controller.completed.Store(true)
 		return nil
@@ -662,6 +711,15 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID ||
 		reset.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
 		t.Fatalf("stale stream disposal = delta:%+v reset:%+v", delta, reset)
+	}
+	reasoningResets := 0
+	for _, event := range events {
+		if event.Kind == EventReasoningDeltaReset {
+			reasoningResets++
+		}
+	}
+	if reasoningResets != 1 {
+		t.Fatalf("external completion reasoning resets = %d, want one", reasoningResets)
 	}
 
 	window, err := mustMaterializeTestEventLog(t, engine.store).ReadRecentRecords(16)
@@ -937,7 +995,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		},
 	)
 
-	queued := engine.QueueUserMessageWithClientRequestID("queued user input", "request-id")
+	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued user input", "request-id")
 	completed, err := engine.observeWorkflowDurableCompletion(context.Background())
 	if err != nil {
 		t.Fatalf("observe durable workflow completion: %v", err)

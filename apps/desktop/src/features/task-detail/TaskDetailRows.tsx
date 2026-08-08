@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEventHandler, type Ref
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail } from "@/api";
+import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
@@ -11,7 +11,7 @@ import { taskStatusTone } from "@/shared/task-status";
 import {
   Button,
   Island,
-  MarkdownText,
+  StaticMarkdown,
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
@@ -238,7 +238,6 @@ function DescriptionReadView({
   value: string;
 }>) {
   const { t } = useTranslation();
-  const openExternalLink = useOpenExternalLink();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const overflows = useDescriptionOverflow({ contentRef, enabled: !expanded, viewportRef });
@@ -265,13 +264,13 @@ function DescriptionReadView({
       >
         <div ref={contentRef}>
           {value.trim().length > 0 ? (
-            <MarkdownText
-              onOpenLink={openExternalLink}
+            <StaticMarkdown
+              disabled={disabled}
+              onTaskListChange={onChange}
               taskListItemToggleLabel={(checked) =>
                 checked ? t("markdown.markIncomplete") : t("markdown.markComplete")
               }
               value={value}
-              {...(disabled ? {} : { onChange })}
             />
           ) : (
             <span className="text-[var(--color-muted)]">{t("task.bodyPlaceholder")}</span>
@@ -393,9 +392,32 @@ export function PropertiesIsland({
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
         <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
+        {detail.currentNodes.map((node) => (
+          <TaskCurrentNodeSelectionProperties key={node.nodeID} node={node} />
+        ))}
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
+  );
+}
+
+export function TaskCurrentNodeSelectionProperties({ node }: Readonly<{ node: TaskCurrentNode }>) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {node.effectiveAssignee === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeAssignee", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveAssignee}</span>}
+        />
+      )}
+      {node.effectiveThinking === null ? null : (
+        <TaskPropertyLine
+          label={t("task.currentNodeThinking", { nodeID: node.nodeID })}
+          value={<span className="font-mono">{node.effectiveThinking}</span>}
+        />
+      )}
+    </>
   );
 }
 

@@ -12,6 +12,7 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -122,7 +123,8 @@ func (a *transcriptPromptAnswerer) submitter(
 			request.ErrorMessage = answerErr.Error()
 		case answer.Approval != nil:
 			request.Decision = answer.Approval.Decision
-			request.Commentary = answer.Approval.Commentary
+			commentary := answer.Approval.Commentary
+			request.Commentary = textutil.OptionalExactString(commentary)
 		default:
 			return nil, errors.New("approval response is required")
 		}

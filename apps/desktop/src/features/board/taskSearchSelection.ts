@@ -11,7 +11,7 @@ export type TaskSearchScrollRequest = Readonly<{
 }>;
 
 export function useTaskSearchSelection(
-  projectID: string,
+  projectID: string | null,
   displayedQuery: string | null,
   results: readonly SearchResult[],
 ) {
@@ -92,7 +92,7 @@ export function adjacentSearchResult(
 function resolveActiveSearchResult(
   results: readonly SearchResult[],
   selected: TaskSearchMemorySelection | null,
-  projectID: string,
+  projectID: string | null,
   displayedQuery: string | null,
 ): string | null {
   if (displayedQuery !== null && selected?.projectID === projectID && selected.query === displayedQuery) {

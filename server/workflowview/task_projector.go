@@ -88,7 +88,7 @@ func (*TaskProjector) ProjectComment(comment sqlitegen.TaskComment) serverapi.Wo
 	}
 }
 
-func workflowCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
+func ProjectCurrentNodes(nodes []workflow.CurrentNode) []serverapi.WorkflowTaskCurrentNode {
 	projected := make([]serverapi.WorkflowTaskCurrentNode, 0, len(nodes))
 	for _, currentNode := range nodes {
 		projected = append(projected, workflowCurrentNode(currentNode))
@@ -101,6 +101,14 @@ func workflowCurrentNode(currentNode workflow.CurrentNode) serverapi.WorkflowTas
 	if currentNode.SessionID != nil {
 		value := currentNode.SessionID.String()
 		projected.SessionID = &value
+	}
+	if currentNode.AgentExecutionSelection != nil {
+		assignee := currentNode.AgentExecutionSelection.Assignee
+		projected.EffectiveAssignee = &assignee
+		if currentNode.AgentExecutionSelection.Thinking != nil {
+			thinking := string(*currentNode.AgentExecutionSelection.Thinking)
+			projected.EffectiveThinking = &thinking
+		}
 	}
 	return projected
 }

@@ -33,6 +33,44 @@ const (
 	ContextModeCompactAndContinueSession ContextMode = "compact_and_continue_session"
 )
 
+type AssigneeSelection string
+
+const (
+	AssigneeSelectionConfigured   AssigneeSelection = "configured"
+	AssigneeSelectionPreviousNode AssigneeSelection = "previous_node"
+)
+
+func CanonicalAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	return AssigneeSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultAssigneeSelection(selection AssigneeSelection) AssigneeSelection {
+	canonical := CanonicalAssigneeSelection(selection)
+	if canonical == "" {
+		return AssigneeSelectionConfigured
+	}
+	return canonical
+}
+
+type ThinkingSelection string
+
+const (
+	ThinkingSelectionConfigured   ThinkingSelection = "configured"
+	ThinkingSelectionPreviousNode ThinkingSelection = "previous_node"
+)
+
+func CanonicalThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	return ThinkingSelection(strings.TrimSpace(string(selection)))
+}
+
+func DefaultThinkingSelection(selection ThinkingSelection) ThinkingSelection {
+	canonical := CanonicalThinkingSelection(selection)
+	if canonical == "" {
+		return ThinkingSelectionConfigured
+	}
+	return canonical
+}
+
 type ContextSourceKind string
 
 const (
@@ -72,8 +110,6 @@ const (
 	MaxDisplayNameChars            = workflowcontract.MaxDisplayNameChars
 	MaxOutputFieldNameChars        = workflowcontract.MaxOutputFieldNameChars
 	MaxOutputFieldDescriptionChars = workflowcontract.MaxOutputFieldDescriptionChars
-	MaxInputFieldNameChars         = workflowcontract.MaxInputFieldNameChars
-	MaxInputFieldDescriptionChars  = workflowcontract.MaxInputFieldDescriptionChars
 	MaxParameterKeyChars           = workflowcontract.MaxParameterKeyChars
 	MaxParameterDescriptionChars   = workflowcontract.MaxParameterDescriptionChars
 	MaxOutputValueBytes            = workflowcontract.MaxOutputValueBytes
@@ -171,10 +207,7 @@ func (StartNode) Kind() NodeKind {
 type AgentNode struct {
 	NodeIdentity
 	SubagentRole   string
-	PromptTemplate string
 	CompletionMode string
-	InputFields    []InputField
-	OutputFields   []OutputField
 }
 
 func (AgentNode) sealedWorkflowNode() {}
@@ -187,8 +220,7 @@ func (AgentNode) Kind() NodeKind {
 
 type ScriptNode struct {
 	NodeIdentity
-	ScriptPath   OptionalScriptPath
-	OutputFields []OutputField
+	ScriptPath OptionalScriptPath
 }
 
 func (ScriptNode) sealedWorkflowNode() {}
@@ -282,13 +314,6 @@ func NodeSubagentRole(node Node) string {
 	return ""
 }
 
-func NodePromptTemplate(node Node) string {
-	if agent, ok := node.(AgentNode); ok {
-		return agent.PromptTemplate
-	}
-	return ""
-}
-
 func NodeCompletionMode(node Node) string {
 	if agent, ok := node.(AgentNode); ok {
 		return agent.CompletionMode
@@ -296,29 +321,11 @@ func NodeCompletionMode(node Node) string {
 	return ""
 }
 
-func NodeInputFields(node Node) []InputField {
-	if agent, ok := node.(AgentNode); ok {
-		return append([]InputField(nil), agent.InputFields...)
-	}
-	return nil
-}
-
 func NodeJoinInputProviders(node Node) []JoinInputProvider {
 	if join, ok := node.(JoinNode); ok {
 		return append([]JoinInputProvider(nil), join.JoinInputProviders...)
 	}
 	return nil
-}
-
-func NodeOutputFields(node Node) []OutputField {
-	switch typed := node.(type) {
-	case AgentNode:
-		return append([]OutputField(nil), typed.OutputFields...)
-	case ScriptNode:
-		return append([]OutputField(nil), typed.OutputFields...)
-	default:
-		return nil
-	}
 }
 
 func NodeScriptPath(node Node) OptionalScriptPath {
@@ -330,11 +337,8 @@ func NodeScriptPath(node Node) OptionalScriptPath {
 
 type NodeFields struct {
 	SubagentRole       string
-	PromptTemplate     string
 	CompletionMode     string
-	InputFields        []InputField
 	JoinInputProviders []JoinInputProvider
-	OutputFields       []OutputField
 	ScriptPath         OptionalScriptPath
 }
 
@@ -346,16 +350,12 @@ func NewNode(identity NodeIdentity, kind NodeKind, fields NodeFields) (Node, err
 		return AgentNode{
 			NodeIdentity:   identity,
 			SubagentRole:   fields.SubagentRole,
-			PromptTemplate: fields.PromptTemplate,
 			CompletionMode: fields.CompletionMode,
-			InputFields:    append([]InputField(nil), fields.InputFields...),
-			OutputFields:   append([]OutputField(nil), fields.OutputFields...),
 		}, nil
 	case NodeKindScript:
 		return ScriptNode{
 			NodeIdentity: identity,
 			ScriptPath:   fields.ScriptPath,
-			OutputFields: append([]OutputField(nil), fields.OutputFields...),
 		}, nil
 	case NodeKindJoin:
 		return JoinNode{
@@ -384,6 +384,8 @@ type Edge struct {
 	Key                ModelKey
 	TransitionGroupID  TransitionGroupID
 	TargetNodeID       NodeID
+	AssigneeSelection  AssigneeSelection
+	ThinkingSelection  ThinkingSelection
 	ContextMode        ContextMode
 	ContextSource      ContextSource
 	RequiresApproval   bool
@@ -393,17 +395,43 @@ type Edge struct {
 	OutputRequirements []OutputRequirement
 }
 
+func (edge Edge) Canonical() Edge {
+	edge.AssigneeSelection = CanonicalAssigneeSelection(edge.AssigneeSelection)
+	edge.ThinkingSelection = CanonicalThinkingSelection(edge.ThinkingSelection)
+	edge.ContextSource = CanonicalContextSource(edge.ContextSource)
+	edge.Parameters = append([]Parameter(nil), edge.Parameters...)
+	for index := range edge.Parameters {
+		edge.Parameters[index] = edge.Parameters[index].Canonical()
+	}
+	edge.InputBindings = append([]InputBinding(nil), edge.InputBindings...)
+	edge.OutputRequirements = append([]OutputRequirement(nil), edge.OutputRequirements...)
+	return edge
+}
+
 type Parameter struct {
-	Key         string `json:"key"`
-	Description string `json:"description"`
+	Key         string           `json:"key"`
+	Description string           `json:"description"`
+	Purpose     ParameterPurpose `json:"purpose"`
+}
+
+type ParameterPurpose string
+
+const (
+	ParameterPurposeOrdinary       ParameterPurpose = "ordinary"
+	ParameterPurposeTargetAssignee ParameterPurpose = "target_assignee"
+	ParameterPurposeTargetThinking ParameterPurpose = "target_thinking"
+)
+
+func CanonicalParameterPurpose(purpose ParameterPurpose) ParameterPurpose {
+	return ParameterPurpose(strings.TrimSpace(string(purpose)))
+}
+
+func (parameter Parameter) Canonical() Parameter {
+	parameter.Purpose = CanonicalParameterPurpose(parameter.Purpose)
+	return parameter
 }
 
 type OutputField struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-type InputField struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }

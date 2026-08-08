@@ -62,7 +62,7 @@ export async function invalidateProjectDeleteQueries(
   queryClient: QueryClient,
   projectID: string,
 ): Promise<void> {
-  removeProjectTaskSearches(queryClient, projectID);
+  await removeProjectTaskSearches(queryClient, projectID);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allProjectEdits }),

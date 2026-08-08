@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 
+import type { BoardNodeCardsSort } from "@/api";
 import type {
   BoardFilterGenerationController,
   BoardFilterGenerationSnapshot,
@@ -13,6 +14,8 @@ export type BoardFilterGenerationRuntime = Readonly<{
   requestAdapter: BoardGenerationRequestAdapter;
   queriesEnabled: boolean;
   snapshot: BoardFilterGenerationSnapshot;
+  sort: BoardNodeCardsSort;
+  setSort: (sort: BoardNodeCardsSort) => void;
 }>;
 
 export const BoardFilterGenerationContext = createContext<BoardFilterGenerationRuntime | null>(null);

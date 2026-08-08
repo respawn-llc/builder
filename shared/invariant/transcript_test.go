@@ -18,20 +18,24 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 	}
 	streamID := runtimeids.NewAssistantStreamID()
 	rollbackTargetID := rollbacktarget.EncodeUserMessageSeq(12)
+	noticeText := "notice"
 	validRows := []clientui.TranscriptCommittedRow{
 		{
 			Visibility: clientui.EntryVisibilityOngoing,
 			Kind:       clientui.TranscriptRowUser,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			User:       &clientui.TranscriptUserRow{StepID: stepID, Text: "user", RollbackTargetID: &rollbackTargetID},
 		},
 		{
 			Visibility: clientui.EntryVisibilityOngoingCollapsed,
 			Kind:       clientui.TranscriptRowAssistant,
-			Assistant:  &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", StreamID: &streamID},
+			Locator:    transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1},
+			Assistant:  &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", StreamID: &streamID, Phase: transcript.AssistantPhaseFinal},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 			Tool: &clientui.TranscriptToolRow{
 				StepID:     stepID,
 				ToolCallID: "tool-call",
@@ -39,9 +43,24 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 			},
 		},
 		{
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowReasoningTrace,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 4, RowOrdinal: 1},
+			ReasoningTrace: &clientui.TranscriptReasoningTraceRow{
+				StepID:      stepID,
+				CompactText: "Planning",
+				Text:        "Planning\nDetails",
+			},
+		},
+		{
 			Visibility: clientui.EntryVisibilityHidden,
 			Kind:       clientui.TranscriptRowNotice,
-			Notice:     &clientui.TranscriptNoticeRow{},
+			Locator:    transcript.CommittedRowLocator{EventSequence: 5, RowOrdinal: 1},
+			Notice: &clientui.TranscriptNoticeRow{
+				Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+				Severity:   clientui.TranscriptNoticeInfo,
+				LegacyText: &noticeText,
+			},
 		},
 	}
 	for _, row := range validRows {
@@ -75,12 +94,14 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityRecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 5, RowOrdinal: 1},
 			Tool:       &clientui.TranscriptToolRow{},
 		},
 		{
 			Visibility: clientui.EntryVisibilityDetail,
 			Integrity:  transcript.RowIntegrityUnrecoverableMalformed,
 			Kind:       clientui.TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 6, RowOrdinal: 1},
 			Tool:       &clientui.TranscriptToolRow{ToolCallID: " "},
 		},
 	}
@@ -94,6 +115,11 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 func TestValidateTranscriptPage(t *testing.T) {
 	olderCursor := int64(10)
 	newerCursor := int64(20)
+	stepID, err := runtimeids.ParseStepID(uuid.NewString())
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
+	noticeText := "notice"
 	validPage := clientui.TranscriptPage{
 		SessionID:    uuid.NewString(),
 		OlderCursor:  &olderCursor,
@@ -105,18 +131,25 @@ func TestValidateTranscriptPage(t *testing.T) {
 			CandidatePageEndByte: 15,
 		},
 		Entries: []clientui.TranscriptCommittedRow{
-			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "valid"}},
-			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{}},
+			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, Locator: transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1}, User: &clientui.TranscriptUserRow{StepID: stepID, Text: "valid"}},
+			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Locator: transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1}, Notice: &clientui.TranscriptNoticeRow{
+				StepID:     &stepID,
+				Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
+				Severity:   clientui.TranscriptNoticeInfo,
+				LegacyText: &noticeText,
+			}},
 			{
 				Visibility: clientui.EntryVisibilityDetail,
 				Integrity:  transcript.RowIntegrityRecoverableMalformed,
 				Kind:       clientui.TranscriptRowTool,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 				Tool:       &clientui.TranscriptToolRow{},
 			},
 			{
 				Visibility: clientui.EntryVisibilityOngoingCollapsed,
 				Integrity:  transcript.RowIntegrityUnrecoverableMalformed,
 				Kind:       clientui.TranscriptRowTool,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 4, RowOrdinal: 1},
 				Tool:       &clientui.TranscriptToolRow{},
 			},
 		},

@@ -42,12 +42,24 @@
 - A missing custom Git ref is a draft validation issue, not an immediate Save rejection. The selected revision is resolved in each Task's source workspace when execution starts; the editor does not resolve repository state.
 - Agent Nodes can edit display name, Node Key, and Assignee. Script Nodes can edit display name, Node Key, and script path. Start and terminal Nodes can edit display name and Node Key, but their kind and execution configuration are fixed.
 - Available Assignees come from configured subagent roles. A referenced role absent from configuration remains visible and selectable.
+- The Agent Node inspector keeps the ordinary Assignee picker and requires a concrete fallback Assignee.
+- Each eligible serial Transition Branch inspector exposes an Assignee picker item labeled **Let the previous node choose**. Selecting it enables Assignee selection only for that Transition.
+- An eligible Transition without that override uses the target Agent Node's configured Assignee, so incoming Transitions may mix override-enabled and fallback-only behavior.
+- A checkbox labeled **Let the previous node select thinking level** enables thinking selection only for the inspected eligible Transition.
+- Assignee selection is unavailable with `N/A for current configuration` when no role is explicitly configured with `agent_callable = true`.
+- With one explicitly agent-callable role, Assignee selection remains available but no model-facing Assignee Parameter appears because Kent applies that role automatically.
+- Thinking selection is unavailable with `N/A for current configuration` when no applicable target model supports thinking.
+- The thinking checkbox may remain enabled with one finite supported level, but no model-facing thinking Parameter appears because Kent applies that level automatically.
 - Node inspection is for identity. Transition configuration is edited by selecting a transition or transition branch.
 - A normal transition inspector edits its label, key, model-facing description, applicable prompt and context, Parameters, approval, routing, and validation issues.
 - A Fan-Out Transition branch inspector edits branch invocation details and shows its parent transition's source-choice label, key, and approval. The parent owns those source-choice details; each branch owns its target prompt, Parameters, context, and routing.
 - A Transition Label is distinct from its Transition Key and model-facing description. The label begins from the key until the operator changes it. The editor names these fields **Label**, **Key**, and **Model-facing description**.
 - Normal transitions do not expose their generated branch key. Fan-Out Transition branches expose a **Branch key** derived from the target Node Key; operators may edit it. It must meet Workflow Key requirements and be unique within its parent Fan-Out Transition.
 - Parameters have a stable key and model-facing description. They are required when declared and their values are strings. `transition` and `commentary` cannot be Parameter Keys.
+- Each enabled Assignee or thinking selector shows its Protected Parameter in the owning Transition's ordinary Parameters list at its saved order.
+- The editor applies the canonical Protected Parameter edit, delete, persistence, and hidden-state behavior from the terminology specification.
+- A blank protected description appears as an empty editor field while Kent derives its default only for Workflow completion instructions.
+- When an applicable thinking model has no enumerable catalog contract, a blank protected thinking description is an execution-validation issue rather than a Draft-save blocker.
 - Fan-Out Transition branch Parameters form one Parameter Requirements set. Branches using the same Parameter Key share one produced value only when their descriptions match after ignoring leading and trailing whitespace; the shared description omits that whitespace. Different descriptions for the same key are validation errors.
 - Prompt editing offers insertable chips for direct Parameters. Selecting one inserts `.Params.<parameter_key>` at the cursor, or at the end if the prompt is not focused. The chip for `{{.Params.<transition_key>.<parameter>}}` explains previous-transition references and does not insert text.
 - Built-in Transition Prompt fields are exactly `.TaskId`, `.TaskShortId`, `.TaskTitle`, `.TaskBody`, `.NodeId`, `.NodeKey`, and `.NodeDisplayName`. `.Params.commentary` renders the source Transition Result commentary, or an empty string when none exists. Other top-level fields are validation errors.
@@ -58,6 +70,12 @@
 - A Join shows its read-only aggregate Parameters and same-key collision errors. Its outgoing transitions cannot declare Parameters. A Join-to-agent prompt can use aggregate Parameters as `.Params.<parameter_key>`. One Fan-Out Transition's matching Parameter Key deduplicates because it has one producing Transition Result; matching keys from different producing transitions collide.
 - Validation sections retain their heading and show errors as plain lists.
 - Context-Preservation Mode and Context Source apply only to transitions into agent Nodes. Unavailable Context Source choices remain visible, disabled, and show `N/A for current configuration`.
+- Assignee and thinking selection is applicable only to serial Transitions from Agent or Script Nodes into Agent Nodes.
+- Fan-Out Transition branches, Start and Join sources, and non-Agent targets do not expose protected selection Parameters.
+- New Session and Compact and Continue Session entries expose enabled protected Assignee Parameters.
+- Continue Session exposes a protected Assignee Parameter only when **Previous session from this target, or new session** will create a new Session.
+- Retained-Session continuation hides the protected Assignee Parameter and preserves the retained materialized Assignee.
+- Eligible serial Transitions expose enabled protected thinking Parameters in every Context-Preservation Mode.
 - **Previous session from this target** is available in continuation modes only when the agent target dominates the transition source: every path from Start to that source passes through the target. It uses the latest retained Session for that target Node in the same Transition Branch Key while parallel work is active, and fails if no such Session exists.
 - **Previous session from this target, or new session** is available in continuation modes into agent targets. It uses that same retained Session when available and otherwise starts a new Session.
 - Selected-Node Context Source choices list all agent Nodes for agent-target transitions. A choice is available in a continuation mode only when it is not the target and is guaranteed before the transition source. Invalid retained selections remain visible and disabled.
@@ -73,6 +91,7 @@
 - The shared Node-kind picker stays visible within the viewport, closes after selection, Escape, or outside interaction, and behaves consistently from every entry point.
 - Hovering a transition exposes reconnect handles. An endpoint can be dragged onto a Node body or side; Nodes do not show target connection handles.
 - Reconnecting preserves the transition's prompt, Parameters, context, approval, and key. Configuration made invalid by the new topology remains in the Draft and is reported by validation unless the topology itself is impossible.
+- Reconnecting also preserves dormant protected Parameter settings, which remain hidden until the new target enables an applicable selector.
 - A Fan-Out Transition branch cannot reconnect its source because that would change Fan-Out membership.
 - Unsupported graph entities remain inspectable but cannot be edited.
 - Topology editing includes adding and deleting agent, script, and terminal Nodes; creating and removing Node Group membership; creating and deleting transitions; connecting Nodes; reconnecting transition endpoints; and editing transition routing and configuration.
@@ -91,11 +110,10 @@
 - Draft validation and execution validation remain separate. Blocking draft-validation errors prevent graph-changing saves. Execution-validation errors remain visible but do not prevent a save limited to Workflow details.
 - Draft validation blocks prompts into non-agent targets, duplicate Transition Keys, invalid or duplicate Fan-Out Transition Branch Keys, invalid Parameter Keys or descriptions, invalid previous-Parameter references, and Join aggregate key collisions.
 - Execution validation blocks starting or executing an agent-target transition without a prompt.
-- Legacy Node-owned prompt and contract data round-trips unchanged as inert compatibility data. It neither validates nor controls execution. A runnable definition must author Transition Prompts and Parameters, and existing active-work edit blockers apply.
-- A save limited to Workflow details, and a no-op save, bypass graph-edit policy and active-work blockers.
-- Graph-changing saves show a preview with draft validation, execution validation, active-Task blockers, destructive or removal impact, and any required confirmation.
+- A save limited to Workflow details, and a no-op save, bypass graph-edit policy.
+- Graph-changing saves show a preview with draft validation, execution validation, destructive or removal impact, and any required confirmation.
 - Destructive graph-save confirmation appears in the editor status area, not in a separate blocking surface.
-- Save recalculates validation and impact together. It rejects a stale Workflow Version, active blockers, an unconfirmed destructive change, or a changed destructive impact; otherwise it applies every change together, increments Workflow Version once, and reports the saved definition and validations to linked Projects.
+- Save recalculates validation and impact together. It rejects a stale Workflow Version, an unconfirmed destructive change, or a changed destructive impact; otherwise it applies every change together, increments Workflow Version once, and reports the saved definition and validations to linked Projects.
 - The editor refuses an incompatible Workflow graph format.
 - Workflow Version advances once for any definition edit, whether it changes only Workflow details, only the graph, or both. No-op saves do not advance it.
 - If the same Workflow changes remotely while its local Workflow Draft is unsaved, the Draft remains and a conflict banner offers **Reload remote** and **Keep editing**. Saving uses the expected Workflow Version and clearly rejects stale saves.
@@ -135,8 +153,7 @@
 - Destructive impact is evaluated at Save, not while making a Draft edit.
 - Save blocks a graph change that removes a Node, Transition, or graph connection required by a Task's Current Nodes, pending approval, live Exact Execution Scope, or unresolved parallel branch.
 - Changing the kind of a current Node is blocked. A Node without current Task references has no completed-work restriction on its kind.
-- Transition display details may change while Tasks exist. Changes to a Transition's completion requirements affect the next Task Start or Resume. A live Exact Execution Scope keeps the requirements it began with until it stops.
-- A destructive change to a Transition's completion requirements is blocked only while a live Exact Execution Scope, pending approval, or unresolved parallel branch depends on that Transition Branch. An interrupted Current Node uses the latest valid requirements on Resume.
+- Transition routing, Parameters, and display details may change while Tasks exist. Pending Approvals and unresolved parallel work keep their captured data. A live Exact Execution Scope keeps its model-visible completion requirements; if an incompatible edit makes its completion invalid, completion fails without Task mutation. Start and Resume use the latest valid requirements.
 - Moving a graph connection to a different Transition is blocked only while current Task state depends on it.
 - Backlog and terminal Tasks do not require confirmation before otherwise unreferenced Nodes or transitions are removed.
 - Manual Task moves are blocked when they would violate a selected prior-Node continuation Context Source. Previous-target continuation uses the context resolved for that transition.

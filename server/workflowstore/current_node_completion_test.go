@@ -1,14 +1,13 @@
 package workflowstore
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
@@ -22,10 +21,7 @@ func TestCompleteCurrentNodeWithoutApprovalDoesNotEmitQueryFailureDiagnostics(t 
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
 
-	var diagnostics bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&diagnostics, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	diagnostics := testsetup.CaptureSlog(t)
 
 	if _, err := store.CompleteCurrentNode(metadata.WithQueryFailureDiagnostics(ctx), CurrentNodeCompletionRequest{
 		Source:       source.Reference,
@@ -73,7 +69,10 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	if len(completed.Mutation.Created) != 1 ||
 		!completed.Mutation.Created[0].Reference.Equal(target) ||
 		completed.Mutation.Created[0].Scheduling == nil ||
-		completed.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		completed.Mutation.Created[0].Scheduling.State != workflow.CurrentNodeSchedulingReady ||
+		completed.Mutation.Created[0].AgentExecutionSelection == nil ||
+		completed.Mutation.Created[0].AgentExecutionSelection.Assignee != "coder" ||
+		completed.Mutation.Created[0].AgentExecutionSelection.Origin != workflow.AssigneeOriginConfiguredFallback {
 		t.Fatalf("completion created = %+v, want ready review current node", completed.Mutation.Created)
 	}
 	if completed.Handoff != (CompletionHandoff{SourceNodeDisplayName: "Plan", DestinationDisplayName: "Review"}) {
@@ -178,6 +177,14 @@ func TestCompleteCurrentNodeFanoutPendingApprovalCarriesCommentary(t *testing.T)
 func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := edgeByKey(t, def, "join_a")
+		record := workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID)
+		record.Parameters = append(
+			record.Parameters,
+			workflow.Parameter{Key: "agent_role", Purpose: workflow.ParameterPurposeTargetAssignee},
+		)
+	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
@@ -852,8 +859,6 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	review := nodeByKey(t, definition, "review")
 	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		auditRecord := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(audit))
-		auditRecord.OutputFields = append(auditRecord.OutputFields, workflow.OutputField{Name: "summary", Description: "Rework summary."})
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           reworkGroupID,
 			WorkflowID:   workflowID,

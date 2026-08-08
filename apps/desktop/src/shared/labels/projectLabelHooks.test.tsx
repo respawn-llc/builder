@@ -69,12 +69,19 @@ describe("project label mutations", () => {
       wrapper: createWrapper(queryClient, authority, original),
     });
     await act(async () => {
-      await expect(result.current.reorder.mutateAsync(original.labels.slice().reverse().map((label) => label.id))).rejects.toBe(
-        failure,
-      );
+      await expect(
+        result.current.reorder.mutateAsync(
+          original.labels
+            .slice()
+            .reverse()
+            .map((label) => label.id),
+        ),
+      ).rejects.toBe(failure);
     });
 
-    expect(queryClient.getQueryData<ProjectLabelCatalog>(["project-labels", original.projectID])).toEqual(original);
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(["project-labels", original.projectID])).toEqual(
+      original,
+    );
     oldRead.resolve(original);
     await firstRead;
     await waitFor(() => {
@@ -110,11 +117,13 @@ describe("project label mutations", () => {
     });
 
     await act(async () => {
-      await expect(result.current.reorder.mutateAsync(original.labels.map((label) => label.id))).rejects.toThrow(
-        "Project catalog authority received project-2 while serving project-1.",
-      );
+      await expect(
+        result.current.reorder.mutateAsync(original.labels.map((label) => label.id)),
+      ).rejects.toThrow("Project catalog authority received project-2 while serving project-1.");
     });
-    expect(queryClient.getQueryData<ProjectLabelCatalog>(["project-labels", original.projectID])).toEqual(original);
+    expect(queryClient.getQueryData<ProjectLabelCatalog>(["project-labels", original.projectID])).toEqual(
+      original,
+    );
   });
 });
 
@@ -146,23 +155,26 @@ function ContextProvider({
     queryFn: async ({ signal }) => authority.read(signal),
     enabled: false,
   });
-    const value: ProjectLabelDataContextValue = {
-      authority,
-      catalog: query,
-      effects: {
-        applyLocalCreate: vi.fn(),
-        applyLocalDelete: vi.fn(),
-        applyLocalRename: vi.fn(),
-        consumeProjectEvent: vi.fn(),
-        refreshAfterSubscriptionBoundary: vi.fn(),
+  const value: ProjectLabelDataContextValue = {
+    authority,
+    catalog: query,
+    effects: {
+      applyLocalCreate: vi.fn(),
+      applyLocalDelete: vi.fn(),
+      applyLocalReorder: async (nextCatalog, generation) => {
+        authority.installCatalog(nextCatalog, generation);
       },
-      filter: {
-        dispatch: vi.fn(),
-        persistence: { status: "ready" },
-        state: createLabelFilterState(),
-      },
-      projectID: catalog.projectID,
-    };
+      applyLocalRename: vi.fn(),
+      consumeProjectEvent: vi.fn(),
+      refreshAfterSubscriptionBoundary: vi.fn(),
+    },
+    filter: {
+      dispatch: vi.fn(),
+      persistence: { status: "ready" },
+      state: createLabelFilterState(),
+    },
+    projectID: catalog.projectID,
+  };
   return createElement(ProjectLabelDataContext.Provider, { value }, children);
 }
 

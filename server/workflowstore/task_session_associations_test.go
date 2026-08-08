@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -49,6 +51,45 @@ func TestAssociateTaskSessionBindsFreshSessionToCurrentNode(t *testing.T) {
 	}
 	if latest != association {
 		t.Fatalf("latest node association = %+v, want %+v", latest, association)
+	}
+}
+
+func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	store.roleResolver = completionTargetCatalog{
+		roles: map[string]workflow.TargetAgentRole{
+			"coder": {
+				Identity:         "coder",
+				QuestionsEnabled: true,
+				Thinking: workflow.ThinkingCapability{
+					ReasoningCapable: true,
+					Finite:           true,
+					Levels:           []string{"low", "high"},
+				},
+			},
+		},
+	}
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, definition, "review").ID)
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+		edge.Parameters = append(edge.Parameters, workflow.Parameter{
+			Key:     "thinking",
+			Purpose: workflow.ParameterPurposeTargetThinking,
+		})
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	if _, err := store.ResolveCurrentNodeStartContext(ctx, started.Reference); err != nil {
+		t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
 	}
 }
 
@@ -135,13 +176,16 @@ INSERT INTO task_active_fanout_branches (
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, transition_branch_key, current_input_values_json,
-    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id
-) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?)`,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin
+) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, ?, ?)`,
 		string(task.ID),
 		string(started.Reference.NodeID),
 		string(branchKey),
 		sourceSessionID.String(),
 		string(*started.EnteredByEdgeID),
+		started.AgentExecutionSelection.Assignee,
+		string(started.AgentExecutionSelection.Origin),
 	); err != nil {
 		t.Fatalf("insert retained fan-out Current Node: %v", err)
 	}
@@ -341,6 +385,161 @@ WHERE session_id = ?
 	}
 	if rowCount != 2 {
 		t.Fatalf("branch association rows = %d, want 2", rowCount)
+	}
+}
+
+func TestLoadSessionReuseAssociationsUsesExistingSerialAndBranchLookups(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	serialReference := started.Reference
+	branchA := workflow.TransitionBranchKey("branch-a")
+	branchB := workflow.TransitionBranchKey("branch-b")
+	branchAReference, err := workflow.NewCurrentNodeReference(task.ID, serialReference.NodeID, &branchA)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference branch A: %v", err)
+	}
+	branchBReference, err := workflow.NewCurrentNodeReference(task.ID, serialReference.NodeID, &branchB)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference branch B: %v", err)
+	}
+	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
+	for _, reference := range []workflow.CurrentNodeReference{serialReference, branchAReference, branchBReference} {
+		if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  reference,
+			AssociatedAt: associatedAt,
+		}); err != nil {
+			t.Fatalf("AssociateTaskSession %v: %v", reference, err)
+		}
+	}
+
+	associations, err := store.LoadSessionReuseAssociations(ctx, []workflow.CurrentNodeReference{
+		serialReference,
+		branchAReference,
+		branchBReference,
+	})
+	if err != nil {
+		t.Fatalf("LoadSessionReuseAssociations: %v", err)
+	}
+	if len(associations) != 3 {
+		t.Fatalf("association count = %d, want 3", len(associations))
+	}
+	for _, want := range []workflow.CurrentNodeReference{serialReference, branchAReference, branchBReference} {
+		found := false
+		for _, association := range associations {
+			if association.CurrentNode.Equal(want) && association.SessionID == sessionID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing retained association for %v: %+v", want, associations)
+		}
+	}
+}
+
+func TestLoadSessionReuseAssociationsTreatsMissingReferencesAsNormalWithoutDiagnostics(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	branchKey := workflow.TransitionBranchKey("missing")
+	branchReference, err := workflow.NewCurrentNodeReference(
+		task.ID,
+		started.Reference.NodeID,
+		&branchKey,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+
+	diagnostics := testsetup.CaptureSlog(t)
+
+	associations, err := store.LoadSessionReuseAssociations(
+		metadata.WithQueryFailureDiagnostics(ctx),
+		[]workflow.CurrentNodeReference{started.Reference, branchReference},
+	)
+	if err != nil {
+		t.Fatalf("LoadSessionReuseAssociations: %v", err)
+	}
+	if len(associations) != 0 {
+		t.Fatalf("missing retained associations = %+v, want none", associations)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("missing retained association diagnostics = %q, want none", diagnostics.String())
+	}
+}
+
+func TestLoadSessionReuseAssociationsRetainsBranchVisitAfterJoinCycle(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	laterNodeID := started.Reference.NodeID
+	for _, node := range definition.Nodes {
+		if node.Kind() == workflow.NodeKindAgent && workflow.NodeIDOf(node) != laterNodeID {
+			laterNodeID = workflow.NodeIDOf(node)
+			break
+		}
+	}
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	branchKey := workflow.TransitionBranchKey("implementation")
+	branchBeforeJoin, err := workflow.NewCurrentNodeReference(task.ID, started.Reference.NodeID, &branchKey)
+	if err != nil {
+		t.Fatalf("branch before Join reference: %v", err)
+	}
+	branchAfterJoin, err := workflow.NewCurrentNodeReference(task.ID, laterNodeID, &branchKey)
+	if err != nil {
+		t.Fatalf("branch after Join reference: %v", err)
+	}
+	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
+	for _, reference := range []workflow.CurrentNodeReference{branchBeforeJoin, branchAfterJoin} {
+		if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  reference,
+			AssociatedAt: associatedAt,
+		}); err != nil {
+			t.Fatalf("AssociateTaskSession %v: %v", reference, err)
+		}
+	}
+
+	associations, err := store.LoadSessionReuseAssociations(ctx, []workflow.CurrentNodeReference{
+		branchBeforeJoin,
+		branchAfterJoin,
+	})
+	if err != nil {
+		t.Fatalf("LoadSessionReuseAssociations after Join cycle: %v", err)
+	}
+	if len(associations) != 2 {
+		t.Fatalf("association count = %d, want 2 retained branch visits", len(associations))
+	}
+	for _, want := range []workflow.CurrentNodeReference{branchBeforeJoin, branchAfterJoin} {
+		found := false
+		for _, association := range associations {
+			if association.CurrentNode.Equal(want) && association.SessionID == sessionID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing retained branch visit %v: %+v", want, associations)
+		}
 	}
 }
 

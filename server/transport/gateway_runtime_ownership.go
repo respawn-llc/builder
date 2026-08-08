@@ -6,6 +6,8 @@ func (s *connectionState) recordOwnedRuntime(attachment serverapi.SessionRuntime
 	if s == nil || attachment.Validate() != nil {
 		return
 	}
+	s.ownedRuntimesMu.Lock()
+	defer s.ownedRuntimesMu.Unlock()
 	if s.ownedRuntimes == nil {
 		s.ownedRuntimes = make(map[serverapi.SessionRuntimeAttachment]struct{})
 	}
@@ -13,14 +15,24 @@ func (s *connectionState) recordOwnedRuntime(attachment serverapi.SessionRuntime
 }
 
 func (s *connectionState) removeOwnedRuntime(attachment serverapi.SessionRuntimeAttachment) {
-	if s == nil || len(s.ownedRuntimes) == 0 {
+	if s == nil {
+		return
+	}
+	s.ownedRuntimesMu.Lock()
+	defer s.ownedRuntimesMu.Unlock()
+	if len(s.ownedRuntimes) == 0 {
 		return
 	}
 	delete(s.ownedRuntimes, attachment)
 }
 
 func (s *connectionState) takeOwnedRuntimes() []serverapi.SessionRuntimeAttachment {
-	if s == nil || len(s.ownedRuntimes) == 0 {
+	if s == nil {
+		return nil
+	}
+	s.ownedRuntimesMu.Lock()
+	defer s.ownedRuntimesMu.Unlock()
+	if len(s.ownedRuntimes) == 0 {
 		return nil
 	}
 	owned := make([]serverapi.SessionRuntimeAttachment, 0, len(s.ownedRuntimes))

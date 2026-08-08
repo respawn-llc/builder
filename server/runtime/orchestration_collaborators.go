@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflowruntime"
 )
 
 type exclusiveStepOptions struct {
@@ -53,6 +54,7 @@ type backgroundNoticeScheduler interface {
 type contextCompactor interface {
 	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
 	CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error)
+	CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult
 	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
@@ -86,12 +88,23 @@ type allPendingUserInjectionSelection struct{}
 
 func (allPendingUserInjectionSelection) userInjectionSelection() {}
 
+type userInjectionFlushDisposition uint8
+
+const (
+	userInjectionFlushContinue userInjectionFlushDisposition = iota
+	userInjectionFlushStopped
+)
+
 type userInjectionCommitResult struct {
-	flushed               int
-	receipt               session.CommitReceipt
-	queueItemIDs          map[string]struct{}
-	continueCombinedFlush bool
+	flushed      int
+	receipt      session.CommitReceipt
+	queueItemIDs map[string]struct{}
+	disposition  userInjectionFlushDisposition
 }
+
+type queuedUserFlushStoppedError struct{}
+
+func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
 
 func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
 	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
@@ -123,9 +136,9 @@ type messageLifecycle interface {
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	PendingUserMessages() []QueuedUserMessage
-	RestorePendingUserInjections(items []queuedUserSteeringIntent)
-	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
-	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
+	RestorePendingUserInjections(items []queuedUserMessage)
+	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
+	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }

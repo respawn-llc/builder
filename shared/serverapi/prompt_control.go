@@ -23,7 +23,7 @@ type ApprovalAnswerRequest struct {
 	ApprovalID      string                    `json:"approval_id"`
 	ErrorMessage    string                    `json:"error_message,omitempty"`
 	Decision        clientui.ApprovalDecision `json:"decision"`
-	Commentary      string                    `json:"commentary,omitempty"`
+	Commentary      *string                   `json:"commentary,omitempty"`
 }
 
 func (r AskAnswerRequest) Validate() error {
@@ -58,6 +58,9 @@ func (r ApprovalAnswerRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.ApprovalID) == "" {
 		return errors.New("approval_id is required")
+	}
+	if r.Commentary != nil && strings.TrimSpace(*r.Commentary) == "" {
+		return errors.New("commentary must be non-blank when present")
 	}
 	if strings.TrimSpace(r.ErrorMessage) == "" {
 		switch r.Decision {

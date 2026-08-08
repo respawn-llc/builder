@@ -111,10 +111,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 			}
 			if compactionBusy {
-				queued := engine.QueueUserMessageForAutoDrain(
+				queued, queueErr := engine.QueueUserMessageForAutoDrain(
 					projection.ExecutionText,
 					strings.TrimSpace(req.ClientRequestID),
 				)
+				if queueErr != nil {
+					return queueErr
+				}
 				recordAccepted(true)
 				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil
@@ -175,7 +178,10 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 				if !activeExecutionAllowsUserTurnAutoDrain(runtimeactivity.ActiveStepFromProvider(engine)) {
 					return serverapi.ErrSessionRunStarting
 				}
-				item = engine.QueueUserMessageForAutoDrain(projection.ExecutionText, req.OperationRef.ClientRequestID.String())
+				item, err = engine.QueueUserMessageForAutoDrain(projection.ExecutionText, req.OperationRef.ClientRequestID.String())
+				if err != nil {
+					return err
+				}
 				accepted = true
 			} else if err != nil {
 				return err

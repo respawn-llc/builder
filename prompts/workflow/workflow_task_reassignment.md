@@ -1,6 +1,6 @@
 Heads up: you just received a new task for the ticket `{{.TaskShortId}}`:
 <task>
-{{.NodePrompt}}
+{{.TransitionPrompt}}
 </task>
 
 Some time has passed since you completed the previous task, so your workspace state might have changed.

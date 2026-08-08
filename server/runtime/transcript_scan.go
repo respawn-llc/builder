@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"core/server/llm"
@@ -58,16 +59,34 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string, owners ...map[string]*TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
-	for _, entry := range visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls) {
+	entries := visibleChatEntriesFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
+	for index := range entries {
+		entry := &entries[index]
 		if strings.TrimSpace(entry.Role) == "user" && seq > 0 {
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
 		}
 		entry.StepID = strings.TrimSpace(stepID)
+		if seq > 0 {
+			entry.CommittedProvenance = &TranscriptCommittedRowProvenance{EventSequence: seq}
+		}
+		if len(owners) > 0 && entry.ToolCallID != "" {
+			if owner := owners[0][entry.ToolCallID]; owner != nil {
+				entry.CommittedProvenance = cloneTranscriptCommittedRowProvenance(owner)
+			}
+		}
+	}
+	sort.SliceStable(entries, func(left, right int) bool {
+		return transcriptCommittedProvenanceBefore(
+			entries[left].CommittedProvenance,
+			entries[right].CommittedProvenance,
+		)
+	})
+	for _, entry := range entries {
 		s.appendEntry(entry)
 	}
 }

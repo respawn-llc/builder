@@ -15,9 +15,15 @@ import (
 func TestClientStreamsDeltasFinalResponseAndReasoning(t *testing.T) {
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Steps: []scriptedllm.Step{{
-			StreamDeltas:    []llm.AssistantDelta{{Text: "hel", Phase: llm.MessagePhaseCommentary}, {Text: "lo", Phase: llm.MessagePhaseFinal}},
-			ReasoningDeltas: []llm.ReasoningSummaryDelta{{Key: "r", Role: "assistant", Text: "because"}},
-			Response:        scriptedllm.FinalAnswer("hello").Response,
+			StreamDeltas: []llm.AssistantDelta{{Text: "hel", Phase: llm.MessagePhaseCommentary}, {Text: "lo", Phase: llm.MessagePhaseFinal}},
+			ReasoningDeltas: []llm.ReasoningSummaryDelta{{
+				SourceCoordinate: &llm.ReasoningSourceCoordinate{
+					OutputIndex: func() *int64 { value := int64(0); return &value }(),
+					PartIndex:   func() *int64 { value := int64(0); return &value }(),
+				},
+				Role: "assistant", Text: "because",
+			}},
+			Response: scriptedllm.FinalAnswer("hello").Response,
 		}},
 	})
 

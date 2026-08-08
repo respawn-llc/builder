@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/prompts"
@@ -11,7 +12,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type defaultStepExecutor struct {
@@ -38,6 +38,9 @@ type preparedCompletedResponse struct {
 	response                     llm.Response
 	phaseTurn                    phaseProtocolTurn
 	assistant                    llm.Message
+	assistantProvenance          *TranscriptCommittedRowProvenance
+	resolutionOutcome            completedResponseResolutionOutcome
+	resolutionResolved           bool
 	localToolCalls               []llm.ToolCall
 	hostedToolExecutions         []hostedToolExecution
 	noopFinalAnswer              bool
@@ -52,6 +55,15 @@ type completedResponsePreflightRejection struct {
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
+	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
+	var stopped *queuedUserFlushStoppedError
+	if errors.As(err, &stopped) {
+		return stepLoopResult{}, nil
+	}
+	return result, err
+}
+
+func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied := false
@@ -77,6 +89,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{}, err
 		}
 
+		var reasoningSteerErr error
 		resp, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
@@ -94,14 +107,19 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
 			},
 			func(delta llm.ReasoningSummaryDelta) {
-				_ = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				if reasoningSteerErr == nil {
+					reasoningSteerErr = e.steer(stepID, steerReasoningDeltaIntent(delta))
+				}
 			},
 			func() {
-				_ = e.steer(stepID, steerClearStreamingStateIntent())
+				_ = e.resetReasoningAndClearStreamingState(stepID)
 			},
 		)
 		if err != nil {
 			return stepLoopResult{}, err
+		}
+		if reasoningSteerErr != nil {
+			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
 		if _, err := e.recordLastUsage(resp.Usage); err != nil {
 			return stepLoopResult{}, err
@@ -115,8 +133,16 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			executedToolCall = true
 		}
 		patchEditsApplied = patchEditsApplied || prepared.patchEditsApplied
-		resolution, err := e.resolveCompletedResponseStream(stepID, prepared.resolution)
-		if err != nil {
+		var resolution completedResponseResolutionOutcome
+		if prepared.resolutionResolved {
+			resolution = prepared.resolutionOutcome
+		} else {
+			resolution, err = e.resolveCompletedResponseStream(stepID, prepared.resolution)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
+		}
+		if err := s.resolveReasoningDisposition(stepID, prepared.next, prepared.response.Reasoning); err != nil {
 			return stepLoopResult{}, err
 		}
 		switch prepared.next {
@@ -150,18 +176,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		hostedToolExecutions := prepared.hostedToolExecutions
 		noopFinalAnswer := prepared.noopFinalAnswer
 		assistantCommittedCoordinate := prepared.assistantCommittedCoordinate
+		assistantProvenance := cloneTranscriptCommittedRowProvenance(prepared.assistantProvenance)
 		assistantEventEmitted := resolution.committedAssistantEventPublished
 
 		if !noopFinalAnswer {
-			for _, entry := range resp.Reasoning {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-					Visibility: transcript.EntryVisibilityDetail,
-					Role:       string(transcript.EntryRoleReasoning),
-					Text:       entry.Text,
-				})); err != nil {
-					return stepLoopResult{}, err
-				}
-			}
 			if phaseTurn.MissingAssistantPhase {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(missingAssistantPhaseWarning)}})); err != nil {
 					return stepLoopResult{}, err
@@ -319,11 +337,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
+				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
+				if startErr != nil {
+					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
+				}
 				if !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
 					// after an unannounced committed assistant message.
-					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate)
+					_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 					assistantEventEmitted = true
 				}
 				preReviewMessage := resolved
@@ -338,15 +360,18 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				} else {
 					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
+				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
+				if err != nil {
+					return stepLoopResult{}, errors.Join(err, terminalizationErr)
+				}
+				if terminalizationErr != nil {
+					return stepLoopResult{}, terminalizationErr
+				}
 			}
 			if !assistantEventEmitted {
-				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate)
+				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 			}
 			if reviewerCompletion != nil {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: reviewerStatusEntryRole(*reviewerCompletion), Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
-					return stepLoopResult{}, err
-				}
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
 			}
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
@@ -373,16 +398,40 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 	}
 }
 
+func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
+	if s == nil || s.engine == nil {
+		return errors.New("Reviewer lifecycle terminalizer requires an engine")
+	}
+	err := s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:     EventReviewerCompleted,
+		StepID:   stepID,
+		Reviewer: status,
+	}))
+	return err
+}
+
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
 	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
-	return result.flushed, err
+	if err != nil {
+		return 0, err
+	}
+	if result.disposition == userInjectionFlushStopped {
+		return 0, &queuedUserFlushStoppedError{}
+	}
+	return result.flushed, nil
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
 	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
-	return err
+	if err != nil {
+		return err
+	}
+	if result.disposition == userInjectionFlushStopped {
+		return &queuedUserFlushStoppedError{}
+	}
+	return nil
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
@@ -392,7 +441,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	} else if completed {
 		return preparedCompletedResponse{
 			next:       completedResponseNextExternalWorkflowTerminal,
-			resolution: completedResponseDiscardInstruction(),
+			resolution: completedResponseAbortInstruction(),
 			response:   resp,
 			assistant:  resp.Assistant,
 		}, nil
@@ -417,7 +466,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	if rejection := classifyCompletedResponsePreflightRejection(e.currentNodeExecutionActive(), localToolCalls, hostedToolExecutions); rejection != nil {
 		return preparedCompletedResponse{
 			next:                 completedResponseNextWorkflowPreflightRejected,
-			resolution:           completedResponseDiscardInstruction(),
+			resolution:           completedResponseAbortInstruction(),
 			response:             resp,
 			phaseTurn:            phaseTurn,
 			assistant:            assistantMsg,
@@ -446,7 +495,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		if terminal {
 			return preparedCompletedResponse{
 				next:              completedResponseNextFinalAnswerToolsTerminal,
-				resolution:        completedResponseDiscardInstruction(),
+				resolution:        completedResponseAbortInstruction(),
 				response:          resp,
 				phaseTurn:         phaseTurn,
 				assistant:         assistantMsg,
@@ -491,42 +540,33 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			return preparedCompletedResponse{}, err
 		}
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
+	executableCallIDs := make(map[string]struct{}, len(localToolCalls))
+	for _, call := range localToolCalls {
+		if callID := strings.TrimSpace(call.ID); callID != "" {
+			executableCallIDs[callID] = struct{}{}
+		}
+	}
+	assistantCommitResult := steeringAssistantCommitResult{}
+	if err := e.steer(
+		stepID,
+		steerAssistantCommitIntent(assistantMsg, executableCallIDs, &assistantCommitResult),
+	); err != nil {
 		return preparedCompletedResponse{}, err
 	}
-	var assistantCommittedCoordinate *committedAssistantCoordinate
-	if !noopFinalAnswer {
-		executableCallIDs := make(map[string]struct{}, len(localToolCalls))
-		for _, call := range localToolCalls {
-			if callID := strings.TrimSpace(call.ID); callID != "" {
-				executableCallIDs[callID] = struct{}{}
-			}
-		}
-		var toolCallStarts map[string]int
-		assistantCommittedCoordinate, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
-		e.rememberPendingToolCallStarts(toolCallStarts)
-	}
+	assistantCommittedCoordinate := assistantCommitResult.coordinate
+	assistantProvenance := assistantCommitResult.provenance
 	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
-	resolution := completedResponseDiscardInstruction()
-	if committedAssistantMessageFinalizesStreaming(assistantMsg) {
-		if assistantCommittedCoordinate == nil {
-			return preparedCompletedResponse{}, errors.New("persisted assistant text row has no committed transcript coordinate")
-		}
-		resolution = completedResponseFinalizeInstruction(assistantMsg, assistantCommittedCoordinate)
-	} else if len(VisibleChatEntriesFromMessage(assistantMsg)) > 0 {
-		if err := s.publishCommittedAssistantMessage(stepID, assistantMsg, assistantCommittedCoordinate); err != nil {
-			return preparedCompletedResponse{}, err
-		}
-	}
-
 	return preparedCompletedResponse{
 		next:                         completedResponseNextAccepted,
-		resolution:                   resolution,
+		resolution:                   completedResponseAbortInstruction(),
+		resolutionOutcome:            assistantCommitResult.resolution,
+		resolutionResolved:           true,
 		response:                     resp,
 		phaseTurn:                    phaseTurn,
 		assistant:                    assistantMsg,
+		assistantProvenance:          cloneTranscriptCommittedRowProvenance(assistantProvenance),
 		localToolCalls:               localToolCalls,
 		hostedToolExecutions:         hostedToolExecutions,
 		noopFinalAnswer:              noopFinalAnswer,
@@ -647,7 +687,7 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 	if err != nil || !completed {
 		return false, err
 	}
-	if err := s.engine.steer(stepID, steerClearStreamingStateIntent()); err != nil {
+	if err := s.engine.resetReasoningAndClearStreamingState(stepID); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -827,8 +867,8 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	return newCompactionReminderCoordinator(e).maybeAppend(ctx, stepID)
 }
 
-func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, msg llm.Message, coordinate *committedAssistantCoordinate) error {
-	return s.engine.steer(stepID, steerCommittedAssistantMessageIntent(msg, coordinate))
+func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, msg llm.Message, coordinate *committedAssistantCoordinate, provenances ...*TranscriptCommittedRowProvenance) error {
+	return s.engine.steer(stepID, steerCommittedAssistantMessageIntent(msg, coordinate, provenances...))
 }
 
 func committedAssistantMessageFinalizesStreaming(msg llm.Message) bool {

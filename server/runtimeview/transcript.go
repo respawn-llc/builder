@@ -33,10 +33,14 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 		engine.SessionName(),
 		ConversationFreshnessFromSession(freshness),
 		segment,
-	), nil
+	)
 }
 
-func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, page runtime.TranscriptSegmentPage) clientui.TranscriptPage {
+func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, page runtime.TranscriptSegmentPage) (clientui.TranscriptPage, error) {
+	entries, err := transcriptRowsFromFactsChecked(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot))
+	if err != nil {
+		return clientui.TranscriptPage{}, err
+	}
 	return clientui.TranscriptPage{
 		SessionID:               sessionID,
 		SessionName:             sessionName,
@@ -46,8 +50,8 @@ func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui
 		NewerCursor:             transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:            page.HasMoreBelow,
 		LatestRollbackCandidate: textutil.Pointer(page.LatestRollbackCandidate),
-		Entries:                 transcriptRowsFromFacts(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)),
-	}
+		Entries:                 entries,
+	}, nil
 }
 
 func transcriptCursor(hasMore bool, cursor int64) *int64 {

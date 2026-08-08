@@ -556,7 +556,7 @@ func (s *TaskStatusDurableSnapshot) Definition(
 	if err != nil {
 		return definitionSnapshot{}, err
 	}
-	api, nodeKinds := ProjectDefinition(domain, record)
+	api, nodeKinds := ProjectDefinition(domain, record, s.workflowStore.TargetAgentCatalog())
 	return definitionSnapshot{domain: domain, api: api, nodeKinds: nodeKinds}, nil
 }
 

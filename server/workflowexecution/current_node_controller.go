@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -78,6 +79,13 @@ type CurrentNodeHeldIntentSnapshot struct {
 	Automatic   bool
 }
 
+type currentNodePostTurnFinalization struct {
+	sessionID      *runtimeids.SessionID
+	classification workflow.SessionReuseClassification
+	reference      workflow.CurrentNodeReference
+	starts         []currentNodeQueuedStart
+}
+
 // CurrentNodeExecutionSnapshot is immutable live controller state. Durable
 // Current Node scheduling rows are intentionally not inferred from this view.
 type CurrentNodeExecutionSnapshot struct {
@@ -96,6 +104,7 @@ type CurrentNodeController struct {
 	store interface {
 		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
@@ -129,6 +138,7 @@ type CurrentNodeController struct {
 	liveByNode            map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID
 	stopping              map[runtimeids.ExecutionScopeID]struct{}
 	completed             map[runtimeids.ExecutionScopeID]struct{}
+	postTurnFinalization  map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization
 	violations            map[runtimeids.ExecutionScopeID]int64
 	heldStarts            map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart
 	explicitQueue         []currentNodeQueuedStart
@@ -148,6 +158,7 @@ func NewCurrentNodeController(
 	store interface {
 		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
@@ -201,6 +212,7 @@ func NewCurrentNodeController(
 		liveByNode:            make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID),
 		stopping:              make(map[runtimeids.ExecutionScopeID]struct{}),
 		completed:             make(map[runtimeids.ExecutionScopeID]struct{}),
+		postTurnFinalization:  make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization),
 		violations:            make(map[runtimeids.ExecutionScopeID]int64),
 		heldStarts:            make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
 		explicitQueued:        make(map[workflow.CurrentNodeReferenceKey]struct{}),
@@ -378,14 +390,45 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			if intentErr != nil {
 				return intentErr
 			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(automaticQueuedStarts(intents))
+			starts = automaticQueuedStarts(intents)
 			c.mu.Lock()
 			c.completed[req.ScopeID] = struct{}{}
+			c.mu.Unlock()
+			if completed.PostCompletionEligible {
+				analysis := workflow.SessionReuseAnalysisInput{}
+				if completed.SessionReuse != nil {
+					analysis = *completed.SessionReuse
+					analysis.RetainedAssociations = c.loadSessionReuseAssociations(ctx, analysis)
+				}
+				classification := workflow.ClassifyWorkflowSessionReuse(analysis)
+				sourceSessionID := req.SessionID
+				if sourceSessionID == nil && analysis.CompletedCurrentNode.SessionID != nil {
+					value := *analysis.CompletedCurrentNode.SessionID
+					sourceSessionID = &value
+				}
+				c.mu.Lock()
+				c.postTurnFinalization[req.ScopeID] = currentNodePostTurnFinalization{
+					sessionID:      sourceSessionID,
+					classification: classification,
+					reference:      exact.reference,
+					starts:         append([]currentNodeQueuedStart(nil), starts...),
+				}
+				c.heldStarts[req.ScopeID] = append([]currentNodeQueuedStart(nil), starts...)
+				c.mu.Unlock()
+				return nil
+			}
+			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
+			c.mu.Lock()
 			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
 			return nil
 		}); err != nil {
-			return err
+			exactErr := err
+			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+			return errors.Join(exactErr, resolveErr)
+		}
+		if completed.PostCompletionEligible {
+			return nil
 		}
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
@@ -394,6 +437,122 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 	}
 	return completed, nil
 }
+
+func (c *CurrentNodeController) loadSessionReuseAssociations(
+	ctx context.Context,
+	input workflow.SessionReuseAnalysisInput,
+) []workflow.SessionReuseAssociation {
+	loader, ok := c.store.(interface {
+		LoadSessionReuseAssociations(context.Context, []workflow.CurrentNodeReference) ([]workflow.SessionReuseAssociation, error)
+	})
+	if !ok {
+		return nil
+	}
+	references := workflow.SessionReuseAssociationReferences(input)
+	associations, err := loader.LoadSessionReuseAssociations(ctx, references)
+	if err != nil {
+		slog.Warn(
+			"load workflow session reuse associations failed",
+			"task_id", input.CompletedCurrentNode.Reference.TaskID,
+			"node_id", input.CompletedCurrentNode.Reference.NodeID,
+			"error", err,
+		)
+		return nil
+	}
+	return associations
+}
+
+func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
+	ctx context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+	sessionID runtimeids.SessionID,
+	runtimeState workflowruntime.PostCompletionRuntime,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if scopeID.IsZero() || sessionID.IsZero() {
+		return errors.New("workflow post-turn finalization identities are required")
+	}
+	var phase currentNodePostTurnFinalization
+	var phaseExists bool
+	if err := c.permit.Run(ctx, func(context.Context) error {
+		c.mu.Lock()
+		current, exists := c.postTurnFinalization[scopeID]
+		if !exists {
+			c.mu.Unlock()
+			return nil
+		}
+		if current.sessionID == nil || *current.sessionID != sessionID {
+			c.mu.Unlock()
+			return fmt.Errorf("workflow post-turn Session %s does not match source Session", sessionID)
+		}
+		phase = current
+		phaseExists = true
+		c.mu.Unlock()
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if !phaseExists {
+		return nil
+	}
+	if phase.classification == workflow.SessionReuseThresholdPossibleReuse &&
+		runtimeState.CompactionMode != "none" &&
+		runtimeState.PreCompactionTokens <= 0 {
+		return errors.New("workflow pre-compaction token limit must be positive")
+	}
+	shouldCompact := runtimeState.Compact != nil &&
+		runtimeState.CompactionMode != "none" &&
+		((phase.classification == workflow.SessionReuseGuaranteedCACReuse) ||
+			(phase.classification == workflow.SessionReuseThresholdPossibleReuse &&
+				runtimeState.PreCompactionTokens > 0 &&
+				runtimeState.UsedTokens >= runtimeState.PreCompactionTokens))
+	if shouldCompact {
+		result := runtimeState.Compact(ctx)
+		if cause := context.Cause(ctx); cause != nil {
+			if result.Diagnostic != nil {
+				return errors.Join(cause, result.Diagnostic)
+			}
+			return cause
+		}
+		if result.Diagnostic != nil {
+			if errors.Is(result.Diagnostic, context.Canceled) ||
+				context.Cause(ctx) != nil {
+				return result.Diagnostic
+			}
+			slog.Warn(
+				"workflow post-turn compaction diagnostic",
+				"task_id", phase.reference.TaskID,
+				"node_id", phase.reference.NodeID,
+				"session_id", sessionID,
+				"receipt_committed", result.CommitReceipt.Committed,
+				"error", result.Diagnostic,
+			)
+		}
+	}
+
+	return c.permit.Run(ctx, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		current, stillFinalizing := c.postTurnFinalization[scopeID]
+		if !stillFinalizing || !current.reference.Equal(phase.reference) {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if _, live := c.live[scopeID]; !live {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if _, stopping := c.stopping[scopeID]; stopping {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		c.heldStarts[scopeID] = append([]currentNodeQueuedStart(nil), phase.starts...)
+		delete(c.postTurnFinalization, scopeID)
+		return nil
+	})
+}
+
+var _ workflowruntime.PostTurnFinalizer = (*CurrentNodeController)(nil)
 
 // CompleteIdleCurrentNode applies a forced completion only after the
 // controller has established that it owns no active, admitted, queued, or
@@ -415,22 +574,22 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		completed, err := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		completed, completionErr := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: transitionID,
 			OutputValues: outputValues,
 			Commentary:   commentary,
 		})
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		if completionErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
-		intents, err := currentNodeAutomaticIntents(completed.AutomaticIntents)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
+		if intentErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, intentErr
 		}
-		starts, err := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
-		if err != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, err
+		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
+		if startErr != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, startErr
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -500,10 +659,7 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			ctx,
 			source.Reference,
 			reasonProtocolViolationCap,
-			workflow.CurrentNodeInterruptionDetail{
-				Code:   string(reasonProtocolViolationCap),
-				Fields: map[string]string{"error": workflowProtocolViolationCause(req).Error()},
-			},
+			workflow.NewCurrentNodeInterruptionDetail(string(reasonProtocolViolationCap), workflowProtocolViolationCause(req)),
 		); err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
@@ -598,10 +754,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	reason workflow.CurrentNodeInterruptionReason,
 	cause error,
 ) error {
-	detail := workflow.CurrentNodeInterruptionDetail{Code: string(reason)}
-	if cause != nil {
-		detail.Fields = map[string]string{"error": cause.Error()}
-	}
+	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
 	var lease sessionruntime.WorkflowExecutionLease
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
@@ -657,6 +810,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	delete(c.stopping, scope.ID())
 	_, completed := c.completed[scope.ID()]
 	delete(c.completed, scope.ID())
+	delete(c.postTurnFinalization, scope.ID())
 	starts := append([]currentNodeQueuedStart(nil), c.heldStarts[scope.ID()]...)
 	delete(c.heldStarts, scope.ID())
 	if gate, gated := c.gates[key]; gated && gate.lease.ScopeID() == scope.ID() {
@@ -678,6 +832,21 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
+	needsAssignmentSteer := false
+	for _, start := range starts {
+		if start.assignmentSteer == nil {
+			needsAssignmentSteer = true
+			break
+		}
+	}
+	if needsAssignmentSteer {
+		steered, steerErr := c.steerStartsAssignments(waitCtx, starts)
+		if steerErr != nil {
+			c.handleCurrentNodeStartFailures(steered, false, steerErr)
+			return
+		}
+		starts = steered
+	}
 	outcome := waitCurrentNodeAssignmentSteers(waitCtx, starts)
 	if outcome.err != nil {
 		if len(outcome.pending) != 0 {
@@ -766,6 +935,7 @@ func (c *CurrentNodeController) Close() error {
 	c.automaticQueue.clear()
 	c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
 	c.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
+	c.postTurnFinalization = make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization)
 	gates := make([]currentNodeAdmissionGate, 0, len(c.gates))
 	for _, gate := range c.gates {
 		gates = append(gates, gate)

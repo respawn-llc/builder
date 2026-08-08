@@ -88,9 +88,13 @@ func TestCurrentNodeSessionIntentReusesDirectRetainedSession(t *testing.T) {
 }
 
 func TestCurrentNodeSessionPolicyReusesTargetOwnedFanoutSession(t *testing.T) {
+	sessionID := mustSessionID(t)
 	policy, err := resolveCurrentNodeSessionPolicy(workflowstore.CurrentNodeStartContext{
 		ContextMode:    workflow.ContextModeContinueSession,
 		IsFanoutBranch: true,
+		CurrentNode: workflow.CurrentNode{
+			SessionID: &sessionID,
+		},
 		EnteringEdge: workflow.Edge{
 			ContextSource: workflow.ContextSource{
 				Kind: workflow.ContextSourcePreviousTargetOrNew,
@@ -201,6 +205,14 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
+	selection, err := workflow.NewAgentExecutionSelection(
+		"reviewer",
+		nil,
+		workflow.AssigneeOriginTransitionSelected,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentExecutionSelection: %v", err)
+	}
 	input := workflowstore.CurrentNodeStartContext{
 		Task: workflowstore.TaskRecord{
 			ID:        reference.TaskID,
@@ -211,8 +223,9 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 			SubagentRole: "reviewer",
 		},
 		CurrentNode: workflow.CurrentNode{
-			Reference: reference,
-			SessionID: &sessionID,
+			Reference:               reference,
+			SessionID:               &sessionID,
+			AgentExecutionSelection: &selection,
 		},
 		ContextMode: workflow.ContextModeCompactAndContinueSession,
 		ExecutionRoot: &workflowstore.ExecutionRoot{

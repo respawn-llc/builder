@@ -11,20 +11,27 @@ import (
 type TranscriptRowKind string
 
 const (
-	TranscriptRowUser      TranscriptRowKind = "user"
-	TranscriptRowAssistant TranscriptRowKind = "assistant"
-	TranscriptRowTool      TranscriptRowKind = "tool"
-	TranscriptRowNotice    TranscriptRowKind = "notice"
+	TranscriptRowUser             TranscriptRowKind = "user"
+	TranscriptRowAssistant        TranscriptRowKind = "assistant"
+	TranscriptRowTool             TranscriptRowKind = "tool"
+	TranscriptRowReasoningTrace   TranscriptRowKind = "reasoning_trace"
+	TranscriptRowNotice           TranscriptRowKind = "notice"
+	TranscriptRowReviewerFeedback TranscriptRowKind = "reviewer_feedback"
+	TranscriptRowReviewerError    TranscriptRowKind = "reviewer_error"
 )
 
 type TranscriptCommittedRow struct {
-	Visibility transcript.EntryVisibility
-	Integrity  transcript.RowIntegrity
-	Kind       TranscriptRowKind
-	User       *TranscriptUserRow
-	Assistant  *TranscriptAssistantRow
-	Tool       *TranscriptToolRow
-	Notice     *TranscriptNoticeRow
+	Visibility       transcript.EntryVisibility
+	Integrity        transcript.RowIntegrity
+	Kind             TranscriptRowKind
+	Locator          transcript.CommittedRowLocator
+	User             *TranscriptUserRow
+	Assistant        *TranscriptAssistantRow
+	Tool             *TranscriptToolRow
+	ReasoningTrace   *TranscriptReasoningTraceRow
+	Notice           *TranscriptNoticeRow
+	ReviewerFeedback *TranscriptReviewerFeedbackRow
+	ReviewerError    *TranscriptReviewerErrorRow
 }
 
 type TranscriptUserRow struct {
@@ -51,6 +58,27 @@ type TranscriptToolRow struct {
 	ResultSummary *string
 	CondensedText *string
 	Presentation  *transcript.ToolCallMeta
+}
+
+type TranscriptReasoningTraceRow struct {
+	StepID              runtimeids.StepID
+	CompactText         string
+	Text                string
+	DurationMs          *int64 `json:"duration_ms"`
+	ProvisionalIdentity *TranscriptReasoningTraceIdentity
+}
+
+type TranscriptReviewerFeedbackRow struct {
+	ID              runtimeids.ReviewerFeedbackID
+	StepID          runtimeids.StepID
+	Suggestions     []string
+	SuggestionCount int
+}
+
+type TranscriptReviewerErrorRow struct {
+	ID     runtimeids.ReviewerErrorID
+	StepID runtimeids.StepID
+	Detail string
 }
 
 type TranscriptNoticeReason string
@@ -95,6 +123,7 @@ const (
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
 	TranscriptMessageActiveGoalContinuation         TranscriptMessageType = "active_goal_continuation"
+	TranscriptMessageAgentSteer                     TranscriptMessageType = TranscriptMessageType(MessageTypeAgentSteer)
 )
 
 type NoticeID string
@@ -148,7 +177,7 @@ type TranscriptBackgroundNoticeIdentity struct {
 	ExitCode   *int
 }
 
-func (r TranscriptCommittedRow) Validate() error {
+func (r TranscriptCommittedRow) ValidateStructure() error {
 	switch r.Visibility {
 	case transcript.EntryVisibilityOngoing,
 		transcript.EntryVisibilityOngoingCollapsed,
@@ -170,11 +199,58 @@ func (r TranscriptCommittedRow) Validate() error {
 	if r.Tool != nil {
 		count++
 	}
+	if r.ReasoningTrace != nil {
+		count++
+	}
 	if r.Notice != nil {
+		count++
+	}
+	if r.ReviewerFeedback != nil {
+		count++
+	}
+	if r.ReviewerError != nil {
 		count++
 	}
 	if count != 1 {
 		return fmt.Errorf("transcript committed row kind %q has %d payloads, want exactly one", r.Kind, count)
+	}
+	if r.Kind == "" {
+		return fmt.Errorf("transcript committed row kind is required")
+	}
+	expectedKind := TranscriptRowKind("")
+	if r.User != nil {
+		expectedKind = TranscriptRowUser
+	}
+	if r.Assistant != nil {
+		expectedKind = TranscriptRowAssistant
+	}
+	if r.Tool != nil {
+		expectedKind = TranscriptRowTool
+	}
+	if r.ReasoningTrace != nil {
+		expectedKind = TranscriptRowReasoningTrace
+	}
+	if r.Notice != nil {
+		expectedKind = TranscriptRowNotice
+	}
+	if r.ReviewerFeedback != nil {
+		expectedKind = TranscriptRowReviewerFeedback
+	}
+	if r.ReviewerError != nil {
+		expectedKind = TranscriptRowReviewerError
+	}
+	if r.Kind != expectedKind {
+		return fmt.Errorf("transcript committed row kind %q does not match payload kind %q", r.Kind, expectedKind)
+	}
+	return nil
+}
+
+func (r TranscriptCommittedRow) Validate() error {
+	if err := r.Locator.Validate(); err != nil {
+		return fmt.Errorf("transcript committed row locator: %w", err)
+	}
+	if err := r.ValidateStructure(); err != nil {
+		return err
 	}
 	switch r.Kind {
 	case TranscriptRowUser:
@@ -192,14 +268,89 @@ func (r TranscriptCommittedRow) Validate() error {
 			return fmt.Errorf("transcript tool row payload is required")
 		}
 		return r.Tool.Validate()
+	case TranscriptRowReasoningTrace:
+		if r.ReasoningTrace == nil {
+			return fmt.Errorf("transcript reasoning trace row payload is required")
+		}
+		return r.ReasoningTrace.Validate()
 	case TranscriptRowNotice:
 		if r.Notice == nil {
 			return fmt.Errorf("transcript notice row payload is required")
 		}
 		return r.Notice.Validate()
+	case TranscriptRowReviewerFeedback:
+		if r.ReviewerFeedback == nil {
+			return fmt.Errorf("transcript Reviewer feedback row payload is required")
+		}
+		if r.Visibility != transcript.EntryVisibilityOngoing &&
+			r.Visibility != transcript.EntryVisibilityOngoingCollapsed {
+			return fmt.Errorf("transcript Reviewer feedback row visibility must be ongoing or ongoing_collapsed")
+		}
+		return r.ReviewerFeedback.Validate()
+	case TranscriptRowReviewerError:
+		if r.ReviewerError == nil {
+			return fmt.Errorf("transcript Reviewer error row payload is required")
+		}
+		if r.Visibility != transcript.EntryVisibilityOngoing {
+			return fmt.Errorf("transcript Reviewer error row visibility must be ongoing")
+		}
+		return r.ReviewerError.Validate()
 	default:
 		return fmt.Errorf("unknown transcript row kind %q", r.Kind)
 	}
+}
+
+func (r TranscriptReasoningTraceRow) Validate() error {
+	if r.StepID.IsZero() {
+		return fmt.Errorf("transcript reasoning trace row step id is required")
+	}
+	if strings.TrimSpace(r.CompactText) == "" {
+		return fmt.Errorf("transcript reasoning trace row compact text is required")
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return fmt.Errorf("transcript reasoning trace row text is required")
+	}
+	if r.DurationMs != nil && *r.DurationMs < 0 {
+		return fmt.Errorf("transcript reasoning trace row duration_ms must not be negative")
+	}
+	if r.ProvisionalIdentity != nil {
+		return r.ProvisionalIdentity.Validate()
+	}
+	return nil
+}
+
+func (r TranscriptReviewerFeedbackRow) Validate() error {
+	if r.ID.IsZero() {
+		return fmt.Errorf("transcript Reviewer feedback row id is required")
+	}
+	if r.StepID.IsZero() {
+		return fmt.Errorf("transcript Reviewer feedback row step id is required")
+	}
+	if len(r.Suggestions) == 0 {
+		return fmt.Errorf("transcript Reviewer feedback row suggestions are required")
+	}
+	for index, suggestion := range r.Suggestions {
+		if strings.TrimSpace(suggestion) == "" {
+			return fmt.Errorf("transcript Reviewer feedback row suggestion %d is required", index)
+		}
+	}
+	if r.SuggestionCount != len(r.Suggestions) {
+		return fmt.Errorf("transcript Reviewer feedback row suggestion count %d does not match %d suggestions", r.SuggestionCount, len(r.Suggestions))
+	}
+	return nil
+}
+
+func (r TranscriptReviewerErrorRow) Validate() error {
+	if r.ID.IsZero() {
+		return fmt.Errorf("transcript Reviewer error row id is required")
+	}
+	if r.StepID.IsZero() {
+		return fmt.Errorf("transcript Reviewer error row step id is required")
+	}
+	if strings.TrimSpace(r.Detail) == "" {
+		return fmt.Errorf("transcript Reviewer error row detail is required")
+	}
+	return nil
 }
 
 func (r TranscriptUserRow) Validate() error {
@@ -377,7 +528,8 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageWorktreeMode,
 		TranscriptMessageWorktreeModeExit,
 		TranscriptMessageGoal,
-		TranscriptMessageActiveGoalContinuation:
+		TranscriptMessageActiveGoalContinuation,
+		TranscriptMessageAgentSteer:
 		return nil
 	default:
 		return fmt.Errorf("unknown transcript message type %q", t)

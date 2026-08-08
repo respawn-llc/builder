@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"core/shared/clientui"
 )
 
 type MessageType string
@@ -31,6 +33,7 @@ const (
 	MessageTypeWorktreeModeExit               MessageType = "worktree_mode_exit"
 	MessageTypeGoal                           MessageType = "goal"
 	MessageTypeActiveGoalContinuation         MessageType = "active_goal_continuation"
+	MessageTypeAgentSteer                     MessageType = MessageType(clientui.MessageTypeAgentSteer)
 )
 
 type MessagePhase string
@@ -183,7 +186,7 @@ func normalizeOptionalMessageType(messageType *MessageType) (*MessageType, error
 		MessageTypeReviewerFeedback, MessageTypeBackgroundNotice, MessageTypeCustomToolCallOutput,
 		MessageTypeCompactionPreservedUserMessage, MessageTypeHeadlessMode, MessageTypeHeadlessModeExit,
 		MessageTypeWorkflowMode, MessageTypeWorktreeMode, MessageTypeWorktreeModeExit,
-		MessageTypeGoal, MessageTypeActiveGoalContinuation:
+		MessageTypeGoal, MessageTypeActiveGoalContinuation, MessageTypeAgentSteer:
 		value := *messageType
 		return &value, nil
 	default:

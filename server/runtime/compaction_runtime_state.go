@@ -1,16 +1,43 @@
 package runtime
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
+
+	"core/server/llm"
+	"core/server/session"
 )
 
+type workflowPostCompletionActivity uint8
+
+const (
+	workflowPostCompletionNoActivity workflowPostCompletionActivity = iota
+	workflowPostCompletionDurableActivity
+)
+
+func workflowPostCompletionMessageActivity(message llm.Message) workflowPostCompletionActivity {
+	if message.MessageType == nil {
+		return workflowPostCompletionDurableActivity
+	}
+	if *message.MessageType == llm.MessageTypeCompactionSoonReminder {
+		return workflowPostCompletionNoActivity
+	}
+	if _, ok := classifyMetaContextMessage(message); ok {
+		return workflowPostCompletionNoActivity
+	}
+	return workflowPostCompletionDurableActivity
+}
+
 type compactionRuntimeState struct {
-	mu                 sync.Mutex
-	count              int
-	soonReminderIssued bool
-	manualEligible     bool
-	active             *TranscriptCompactionState
+	mu                             sync.Mutex
+	count                          int
+	soonReminderIssued             bool
+	manualEligible                 bool
+	historyReplacementMode         *session.CompactionMode
+	workflowPostCompletionBoundary bool
+	active                         *TranscriptCompactionState
 }
 
 func (s *compactionRuntimeState) ManualCompactionEligible() bool {
@@ -119,4 +146,69 @@ func (s *compactionRuntimeState) SetSoonReminderIssued(issued bool) {
 	s.mu.Lock()
 	s.soonReminderIssued = issued
 	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) SetHistoryReplacementMode(mode *session.CompactionMode) error {
+	if s == nil {
+		return errors.New("compaction runtime state is required")
+	}
+	if mode == nil {
+		s.mu.Lock()
+		s.historyReplacementMode = nil
+		s.workflowPostCompletionBoundary = false
+		s.mu.Unlock()
+		return nil
+	}
+	normalized := session.CompactionMode(strings.TrimSpace(string(*mode)))
+	switch normalized {
+	case session.CompactionModeAuto,
+		session.CompactionModeHandoff,
+		session.CompactionModeManual,
+		session.CompactionModeWorkflowPostCompletion:
+	default:
+		return fmt.Errorf("invalid history replacement mode %q", normalized)
+	}
+	s.mu.Lock()
+	s.historyReplacementMode = &normalized
+	s.workflowPostCompletionBoundary = normalized == session.CompactionModeWorkflowPostCompletion
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *compactionRuntimeState) HistoryReplacementMode() (*session.CompactionMode, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.historyReplacementMode == nil {
+		return nil, false
+	}
+	value := *s.historyReplacementMode
+	return &value, true
+}
+
+func (s *compactionRuntimeState) WorkflowPostCompletionBoundary() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workflowPostCompletionBoundary
+}
+
+func (s *compactionRuntimeState) ApplyWorkflowPostCompletionActivity(activity workflowPostCompletionActivity) bool {
+	if s == nil {
+		return false
+	}
+	if activity != workflowPostCompletionDurableActivity {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.workflowPostCompletionBoundary {
+		return false
+	}
+	s.workflowPostCompletionBoundary = false
+	return true
 }

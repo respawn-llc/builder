@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -102,18 +103,18 @@ type TaskAwarenessSource interface {
 }
 
 type TaskInstructions struct {
-	CurrentNode     workflow.CurrentNodeReference
-	TaskShortID     string
-	TaskTitle       string
-	TaskBody        string
-	WorkflowID      runtimeids.WorkflowID
-	WorkflowName    string
-	NodeKey         string
-	NodeDisplayName string
-	ContextMode     string
-	SourceSessionID string
-	Transitions     []TransitionInstruction
-	NodePrompt      string
+	CurrentNode      workflow.CurrentNodeReference
+	TaskShortID      string
+	TaskTitle        string
+	TaskBody         string
+	WorkflowID       runtimeids.WorkflowID
+	WorkflowName     string
+	NodeKey          string
+	NodeDisplayName  string
+	ContextMode      string
+	SourceSessionID  string
+	Transitions      []TransitionInstruction
+	TransitionPrompt string
 }
 
 // CurrentNodePromptIdentity gives one stable prompt SourcePath to the full
@@ -155,6 +156,28 @@ type CompletionObservationRequest struct {
 
 type CompletionObservationResult struct {
 	Completed bool
+}
+
+// PostCompletionCompactionResult preserves a durable history-replacement
+// receipt separately from operational work that ran after that replacement.
+type PostCompletionCompactionResult struct {
+	CommitReceipt session.CommitReceipt
+	Diagnostic    error
+}
+
+// PostCompletionRuntime is the live runtime authority supplied by the Agent
+// runner to the workflow controller after the completed turn returns.
+type PostCompletionRuntime struct {
+	UsedTokens          int
+	PreCompactionTokens int
+	CompactionMode      string
+	Compact             func(context.Context) PostCompletionCompactionResult
+}
+
+// PostTurnFinalizer owns the process-local completion fence and releases held
+// successors only after post-turn finalization has completed.
+type PostTurnFinalizer interface {
+	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
 }
 
 type ViolationKind string
@@ -440,7 +463,7 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 				continue
 			}
 			if strings.TrimSpace(parsed.OutputValues[key]) == "" {
-				issues = append(issues, ValidationIssue{Code: "required_parameter_missing", Field: key, Message: "parameter is required by the selected transition"})
+				issues = append(issues, requiredParameterMissingIssue(parameter))
 			}
 		}
 	}
@@ -565,6 +588,21 @@ func normalizeStoreValidationIssue(issue workflowstore.CompletionValidationIssue
 	return ValidationIssue{Code: code, Field: field, Message: message}
 }
 
+func requiredParameterMissingIssue(parameter workflow.Parameter) ValidationIssue {
+	if workflow.CanonicalParameterPurpose(parameter.Purpose) == workflow.ParameterPurposeTargetAssignee {
+		return ValidationIssue{
+			Code:    "workflow.target_agent.unavailable_role",
+			Field:   strings.TrimSpace(parameter.Key),
+			Message: "a selectable target Agent role is required",
+		}
+	}
+	return ValidationIssue{
+		Code:    "required_parameter_missing",
+		Field:   strings.TrimSpace(parameter.Key),
+		Message: "parameter is required by the selected transition",
+	}
+}
+
 func selectedTransition(value string, provided bool, transitions []CompletionTransition) (CompletionTransition, bool, []ValidationIssue) {
 	if len(transitions) == 0 {
 		return CompletionTransition{}, false, []ValidationIssue{{Code: "no_outgoing_transition", Field: "transition", Message: "no outgoing transition is available for this Current Node execution"}}
@@ -616,7 +654,11 @@ func normalizedParameters(parameters []workflow.Parameter) []workflow.Parameter 
 			continue
 		}
 		seen[key] = true
-		out = append(out, workflow.Parameter{Key: key, Description: strings.TrimSpace(parameter.Description)})
+		out = append(out, workflow.Parameter{
+			Key:         key,
+			Description: strings.TrimSpace(parameter.Description),
+			Purpose:     workflow.CanonicalParameterPurpose(parameter.Purpose),
+		})
 	}
 	return out
 }
@@ -631,7 +673,11 @@ func schemaParameters(transitions []CompletionTransition) []workflow.Parameter {
 				continue
 			}
 			seen[key] = true
-			out = append(out, workflow.Parameter{Key: key, Description: strings.TrimSpace(parameter.Description)})
+			out = append(out, workflow.Parameter{
+				Key:         key,
+				Description: strings.TrimSpace(parameter.Description),
+				Purpose:     workflow.CanonicalParameterPurpose(parameter.Purpose),
+			})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

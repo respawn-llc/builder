@@ -10,7 +10,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 	"core/shared/runtimeids"
-	"core/shared/toolspec"
 )
 
 type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) runtimeids.WorkflowID
@@ -125,16 +124,16 @@ type blockingGraphSaveRoleResolver struct {
 	once    sync.Once
 }
 
-func (r *blockingGraphSaveRoleResolver) RoleExists(string) bool {
+func (r *blockingGraphSaveRoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
 	r.once.Do(func() {
 		close(r.started)
 		<-r.release
 	})
-	return true
+	return workflow.TargetAgentRole{Identity: role, QuestionsEnabled: true}, true
 }
 
-func (r *blockingGraphSaveRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
-	return true
+func (r *blockingGraphSaveRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return nil
 }
 
 func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
@@ -184,7 +183,7 @@ func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
 	}
 }
 
-func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
+func TestWorkflowGraphSaveCommitAllowsActiveWorkStartedDuringPreparation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
 	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
@@ -235,15 +234,12 @@ func TestWorkflowGraphSaveCommitRevalidatesDynamicPolicyImpact(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
 	}
-	if outcome.result.Saved || workflowGraphSaveBlockerCount(outcome.result.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("save after dynamic policy race = %+v, want active_transition_contract_changed blocker", outcome.result)
-	}
-	if outcome.result.EditPolicyImpact.ActiveCurrentNodeCount != 1 {
-		t.Fatalf("save result policy impact = %+v, want authoritative active Current Node count", outcome.result.EditPolicyImpact)
+	if !outcome.result.Saved || len(outcome.result.Blockers) != 0 {
+		t.Fatalf("save after active work starts = %+v, want committed graph", outcome.result)
 	}
 }
 
-func TestWorkflowGraphSaveAddingTransitionFromActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(runtimeids.WorkflowID, workflow.NodeID, workflow.NodeID, *WorkflowGraphSaveRequest)
@@ -309,14 +305,61 @@ func TestWorkflowGraphSaveAddingTransitionFromActiveSourceIsBlocked(t *testing.T
 			if err != nil {
 				t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 			}
-			if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-				t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+			if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+				t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 			}
 		})
 	}
 }
 
-func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveIncompatibleActiveTransitionFailsCompletionWithoutTaskMutation(t *testing.T) {
+	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	source := started.Mutation.Created[0].Reference
+
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	for index := range req.TransitionGroups {
+		if req.TransitionGroups[index].SourceNodeID == source.NodeID {
+			req.TransitionGroups[index].TransitionID = "renamed"
+		}
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || len(saved.Blockers) != 0 {
+		t.Fatalf("save = %+v, want committed transition edit", saved)
+	}
+
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "done",
+	}); err == nil {
+		t.Fatal("CompleteCurrentNode with obsolete transition succeeded")
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after rejected completion: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Reference != source {
+		t.Fatalf("current nodes after rejected completion = %+v, want unchanged source", currentNodes)
+	}
+
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "renamed",
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode with current transition: %v", err)
+	}
+}
+
+func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -332,9 +375,9 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 	reassignedEdgeID := workflow.EdgeID("edge-spare-split-a-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: spareSourceID, WorkflowID: workflowID, Key: "spare_source", Kind: workflow.NodeKindAgent, DisplayName: "Spare Source", SubagentRole: "coder", PromptTemplate: "Route spare work."},
-			NodeRecord{ID: spareBranchAID, WorkflowID: workflowID, Key: "spare_a", Kind: workflow.NodeKindAgent, DisplayName: "Spare A", SubagentRole: "coder", PromptTemplate: "Do spare A."},
-			NodeRecord{ID: spareBranchBID, WorkflowID: workflowID, Key: "spare_b", Kind: workflow.NodeKindAgent, DisplayName: "Spare B", SubagentRole: "coder", PromptTemplate: "Do spare B."},
+			NodeRecord{ID: spareSourceID, WorkflowID: workflowID, Key: "spare_source", Kind: workflow.NodeKindAgent, DisplayName: "Spare Source", SubagentRole: "coder"},
+			NodeRecord{ID: spareBranchAID, WorkflowID: workflowID, Key: "spare_a", Kind: workflow.NodeKindAgent, DisplayName: "Spare A", SubagentRole: "coder"},
+			NodeRecord{ID: spareBranchBID, WorkflowID: workflowID, Key: "spare_b", Kind: workflow.NodeKindAgent, DisplayName: "Spare B", SubagentRole: "coder"},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: spareRouteGroupID, WorkflowID: workflowID, SourceNodeID: planID, TransitionID: "spare", DisplayName: "Spare"},
@@ -368,12 +411,12 @@ func TestWorkflowGraphSaveReassigningExistingEdgeToActiveSourceIsBlocked(t *test
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+		t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 	}
 }
 
-func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBlocked(t *testing.T) {
+func TestWorkflowGraphSaveAllowsReassigningExistingTransitionGroupToActiveSource(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	agentID := workflow.NodeID("node-agent-" + workflowID.String())
@@ -385,7 +428,7 @@ func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBloc
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: spareAgentID, WorkflowID: workflowID, Key: "spare_agent", Kind: workflow.NodeKindAgent, DisplayName: "Spare Agent", SubagentRole: "coder", PromptTemplate: "Do spare work."},
+			NodeRecord{ID: spareAgentID, WorkflowID: workflowID, Key: "spare_agent", Kind: workflow.NodeKindAgent, DisplayName: "Spare Agent", SubagentRole: "coder"},
 			NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
@@ -417,8 +460,8 @@ func TestWorkflowGraphSaveReassigningExistingTransitionGroupToActiveSourceIsBloc
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("preview = %+v, want active_transition_contract_changed blocker", preview)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "active_transition_contract_changed") != 0 {
+		t.Fatalf("preview = %+v, want no active-source transition blocker", preview)
 	}
 }
 
@@ -878,7 +921,7 @@ func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
 		case "start":
 			req.Edges[i].PromptTemplate = "Start from {{.TaskTitle}}."
 		case "done":
-			req.Edges[i].Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary for terminal history."}}
+			req.Edges[i].Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary for terminal history.", Purpose: workflow.ParameterPurposeOrdinary}}
 		}
 	}
 	saved := f.save(t, req)
@@ -900,6 +943,72 @@ func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
 	noopSaved := f.save(t, noop)
 	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != updatedRecord.Version {
 		t.Fatalf("noop save = %+v, want prompt/parameters preserved as unchanged graph", noopSaved)
+	}
+}
+
+func TestWorkflowGraphSaveRoundTripsEdgeSelectionModesAndParameterPurposes(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	req := f.request(f.record.Version, false, f.def)
+	for index := range req.Edges {
+		if req.Edges[index].Key != "done" {
+			continue
+		}
+		req.Edges[index].AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		req.Edges[index].ThinkingSelection = workflow.ThinkingSelectionPreviousNode
+		req.Edges[index].Parameters = []workflow.Parameter{
+			{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee},
+			{Key: "thinking", Purpose: workflow.ParameterPurposeTargetThinking},
+			{Key: "summary", Description: "Summary.", Purpose: workflow.ParameterPurposeOrdinary},
+		}
+	}
+	saved := f.save(t, req)
+	if !saved.Saved || !saved.Changed {
+		t.Fatalf("save result = %+v, want changed graph", saved)
+	}
+	updated, _ := f.current(t)
+	edge := edgeByKey(t, updated, "done")
+	if edge.AssigneeSelection != workflow.AssigneeSelectionPreviousNode || edge.ThinkingSelection != workflow.ThinkingSelectionPreviousNode {
+		t.Fatalf("edge selections = %q/%q", edge.AssigneeSelection, edge.ThinkingSelection)
+	}
+	if len(edge.Parameters) != 3 || edge.Parameters[0].Purpose != workflow.ParameterPurposeTargetAssignee || edge.Parameters[1].Purpose != workflow.ParameterPurposeTargetThinking || edge.Parameters[2].Purpose != workflow.ParameterPurposeOrdinary {
+		t.Fatalf("edge parameters = %+v", edge.Parameters)
+	}
+}
+
+func TestWorkflowGraphSavePersistsSemanticallyInapplicableSelectorForDraftFixup(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	req := f.request(f.record.Version, false, f.def)
+	for index := range req.Edges {
+		if req.Edges[index].Key != "done" {
+			continue
+		}
+		req.Edges[index].AssigneeSelection = workflow.AssigneeSelectionPreviousNode
+		req.Edges[index].Parameters = []workflow.Parameter{{
+			Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee,
+		}}
+	}
+	saved := f.save(t, req)
+	if !saved.Saved || len(saved.Blockers) != 0 {
+		t.Fatalf("semantically inapplicable selector save = %+v, want saved draft", saved)
+	}
+	foundDiagnostic := false
+	for _, diagnostic := range saved.ValidationErrors {
+		if diagnostic.Code == workflow.CodeAssigneeSelectionInapplicable {
+			foundDiagnostic = true
+			if diagnostic.BlocksContext {
+				t.Fatal("draft selector applicability diagnostic blocks save")
+			}
+		}
+	}
+	if !foundDiagnostic {
+		t.Fatalf("save diagnostics = %+v, want Assignee applicability diagnostic", saved.ValidationErrors)
+	}
+	updated, _ := f.current(t)
+	edge := edgeByKey(t, updated, "done")
+	if edge.AssigneeSelection != workflow.AssigneeSelectionPreviousNode ||
+		len(edge.Parameters) != 1 ||
+		edge.Parameters[0].Purpose != workflow.ParameterPurposeTargetAssignee {
+		t.Fatalf("reloaded draft edge = %+v, want selector state preserved", edge)
 	}
 }
 
@@ -927,6 +1036,8 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 		TransitionGroupID: "workflow-transition-group-00000000-0000-4000-8000-000000000001",
 		Key:               "client_generated",
 		TargetNodeID:      "workflow-node-00000000-0000-4000-8000-000000000001",
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
 		PromptTemplate:    "Client generated.",
 	})

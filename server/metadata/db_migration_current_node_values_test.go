@@ -7,7 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"core/server/workflow"
+	"core/shared/runtimeids"
+	"core/shared/toolspec"
+
 	_ "modernc.org/sqlite"
+)
+
+const (
+	historicalVersion58TransitionPrompt = `Review {{.Inputs.summary}}.`
+	version71TransitionPrompt           = `Execute {{.TaskTitle}}.`
+	version71TransitionParameters       = `[{"key":"summary","description":"Transition summary."}]`
 )
 
 func TestOpenProjectsMigratesSequentialCurrentNodeValueEnvironment(t *testing.T) {
@@ -58,14 +68,14 @@ INSERT INTO workflow_edges (
     prompt_template, parameters_json, input_bindings_json, output_requirements_json
 ) VALUES
     ('edge-plan-review', 'group-done', 'review', 'node-review', 'new_session',
-     'Review {{.Inputs.summary}}.',
+     ?,
      '[{"key":"summary","description":"Plan summary."}]',
      '[{"name":"summary","source":"transition_output","field":"summary"}]',
      '[]'),
     ('edge-review-audit', 'group-review-audit', 'audit', 'node-audit', 'new_session',
      'Audit {{.Params.review.summary}}.', '[]', '[]', '[]'),
     ('edge-audit-done', 'group-audit-done', 'done', 'node-done', 'new_session',
-     '', '[]', '[]', '[]')`)
+     '', '[]', '[]', '[]')`, historicalVersion58TransitionPrompt)
 	execSeed(t, db, "task", workflowSeedTaskSQL, "task-value-environment-migration", "link-1", 1, "VAL-1", now, now)
 	execSeed(t, db, "plan and review placements", `
 INSERT INTO task_node_placements (
@@ -163,7 +173,6 @@ INSERT INTO task_transitions (
 		t.Fatalf("open migrated store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-
 	var currentInputs, priorNodeValues, enteredByEdgeID string
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT current_input_values_json, prior_node_values_json, entered_by_edge_id
@@ -184,6 +193,79 @@ WHERE task_id = 'task-value-environment-migration'`).Scan(
 			priorNodeValues,
 			enteredByEdgeID,
 		)
+	}
+	for _, column := range []string{"prompt_template", "input_fields_json", "output_fields_json"} {
+		if columnExists(t, store.db, "workflow_nodes", column) {
+			t.Fatalf("workflow_nodes.%s remains after migration 72", column)
+		}
+	}
+	var preservedPrompt string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT prompt_template
+FROM workflow_edges
+WHERE id = 'edge-plan-review'`).Scan(&preservedPrompt); err != nil {
+		t.Fatalf("query preserved historical prompt: %v", err)
+	}
+	if preservedPrompt != historicalVersion58TransitionPrompt {
+		t.Fatalf("historical Edge prompt = %q, want byte-for-byte preserved prompt", preservedPrompt)
+	}
+	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440001")
+	if err != nil {
+		t.Fatalf("ParseWorkflowID: %v", err)
+	}
+	validation := workflow.ValidateDefinition(workflow.Definition{
+		ID:          workflowID,
+		DisplayName: "Migrated Workflow",
+		Nodes: []workflow.Node{
+			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
+			workflow.AgentNode{
+				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-agent", Key: "agent", DisplayName: "Agent"},
+				SubagentRole: "coder",
+			},
+			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-done", Key: "done", DisplayName: "Done"}},
+		},
+		TransitionGroups: []workflow.TransitionGroup{
+			{WorkflowID: workflowID, ID: "group-start", SourceNodeID: "node-start", TransitionID: "start", DisplayName: "Start"},
+			{WorkflowID: workflowID, ID: "group-done", SourceNodeID: "node-agent", TransitionID: "done", DisplayName: "Done"},
+		},
+		Edges: []workflow.Edge{
+			{WorkflowID: workflowID, ID: "edge-start", Key: "start", TransitionGroupID: "group-start", TargetNodeID: "node-agent", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Use {{.Inputs.summary}}."},
+			{WorkflowID: workflowID, ID: "edge-done", Key: "done", TransitionGroupID: "group-done", TargetNodeID: "node-done", ContextMode: workflow.ContextModeNewSession},
+		},
+	}, workflow.ValidationOptions{
+		Context:      workflow.ValidationContextExecution,
+		RoleResolver: metadataTestRoleResolver{},
+	})
+	foundInvalidPrompt := false
+	for _, diagnostic := range validation.Errors {
+		if diagnostic.Code == workflow.CodeInvalidTemplatePlaceholder {
+			foundInvalidPrompt = true
+			break
+		}
+	}
+	if !foundInvalidPrompt {
+		t.Fatalf("post-upgrade validation = %+v, want preserved .Inputs prompt rejection", validation.Errors)
+	}
+}
+
+type metadataTestRoleResolver struct{}
+
+func (metadataTestRoleResolver) RoleExists(string) bool {
+	return true
+}
+
+func (metadataTestRoleResolver) RoleToolEnabled(string, toolspec.ID) bool {
+	return true
+}
+
+func (metadataTestRoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
+	return workflow.TargetAgentRole{Identity: role, QuestionsEnabled: true, ExplicitAgentCallable: true}, true
+}
+
+func (metadataTestRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	return []workflow.TargetAgentRole{
+		{Identity: workflow.DefaultAgentRole, QuestionsEnabled: true, ExplicitAgentCallable: true},
+		{Identity: "coder", QuestionsEnabled: true, ExplicitAgentCallable: true},
 	}
 }
 

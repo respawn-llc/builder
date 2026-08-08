@@ -450,8 +450,6 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		prepared.nodeGroups[i] = group
 	}
 
-	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: executionTargetPolicy}
-	groupNodeIDs := map[string][]workflow.NodeID{}
 	for i, node := range prepared.nodes {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, node.WorkflowID, "node", string(node.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
@@ -473,32 +471,26 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		}
 		node.CompletionMode = nodeCompletionMode(node)
 		prepared.nodes[i] = node
-		if node.GroupID != "" {
-			groupNodeIDs[node.GroupID] = append(groupNodeIDs[node.GroupID], node.ID)
-		}
-		workflowNode, err := workflowNodeFromRecord(node)
-		if err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		def.Nodes = append(def.Nodes, workflowNode)
-	}
-	for _, group := range prepared.nodeGroups {
-		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: group.WorkflowID, ID: group.ID, Key: group.Key, DisplayName: group.DisplayName, MemberNodeIDs: groupNodeIDs[group.ID]})
 	}
 	for i, group := range prepared.transitionGroups {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "transition group", string(group.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		prepared.transitionGroups[i] = group
-		def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{WorkflowID: group.WorkflowID, ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for i, edge := range prepared.edges {
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, edge.WorkflowID, "edge", string(edge.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
 		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
+		for parameterIndex := range edge.Parameters {
+			edge.Parameters[parameterIndex] = edge.Parameters[parameterIndex].Canonical()
+		}
 		prepared.edges[i] = edge
-		def.Edges = append(def.Edges, workflow.Edge{WorkflowID: edge.WorkflowID, ID: edge.ID, Key: edge.Key, TransitionGroupID: edge.TransitionGroupID, TargetNodeID: edge.TargetNodeID, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
+	}
+	def, err := workflowDefinitionFromPreparedGraph(prepared, workflowID, displayName, executionTargetPolicy)
+	if err != nil {
+		return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 	}
 	return prepared, def, nil
 }
@@ -621,12 +613,9 @@ type comparableWorkflowGraphSaveNode struct {
 	DisplayName        string
 	GroupID            string
 	SubagentRole       string
-	PromptTemplate     string
 	CompletionMode     string
 	ScriptPath         string
-	InputFields        []workflow.InputField
 	JoinInputProviders []workflow.JoinInputProvider
-	OutputFields       []workflow.OutputField
 	SortOrder          int64
 }
 
@@ -646,6 +635,8 @@ type comparableWorkflowGraphSaveEdge struct {
 	TransitionGroupID  workflow.TransitionGroupID
 	Key                workflow.ModelKey
 	TargetNodeID       workflow.NodeID
+	AssigneeSelection  workflow.AssigneeSelection
+	ThinkingSelection  workflow.ThinkingSelection
 	RequiresApproval   bool
 	ContextMode        workflow.ContextMode
 	ContextSource      workflow.ContextSource
@@ -657,11 +648,11 @@ type comparableWorkflowGraphSaveEdge struct {
 }
 
 func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode, other comparableWorkflowGraphSaveNode) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && item.GroupID == other.GroupID && item.SubagentRole == other.SubagentRole && item.PromptTemplate == other.PromptTemplate && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.InputFields, other.InputFields) && slices.Equal(item.JoinInputProviders, other.JoinInputProviders) && slices.Equal(item.OutputFields, other.OutputFields)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && item.GroupID == other.GroupID && item.SubagentRole == other.SubagentRole && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.JoinInputProviders, other.JoinInputProviders)
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters) && slices.Equal(item.InputBindings, other.InputBindings) && slices.Equal(item.OutputRequirements, other.OutputRequirements)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.AssigneeSelection == other.AssigneeSelection && item.ThinkingSelection == other.ThinkingSelection && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters) && slices.Equal(item.InputBindings, other.InputBindings) && slices.Equal(item.OutputRequirements, other.OutputRequirements)
 }
 
 func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableWorkflowGraphSave {
@@ -679,14 +670,14 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName), SortOrder: sortOrder})
 	}
 	for index, node := range prepared.nodes {
-		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), PromptTemplate: strings.TrimSpace(node.PromptTemplate), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders, OutputFields: node.OutputFields, SortOrder: int64(index * 100)})
+		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), JoinInputProviders: node.JoinInputProviders, SortOrder: int64(index * 100)})
 	}
 	for index, group := range prepared.transitionGroups {
 		out.TransitionGroups = append(out.TransitionGroups, comparableWorkflowGraphSaveTransitionGroup{ID: group.ID, WorkflowID: group.WorkflowID, SourceNodeID: group.SourceNodeID, TransitionID: workflow.TransitionID(strings.TrimSpace(string(group.TransitionID))), DisplayName: strings.TrimSpace(group.DisplayName), Description: strings.TrimSpace(group.Description), SortOrder: int64(index * 100)})
 	}
 	for index, edge := range prepared.edges {
 		contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements, SortOrder: int64(index * 100)})
+		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: workflow.CanonicalAssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.CanonicalThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements, SortOrder: int64(index * 100)})
 	}
 	return out
 }
@@ -758,15 +749,7 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 		return err
 	}
-	inputFields, err := workflow.MarshalString(node.InputFields)
-	if err != nil {
-		return err
-	}
 	joinProviders, err := workflow.MarshalString(node.JoinInputProviders)
-	if err != nil {
-		return err
-	}
-	outputFields, err := workflow.MarshalString(node.OutputFields)
 	if err != nil {
 		return err
 	}
@@ -777,12 +760,9 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 		Kind:                   string(node.Kind),
 		DisplayName:            strings.TrimSpace(node.DisplayName),
 		SubagentRole:           strings.TrimSpace(node.SubagentRole),
-		PromptTemplate:         strings.TrimSpace(node.PromptTemplate),
 		CompletionMode:         nodeCompletionMode(node),
 		ScriptPath:             nullableString(node.ScriptPath),
-		InputFieldsJson:        inputFields,
 		JoinInputProvidersJson: joinProviders,
-		OutputFieldsJson:       outputFields,
 		GroupID:                nullableString(node.GroupID),
 		SortOrder:              sortOrder,
 	})
@@ -804,7 +784,11 @@ func upsertWorkflowTransitionGroup(ctx context.Context, q *sqlitegen.Queries, gr
 
 func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeRecord, sortOrder int64, op string) error {
 	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-	parameters, err := marshalJSONArray(edge.Parameters)
+	canonicalParameters := make([]workflow.Parameter, 0, len(edge.Parameters))
+	for _, parameter := range edge.Parameters {
+		canonicalParameters = append(canonicalParameters, parameter.Canonical())
+	}
+	parameters, err := marshalJSONArray(canonicalParameters)
 	if err != nil {
 		return err
 	}
@@ -820,11 +804,15 @@ func upsertWorkflowEdge(ctx context.Context, q *sqlitegen.Queries, edge EdgeReco
 	if edge.RequiresApproval {
 		requiresApproval = 1
 	}
+	assigneeSelection := workflow.DefaultAssigneeSelection(edge.AssigneeSelection)
+	thinkingSelection := workflow.DefaultThinkingSelection(edge.ThinkingSelection)
 	updated, err := q.UpsertWorkflowEdge(ctx, sqlitegen.UpsertWorkflowEdgeParams{
 		ID:                     string(edge.ID),
 		TransitionGroupID:      string(edge.TransitionGroupID),
 		EdgeKey:                string(edge.Key),
 		TargetNodeID:           string(edge.TargetNodeID),
+		AssigneeSelection:      string(assigneeSelection),
+		ThinkingSelection:      string(thinkingSelection),
 		RequiresApproval:       requiresApproval,
 		ContextMode:            string(edge.ContextMode),
 		ContextSourceKind:      string(contextSource.Kind),

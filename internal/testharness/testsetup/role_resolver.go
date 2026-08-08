@@ -1,8 +1,10 @@
 package testsetup
 
 import (
+	"sort"
 	"strings"
 
+	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
@@ -19,11 +21,28 @@ func QuestionsEnabled(roles ...string) RoleResolver {
 	return resolver
 }
 
-func (r RoleResolver) RoleExists(role string) bool {
-	_, exists := r[strings.TrimSpace(role)]
-	return exists
+func (r RoleResolver) ResolveConfiguredRole(role string) (workflow.TargetAgentRole, bool) {
+	trimmed := strings.TrimSpace(role)
+	tools, exists := r[trimmed]
+	if !exists {
+		return workflow.TargetAgentRole{}, false
+	}
+	return workflow.TargetAgentRole{
+		Identity:         strings.ToLower(trimmed),
+		QuestionsEnabled: tools[toolspec.ToolAskQuestion],
+	}, true
 }
 
-func (r RoleResolver) RoleToolEnabled(role string, tool toolspec.ID) bool {
-	return r[strings.TrimSpace(role)][tool]
+func (r RoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
+	roles := make([]workflow.TargetAgentRole, 0, len(r))
+	for role := range r {
+		if workflow.IsDefaultAgentRole(role) {
+			continue
+		}
+		roles = append(roles, workflow.TargetAgentRole{Identity: strings.ToLower(strings.TrimSpace(role)), ExplicitAgentCallable: true, QuestionsEnabled: r[role][toolspec.ToolAskQuestion]})
+	}
+	sort.Slice(roles, func(left, right int) bool {
+		return roles[left].Identity < roles[right].Identity
+	})
+	return roles
 }

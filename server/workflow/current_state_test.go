@@ -1,12 +1,32 @@
 package workflow_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
+
+func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T) {
+	detail := workflow.NewCurrentNodeInterruptionDetail("script_failed", errors.New("script exited"))
+	if detail.Code != "script_failed" {
+		t.Fatalf("code = %q", detail.Code)
+	}
+	diagnostic := detail.Diagnostic()
+	if diagnostic == nil || *diagnostic != "script exited" {
+		t.Fatalf("diagnostic = %v", diagnostic)
+	}
+	legacy := workflow.CurrentNodeInterruptionDetail{
+		Code:   "script_failed",
+		Fields: map[string]string{workflow.CurrentNodeInterruptionDiagnosticField: "legacy failure"},
+	}
+	diagnostic = legacy.Diagnostic()
+	if diagnostic == nil || *diagnostic != "legacy failure" {
+		t.Fatalf("legacy diagnostic = %v", diagnostic)
+	}
+}
 
 func TestCurrentNodeReferenceUsesTaskNodeAndOptionalBranchAsItsNaturalIdentity(t *testing.T) {
 	branchA := workflow.TransitionBranchKey("implementation")

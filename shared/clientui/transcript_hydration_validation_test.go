@@ -74,10 +74,15 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 		{
 			name: "reasoning",
 			mutate: func(hydration *TranscriptHydration) {
-				hydration.ActiveReasoning = &TranscriptReasoningUpdate{
+				hydration.ActiveReasoningTraces = []TranscriptReasoningTraceUpdate{{
 					StepID: otherStepID,
-					Key:    "reasoning",
-				}
+					Identity: TranscriptReasoningTraceIdentity{Kent: func() *runtimeids.ReasoningTraceID {
+						id := runtimeids.NewReasoningTraceID()
+						return &id
+					}()},
+					CompactText: "reasoning",
+					Text:        "reasoning",
+				}}
 			},
 		},
 		{

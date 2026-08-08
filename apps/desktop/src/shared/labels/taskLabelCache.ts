@@ -24,7 +24,7 @@ export function patchExistingTaskLabelProjections(
 type TaskLabelTransform = (taskID: string, labelIDs: readonly string[]) => readonly string[];
 
 function transformExistingPagedTaskLabels(queryClient: QueryClient, transform: TaskLabelTransform): void {
-  queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, string | null>>(
+  queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, number>>(
     { queryKey: queryKeys.allBoardNodeCards },
     (data) => {
       if (data === undefined) {
@@ -110,7 +110,7 @@ export function removeDeletedTaskFromExistingCaches(queryClient: QueryClient, ta
     queryKey: queryKeys.task(taskID),
     exact: true,
   });
-  queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, string | null>>(
+  queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, number>>(
     { queryKey: queryKeys.allBoardNodeCards },
     (data) =>
       data === undefined

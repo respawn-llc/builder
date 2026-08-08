@@ -18,6 +18,8 @@ func taskSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			"approve":      taskApproveSubcommand,
 			"move":         taskMoveSubcommand,
 			"complete":     taskCompleteSubcommand,
+			"wait":         taskWaitSubcommand,
+			"watch":        taskWatchSubcommand,
 			"resume":       taskResumeSubcommand,
 			"comment":      taskCommentSubcommand,
 			"comments":     taskCommentSubcommand,

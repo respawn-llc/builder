@@ -448,10 +448,12 @@ func (s *Service) cleanupDeletedBranch(
 		}
 		branchName = createdBranch
 	case serverapi.WorktreeBranchCleanupModeDeleteSafe:
+	case serverapi.WorktreeBranchCleanupModeDeleteForce:
 	default:
 		panic(fmt.Sprintf("invalid branch cleanup policy %q", policy))
 	}
-	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
+	force := policy == serverapi.WorktreeBranchCleanupModeDeleteForce
+	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, force); err != nil {
 		diagnostic := err.Error()
 		return serverapi.WorktreeBranchCleanupOutcome{
 			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,

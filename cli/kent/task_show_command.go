@@ -191,6 +191,14 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	for _, script := range task.CurrentScripts {
 		fmt.Fprintf(stdout, "Current script: %s (%s)\n", script.Path, script.CurrentNode.NodeID)
 	}
+	for _, node := range task.CurrentNodes {
+		if node.EffectiveAssignee != nil {
+			fmt.Fprintf(stdout, "Current node %s effective assignee: %s\n", node.NodeID, *node.EffectiveAssignee)
+		}
+		if node.EffectiveThinking != nil {
+			fmt.Fprintf(stdout, "Current node %s effective thinking: %s\n", node.NodeID, *node.EffectiveThinking)
+		}
+	}
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}

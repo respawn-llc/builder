@@ -137,6 +137,12 @@ func stampParsedOutputIndex(parsed *parsedResponseOutputItem, outputIndex int64)
 	for idx := range parsed.AssistantSegments {
 		parsed.AssistantSegments[idx].OutputIndex = outputIndex
 	}
+	for idx := range parsed.Reasoning {
+		if parsed.Reasoning[idx].SourceCoordinate == nil {
+			parsed.Reasoning[idx].SourceCoordinate = &ReasoningSourceCoordinate{}
+		}
+		parsed.Reasoning[idx].SourceCoordinate.OutputIndex = textutil.Pointer(&outputIndex)
+	}
 }
 
 type messageOutputItemParser struct{}
@@ -238,12 +244,26 @@ func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _
 	reasoningItem := item.AsReasoning()
 	summaries := make([]ReasoningEntry, 0, len(reasoningItem.Summary))
 	reasoning := make([]ReasoningEntry, 0, len(reasoningItem.Summary))
-	for _, summary := range reasoningItem.Summary {
+	for summaryIndex, summary := range reasoningItem.Summary {
 		text := strings.TrimSpace(summary.Text)
 		if text == "" {
 			continue
 		}
-		entry := ReasoningEntry{Role: textutil.Value(reasoningRoleSummary), Text: text}
+		index := int64(summaryIndex)
+		identity := &ReasoningItemIdentity{PartIndex: &index}
+		if itemID := strings.TrimSpace(reasoningItem.ID); itemID != "" {
+			identity.ItemID = itemID
+		} else {
+			identity = nil
+		}
+		entry := ReasoningEntry{
+			Role: textutil.Value(reasoningRoleSummary),
+			Text: text,
+			SourceCoordinate: &ReasoningSourceCoordinate{
+				PartIndex: textutil.Pointer(&index),
+			},
+			ItemIdentity: identity,
+		}
 		summaries = append(summaries, entry)
 		reasoning = append(reasoning, entry)
 	}

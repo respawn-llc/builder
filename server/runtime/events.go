@@ -103,6 +103,7 @@ type Event struct {
 	CommittedEntryCount          int
 	CommittedEntryStart          int
 	CommittedEntryStartSet       bool
+	CommittedProvenance          *TranscriptCommittedRowProvenance
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase
@@ -110,6 +111,7 @@ type Event struct {
 	AssistantTranscriptStreamID  *uuid.UUID
 	AssistantStreamAbortReason   string
 	ReasoningDelta               *llm.ReasoningSummaryDelta
+	ReasoningTraceIdentity       *TranscriptReasoningTraceIdentity
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string

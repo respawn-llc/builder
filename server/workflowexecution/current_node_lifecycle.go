@@ -70,10 +70,11 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 		return 0, errors.New("current node workflow controller is required")
 	}
 	recovered, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
-		return c.store.RecoverExecutableCurrentNodes(ctx, ReasonCurrentNodeStartupRecovery, workflow.CurrentNodeInterruptionDetail{
-			Code:   string(ReasonCurrentNodeStartupRecovery),
-			Fields: map[string]string{},
-		})
+		return c.store.RecoverExecutableCurrentNodes(
+			ctx,
+			ReasonCurrentNodeStartupRecovery,
+			workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
+		)
 	})
 	if err != nil {
 		return 0, err
@@ -175,16 +176,21 @@ func (c *CurrentNodeController) resumeTask(
 			return nil, err
 		}
 		c.mu.Unlock()
-		selected, err := c.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
 		if err != nil {
 			return nil, err
 		}
-		if len(selected) == 0 {
+		if len(classifications) == 0 {
 			return nil, &TaskResumeConflictError{TaskID: taskID}
 		}
-		resumed := make([]workflow.CurrentNode, 0, len(selected))
+		resumed := make([]workflow.CurrentNode, 0, len(classifications))
 		var resumeErrs []error
-		for _, currentNode := range selected {
+		for _, classification := range classifications {
+			currentNode := classification.CurrentNode
+			if validationErr := classification.ValidationError(); validationErr != nil {
+				resumeErrs = append(resumeErrs, validationErr)
+				continue
+			}
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))
@@ -238,6 +244,10 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if _, completed := c.completed[sourceScopeID]; !completed {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
+			}
+			if _, finalizing := c.postTurnFinalization[sourceScopeID]; finalizing {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 			}
 			if _, stopping := c.stopping[sourceScopeID]; stopping {
 				c.mu.Unlock()

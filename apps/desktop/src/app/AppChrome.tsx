@@ -5,6 +5,11 @@ import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from 
 import { useTranslation } from "react-i18next";
 
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
+import {
+  TaskSearchGlobalTrigger,
+  TaskSearchHost,
+  TaskSearchProvider,
+} from "@/features/board";
 import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
 import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
@@ -29,6 +34,16 @@ export type AppChromeProps = Readonly<{
 }>;
 
 export function AppChrome({ children }: AppChromeProps) {
+  return (
+    <TaskSearchProvider>
+      <SidebarProvider policy={sidebarDestinationPolicy}>
+        <AppChromeContent>{children}</AppChromeContent>
+      </SidebarProvider>
+    </TaskSearchProvider>
+  );
+}
+
+function AppChromeContent({ children }: AppChromeProps) {
   const { t } = useTranslation();
   const { debugThemeOverrideEnabled, logger, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
@@ -37,9 +52,9 @@ export function AppChrome({ children }: AppChromeProps) {
   const topTreatment = appChromeTopTreatmentForPlatform(nativeBridge.capabilities.platform);
   const title = useCurrentWindowChromeTitle();
   const update = useDesktopUpdate(nativeBridge, logger);
-
   return (
     <main className="window-glass-fill grid h-screen w-screen overflow-hidden pt-[var(--native-titlebar-height)]">
+      <TaskSearchHost />
       <div
         aria-hidden="true"
         className={topTreatment.classNames.join(" ")}
@@ -58,7 +73,7 @@ export function AppChrome({ children }: AppChromeProps) {
         className={`app-region-no-drag fixed top-[8px] z-30 flex h-6 items-center ${macOS ? "left-[var(--native-home-link-left-macos)]" : "right-[var(--space-4)]"}`}
         data-testid="app-chrome-navigation"
       >
-        {!macOS ? <AppUpdateChip state={update} /> : null}
+        <AppChromeGlobalSearch macOS={macOS} position="leading" />
         {stack.hasHistory && !macOS ? (
           <HistoryButtons
             backLabel={t("app.back")}
@@ -68,6 +83,7 @@ export function AppChrome({ children }: AppChromeProps) {
             stack={stack}
           />
         ) : null}
+        {!macOS ? <AppUpdateChip state={update} /> : null}
         <Link
           aria-label={t("app.home")}
           className="grid h-6 w-6 place-items-center rounded-full border border-transparent text-[var(--color-on-island)]"
@@ -90,6 +106,7 @@ export function AppChrome({ children }: AppChromeProps) {
             stack={stack}
           />
         ) : null}
+        <AppChromeGlobalSearch macOS={macOS} position="trailing" />
         {debugThemeOverrideEnabled ? <DebugThemeToggle label={t("app.toggleTheme")} /> : null}
         {title !== null && macOS ? (
           <div className={appChromeInlineTitleClassNames.join(" ")} data-testid="app-chrome-title">
@@ -106,23 +123,32 @@ export function AppChrome({ children }: AppChromeProps) {
           {title}
         </div>
       ) : null}
-      <SidebarProvider policy={sidebarDestinationPolicy}>
-        <WorkflowEditorDraftBridgeProvider>
-          <ProjectDeletionEventHandler />
-          <AttentionNotificationController />
-          <div
-            className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
-            data-testid="app-shell-content"
-          >
-            <div className="min-h-0 min-w-0 flex-1 overflow-visible" data-testid="app-main-content">
-              {children}
-            </div>
-            <SidebarHost />
+      <WorkflowEditorDraftBridgeProvider>
+        <ProjectDeletionEventHandler />
+        <AttentionNotificationController />
+        <div
+          className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
+          data-testid="app-shell-content"
+        >
+          <div className="min-h-0 min-w-0 flex-1 overflow-visible" data-testid="app-main-content">
+            {children}
           </div>
-        </WorkflowEditorDraftBridgeProvider>
-      </SidebarProvider>
+          <SidebarHost />
+        </div>
+      </WorkflowEditorDraftBridgeProvider>
     </main>
   );
+}
+
+function AppChromeGlobalSearch({
+  macOS,
+  position,
+}: Readonly<{
+  macOS: boolean;
+  position: "leading" | "trailing";
+}>) {
+  const visible = position === "leading" ? !macOS : macOS;
+  return visible ? <TaskSearchGlobalTrigger /> : null;
 }
 
 // macOS keeps the traffic lights and nav cluster on the left, so the update chip

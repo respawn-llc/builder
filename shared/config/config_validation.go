@@ -306,6 +306,18 @@ func validateCacheWarningMode(state settingsState, _ map[string]string) error {
 }
 
 func validateWorkflowSettings(state settingsState, _ map[string]string) error {
+	if value := state.Settings.Workflow.PreCompactionTokens; value != nil {
+		if *value <= 0 {
+			return fmt.Errorf("%w: workflow.pre_compaction_tokens must be > 0", errInvalidWorkflowSettings)
+		}
+		if *value > state.Settings.ContextCompactionThresholdTokens {
+			return fmt.Errorf(
+				"%w: workflow.pre_compaction_tokens must be <= context_compaction_threshold_tokens (%d)",
+				errInvalidWorkflowSettings,
+				state.Settings.ContextCompactionThresholdTokens,
+			)
+		}
+	}
 	if state.Settings.Workflow.CompletionMode == "" &&
 		state.Settings.Workflow.Concurrency == 0 &&
 		state.Settings.Workflow.MaxInvalidCompletionAttempts == 0 {

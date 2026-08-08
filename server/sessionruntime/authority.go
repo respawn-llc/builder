@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"core/server/auth"
@@ -266,10 +267,60 @@ func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionH
 	return executionHandle{execution: execution}, true
 }
 
-// WithExactExecutions linearizes an operation against retirement of the exact
-// execution handles. A script finalizer may retire a workflow scope from
-// liveness indexes before it commits completion, while retaining its exact
-// scope registration for that commit.
+func (a *Authority) exactExecutions(handles []ExecutionHandle) ([]*execution, error) {
+	executions := make([]*execution, 0, len(handles))
+	seen := make(map[*execution]struct{}, len(handles))
+	for _, handle := range handles {
+		exact, ok := handle.(executionHandle)
+		if !ok || exact.execution == nil {
+			return nil, errors.New("execution handle does not belong to this authority")
+		}
+		execution := exact.execution
+		if execution.authority != a {
+			return nil, errors.New("execution handle does not belong to this authority")
+		}
+		if _, duplicate := seen[execution]; duplicate {
+			continue
+		}
+		seen[execution] = struct{}{}
+		executions = append(executions, execution)
+	}
+	sort.Slice(executions, func(i, j int) bool {
+		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
+	})
+	return executions, nil
+}
+
+func lockExactExecutions(executions []*execution) {
+	for _, execution := range executions {
+		execution.exactMu.Lock()
+	}
+}
+
+func unlockExactExecutions(executions []*execution) {
+	for index := len(executions) - 1; index >= 0; index-- {
+		executions[index].exactMu.Unlock()
+	}
+}
+
+func (a *Authority) exactExecutionsLiveLocked(executions []*execution) bool {
+	for _, execution := range executions {
+		if a.byScope[execution.scope.ID()] != execution {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Authority) exactExecutionsLive(executions []*execution) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.exactExecutionsLiveLocked(executions)
+}
+
+// WithExactExecutions linearizes an operation against retirement of only the
+// selected execution handles. It deliberately does not retain the Authority
+// mutex while operation runs.
 func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation func() error) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
@@ -280,17 +331,14 @@ func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation fun
 	if operation == nil {
 		return errors.New("exact execution operation is required")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, handle := range handles {
-		exact, ok := handle.(executionHandle)
-		if !ok || exact.execution == nil {
-			return errors.New("execution handle does not belong to this authority")
-		}
-		execution := exact.execution
-		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
-			return ErrExecutionNoLongerLive
-		}
+	executions, err := a.exactExecutions(handles)
+	if err != nil {
+		return err
+	}
+	lockExactExecutions(executions)
+	defer unlockExactExecutions(executions)
+	if !a.exactExecutionsLive(executions) {
+		return ErrExecutionNoLongerLive
 	}
 	return operation()
 }

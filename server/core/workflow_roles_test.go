@@ -59,8 +59,9 @@ func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolver.RoleExists(tt.role); got != tt.want {
-				t.Fatalf("RoleExists(%q) = %v, want %v", tt.role, got, tt.want)
+			_, got := resolver.ResolveConfiguredRole(tt.role)
+			if got != tt.want {
+				t.Fatalf("ResolveConfiguredRole(%q) exists = %v, want %v", tt.role, got, tt.want)
 			}
 		})
 	}
@@ -226,9 +227,7 @@ func coreWorkflowValidationDefinition(role string) workflow.Definition {
 		Nodes: []workflow.Node{
 			coreWorkflowNode(workflowID, startNodeID, "start", "Start", workflow.NodeKindStart, workflow.NodeFields{}),
 			coreWorkflowNode(workflowID, agentNodeID, "agent", "Agent", workflow.NodeKindAgent, workflow.NodeFields{
-				SubagentRole:   role,
-				PromptTemplate: "Do work.",
-				OutputFields:   []workflow.OutputField{{Name: "summary", Description: "Summary of completed work."}},
+				SubagentRole: role,
 			}),
 			coreWorkflowNode(workflowID, doneNodeID, "done", "Done", workflow.NodeKindTerminal, workflow.NodeFields{}),
 		},
@@ -237,15 +236,17 @@ func coreWorkflowValidationDefinition(role string) workflow.Definition {
 			{WorkflowID: workflowID, ID: doneGroupID, SourceNodeID: agentNodeID, TransitionID: doneTransitionID, DisplayName: "Done"},
 		},
 		Edges: []workflow.Edge{
-			{WorkflowID: workflowID, ID: startEdgeID, Key: "start", TransitionGroupID: startGroupID, TargetNodeID: agentNodeID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
+			{WorkflowID: workflowID, ID: startEdgeID, Key: "start", TransitionGroupID: startGroupID, TargetNodeID: agentNodeID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
 			{
 				WorkflowID:         workflowID,
 				ID:                 doneEdgeID,
 				Key:                "done",
 				TransitionGroupID:  doneGroupID,
 				TargetNodeID:       doneNodeID,
+				AssigneeSelection:  workflow.AssigneeSelectionConfigured,
+				ThinkingSelection:  workflow.ThinkingSelectionConfigured,
 				ContextMode:        workflow.ContextModeNewSession,
-				Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary of completed work."}},
+				Parameters:         []workflow.Parameter{{Key: "summary", Description: "Summary of completed work.", Purpose: workflow.ParameterPurposeOrdinary}},
 				OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
 			},
 		},

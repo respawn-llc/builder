@@ -97,6 +97,15 @@ export const workflowEditorEnglish = {
   assigneeHelp:
     "Subagent role that runs this node's agent loop. Subagent roles are configured in the server config file.",
   selectAssignee: "Select assignee",
+  previousNodeAssignee: "Let the previous node choose",
+  previousNodeAssigneeHelp: "Allow this transition's source to choose the target Agent role.",
+  previousNodeThinking: "Let the previous node select thinking level",
+  previousNodeThinkingHelp: "Allow this transition's source to choose the target thinking level.",
+  edgeAssigneeSelection: "Transition assignee",
+  edgeAssigneeSelectionHelp: "Choose whether this transition uses the target node fallback or source-selected role.",
+  edgeAssigneeConfigured: "Use target node's configured assignee",
+  edgeThinkingSelectionHelp:
+    "Choose whether this transition uses configured thinking or source-selected thinking.",
   completionMode: "Completion mode",
   completionModeHelp:
     "How this agent signals that it finished its task.\n\nAuto: choose a mode automatically based on the workflow and runtime.\n\nStructured output: a provider-validated JSON schema response.\n\nTool call: the agent calls a dedicated completion tool.\n\nShell command: the agent uses the `kent` CLI.\n\nUnstructured output: the agent tries to emit a raw JSON object as its final answer, following instructions.",
@@ -141,11 +150,7 @@ export const workflowEditorEnglish = {
   deleteParameter: "Delete parameter",
   reorderParameter: "Reorder parameter",
   joinAggregateParameters: "Join aggregate parameters",
-  inputFieldName: "Input name",
-  inputFieldDescription: "Input description",
-  addRequiredInput: "Add required input",
   deleteField: "Delete field",
-  reorderInputField: "Reorder input field",
   members: "Members",
   transitionText: "Label",
   transitionDescription: "Model-facing description",

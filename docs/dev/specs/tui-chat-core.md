@@ -37,7 +37,7 @@
 - While the Agent Turn is busy, `Enter` adds another Steer without locking the composer.
 - Steer operations take effect at safe Agent Step boundaries.
 - Pending Queue and Steer messages use FIFO order.
-- Several messages delivered at one boundary become one user message separated by blank lines.
+- Several human messages delivered at one boundary become one user message separated by blank lines. Each steer issued from another Session remains a separate message.
 - Pending messages have no fixed count limit and survive only until delivery or process exit.
 - Pending messages render as a visible pane between transcript and input until drained. The pane shows both queued post-turn messages and pending steering messages, each in FIFO order; queued messages render above steering messages.
 - There is no standalone per-item removal or reordering affordance. The only user-facing removal is the busy `Ctrl+C` interrupt, which drains both pending queues into the main input (see Interrupts And Exit).

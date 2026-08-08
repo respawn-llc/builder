@@ -97,6 +97,31 @@ func TestDeleteWorktreeCompletesNonCurrentDeletionAndRetainsBranch(t *testing.T)
 	}
 }
 
+func TestDeleteWorktreeForceDeletesUnmergedBranch(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/delete-force-branch")
+	if err := os.WriteFile(filepath.Join(created.CanonicalRoot, "unmerged.txt"), []byte("unmerged"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGit(t, created.CanonicalRoot, "add", "unmerged.txt")
+	runGit(t, created.CanonicalRoot, "commit", "-m", "unmerged branch change")
+
+	request := worktreeDeleteRequest(env, created.WorktreeID)
+	request.BranchCleanupPolicy = serverapi.WorktreeBranchCleanupModeDeleteForce
+	result, err := env.service.DeleteWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted ||
+		result.Completed == nil ||
+		result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted {
+		t.Fatalf("DeleteWorktree result = %+v, want deleted branch", result)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || exists {
+		t.Fatalf("force-deleted branch exists=%v err=%v", exists, err)
+	}
+}
+
 func TestDeleteWorktreeRemovesMetadataForPrunableRegistration(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/delete-prunable-registration")

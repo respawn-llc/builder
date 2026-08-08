@@ -23,7 +23,7 @@ import {
   ContextMenuTrigger,
   IconTooltipButton,
   InfiniteListBoundary,
-  MarkdownPlainText,
+  TaskBodyMarkdown,
   OneLineOverflowRow,
   Spinner,
   VirtualizedInfiniteList,
@@ -534,7 +534,7 @@ const TaskCardPreview = memo(function TaskCardPreview({
   }
   return (
     <>
-      <MarkdownPlainText value={preview.markdown} />
+      <TaskBodyMarkdown value={preview.markdown} />
       {preview.truncated ? (
         <span aria-hidden="true" data-testid="task-card-preview-ellipsis">
           …

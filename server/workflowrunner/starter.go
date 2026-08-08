@@ -119,7 +119,11 @@ func (s *Starter) StartCurrentNode(
 	case workflow.NodeKindScript:
 		return s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
-		if err := s.validateRole(input.Node.SubagentRole); err != nil {
+		selection, err := currentNodeAgentExecutionSelection(input)
+		if err != nil {
+			return err
+		}
+		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
 		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
@@ -145,7 +149,11 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
 	}
-	if err := s.validateRole(input.Node.SubagentRole); err != nil {
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
 	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false)
@@ -192,6 +200,17 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	})
 	if steerErr == nil && admission.RuntimeAvailable {
 		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+			thinkingMutation := workflowThinkingMutationFor(input, selection)
+			switch thinkingMutation.Kind() {
+			case launch.WorkflowThinkingMutationSet:
+				if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
+					return err
+				}
+			case launch.WorkflowThinkingMutationClear:
+				if err := engine.ClearWorkflowThinkingValue(); err != nil {
+					return err
+				}
+			}
 			var err error
 			steer, err = engine.SteerWorkflowAssignment(assignment)
 			return err
@@ -374,15 +393,39 @@ func (s *Starter) startCurrentNodeAgent(
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+					if err != nil {
 						return err
 					}
+				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+					return err
 				}
-				_, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
-				return err
+				turnEngine = engine
+				return nil
 			})
+			if turnErr == nil && turnEngine != nil {
+				if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
+					sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
+					if err != nil {
+						return err
+					}
+					preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
+					if err != nil {
+						return err
+					}
+					turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
+						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
+						PreCompactionTokens: preCompactionTokens,
+						CompactionMode:      turnEngine.CompactionMode(),
+						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
+							return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
+						},
+					})
+				}
+			}
 			if turnErr == nil {
 				return nil
 			}
@@ -486,34 +529,69 @@ func (s *Starter) planCurrentNodeSession(
 		}
 	}
 	if sessionPrepared {
+		selection, err := currentNodeAgentExecutionSelection(input)
+		if err != nil {
+			return launch.SessionPlan{}, disposable, err
+		}
+		thinkingMutation := workflowThinkingMutationFor(input, selection)
+		if thinkingMutation.Kind() != launch.WorkflowThinkingMutationUnchanged {
+			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+				var applyErr error
+				plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
+					plan,
+					store,
+					serverapi.RunPromptOverrides{},
+					auth.EmptyState(),
+					launch.RunPromptOverrideOptions{WorkflowThinking: thinkingMutation},
+				)
+				return applyErr
+			}); err != nil {
+				return launch.SessionPlan{}, disposable, err
+			}
+		}
 		return plan, disposable, nil
 	}
 	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if policy.assignee != currentNodeSessionAssigneeEstablishTarget {
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	thinkingMutation := workflowThinkingMutationFor(input, selection)
+	if policy.assignee != currentNodeSessionAssigneeEstablishTarget &&
+		thinkingMutation.Kind() == launch.WorkflowThinkingMutationUnchanged {
 		return plan, disposable, nil
+	}
+	options := launch.RunPromptOverrideOptions{}
+	if selection.Origin == workflow.AssigneeOriginTransitionSelected {
+		options.RequiredTools = []toolspec.ID{toolspec.ToolAskQuestion}
+	}
+	options.WorkflowThinking = thinkingMutation
+	overrides := serverapi.RunPromptOverrides{}
+	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
+		overrides = workflowPromptOverrides(selection.Assignee)
 	}
 	err = s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var applyErr error
 		plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
 			plan,
 			store,
-			workflowPromptOverrides(input.Node.SubagentRole),
+			overrides,
 			auth.EmptyState(),
-			launch.RunPromptOverrideOptions{},
+			options,
 		)
 		return applyErr
 	})
 	return plan, disposable, err
 }
 
-type currentNodeSessionAssigneePolicy uint8
+type currentNodeSessionAssigneePolicy = workflow.AssigneeSessionPolicy
 
 const (
-	currentNodeSessionAssigneeEstablishTarget currentNodeSessionAssigneePolicy = iota + 1
-	currentNodeSessionAssigneeRequireTargetMatch
-	currentNodeSessionAssigneePreserve
+	currentNodeSessionAssigneeEstablishTarget    = workflow.AssigneeSessionPolicyEstablishTarget
+	currentNodeSessionAssigneeRequireTargetMatch = workflow.AssigneeSessionPolicyRequireTargetMatch
+	currentNodeSessionAssigneePreserve           = workflow.AssigneeSessionPolicyPreserve
 )
 
 type currentNodeSessionPolicy struct {
@@ -529,37 +607,20 @@ func resolveCurrentNodeSessionPolicy(input workflowstore.CurrentNodeStartContext
 	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
 		targetOwned = true
 	default:
-		return currentNodeSessionPolicy{}, fmt.Errorf(
-			"current node session policy does not support context source %q",
-			source.Kind,
-		)
+		return currentNodeSessionPolicy{}, fmt.Errorf("current node session policy does not support context source %q", source.Kind)
 	}
-	switch input.ContextMode {
-	case workflow.ContextModeNewSession:
-		return currentNodeSessionPolicy{
-			assignee: currentNodeSessionAssigneeEstablishTarget,
-		}, nil
-	case workflow.ContextModeCompactAndContinueSession:
-		return currentNodeSessionPolicy{
-			cloneRetainedSession: input.IsFanoutBranch && !targetOwned,
-			assignee:             currentNodeSessionAssigneeEstablishTarget,
-		}, nil
-	case workflow.ContextModeContinueSession:
-		if targetOwned {
-			return currentNodeSessionPolicy{
-				assignee: currentNodeSessionAssigneePreserve,
-			}, nil
-		}
-		return currentNodeSessionPolicy{
-			cloneRetainedSession: input.IsFanoutBranch,
-			assignee:             currentNodeSessionAssigneeRequireTargetMatch,
-		}, nil
-	default:
-		return currentNodeSessionPolicy{}, fmt.Errorf(
-			"current node session policy does not support context mode %q",
-			input.ContextMode,
-		)
+	assignee, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
+		ContextMode:           input.ContextMode,
+		ContextSource:         source,
+		TargetSessionResolved: input.CurrentNode.SessionID != nil,
+	})
+	if err != nil {
+		return currentNodeSessionPolicy{}, err
 	}
+	return currentNodeSessionPolicy{
+		cloneRetainedSession: input.IsFanoutBranch && !targetOwned && input.ContextMode != workflow.ContextModeNewSession,
+		assignee:             assignee,
+	}, nil
 }
 
 func validateRetainedWorkflowSessionAgentRole(
@@ -571,7 +632,11 @@ func validateRetainedWorkflowSessionAgentRole(
 		policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		return nil
 	}
-	roleOverride, err := workflowPromptOverrides(input.Node.SubagentRole).AgentRoleOverride()
+	selection, err := currentNodeAgentExecutionSelection(input)
+	if err != nil {
+		return err
+	}
+	roleOverride, err := workflowPromptOverrides(selection.Assignee).AgentRoleOverride()
 	if err != nil {
 		return err
 	}
@@ -630,7 +695,7 @@ func (s *Starter) applyCurrentNodeSessionMetadata(ctx context.Context, input wor
 	if err != nil {
 		return err
 	}
-	preview, err := renderCurrentNodePrompt(input.PromptTemplate, input)
+	preview, err := renderCurrentNodePrompt(input.TransitionPrompt, input)
 	if err != nil {
 		return err
 	}
@@ -676,7 +741,7 @@ func renderCurrentNodePrompt(text string, input workflowstore.CurrentNodeStartCo
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: text, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
+	return renderWorkflowPrompt(text, workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, TransitionPrompt: text, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
 }
 
 func (s *Starter) resolveCurrentNodeCompletionMode(ctx context.Context, input workflowstore.CurrentNodeStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
@@ -834,6 +899,28 @@ func (s *Starter) validateRole(role string) error {
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
 }
 
+func currentNodeAgentExecutionSelection(input workflowstore.CurrentNodeStartContext) (workflow.AgentExecutionSelection, error) {
+	if input.CurrentNode.AgentExecutionSelection == nil {
+		return workflow.AgentExecutionSelection{}, errors.New("Agent Current Node execution selection is required")
+	}
+	selection := input.CurrentNode.AgentExecutionSelection.Clone()
+	if err := selection.Validate(); err != nil {
+		return workflow.AgentExecutionSelection{}, err
+	}
+	return selection, nil
+}
+
+func workflowThinkingMutationFor(input workflowstore.CurrentNodeStartContext, selection workflow.AgentExecutionSelection) launch.WorkflowThinkingMutation {
+	if selection.Thinking != nil {
+		return launch.SetWorkflowThinking(*selection.Thinking)
+	}
+	if selection.Origin == workflow.AssigneeOriginRetainedSession &&
+		workflow.CanonicalThinkingSelection(input.EnteringEdge.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode {
+		return launch.ClearWorkflowThinking()
+	}
+	return launch.KeepWorkflowThinking()
+}
+
 type executionPromptAwaiter struct {
 	authority *sessionruntime.Authority
 	scope     sessionruntime.ExecutionScope
@@ -873,7 +960,7 @@ func BuildCurrentSessionTaskInstructions(input workflowstore.CurrentNodeStartCon
 	if input.SourceSessionID != nil {
 		source = input.SourceSessionID.String()
 	}
-	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, PromptTemplate: input.PromptTemplate, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
+	return buildWorkflowTaskInstructions(workflowPromptInput{Task: input.Task, Workflow: input.Workflow, Node: input.Node, CurrentNode: input.CurrentNode.Reference, ContextMode: input.ContextMode, SourceSessionID: source, TransitionOptions: input.TransitionOptions, TransitionIDs: input.TransitionIDs, TransitionPrompt: input.TransitionPrompt, ParameterValues: input.ParameterValues, PriorValues: input.CurrentNode.PriorValues})
 }
 
 type workflowPromptInput struct {
@@ -885,13 +972,13 @@ type workflowPromptInput struct {
 	SourceSessionID   string
 	TransitionOptions []workflowstore.TransitionOption
 	TransitionIDs     []string
-	PromptTemplate    string
+	TransitionPrompt  string
 	ParameterValues   map[string]string
 	PriorValues       workflow.MaterializedPriorValues
 }
 
 func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.TaskInstructions, error) {
-	prompt, err := renderWorkflowPrompt(input.PromptTemplate, input)
+	prompt, err := renderWorkflowPrompt(input.TransitionPrompt, input)
 	if err != nil {
 		return workflowruntime.TaskInstructions{}, err
 	}
@@ -899,7 +986,7 @@ func buildWorkflowTaskInstructions(input workflowPromptInput) (workflowruntime.T
 	if shortID == "" {
 		shortID = string(input.Task.ID)
 	}
-	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: input.Task.WorkflowID, WorkflowName: strings.TrimSpace(input.Workflow.Name), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), NodePrompt: prompt}, nil
+	return workflowruntime.TaskInstructions{CurrentNode: input.CurrentNode, TaskShortID: shortID, TaskTitle: input.Task.Title, TaskBody: input.Task.Body, WorkflowID: input.Task.WorkflowID, WorkflowName: strings.TrimSpace(input.Workflow.Name), NodeKey: string(input.Node.Key), NodeDisplayName: input.Node.DisplayName, ContextMode: string(input.ContextMode), SourceSessionID: input.SourceSessionID, Transitions: workflowInstructionTransitions(input.TransitionOptions, input.TransitionIDs), TransitionPrompt: prompt}, nil
 }
 
 func workflowTransitions(options []workflowstore.TransitionOption, ids []string) []prompts.WorkflowTransition {

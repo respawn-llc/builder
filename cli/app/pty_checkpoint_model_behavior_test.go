@@ -178,6 +178,7 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 			Visibility: clientui.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 			Assistant: &clientui.TranscriptAssistantRow{
 				StepID:   ptyCheckpointStepID(),
 				StreamID: ptyCheckpointAssistantStreamID(),
@@ -376,6 +377,7 @@ func applyPTYCheckpointAssistantFinal(model *ptyCheckpointModel, sequence uint64
 			Visibility: clientui.EntryVisibilityOngoing,
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowAssistant,
+			Locator:    transcript.CommittedRowLocator{EventSequence: int64(sequence), RowOrdinal: 1},
 			Assistant: &clientui.TranscriptAssistantRow{
 				StepID:   ptyCheckpointStepID(),
 				StreamID: ptyCheckpointAssistantStreamID(),

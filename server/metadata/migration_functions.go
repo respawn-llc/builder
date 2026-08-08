@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
+	"text/template/parse"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -24,6 +26,45 @@ const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
 const migrationWorkflowRunHistoryCutoverIrreversibleFunction = "kent_workflow_run_history_cutover_is_irreversible"
 const migrationCurrentNodePriorValuesIrreversibleFunction = "kent_current_node_prior_transition_parameters_are_irreversible"
 const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_session_agent_role_backfill_is_irreversible"
+const migrationCurrentNodeAgentExecutionFunction = "kent_migration_current_node_agent_execution_v1"
+const migrationCurrentNodeAgentExecutionValidationFunction = "kent_migration_current_node_agent_execution_validation_v1"
+const migrationPendingApprovalAgentExecutionValidationFunction = "kent_migration_pending_approval_agent_execution_validation_v1"
+
+func migrationAgentExecutionSelection(
+	contextMode workflow.ContextMode,
+	contextSource workflow.ContextSource,
+	targetSessionResolved bool,
+	targetBound bool,
+	fallbackRole string,
+	sessionRole string,
+) (workflow.AgentExecutionSelection, error) {
+	fallbackRole = strings.TrimSpace(fallbackRole)
+	if fallbackRole == "" {
+		return workflow.AgentExecutionSelection{}, errors.New("current node Agent fallback role is required")
+	}
+	policy, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
+		ContextMode:           contextMode,
+		ContextSource:         contextSource,
+		TargetSessionResolved: targetSessionResolved,
+	})
+	if err != nil {
+		return workflow.AgentExecutionSelection{}, fmt.Errorf("resolve current node Agent session policy: %w", err)
+	}
+	origin := workflow.AssigneeOriginConfiguredFallback
+	role := fallbackRole
+	if targetBound || policy == workflow.AssigneeSessionPolicyPreserve {
+		role = strings.TrimSpace(sessionRole)
+		if role == "" {
+			role = workflow.DefaultAgentRole
+		}
+		origin = workflow.AssigneeOriginRetainedSession
+	}
+	selection, err := workflow.NewAgentExecutionSelection(role, nil, origin)
+	if err != nil {
+		return workflow.AgentExecutionSelection{}, fmt.Errorf("materialize current node Agent execution selection: %w", err)
+	}
+	return selection, nil
+}
 
 var registerMetadataSQLiteFunctionsOnce sync.Once
 var registerMetadataSQLiteFunctionsErr error
@@ -62,6 +103,30 @@ func registerMetadataSQLiteFunctions() error {
 		if registerMetadataSQLiteFunctionsErr != nil {
 			return
 		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationCurrentNodeAgentExecutionFunction,
+			6,
+			migrationCurrentNodeAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationCurrentNodeAgentExecutionValidationFunction,
+			4,
+			migrationValidateCurrentNodeAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			migrationPendingApprovalAgentExecutionValidationFunction,
+			1,
+			migrationValidatePendingApprovalAgentExecution,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
 		for _, functionName := range [...]string{
 			migrationWorkflowRunHistoryCutoverIrreversibleFunction,
 			migrationCurrentNodePriorValuesIrreversibleFunction,
@@ -81,6 +146,108 @@ func registerMetadataSQLiteFunctions() error {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 6 {
+		return nil, fmt.Errorf("%s requires 6 arguments", migrationCurrentNodeAgentExecutionFunction)
+	}
+	modeRaw, err := migrationStringArgument(args[0], "context mode")
+	if err != nil {
+		return nil, err
+	}
+	sourceRaw, err := migrationStringArgument(args[1], "context source")
+	if err != nil {
+		return nil, err
+	}
+	targetResolved, err := migrationBooleanArgument(args[2], "target session resolution")
+	if err != nil {
+		return nil, err
+	}
+	targetBound, err := migrationBooleanArgument(args[3], "target binding")
+	if err != nil {
+		return nil, err
+	}
+	selection, err := migrationAgentExecutionSelection(
+		workflow.ContextMode(strings.TrimSpace(modeRaw)),
+		workflow.ContextSource{Kind: workflow.ContextSourceKind(strings.TrimSpace(sourceRaw))},
+		targetResolved,
+		targetBound,
+		migrationOptionalStringArgument(args[4]),
+		migrationOptionalStringArgument(args[5]),
+	)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(selection)
+	if err != nil {
+		return nil, fmt.Errorf("encode migrated Agent execution selection: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func migrationValidateCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 4 {
+		return nil, fmt.Errorf("%s requires 4 arguments", migrationCurrentNodeAgentExecutionValidationFunction)
+	}
+	kind, err := migrationStringArgument(args[0], "current node kind")
+	if err != nil {
+		return nil, err
+	}
+	assignee := strings.TrimSpace(migrationOptionalStringArgument(args[1]))
+	thinking := strings.TrimSpace(migrationOptionalStringArgument(args[2]))
+	origin := strings.TrimSpace(migrationOptionalStringArgument(args[3]))
+	switch workflow.NodeKind(strings.TrimSpace(kind)) {
+	case workflow.NodeKindAgent:
+		if assignee == "" || origin == "" {
+			return nil, errors.New("Agent current node selection is incomplete")
+		}
+		switch workflow.AssigneeOrigin(origin) {
+		case workflow.AssigneeOriginConfiguredFallback, workflow.AssigneeOriginTransitionSelected, workflow.AssigneeOriginRetainedSession:
+		default:
+			return nil, fmt.Errorf("Agent current node selection origin %q is invalid", origin)
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if assignee != "" || thinking != "" || origin != "" {
+			return nil, fmt.Errorf("%s current node contains Agent selection fields", kind)
+		}
+	default:
+		return nil, fmt.Errorf("current node kind %q is invalid", kind)
+	}
+	return int64(1), nil
+}
+
+func migrationValidatePendingApprovalAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("%s requires 1 argument", migrationPendingApprovalAgentExecutionValidationFunction)
+	}
+	raw, err := migrationStringArgument(args[0], "pending approval target snapshot")
+	if err != nil {
+		return nil, err
+	}
+	var snapshot struct {
+		NodeKind                workflow.NodeKind                 `json:"node_kind"`
+		AgentExecutionSelection *workflow.AgentExecutionSelection `json:"agent_execution_selection,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return nil, fmt.Errorf("decode pending approval target snapshot: %w", err)
+	}
+	switch snapshot.NodeKind {
+	case workflow.NodeKindAgent:
+		if snapshot.AgentExecutionSelection == nil {
+			return nil, errors.New("pending approval Agent target selection is missing")
+		}
+		if err := snapshot.AgentExecutionSelection.Validate(); err != nil {
+			return nil, fmt.Errorf("pending approval Agent target selection: %w", err)
+		}
+	case workflow.NodeKindStart, workflow.NodeKindScript, workflow.NodeKindJoin, workflow.NodeKindTerminal:
+		if snapshot.AgentExecutionSelection != nil {
+			return nil, fmt.Errorf("pending approval %s target contains Agent selection", snapshot.NodeKind)
+		}
+	default:
+		return nil, fmt.Errorf("pending approval target kind %q is invalid", snapshot.NodeKind)
+	}
+	return int64(1), nil
 }
 
 func migrationIrreversibleMarker(
@@ -328,23 +495,24 @@ func migrationFrozenPriorValueNamespace(context, kind, raw string) (map[workflow
 }
 
 func migrationPriorParameterRequirements(currentNodeID string, graph []migrationGraphEdge) ([]workflow.PriorTransitionParameterRequirement, error) {
-	definition, err := migrationWorkflowDefinition(graph)
+	definition, priorReferencesByEdge, err := migrationWorkflowDefinition(graph)
 	if err != nil {
 		return nil, err
 	}
-	return workflow.DeriveWiring(definition).PriorParameterRequirementsForNode(workflow.NodeID(currentNodeID)), nil
+	return workflow.DeriveWiringWithPriorParameterReferences(definition, priorReferencesByEdge).
+		PriorParameterRequirementsForNode(workflow.NodeID(currentNodeID)), nil
 }
 
-func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, error) {
+func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definition, map[workflow.EdgeID][]workflow.PromptPriorParameterReference, error) {
 	migrationWorkflowID, err := runtimeids.ParseWorkflowID("00000000-0000-4000-8000-000000000001")
 	if err != nil {
-		return workflow.Definition{}, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
+		return workflow.Definition{}, nil, fmt.Errorf("parse synthetic migration Workflow ID: %w", err)
 	}
 	graphByEdgeID := make(map[string]migrationGraphEdge, len(graph))
 	for _, edge := range graph {
 		edgeID := strings.TrimSpace(edge.EdgeID)
 		if edgeID == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge id is blank")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge id is blank")
 		}
 		existing, exists := graphByEdgeID[edgeID]
 		if !exists || edge.SnapshotPriority > existing.SnapshotPriority {
@@ -352,7 +520,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 			continue
 		}
 		if edge.SnapshotPriority == existing.SnapshotPriority && edge != existing {
-			return workflow.Definition{}, fmt.Errorf("workflow graph edge %q has conflicting snapshots", edgeID)
+			return workflow.Definition{}, nil, fmt.Errorf("workflow graph edge %q has conflicting snapshots", edgeID)
 		}
 	}
 	edgeIDs := make([]string, 0, len(graphByEdgeID))
@@ -363,6 +531,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 	nodesByID := make(map[workflow.NodeID]workflow.Node)
 	groupsBySemanticKey := make(map[string]workflow.TransitionGroup)
 	edges := make([]workflow.Edge, 0, len(edgeIDs))
+	priorReferencesByEdge := make(map[workflow.EdgeID][]workflow.PromptPriorParameterReference, len(edgeIDs))
 	for _, selectedEdgeID := range edgeIDs {
 		edge := graphByEdgeID[selectedEdgeID]
 		sourceNodeID := strings.TrimSpace(edge.SourceNodeID)
@@ -374,27 +543,24 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 		transitionKey := strings.TrimSpace(edge.TransitionKey)
 		edgeID := strings.TrimSpace(edge.EdgeID)
 		if sourceNodeID == "" || sourceNodeKey == "" || targetNodeID == "" || targetNodeKey == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete node")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge has an incomplete node")
 		}
 		if transitionKey == "" || edgeID == "" {
-			return workflow.Definition{}, errors.New("workflow graph edge has an incomplete transition")
+			return workflow.Definition{}, nil, errors.New("workflow graph edge has an incomplete transition")
 		}
 		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, sourceNodeID, sourceNodeKey, sourceNodeKind); err != nil {
-			return workflow.Definition{}, err
+			return workflow.Definition{}, nil, err
 		}
 		if err := addMigrationWorkflowNode(nodesByID, migrationWorkflowID, targetNodeID, targetNodeKey, targetNodeKind); err != nil {
-			return workflow.Definition{}, err
+			return workflow.Definition{}, nil, err
 		}
-		refs, err := workflow.ExtractPromptTemplateReferences(edge.PromptTemplate)
+		refs, err := migrationPriorParameterReferences(edge.PromptTemplate)
 		if err != nil {
-			return workflow.Definition{}, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
-		}
-		if len(refs.Invalid) != 0 {
-			return workflow.Definition{}, fmt.Errorf("prompt for edge %s -> %s has invalid reference %q", sourceNodeID, targetNodeID, refs.Invalid[0].Placeholder)
+			return workflow.Definition{}, nil, fmt.Errorf("parse prompt for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
 		}
 		parameters := []workflow.Parameter{}
 		if err := json.Unmarshal([]byte(edge.ParametersJSON), &parameters); err != nil {
-			return workflow.Definition{}, fmt.Errorf("decode parameters for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
+			return workflow.Definition{}, nil, fmt.Errorf("decode parameters for edge %s -> %s: %w", sourceNodeID, targetNodeID, err)
 		}
 		groupSemanticKey := sourceNodeID + "\x00" + transitionKey
 		group, exists := groupsBySemanticKey[groupSemanticKey]
@@ -415,6 +581,7 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 			PromptTemplate:    edge.PromptTemplate,
 			Parameters:        parameters,
 		})
+		priorReferencesByEdge[workflow.EdgeID(edgeID)] = refs
 	}
 	nodeIDs := make([]string, 0, len(nodesByID))
 	for nodeID := range nodesByID {
@@ -435,7 +602,185 @@ func migrationWorkflowDefinition(graph []migrationGraphEdge) (workflow.Definitio
 		Nodes:            nodes,
 		TransitionGroups: groups,
 		Edges:            edges,
-	}, nil
+	}, priorReferencesByEdge, nil
+}
+
+func migrationPriorParameterReferences(prompt string) ([]workflow.PromptPriorParameterReference, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return nil, nil
+	}
+	tmpl, err := template.New("historical workflow prompt").Parse(prompt)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]workflow.PromptPriorParameterReference, 0)
+	for _, parsed := range tmpl.Templates() {
+		if parsed.Tree != nil {
+			if err := walkMigrationPromptNode(parsed.Tree.Root, &refs); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return refs, nil
+}
+
+func walkMigrationPromptNode(node parse.Node, refs *[]workflow.PromptPriorParameterReference) error {
+	switch typed := node.(type) {
+	case nil:
+		return nil
+	case *parse.ListNode:
+		for _, child := range typed.Nodes {
+			if err := walkMigrationPromptNode(child, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.ActionNode:
+		return walkMigrationPromptNode(typed.Pipe, refs)
+	case *parse.IfNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.RangeNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.WithNode:
+		if err := walkMigrationPromptNode(typed.Pipe, refs); err != nil {
+			return err
+		}
+		if err := walkMigrationPromptNode(typed.List, refs); err != nil {
+			return err
+		}
+		return walkMigrationPromptNode(typed.ElseList, refs)
+	case *parse.TemplateNode:
+		return walkMigrationPromptNode(typed.Pipe, refs)
+	case *parse.PipeNode:
+		for _, command := range typed.Cmds {
+			if err := walkMigrationPromptNode(command, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.CommandNode:
+		if len(typed.Args) > 0 {
+			if ident, ok := typed.Args[0].(*parse.IdentifierNode); ok &&
+				ident.Ident == "index" &&
+				indexCommandTouchesHistoricalPromptNamespace(typed.Args[1:]) {
+				return errors.New("historical dynamic prompt reference lookup is unsupported")
+			}
+		}
+		for _, arg := range typed.Args {
+			if err := walkMigrationPromptNode(arg, refs); err != nil {
+				return err
+			}
+		}
+	case *parse.ChainNode:
+		if err := walkMigrationPromptNode(typed.Node, refs); err != nil {
+			return err
+		}
+		if len(typed.Field) > 0 && historicalPromptNamespace(typed.Field[0]) {
+			return errors.New("historical chained prompt references are unsupported")
+		}
+	case *parse.FieldNode:
+		if err := migrationPromptFieldReference(typed.Ident, refs); err != nil {
+			return err
+		}
+	case *parse.VariableNode:
+		if variableTouchesHistoricalPromptNamespace(typed.Ident) {
+			return errors.New("historical variable prompt references are unsupported")
+		}
+	}
+	return nil
+}
+
+func variableTouchesHistoricalPromptNamespace(ident []string) bool {
+	for _, part := range ident {
+		if historicalPromptNamespace(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func historicalPromptNamespace(value string) bool {
+	return value == "Inputs" || value == "Params" || value == "$Inputs" || value == "$Params"
+}
+
+func indexCommandTouchesHistoricalPromptNamespace(args []parse.Node) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if _, ok := args[0].(*parse.DotNode); ok {
+		return true
+	}
+	for _, arg := range args {
+		switch typed := arg.(type) {
+		case *parse.FieldNode:
+			if len(typed.Ident) > 0 && historicalPromptNamespace(typed.Ident[0]) {
+				return true
+			}
+		case *parse.ChainNode:
+			if len(typed.Field) > 0 && historicalPromptNamespace(typed.Field[0]) {
+				return true
+			}
+			if indexCommandTouchesHistoricalPromptNamespace([]parse.Node{typed.Node}) {
+				return true
+			}
+		case *parse.VariableNode:
+			if variableTouchesHistoricalPromptNamespace(typed.Ident) {
+				return true
+			}
+		case *parse.StringNode:
+			if historicalPromptNamespace(typed.Text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func migrationPromptFieldReference(ident []string, refs *[]workflow.PromptPriorParameterReference) error {
+	if len(ident) == 0 {
+		return errors.New("historical prompt reference is empty")
+	}
+	switch ident[0] {
+	case "TaskId", "TaskShortId", "TaskTitle", "TaskBody", "NodeId", "NodeKey", "NodeDisplayName":
+		if len(ident) != 1 {
+			return fmt.Errorf("historical prompt built-in %q is chained", ident[0])
+		}
+	case "Inputs":
+		if len(ident) != 2 || strings.TrimSpace(ident[1]) == "" {
+			return errors.New("historical .Inputs reference must use .Inputs.<input_name>")
+		}
+	case "Params":
+		switch len(ident) {
+		case 2:
+			if strings.TrimSpace(ident[1]) == "" {
+				return errors.New("historical .Params reference has an empty parameter key")
+			}
+		case 3:
+			if strings.TrimSpace(ident[1]) == "" || strings.TrimSpace(ident[2]) == "" {
+				return errors.New("historical prior .Params reference has an empty key")
+			}
+			*refs = append(*refs, workflow.PromptPriorParameterReference{
+				TransitionKey: workflow.ModelKey(ident[1]),
+				ParameterKey:  ident[2],
+				Placeholder:   "." + strings.Join(ident, "."),
+			})
+		default:
+			return errors.New("historical .Params reference has an unsupported shape")
+		}
+	default:
+		return fmt.Errorf("historical prompt reference .%s is unsupported", strings.Join(ident, "."))
+	}
+	return nil
 }
 
 func addMigrationWorkflowNode(
@@ -641,5 +986,30 @@ func migrationOptionalStringArgument(value driver.Value) string {
 		return string(typed)
 	default:
 		return ""
+	}
+}
+
+func migrationBooleanArgument(value driver.Value, label string) (bool, error) {
+	switch typed := value.(type) {
+	case int64:
+		switch typed {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("%s must be 0 or 1", label)
+		}
+	case int:
+		switch typed {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("%s must be 0 or 1", label)
+		}
+	default:
+		return false, fmt.Errorf("%s must be an integer", label)
 	}
 }

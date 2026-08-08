@@ -1,6 +1,7 @@
 import type { AttentionItem } from "./attention";
 
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
+import type { WorkflowEdgeSelectionMode, WorkflowParameterPurpose, WorkflowSelectorApplicability } from "./workflowSelectionModels";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 export type {
@@ -202,10 +203,7 @@ export type WorkflowInputField = Readonly<{
   description: string;
 }>;
 
-export type WorkflowParameter = Readonly<{
-  key: string;
-  description: string;
-}>;
+export type WorkflowParameter = Readonly<{ key: string; description: string; purpose: WorkflowParameterPurpose }>;
 
 export type WorkflowJoinInputProvider = Readonly<{
   inputName: string;
@@ -246,12 +244,9 @@ export type WorkflowNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
-  outputFields: readonly WorkflowOutputField[];
 }>;
 
 export type WorkflowInputBinding = Readonly<{
@@ -287,6 +282,8 @@ export type WorkflowDerivedEdgeWiring = Readonly<{
   inputBindings: readonly WorkflowInputBinding[];
   requiredProvisionFields: readonly WorkflowOutputField[];
   requiredProviderFields: readonly WorkflowOutputField[];
+  assigneeSelectionApplicability: WorkflowSelectorApplicability;
+  thinkingSelectionApplicability: WorkflowSelectorApplicability;
 }>;
 
 export const emptyWorkflowDerivedWiring: WorkflowDerivedWiring = {
@@ -316,6 +313,8 @@ export type WorkflowEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -355,10 +354,8 @@ export type WorkflowGraphDraftNode = Readonly<{
   groupID: string;
   groupKey: string;
   subagentRole: string;
-  promptTemplate: string;
   completionMode?: string | undefined;
   scriptPath?: string | null | undefined;
-  inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
 }>;
 
@@ -375,6 +372,8 @@ export type WorkflowGraphDraftEdge = Readonly<{
   transitionGroupID: string;
   key: string;
   targetNodeID: string;
+  assigneeSelection: WorkflowEdgeSelectionMode;
+  thinkingSelection: WorkflowEdgeSelectionMode;
   requiresApproval: boolean;
   contextMode: string;
   contextSource: WorkflowContextSource;
@@ -631,8 +630,7 @@ export type BoardNodeCardsPage = Readonly<{
   workflowID: string;
   nodeID: string;
   cards: readonly BoardCard[];
-  previousPageToken: string | null;
-  nextPageToken: string | null;
+  nextOffset: number | null;
   generatedAt: number;
 }>;
 
@@ -676,6 +674,8 @@ export type TaskCurrentNode = Readonly<{
   nodeID: string;
   transitionBranchKey: string | null;
   sessionID: string | null;
+  effectiveAssignee: string | null;
+  effectiveThinking: string | null;
 }>;
 
 export type TaskScriptCurrentNode = Readonly<{

@@ -9,8 +9,8 @@ import (
 func TestSerialTransitionRequiresFanoutSiblings(t *testing.T) {
 	def := fanoutWorkflow(t)
 	def.Nodes = append(def.Nodes,
-		testAgentNode(def.ID, "node_impl_a_detail", "impl_a_detail", "Implement A Detail", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "A detail."}),
-		testAgentNode(def.ID, "node_impl_b_detail", "impl_b_detail", "Implement B Detail", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "B detail."}),
+		testAgentNode(def.ID, "node_impl_a_detail", "impl_a_detail", "Implement A Detail", workflow.NodeFields{SubagentRole: "coder"}),
+		testAgentNode(def.ID, "node_impl_b_detail", "impl_b_detail", "Implement B Detail", workflow.NodeFields{SubagentRole: "coder"}),
 	)
 	def.TransitionGroups = append(def.TransitionGroups,
 		workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_detail", SourceNodeID: "node_impl_a", TransitionID: "detail", DisplayName: "Detail"},

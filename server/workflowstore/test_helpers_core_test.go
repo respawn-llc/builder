@@ -155,13 +155,27 @@ func workflowGraphSaveRequestFromDefinition(workflowID runtimeids.WorkflowID, re
 	}
 	for _, node := range def.Nodes {
 		groupID := workflow.NodeGroupID(node)
-		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), PromptTemplate: workflow.NodePromptTemplate(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), InputFields: workflow.NodeInputFields(node), JoinInputProviders: workflow.NodeJoinInputProviders(node), OutputFields: workflow.NodeOutputFields(node)})
+		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), JoinInputProviders: workflow.NodeJoinInputProviders(node)})
 	}
 	for _, group := range def.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
 	}
 	for _, edge := range def.Edges {
-		req.Edges = append(req.Edges, EdgeRecord{ID: edge.ID, WorkflowID: workflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
+		assigneeSelection := edge.AssigneeSelection
+		if assigneeSelection == "" {
+			assigneeSelection = workflow.AssigneeSelectionConfigured
+		}
+		thinkingSelection := edge.ThinkingSelection
+		if thinkingSelection == "" {
+			thinkingSelection = workflow.ThinkingSelectionConfigured
+		}
+		parameters := append([]workflow.Parameter(nil), edge.Parameters...)
+		for index := range parameters {
+			if parameters[index].Purpose == "" {
+				parameters[index].Purpose = workflow.ParameterPurposeOrdinary
+			}
+		}
+		req.Edges = append(req.Edges, EdgeRecord{ID: edge.ID, WorkflowID: workflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: assigneeSelection, ThinkingSelection: thinkingSelection, ContextMode: edge.ContextMode, ContextSource: edge.ContextSource, RequiresApproval: edge.RequiresApproval, PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements})
 	}
 	return req
 }
@@ -174,6 +188,19 @@ func saveWorkflowGraphFixture(t *testing.T, ctx context.Context, store *Store, w
 	}
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	edit(def, &req)
+	for index := range req.Edges {
+		if req.Edges[index].AssigneeSelection == "" {
+			req.Edges[index].AssigneeSelection = workflow.AssigneeSelectionConfigured
+		}
+		if req.Edges[index].ThinkingSelection == "" {
+			req.Edges[index].ThinkingSelection = workflow.ThinkingSelectionConfigured
+		}
+		for parameterIndex := range req.Edges[index].Parameters {
+			if req.Edges[index].Parameters[parameterIndex].Purpose == "" {
+				req.Edges[index].Parameters[parameterIndex].Purpose = workflow.ParameterPurposeOrdinary
+			}
+		}
+	}
 	result, err := store.SaveWorkflowGraph(ctx, req)
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph workflow fixture: %v", err)
