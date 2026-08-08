@@ -396,6 +396,36 @@ func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
 	}
 }
 
+func TestRepairMissingToolOutputsDefersOnlyMatchingPendingStarts(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+		ID: "pending", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+	steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+		ID: "repairable", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+	engine.rememberPendingToolCallStarts(map[string]int{"pending": 1})
+
+	repaired, err := engine.repairMissingToolOutputsByAppending(
+		textutil.Value("step"),
+		missingToolOutputRepairLiveProvider400,
+	)
+	if err != nil {
+		t.Fatalf("repair mixed pending starts: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("mixed pending repair count = %d, want one", repaired)
+	}
+	if repairRequestHasToolOutput(engine.transcriptRuntimeState().SnapshotItems(), "pending") {
+		t.Fatal("matching pending start was pre-empted")
+	}
+	if !repairRequestHasToolOutput(engine.transcriptRuntimeState().SnapshotItems(), "repairable") {
+		t.Fatal("unmatched dangling call was not repaired")
+	}
+}
+
 func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

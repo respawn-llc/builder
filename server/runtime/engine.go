@@ -130,7 +130,7 @@ type Config struct {
 	GlobalConfigDir       string
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
-	LifecycleTaskFinished func() error
+	LifecycleTaskFinished func(error) error
 	DurabilityObserver    ResultGroupDurabilityObserver
 }
 
@@ -478,7 +478,7 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
+func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 	if e == nil || task == nil {
 		return false
 	}
@@ -495,13 +495,14 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
+		var taskErr error
 		defer func() {
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
-				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
+				e.surfaceRunError(e.cfg.LifecycleTaskFinished(taskErr))
 			}
 		}()
-		task(ctx)
+		taskErr = task(ctx)
 	}(ctx)
 	return true
 }

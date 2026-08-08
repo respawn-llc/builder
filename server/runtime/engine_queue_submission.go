@@ -248,7 +248,7 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	return true
 }
 
-func (e *Engine) processQueuedUserWork(ctx context.Context) {
+func (e *Engine) processQueuedUserWork(ctx context.Context) error {
 	completed := false
 	defer func() {
 		e.clearQueuedUserWorkScheduled()
@@ -262,15 +262,16 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 	}()
 	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
 		e.surfaceRunError(err)
-		return
+		return err
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
 	if err != nil {
-		return
+		return err
 	}
 	e.completeLiveRunQueueItems(consumedQueueItemIDs)
 	completed = true
+	return nil
 }
 
 func (e *Engine) HasScheduledQueuedUserWork() bool {

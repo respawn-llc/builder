@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"core/internal/testharness/filemode"
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
@@ -500,6 +502,110 @@ func TestQuestionBarrierDurabilityAbortClosesLifecycleAndRetiresCurrentGeneratio
 	authority.mu.Unlock()
 	if admitted == failedResource {
 		t.Fatal("Question barrier failed resource generation remained admitted")
+	}
+}
+
+func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	client := &lifecycleQuestionBarrierClient{}
+	var failedResource *agentResource
+	var blocker *filemode.EventLogAppendBlocker
+	var blockErr error
+	blocked := make(chan struct{})
+	var blockOnce sync.Once
+	plan := authorityTestRuntimePlan(t, fixture, client, func(event runtime.Event) {
+		if event.Kind == runtime.EventToolCallStarted &&
+			event.ToolCall != nil &&
+			event.ToolCall.ID == "lifecycle-question" {
+			blockOnce.Do(func() {
+				blocker, blockErr = filemode.BlockEventLogAppends(
+					filepath.Join(failedResource.store.Dir(), "events.jsonl"),
+				)
+				close(blocked)
+			})
+		}
+	})
+	plan.options.EnabledTools = []toolspec.ID{
+		toolspec.ToolAskQuestion,
+		toolspec.ToolWebSearch,
+	}
+	plan.options.Settings.WebSearch = "native"
+	capabilities := llm.ProviderCapabilities{
+		ProviderID:                    "openai",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		IsOpenAIFirstParty:            true,
+	}
+	plan.options.ProviderCapabilitiesOverride = &capabilities
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+	authority.mu.Lock()
+	failedResource = authority.resources[sessionID]
+	authority.mu.Unlock()
+
+	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(
+		_ context.Context,
+		engine *runtime.Engine,
+	) error {
+		if _, err := engine.SetGoal("continue autonomously", session.GoalActorUser); err != nil {
+			return err
+		}
+		return engine.StartGoalLoop()
+	}); err != nil {
+		t.Fatalf("start Goal lifecycle turn: %v", err)
+	}
+
+	select {
+	case <-blocked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Goal lifecycle turn did not reach Result Group append")
+	}
+	if blockErr != nil {
+		t.Fatalf("block Goal lifecycle event-log append: %v", blockErr)
+	}
+	select {
+	case <-lifecycle.draining:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Goal lifecycle runtime abort did not retire the resource")
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore Goal lifecycle event log: %v", err)
+	}
+	if state := failedResource.descriptor().State; state != AgentResourceClosed {
+		t.Fatalf("Goal lifecycle aborted resource state = %v, want closed", state)
+	}
+	var admitted *agentResource
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		authority.mu.Lock()
+		admitted = authority.resources[sessionID]
+		authority.mu.Unlock()
+		if admitted != failedResource || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if admitted == failedResource {
+		t.Fatal("Goal lifecycle aborted resource remained admitted")
+	}
+	reopened := openLifecycleRuntime(t, authority, sessionID, "owner-b", &plan)
+	if reopened.Resource() == attachment.Resource() {
+		t.Fatal("Goal lifecycle abort reused the failed resource generation")
 	}
 }
 

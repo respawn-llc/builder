@@ -54,7 +54,7 @@ type RuntimeWiringOptions struct {
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
-	LifecycleTaskFinished               func() error
+	LifecycleTaskFinished               func(error) error
 	DurabilityObserver                  runtime.ResultGroupDurabilityObserver
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to

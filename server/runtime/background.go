@@ -280,8 +280,9 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 	return fmt.Sprintf("%d", out.SessionID), true
 }
 
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) {
-	_, _ = b.runQueuedNotices(ctx)
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) error {
+	_, err := b.runQueuedNotices(ctx)
+	return err
 }
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {

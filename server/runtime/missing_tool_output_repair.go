@@ -114,9 +114,6 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 		}
 		repairStepID = textutil.Value(normalized)
 	}
-	if policy.deferToPendingToolStarts && e.pendingToolCallStartStore().Len() > 0 {
-		return 0, nil
-	}
 	chat := e.transcriptRuntimeState().chatProjection()
 	if chat == nil {
 		return 0, nil
@@ -124,6 +121,18 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	dangling := chat.danglingToolCalls()
 	if len(dangling) == 0 {
 		return 0, nil
+	}
+	if policy.deferToPendingToolStarts {
+		repairable := dangling[:0]
+		for _, call := range dangling {
+			if _, pending := e.pendingToolCallStart(call.callID); !pending {
+				repairable = append(repairable, call)
+			}
+		}
+		dangling = repairable
+		if len(dangling) == 0 {
+			return 0, nil
+		}
 	}
 	for index := range dangling {
 		if dangling[index].stepID == nil {
