@@ -61,6 +61,73 @@ func TestScriptFinalizerCancellationUsesTypedDurableInterruption(t *testing.T) {
 	}
 }
 
+func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
+	diagnostic := errors.New("completion event delivery failed")
+	controller := &committedDiagnosticFinalizerController{diagnostic: diagnostic}
+	scopeID := runtimeids.NewExecutionScopeID()
+	err := (&Starter{}).finalizeCurrentNodeAgentExecution(
+		context.Background(),
+		controller,
+		scopeID,
+		nil,
+		&currentNodeAgentPostTurn{
+			sessionID: runtimeids.NewSessionID(),
+			runtime:   workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
+		},
+	)
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("Agent finalizer error = %v, want committed diagnostic %v", err, diagnostic)
+	}
+	if controller.postTurnFinalizations != 1 {
+		t.Fatalf("post-turn finalizations = %d, want 1", controller.postTurnFinalizations)
+	}
+	if controller.failurePublications != 0 {
+		t.Fatalf("durable failure publications = %d, want 0", controller.failurePublications)
+	}
+}
+
+type committedDiagnosticFinalizerController struct {
+	canceledFinalizerController
+	diagnostic            error
+	postTurnFinalizations int
+	failurePublications   int
+}
+
+func (*committedDiagnosticFinalizerController) PublishCurrentNodeExactFinalizing(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+) error {
+	return nil
+}
+
+func (c *committedDiagnosticFinalizerController) FinalizeCurrentNodeResult(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+	error,
+) error {
+	return workflowruntime.NewCommittedCompletionDiagnostic(c.diagnostic)
+}
+
+func (c *committedDiagnosticFinalizerController) FinalizeCurrentNodePostTurn(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+	runtimeids.SessionID,
+	workflowruntime.PostCompletionRuntime,
+) error {
+	c.postTurnFinalizations++
+	return nil
+}
+
+func (c *committedDiagnosticFinalizerController) FailCurrentNodeScope(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+	workflow.CurrentNodeInterruptionReason,
+	error,
+) error {
+	c.failurePublications++
+	return nil
+}
+
 type canceledFinalizerController struct {
 	finalizingEntered chan struct{}
 	finalizingOnce    sync.Once

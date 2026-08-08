@@ -1643,6 +1643,65 @@ func TestCurrentNodeControllerRetiresCommittedCompletionAfterEventFailure(t *tes
 	}
 }
 
+func TestCurrentNodeControllerMarksCommittedAgentCompletionDiagnosticNonfatal(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-agent-completion-event-failure", "node-source")
+	eventErr := errors.New("completion event delivery failed")
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			PostCompletionEligible: true,
+		},
+		completionEventErr: eventErr,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: source,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	controller.mu.Lock()
+	installLiveCurrentNodeRunLockedForTest(
+		controller,
+		source,
+		workflow.NodeKindAgent,
+		currentNodeAdmissionExplicitOverride,
+		lease,
+	)
+	key, err := source.Key()
+	if err != nil {
+		controller.mu.Unlock()
+		t.Fatalf("source key: %v", err)
+	}
+	run, exists := controller.runs.get(key)
+	if !exists {
+		controller.mu.Unlock()
+		t.Fatal("installed Agent Run is missing")
+	}
+	run.pendingCompletionRequest = &workflowstore.CurrentNodeCompletionRequest{
+		Source:       source,
+		TransitionID: "next",
+	}
+	controller.mu.Unlock()
+
+	err = controller.FinalizeCurrentNodeResult(context.Background(), lease.ScopeID(), nil)
+	if !workflowruntime.IsCommittedCompletionDiagnostic(err) || !errors.Is(err, eventErr) {
+		t.Fatalf("FinalizeCurrentNodeResult error = %v, want committed diagnostic %v", err, eventErr)
+	}
+	controller.mu.Lock()
+	_, postTurnFinalizing := controller.postTurnFinalization[lease.ScopeID()]
+	controller.mu.Unlock()
+	if !postTurnFinalizing {
+		t.Fatal("committed Agent completion did not retain mandatory post-turn finalization")
+	}
+}
+
 func TestCurrentNodeControllerInterruptsAgentThatReturnsWithoutAcceptedCompletion(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-agent-finalizer-failure", "node-agent")
 	store := &currentNodeControllerStore{}

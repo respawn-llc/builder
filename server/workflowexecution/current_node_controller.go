@@ -1183,7 +1183,10 @@ func (c *CurrentNodeController) FinalizeCurrentNodeResult(
 				confirmErr = nil
 			}
 			if postTurnFinalization {
-				return errors.Join(err, confirmErr)
+				if diagnostic := errors.Join(err, confirmErr); diagnostic != nil {
+					return workflowruntime.NewCommittedCompletionDiagnostic(diagnostic)
+				}
+				return nil
 			}
 			return errors.Join(
 				err,

@@ -162,6 +162,32 @@ type ResultFinalizer interface {
 	FinalizeCurrentNodeResult(context.Context, runtimeids.ExecutionScopeID, error) error
 }
 
+type committedCompletionDiagnostic struct {
+	cause error
+}
+
+// NewCommittedCompletionDiagnostic reports an operational failure that
+// happened after the Current Node completion and its lifecycle view committed.
+func NewCommittedCompletionDiagnostic(cause error) error {
+	if cause == nil {
+		panic("committed workflow completion diagnostic requires a cause")
+	}
+	return &committedCompletionDiagnostic{cause: cause}
+}
+
+func IsCommittedCompletionDiagnostic(err error) bool {
+	var diagnostic *committedCompletionDiagnostic
+	return errors.As(err, &diagnostic)
+}
+
+func (d *committedCompletionDiagnostic) Error() string {
+	return "committed workflow completion diagnostic: " + d.cause.Error()
+}
+
+func (d *committedCompletionDiagnostic) Unwrap() error {
+	return d.cause
+}
+
 // PostCompletionCompactionResult preserves a durable history-replacement
 // receipt separately from operational work that ran after that replacement.
 type PostCompletionCompactionResult struct {

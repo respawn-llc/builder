@@ -72,6 +72,15 @@ func (c currentNodeRunnerDependencyCounter) CountUnsatisfiedBlockers(ctx context
 	return c(ctx, taskID)
 }
 
+type currentNodeRunnerWorkflowEventPublisherFunc func(context.Context, workflowstore.WorkflowEventRecord) error
+
+func (f currentNodeRunnerWorkflowEventPublisherFunc) PublishWorkflowEvent(
+	ctx context.Context,
+	event workflowstore.WorkflowEventRecord,
+) error {
+	return f(ctx, event)
+}
+
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
 	return llm.CompactionResponse{
 		OutputItems: []llm.ResponseItem{
@@ -1218,6 +1227,51 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	if target.NodeID == source.NodeID {
 		t.Fatalf("successor reference = %v, want a distinct target", target)
 	}
+}
+
+func TestCommittedCompletionEventDiagnosticReleasesAutomaticSuccessor(t *testing.T) {
+	eventErr := errors.New("completion event delivery failed")
+	var completionEventFailed atomic.Bool
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch(
+			"complete first node",
+			llm.ToolCall{
+				ID:    "complete-first",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next","commentary":"first done"}`),
+			},
+		),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	f.store.SetWorkflowEventPublisher(currentNodeRunnerWorkflowEventPublisherFunc(
+		func(_ context.Context, event workflowstore.WorkflowEventRecord) error {
+			if event.Action == serverapi.WorkflowProjectEventActionCompleted {
+				completionEventFailed.Store(true)
+				return eventErr
+			}
+			return nil
+		},
+	))
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Committed diagnostic successor",
+		workflow.ContextModeCompactAndContinueSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+
+	requests := f.waitForModelRequests(t, 2)
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want source and automatic successor", len(requests))
+	}
+	if !completionEventFailed.Load() {
+		t.Fatal("committed completion event diagnostic was not exercised")
+	}
+	f.waitForControllerCurrentNodeFinalized(t, source)
 }
 
 func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterruptedSourceScope(t *testing.T) {

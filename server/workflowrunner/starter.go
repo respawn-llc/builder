@@ -261,6 +261,11 @@ type preparedCurrentNodeAgentSession struct {
 	cleanup func(error) error
 }
 
+type currentNodeAgentPostTurn struct {
+	sessionID runtimeids.SessionID
+	runtime   workflowruntime.PostCompletionRuntime
+}
+
 func (s *Starter) prepareCurrentNodeAgentSession(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
@@ -405,10 +410,7 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return prepared.cleanup(err)
 	}
-	var postTurn *struct {
-		sessionID runtimeids.SessionID
-		runtime   workflowruntime.PostCompletionRuntime
-	}
+	var postTurn *currentNodeAgentPostTurn
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
 		PromptFeed:         currentNodeExecutionPromptFeed(controller),
@@ -439,10 +441,7 @@ func (s *Starter) startCurrentNodeAgent(
 				if err != nil {
 					return err
 				}
-				postTurn = &struct {
-					sessionID runtimeids.SessionID
-					runtime   workflowruntime.PostCompletionRuntime
-				}{
+				postTurn = &currentNodeAgentPostTurn{
 					sessionID: sessionID,
 					runtime: workflowruntime.PostCompletionRuntime{
 						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
@@ -460,34 +459,12 @@ func (s *Starter) startCurrentNodeAgent(
 			return turnErr
 		},
 		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, runErr error) error {
-			if err := s.finalizeCurrentNodeAgent(finalizeCtx, controller, scope.ID(), runErr); err != nil {
-				return err
-			}
-			if postTurn == nil {
-				return nil
-			}
-			finalizer, ok := controller.(workflowruntime.PostTurnFinalizer)
-			if !ok {
-				return errors.New("workflow controller does not finalize Current Node post-turn state")
-			}
-			postTurnErr := finalizer.FinalizeCurrentNodePostTurn(
+			return s.finalizeCurrentNodeAgentExecution(
 				finalizeCtx,
+				controller,
 				scope.ID(),
-				postTurn.sessionID,
-				postTurn.runtime,
-			)
-			if postTurnErr == nil {
-				return nil
-			}
-			reason := ReasonRuntimeFailed
-			failureCtx := finalizeCtx
-			if errors.Is(postTurnErr, context.Canceled) || context.Cause(finalizeCtx) != nil {
-				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
-				failureCtx = context.WithoutCancel(finalizeCtx)
-			}
-			return errors.Join(
-				postTurnErr,
-				s.failCurrentNodeScope(failureCtx, controller, scope.ID(), reason, postTurnErr),
+				runErr,
+				postTurn,
 			)
 		},
 	})
@@ -495,6 +472,53 @@ func (s *Starter) startCurrentNodeAgent(
 		return prepared.cleanup(err)
 	}
 	return nil
+}
+
+func (s *Starter) finalizeCurrentNodeAgentExecution(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+	runErr error,
+	postTurn *currentNodeAgentPostTurn,
+) error {
+	resultErr := s.finalizeCurrentNodeAgent(ctx, controller, scopeID, runErr)
+	if resultErr != nil {
+		if context.Cause(ctx) != nil ||
+			!workflowruntime.IsCommittedCompletionDiagnostic(resultErr) ||
+			postTurn == nil {
+			return resultErr
+		}
+	}
+	if postTurn == nil {
+		return nil
+	}
+	finalizer, ok := controller.(workflowruntime.PostTurnFinalizer)
+	if !ok {
+		return errors.Join(
+			resultErr,
+			errors.New("workflow controller does not finalize Current Node post-turn state"),
+		)
+	}
+	postTurnErr := finalizer.FinalizeCurrentNodePostTurn(
+		ctx,
+		scopeID,
+		postTurn.sessionID,
+		postTurn.runtime,
+	)
+	if postTurnErr == nil {
+		return resultErr
+	}
+	reason := ReasonRuntimeFailed
+	failureCtx := ctx
+	if errors.Is(postTurnErr, context.Canceled) || context.Cause(ctx) != nil {
+		reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+		failureCtx = context.WithoutCancel(ctx)
+	}
+	return errors.Join(
+		resultErr,
+		postTurnErr,
+		s.failCurrentNodeScope(failureCtx, controller, scopeID, reason, postTurnErr),
+	)
 }
 
 func (s *Starter) finalizeCurrentNodeAgent(
