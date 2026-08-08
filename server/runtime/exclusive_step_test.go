@@ -80,8 +80,6 @@ func (s *stubExclusiveStepLifecycle) RunNext(ctx context.Context, options exclus
 	return fn(ctx, "stub-step")
 }
 
-func (s *stubExclusiveStepLifecycle) AcquireReservation(*exclusiveStepReservation) error { return nil }
-func (s *stubExclusiveStepLifecycle) ReleaseReservation(*exclusiveStepReservation)       {}
 func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
@@ -194,78 +192,6 @@ func TestExclusiveStepLifecycleRejectsCanceledContextBeforeActiveRun(t *testing.
 	}
 	if snapshot := lifecycle.Snapshot(); snapshot != nil {
 		t.Fatalf("canceled pre-active run left active snapshot: %+v", snapshot)
-	}
-}
-
-func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	sink := newBlockingStepLifecycleSink()
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", StepLifecycle: sink})
-
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
-	if err := lifecycle.AcquireReservation(reservation); err != nil {
-		t.Fatalf("acquire reservation: %v", err)
-	}
-	if !lifecycle.IsBusy() {
-		t.Fatal("held reservation must keep exclusive lifecycle busy")
-	}
-	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("ordinary run with held reservation err = %v, want busy", err)
-	}
-	maintenanceDone := make(chan error, 1)
-	go func() {
-		maintenanceDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
-			return nil
-		})
-	}()
-	releaseStep := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction, Reservation: reservation}, func(context.Context, string) error {
-			<-releaseStep
-			return nil
-		})
-	}()
-
-	close(releaseStep)
-	select {
-	case <-sink.endedStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for terminal publication")
-	}
-	if snapshot := lifecycle.Snapshot(); snapshot != nil {
-		t.Fatalf("active snapshot must be cleared before terminal publication, got %+v", snapshot)
-	}
-	if !lifecycle.IsBusy() {
-		t.Fatal("terminal publication must keep exclusive lifecycle busy")
-	}
-	err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil })
-	if !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("successor run while terminal publication is pending err = %v, want ErrAgentBusy", err)
-	}
-	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
-	if !errors.Is(err, ErrExclusiveStepReservationPending) {
-		t.Fatalf("duplicate reservation during terminal publication err = %v, want pending rejection", err)
-	}
-
-	close(sink.releaseEnded)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	err = lifecycle.AcquireReservation(&exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction})
-	if !errors.Is(err, ErrExclusiveStepReservationPending) {
-		t.Fatalf("duplicate reservation after terminal publication err = %v, want pending rejection", err)
-	}
-	select {
-	case err := <-maintenanceDone:
-		t.Fatalf("non-holder RunNext finished before reservation release: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	lifecycle.ReleaseReservation(reservation)
-	if err := <-maintenanceDone; err != nil {
-		t.Fatalf("maintenance after reservation release: %v", err)
 	}
 }
 

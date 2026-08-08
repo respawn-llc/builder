@@ -293,7 +293,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
-		e.stepLifecycle.EndAgentStepBoundary()
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		} else if terminal {
@@ -809,7 +808,7 @@ func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) err
 	if _, err := s.engine.completeAgentProviderBoundary(ctx, true); err != nil {
 		return err
 	}
-	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
+	return nil
 }
 
 func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(

@@ -1040,7 +1040,7 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
-		if call == 3 {
+		if call == 4 {
 			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 		}
 	}
@@ -1059,20 +1059,25 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	client.releaseCall(1)
 
 	client.waitStarted(t, 2)
-	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindCompaction {
-		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
+	if active := engine.compactionRuntimeState().ActiveSnapshot(); active == nil {
+		t.Fatal("first manual compaction did not become active before the next goal turn")
 	}
 	client.releaseCall(2)
-	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrManualCompactionTooSoon) && !errors.Is(second, ErrManualCompactionTooSoon)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one too-soon result", first, second)
+	client.waitStarted(t, 3)
+	if active := engine.compactionRuntimeState().ActiveSnapshot(); active == nil {
+		t.Fatal("second distinct manual compaction did not retain FIFO priority")
 	}
-	if got := engine.CompactionCount(); got != 1 {
-		t.Fatalf("compaction count = %d, want 1", got)
+	client.releaseCall(3)
+	first, second := <-compactDone, <-compactDone
+	if first != nil || second != nil {
+		t.Fatalf("distinct compact errors = (%v, %v), want two successes", first, second)
+	}
+	if got := engine.CompactionCount(); got != 2 {
+		t.Fatalf("compaction count = %d, want 2", got)
 	}
 
-	client.waitStarted(t, 3)
-	client.releaseCall(3)
+	client.waitStarted(t, 4)
+	client.releaseCall(4)
 	waitGoalLoopRunning(t, engine, false)
 }
 

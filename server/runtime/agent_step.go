@@ -216,10 +216,11 @@ func (e *Engine) applyAgentStepBoundary(
 	e.agentSteps.boundary = current
 	sink, ok := e.cfg.StepLifecycle.(AgentStepOriginLifecycleSink)
 	if !ok {
-		return e.resumeReducerBoundaryGrant(
+		return e.resumeReducerBoundaryGrantWithResolver(
 			admission,
 			localAgentStepReducerGrant{engine: e},
 			request.continueTurn,
+			complete,
 		)
 	}
 	transfer, err := sink.AgentStepBoundary(admission.Context(), current.origin)
@@ -228,7 +229,12 @@ func (e *Engine) applyAgentStepBoundary(
 	}
 	switch typed := transfer.(type) {
 	case AgentStepReducerBoundary:
-		return e.resumeReducerBoundaryGrant(admission, typed.Grant, request.continueTurn)
+		return e.resumeReducerBoundaryGrantWithResolver(
+			admission,
+			typed.Grant,
+			request.continueTurn,
+			complete,
+		)
 	case AgentStepWorktreeBoundary:
 		if typed.Wait == nil {
 			return nil, errors.New("Agent Step Worktree boundary has no waiter")
@@ -258,11 +264,12 @@ func (e *Engine) applyAgentStepBoundary(
 					if waitErr != nil {
 						return nil, waitErr
 					}
-					return e.acceptReducerBoundaryGrant(
+					return e.acceptReducerBoundaryGrantWithResolver(
 						resultAdmission,
 						result.grant,
 						result.continueTurn,
 						result.step,
+						complete,
 					)
 				},
 			)
@@ -282,14 +289,29 @@ func (e *Engine) resumeReducerBoundaryGrant(
 	grant AgentStepReducerGrant,
 	continueTurn bool,
 ) (agentStepBoundaryDecision, error) {
+	return e.resumeReducerBoundaryGrantWithResolver(
+		admission,
+		grant,
+		continueTurn,
+		nil,
+	)
+}
+
+func (e *Engine) resumeReducerBoundaryGrantWithResolver(
+	admission runtimeEventAdmission,
+	grant AgentStepReducerGrant,
+	continueTurn bool,
+	complete func(agentStepBoundaryDecision, error),
+) (agentStepBoundaryDecision, error) {
 	if e.agentSteps.boundary == nil {
 		return nil, errors.New("Agent Step reducer boundary has no closed Step")
 	}
-	return e.acceptReducerBoundaryGrant(
+	return e.acceptReducerBoundaryGrantWithResolver(
 		admission,
 		grant,
 		continueTurn,
 		*e.agentSteps.boundary,
+		complete,
 	)
 }
 
@@ -298,6 +320,22 @@ func (e *Engine) acceptReducerBoundaryGrant(
 	grant AgentStepReducerGrant,
 	continueTurn bool,
 	step activeAgentStep,
+) (agentStepBoundaryDecision, error) {
+	return e.acceptReducerBoundaryGrantWithResolver(
+		admission,
+		grant,
+		continueTurn,
+		step,
+		nil,
+	)
+}
+
+func (e *Engine) acceptReducerBoundaryGrantWithResolver(
+	admission runtimeEventAdmission,
+	grant AgentStepReducerGrant,
+	continueTurn bool,
+	step activeAgentStep,
+	complete func(agentStepBoundaryDecision, error),
 ) (agentStepBoundaryDecision, error) {
 	if grant == nil {
 		return nil, errors.New("Agent Step reducer boundary has no grant")
@@ -356,6 +394,41 @@ func (e *Engine) acceptReducerBoundaryGrant(
 				e.agentSteps.boundary = nil
 				return nil, errors.Join(err, grant.Release())
 			}
+		case *manualCompactionAgendaItem:
+			compactionItem := next.(*manualCompactionAgendaItem)
+			if complete == nil {
+				e.agentSteps.boundary = nil
+				return nil, errors.Join(
+					errors.New("active-Step manual compaction requires a typed Boundary resolver"),
+					grant.Release(),
+				)
+			}
+			compactionItem.boundary = &manualCompactionBoundaryContinuation{
+				engine:       e,
+				grant:        grant,
+				continueTurn: continueTurn,
+				step:         step,
+				complete:     complete,
+			}
+			selected, err := e.longBoundary.selectNext(
+				e.boundaryAgenda,
+				selection,
+			)
+			if err != nil || selected == nil {
+				e.agentSteps.boundary = nil
+				return nil, errors.Join(err, grant.Release())
+			}
+			compaction, ok := selected.(*manualCompactionSelection)
+			if !ok {
+				panic(fmt.Sprintf(
+					"manual compaction selection has unexpected type %T",
+					selected,
+				))
+			}
+			if err := e.launchManualCompactionSelection(admission, compaction); err != nil {
+				return nil, nil
+			}
+			return nil, nil
 		default:
 			e.agentSteps.boundary = nil
 			return nil, errors.Join(

@@ -46,6 +46,8 @@ func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) error {
 			}
 		case *backgroundNoticeAgendaItem:
 			return e.startNextBackgroundLongWork(admission)
+		case *manualCompactionAgendaItem:
+			return e.startNextManualCompactionLongWork(admission)
 		case *humanBoundaryAgendaItem:
 			return e.startRuntimeBoundHumanExecution(admission)
 		default:

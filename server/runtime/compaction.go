@@ -162,8 +162,6 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 		compactionInstructionsInput{},
 		false,
 		nil,
-		nil,
-		false,
 	)
 	return workflowruntime.PostCompletionCompactionResult{
 		CommitReceipt: receipt,
@@ -173,24 +171,42 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
 	if requireEligibility {
-		if snapshot := c.steps.Snapshot(); snapshot != nil &&
-			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
-			return session.CommitReceipt{}, ErrManualCompactionActive
+		resolver, err := submitRuntimeEvent(
+			c.engine,
+			struct {
+				instructions compactionInstructionsInput
+				onActive     func()
+			}{instructions: instructions, onActive: onActive},
+			func(
+				admission runtimeEventAdmission,
+				request struct {
+					instructions compactionInstructionsInput
+					onActive     func()
+				},
+			) (*manualCompactionResolver, error) {
+				return c.engine.admitManualCompaction(
+					admission,
+					request.instructions,
+					request.onActive,
+				)
+			},
+		)
+		if err != nil {
+			return session.CommitReceipt{}, err
 		}
+		return resolver.wait(ctx)
 	}
-	reservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationManualCompaction,
-		queueable: true,
-	}
-	if err := c.steps.AcquireReservation(reservation); err != nil {
-		return session.CommitReceipt{}, err
-	}
-	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, requireEligibility)
+	return c.compactContext(
+		ctx,
+		compactionModeManual,
+		instructions,
+		true,
+		onActive,
+	)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, false)
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, onActive)
 }
 
 func isAgentStepCapable(kind ActiveKind) bool {
@@ -228,23 +244,14 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, onActive func()) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includePreservedUserMessage {
 		activeKind = ActiveKindCompaction
 	}
 	var receipt session.CommitReceipt
-	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
-		if requireEligibility {
-			planningSnapshot := e.compactionPlanningSnapshot()
-			if e.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
-				return errCompactionDisabledModeNone
-			}
-			if !e.compactionRuntimeState().ManualCompactionEligible() {
-				return ErrManualCompactionTooSoon
-			}
-		}
+	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}
@@ -683,135 +690,43 @@ func (e *Engine) currentTokenUsage() int {
 }
 
 func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
-	planningSnapshot := e.compactionPlanningSnapshot()
-	planner := e.compactionPlannerState()
-	if planner.mode(planningSnapshot.compactionMode) == "none" {
-		if mode == compactionModeAuto {
-			return compactionResult{}, session.CommitReceipt{}, nil
-		}
-		return compactionResult{}, session.CommitReceipt{}, errCompactionDisabledModeNone
+	prepared, workErr := e.prepareCompactionWork(
+		ctx,
+		stepID,
+		mode,
+		instructionsInput,
+		includePreservedUserMessage,
+	)
+	type applyResult struct {
+		receipt session.CommitReceipt
+		err     error
 	}
-
-	input := e.transcriptRuntimeState().SnapshotItems()
-	if len(input) == 0 {
-		return compactionResult{}, session.CommitReceipt{}, nil
-	}
-
-	_ = e.resolveContextWindowTokens(ctx)
-
-	caps, err := e.providerCapabilities(ctx)
-	if err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
-	}
-	providerID := strings.TrimSpace(caps.ProviderID)
-	if providerID == "" {
-		providerID = "unknown"
-	}
-
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
-	}
-
-	instructions := compactionInstructionsForMode(mode, instructionsInput)
-	preservedUserMessageText := ""
-	if mode == compactionModeManual && includePreservedUserMessage {
-		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
-	}
-	var result compactionResult
-	enginePlan := planner.enginePlan(planningSnapshot, caps)
-	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions)
-		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
-		}
-	} else {
-		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
-	}
-	if err != nil {
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
-	}
-
-	if len(result.items) == 0 {
-		err := errors.New("compaction returned empty replacement history")
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
-	}
-
-	compactionNumber := e.compactionRuntimeState().Count() + 1
-	postReplacementMeta, err := e.compactionReinjectedMetaMessagesForMode(ctx, mode)
-	if err != nil {
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
-	}
-	// Reinject canonical generation context as part of the single
-	// history_replaced commit. The rebuilt active list is born with all runtime
-	// context atomically, and the summary precedes it in both provider and
-	// transcript order.
-	replacementItems := append(llm.CloneResponseItems(result.items), llm.ItemsFromMessages(postReplacementMeta)...)
-	if mode == compactionModeManual {
-		if preservedMessage, ok := compactionPreservedUserMessage(preservedUserMessageText); ok {
-			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
-		}
-	}
-	replacementReceipt, replacementErr := newCompactionPersistence(e).replaceHistory(stepID, result.engine, mode, replacementItems)
-	if !replacementReceipt.Committed {
-		if replacementErr == nil {
-			replacementErr = errors.New("history replacement returned an uncommitted receipt without an error")
-		}
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, replacementErr.Error())
-		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
-	}
-	e.compactionRuntimeState().SetManualCompactionEligible(false)
-	finalizationErr := replacementErr
-	if result.overflowRepair.Collapsed() {
-		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
-			"Context compaction succeeded after collapsing tool payloads: %d shell outputs, %d patch inputs, ~%d tokens omitted. Full original tool payloads remain in pre-compaction transcript history but are omitted from the compacted model context.",
-			result.overflowRepair.ShellOutputsCollapsed,
-			result.overflowRepair.PatchInputsCollapsed,
-			result.overflowRepair.EstimatedSavedTokens,
-		)})); err != nil {
-			finalizationErr = errors.Join(finalizationErr, err)
-		}
-	}
-	if mode == compactionModeHandoff {
-		if err := newCompactionPreservedContextCoordinator(e).appendHandoffFutureMessage(stepID); err != nil {
-			finalizationErr = errors.Join(finalizationErr, err)
-		}
-	}
-	compactionNumber = e.compactionRuntimeState().Count()
-	windowTokens := result.usage.WindowTokens
-	if windowTokens <= 0 {
-		windowTokens = e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
-	}
-	inputTokens := estimateItemsTokens(e.transcriptRuntimeState().SnapshotItems())
-	if preciseInput, ok := e.currentInputTokensPreciselyWithoutPromptRefresh(ctx); ok {
-		inputTokens = preciseInput
-	}
-	compactedUsage := llm.Usage{
-		InputTokens:  inputTokens,
-		OutputTokens: 0,
-		WindowTokens: windowTokens,
-	}
-	usageReceipt, usageErr := e.recordLastUsage(compactedUsage)
-	if !usageReceipt.Committed {
-		e.setLastUsage(compactedUsage)
-	}
-	if usageErr != nil {
-		finalizationErr = errors.Join(finalizationErr, usageErr)
-	}
-	staleResult, staleErr := e.store.MarkLockedPromptFacingSnapshotsStale()
-	if staleResult.Committed && staleResult.Locked != nil {
-		e.lockedContractState().Set(*staleResult.Locked)
-	}
-	if staleErr != nil {
-		finalizationErr = errors.Join(finalizationErr, staleErr)
-	}
-
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionCompleted, mode, result.engine, providerID, result.trimmedItemsCount, compactionNumber, ""); err != nil {
-		finalizationErr = errors.Join(finalizationErr, err)
-	}
-	return result, replacementReceipt, finalizationErr
+	applied, submitErr := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		ctx,
+		e,
+		struct {
+			prepared preparedCompactionWork
+			err      error
+		}{prepared: prepared, err: workErr},
+		func(
+			admission runtimeEventAdmission,
+			result struct {
+				prepared preparedCompactionWork
+				err      error
+			},
+		) (applyResult, error) {
+			receipt, err := e.applyPreparedCompactionWork(
+				admission,
+				stepID,
+				mode,
+				result.prepared,
+				result.err,
+			)
+			return applyResult{receipt: receipt, err: err}, nil
+		},
+	)
+	return prepared.result, applied.receipt, errors.Join(workErr, applied.err, submitErr)
 }
 
 func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) string {

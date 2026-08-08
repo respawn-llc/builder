@@ -15,7 +15,7 @@ func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	return runExclusiveStepWhenIdle(ctx, e.stepLifecycle, activeKind, nil, func(context.Context, string) error {
+	return runExclusiveStepWhenIdle(ctx, e.stepLifecycle, activeKind, func(context.Context, string) error {
 		return fn()
 	})
 }
@@ -24,7 +24,6 @@ func runExclusiveStepWhenIdle(
 	ctx context.Context,
 	steps exclusiveStepLifecycle,
 	activeKind ActiveKind,
-	reservation *exclusiveStepReservation,
 	fn func(context.Context, string) error,
 ) error {
 	if steps == nil {
@@ -33,7 +32,7 @@ func runExclusiveStepWhenIdle(
 	if fn == nil {
 		return nil
 	}
-	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind, Reservation: reservation}, fn)
+	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind}, fn)
 }
 
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {

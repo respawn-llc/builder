@@ -39,7 +39,6 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		if persistErr := e.steer(stepID, steerReviewerErrorIntent(err.Error())); persistErr != nil {
 			return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer error: %w", persistErr)
 		}
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{
 			Outcome: "failed",
 			Error:   strings.TrimSpace(err.Error()),
@@ -48,12 +47,8 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	}
 	suggestions := reviewerResult.Suggestions
 	if len(suggestions) == 0 {
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
-	}
-	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-		return reviewerFollowUpResult{}, err
 	}
 	if _, err := e.completeAgentProviderBoundary(ctx, true); err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("reduce Reviewer follow-up Step Boundary: %w", err)

@@ -91,6 +91,19 @@ func TestBoundaryLongSelectionLifecycleContract(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "compaction",
+			newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
+				return &manualCompactionLongContractItem{
+					manualCompactionAgendaItem: &manualCompactionAgendaItem{
+						id:          id,
+						binding:     runtimeBoundaryBinding(),
+						eligibility: boundaryEligibilityIdle,
+						resolver:    newManualCompactionResolver(),
+					},
+				}
+			},
+		},
 	} {
 		t.Run(adapter.name, func(t *testing.T) {
 			runBoundaryLongSelectionLifecycleContract(t, adapter)
@@ -323,4 +336,21 @@ func (i *testLongBoundaryAgendaItem) contractSettlementCount() int {
 
 func (i *testLongBoundaryAgendaItem) contractSettlementError() error {
 	return i.settlement
+}
+
+type manualCompactionLongContractItem struct {
+	*manualCompactionAgendaItem
+}
+
+func (i *manualCompactionLongContractItem) contractSettlementCount() int {
+	select {
+	case <-i.resolver.done:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (i *manualCompactionLongContractItem) contractSettlementError() error {
+	return i.resolver.err
 }
