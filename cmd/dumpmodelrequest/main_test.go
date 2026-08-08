@@ -34,6 +34,12 @@ func TestCaptureSessionRequestRejectsLegacyHistoryWithoutMutatingSource(t *testi
 	assertSourceSessionUntouched(t, fixture)
 }
 
+func TestOfflineWorkflowRequestRequiresLiveAuthority(t *testing.T) {
+	if err := offlineWorkflowRequestError("workflow-session"); !errors.Is(err, errWorkflowRequestRequiresLiveAuthority) {
+		t.Fatalf("offline workflow request error = %v, want live-authority requirement", err)
+	}
+}
+
 type captureSessionFixture struct {
 	persistenceRoot string
 	sessionID       string

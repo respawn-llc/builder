@@ -28,22 +28,21 @@ import (
 )
 
 type currentNodeViewFixture struct {
-	ctx               context.Context
-	metadata          *metadata.Store
-	store             *workflowstore.Store
-	binding           metadata.Binding
-	cfg               config.App
-	workflowID        runtimeids.WorkflowID
-	agentNodeID       workflow.NodeID
-	authority         *sessionruntime.Authority
-	dependencyCounter *TaskDependencyCounter
-	quiescence        *currentNodeViewQuiescence
-	projection        *TaskStatusProjection
-	board             *Board
-	detail            *TaskDetail
-	tasks             *TaskList
-	search            *TaskSearch
-	activity          *Activity
+	ctx         context.Context
+	metadata    *metadata.Store
+	store       *workflowstore.Store
+	binding     metadata.Binding
+	cfg         config.App
+	workflowID  runtimeids.WorkflowID
+	agentNodeID workflow.NodeID
+	authority   *sessionruntime.Authority
+	quiescence  *currentNodeViewQuiescence
+	projection  *TaskStatusProjection
+	board       *Board
+	detail      *TaskDetail
+	tasks       *TaskList
+	search      *TaskSearch
+	activity    *Activity
 }
 
 type currentNodeViewStatusObservationSource struct {
@@ -369,10 +368,6 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
-	dependencyCounter, err := NewTaskDependencyCounter(metadataStore)
-	if err != nil {
-		t.Fatalf("NewTaskDependencyCounter: %v", err)
-	}
 	dependencies, err := NewTaskDependencies(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
@@ -398,22 +393,21 @@ func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeV
 		t.Fatalf("NewActivity: %v", err)
 	}
 	return currentNodeViewFixture{
-		ctx:               t.Context(),
-		metadata:          metadataStore,
-		store:             store,
-		binding:           binding,
-		cfg:               cfg,
-		workflowID:        workflowID,
-		agentNodeID:       agentNodeID,
-		authority:         authority,
-		dependencyCounter: dependencyCounter,
-		quiescence:        quiescence,
-		projection:        projection,
-		board:             board,
-		detail:            detail,
-		tasks:             tasks,
-		search:            search,
-		activity:          activity,
+		ctx:         t.Context(),
+		metadata:    metadataStore,
+		store:       store,
+		binding:     binding,
+		cfg:         cfg,
+		workflowID:  workflowID,
+		agentNodeID: agentNodeID,
+		authority:   authority,
+		quiescence:  quiescence,
+		projection:  projection,
+		board:       board,
+		detail:      detail,
+		tasks:       tasks,
+		search:      search,
+		activity:    activity,
 	}
 }
 

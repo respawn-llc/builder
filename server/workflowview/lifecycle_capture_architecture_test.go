@@ -17,7 +17,7 @@ func TestLifecycleSensitiveReadModelsUseSharedCaptureBoundary(t *testing.T) {
 		"task_list.go":         1,
 		"task_search.go":       1,
 		"board.go":             2,
-		"task_dependencies.go": 2,
+		"task_dependencies.go": 1,
 	}
 	for fileName, minimumCaptures := range requiredCaptures {
 		fileName, minimumCaptures := fileName, minimumCaptures
@@ -51,6 +51,9 @@ func TestLifecycleSensitiveReadModelsUseSharedCaptureBoundary(t *testing.T) {
 					captures,
 					minimumCaptures,
 				)
+			}
+			if fileName == "task_dependencies.go" && captures != 1 {
+				t.Fatalf("%s has %d shared lifecycle captures, want exactly one dependency authority", fileName, captures)
 			}
 		})
 	}

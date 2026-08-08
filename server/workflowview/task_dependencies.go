@@ -20,11 +20,6 @@ type TaskDependencies struct {
 	policy     workflow.TaskDependencyPolicy
 }
 
-type taskDependencySatisfaction struct {
-	queries   *sqlitegen.Queries
-	projector *TaskProjector
-}
-
 type taskDependencyFactRow struct {
 	direction string
 	taskID    string
@@ -68,11 +63,19 @@ func (d *TaskDependencies) GetTaskDependencies(ctx context.Context, taskID strin
 	if trimmedTaskID == "" {
 		return serverapi.WorkflowTaskDependencies{}, errors.New("task id is required")
 	}
-	facts, err := d.loadFacts(ctx, trimmedTaskID, false)
+	var projected serverapi.WorkflowTaskDependencies
+	err := d.captureFacts(ctx, trimmedTaskID, false, func(
+		facts taskDependencyFacts,
+		_ *TaskStatusDurableSnapshot,
+	) error {
+		var err error
+		projected, err = d.projectFacts(facts)
+		return err
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskDependencies{}, err
 	}
-	return d.projectFacts(facts)
+	return projected, nil
 }
 
 func (d *TaskDependencies) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
@@ -83,15 +86,16 @@ func (d *TaskDependencies) CountUnsatisfiedBlockers(ctx context.Context, taskID 
 	if trimmedTaskID == "" {
 		return 0, errors.New("task id is required")
 	}
-	facts, err := d.loadFacts(ctx, trimmedTaskID, true)
+	count := 0
+	err := d.captureFacts(ctx, trimmedTaskID, true, func(
+		facts taskDependencyFacts,
+		_ *TaskStatusDurableSnapshot,
+	) error {
+		count = countUnsatisfiedDependencyBlockers(facts)
+		return nil
+	})
 	if err != nil {
 		return 0, err
-	}
-	count := 0
-	for _, blocker := range facts.rows[serverapi.WorkflowTaskDependencyDirectionBlockedBy] {
-		if !blocker.done {
-			count++
-		}
 	}
 	return count, nil
 }
@@ -144,12 +148,7 @@ func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID stri
 			Items:      items,
 		}
 		if direction == serverapi.WorkflowTaskDependencyDirectionBlockedBy {
-			unsatisfied := 0
-			for _, row := range rows {
-				if !row.done {
-					unsatisfied++
-				}
-			}
+			unsatisfied := countUnsatisfiedDependencyBlockers(facts)
 			projection.UnsatisfiedCount = &unsatisfied
 		}
 		directions = append(directions, projection)
@@ -159,22 +158,6 @@ func (d *TaskDependencies) ListTaskDependencies(ctx context.Context, taskID stri
 		ShortID:    subject.ShortID,
 		Directions: directions,
 	}, nil
-}
-
-func (d *TaskDependencies) loadFacts(ctx context.Context, taskID string, blockedOnly bool) (taskDependencyFacts, error) {
-	if d.projection == nil {
-		return taskDependencyFacts{}, errors.New("task status projection is required")
-	}
-	var facts taskDependencyFacts
-	err := d.projection.WithSnapshot(ctx, nil, func(
-		observation TaskStatusObservation,
-		durable *TaskStatusDurableSnapshot,
-	) error {
-		var err error
-		facts, err = d.loadFactsWithSnapshot(ctx, taskID, blockedOnly, observation, durable)
-		return err
-	})
-	return facts, err
 }
 
 func (d *TaskDependencies) captureFacts(
@@ -410,34 +393,6 @@ func listDependencyBlockerRows(
 	return out, nil
 }
 
-func (s taskDependencySatisfaction) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
-	if s.queries == nil || s.projector == nil {
-		return 0, errors.New("task dependency satisfaction is required")
-	}
-	rows, err := listDependencyBlockerRows(ctx, s.queries, taskID)
-	if err != nil {
-		return 0, err
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	taskIDs := make([]string, 0, len(rows))
-	for _, row := range rows {
-		taskIDs = append(taskIDs, row.TaskID)
-	}
-	statuses, err := loadWorkflowTaskStatusFacts(ctx, s.queries, s.projector, taskIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, relatedTaskID := range taskIDs {
-		if !statuses[relatedTaskID].Done {
-			count++
-		}
-	}
-	return count, nil
-}
-
 func (d *TaskDependencies) projectFacts(facts taskDependencyFacts) (serverapi.WorkflowTaskDependencies, error) {
 	blockedBy := facts.rows[serverapi.WorkflowTaskDependencyDirectionBlockedBy]
 	blocks := facts.rows[serverapi.WorkflowTaskDependencyDirectionBlocks]
@@ -449,12 +404,7 @@ func (d *TaskDependencies) projectFacts(facts taskDependencyFacts) (serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowTaskDependencies{}, err
 	}
-	unsatisfied := 0
-	for _, row := range blockedBy {
-		if !row.done {
-			unsatisfied++
-		}
-	}
+	unsatisfied := countUnsatisfiedDependencyBlockers(facts)
 	unsatisfiedCount := unsatisfied
 	return serverapi.WorkflowTaskDependencies{
 		BlockerCount:             len(blockedBy),
@@ -476,6 +426,16 @@ func (d *TaskDependencies) projectFacts(facts taskDependencyFacts) (serverapi.Wo
 			},
 		},
 	}, nil
+}
+
+func countUnsatisfiedDependencyBlockers(facts taskDependencyFacts) int {
+	count := 0
+	for _, blocker := range facts.rows[serverapi.WorkflowTaskDependencyDirectionBlockedBy] {
+		if !blocker.done {
+			count++
+		}
+	}
+	return count
 }
 
 func projectDependencyItems(rows []taskDependencyFactRow, includeSatisfaction bool) []serverapi.WorkflowTaskDependencyItem {

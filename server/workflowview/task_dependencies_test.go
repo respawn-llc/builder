@@ -192,7 +192,7 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	}
 }
 
-func TestListTaskDependenciesObservesOnlyRelatedTasks(t *testing.T) {
+func TestTaskDependencyReadsObserveOnlyRelatedTasks(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	subject := createViewTask(t, fixture, "Dependency subject")
 	related := createViewTask(t, fixture, "Dependency related")
@@ -239,19 +239,25 @@ func TestListTaskDependenciesObservesOnlyRelatedTasks(t *testing.T) {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
 
+	if _, err := dependencies.GetTaskDependencies(fixture.ctx, string(subject.ID)); err != nil {
+		t.Fatalf("GetTaskDependencies: %v", err)
+	}
+	if _, err := dependencies.CountUnsatisfiedBlockers(fixture.ctx, string(subject.ID)); err != nil {
+		t.Fatalf("CountUnsatisfiedBlockers: %v", err)
+	}
 	if _, err := dependencies.ListTaskDependencies(fixture.ctx, string(subject.ID), nil); err != nil {
 		t.Fatalf("ListTaskDependencies: %v", err)
 	}
 	if len(capturedTaskIDs) != 0 {
-		t.Fatalf("dependency list used unbounded lifecycle captures: %+v", capturedTaskIDs)
+		t.Fatalf("dependency reads used unbounded lifecycle captures: %+v", capturedTaskIDs)
 	}
-	if len(boundedSelectedTaskIDs) != 1 ||
-		!slices.Equal(boundedSelectedTaskIDs[0], []workflow.TaskID{related.ID}) {
-		t.Fatalf(
-			"bounded dependency lifecycle selections = %+v, want only %q",
-			boundedSelectedTaskIDs,
-			related.ID,
-		)
+	if len(boundedSelectedTaskIDs) != 3 {
+		t.Fatalf("bounded dependency lifecycle selections = %+v, want three reads", boundedSelectedTaskIDs)
+	}
+	for _, selected := range boundedSelectedTaskIDs {
+		if !slices.Equal(selected, []workflow.TaskID{related.ID}) {
+			t.Fatalf("bounded dependency lifecycle selection = %+v, want only %q", selected, related.ID)
+		}
 	}
 }
 

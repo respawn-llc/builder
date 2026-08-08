@@ -66,6 +66,12 @@ type currentNodeRunnerClient interface {
 	Requests() []llm.Request
 }
 
+type currentNodeRunnerDependencyCounter func(context.Context, string) (int, error)
+
+func (c currentNodeRunnerDependencyCounter) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
+	return c(ctx, taskID)
+}
+
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
 	return llm.CompactionResponse{
 		OutputItems: []llm.ResponseItem{
@@ -243,14 +249,16 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
-	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
-	if err != nil {
-		t.Fatalf("new Task dependency counter: %v", err)
-	}
+	var sharedDependencies *workflowview.TaskDependencies
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
 		MutationPermit:   permit,
-		TaskDependencies: dependencyCounter,
+		TaskDependencies: currentNodeRunnerDependencyCounter(func(ctx context.Context, taskID string) (int, error) {
+			if sharedDependencies == nil {
+				return 0, errors.New("shared Task dependencies are not bound")
+			}
+			return sharedDependencies.CountUnsatisfiedBlockers(ctx, taskID)
+		}),
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(factoryCtx context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
@@ -297,6 +305,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	if err != nil {
 		t.Fatalf("new Task dependency projection: %v", err)
 	}
+	sharedDependencies = dependencies
 	fixture.dependencies = dependencies
 	return fixture
 }

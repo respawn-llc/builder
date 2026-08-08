@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"core/prompts"
 	"core/server/attentionnotify"
@@ -234,18 +235,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: activity: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
-	workflowTaskDependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
-	if err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
-	}
+	workflowTaskDependenciesCell := &workflowTaskDependencyCompositionCell{}
 	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
 		RuntimeClientFactory: opts.RuntimeClientFactory,
 		RuntimeAuthority:     runtimeAuthority,
 		MutationPermit:       workflowMutationPermit,
-		TaskDependencies:     workflowTaskDependencyCounter,
+		TaskDependencies:     workflowTaskDependenciesCell,
 	})
 	if err != nil {
 		cleanupNewFailure()
@@ -267,10 +264,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
 	runtimeControlService.WithWorkflowSessionInterruptor(workflowController)
-	if _, err := workflowController.Recover(context.Background()); err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
-	}
 	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
 		RuntimeClientFactory:       opts.RuntimeClientFactory,
 		RetainedWorkflowActivation: workflowController,
@@ -327,6 +320,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
+	}
+	if err := workflowTaskDependenciesCell.bindTaskDependencies(workflowTaskDependencies); err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: bind task dependencies: %w", err)
+	}
+	if _, err := workflowController.Recover(context.Background()); err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
 	}
 	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskStatusProjection)
 	if err != nil {
@@ -410,6 +411,40 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}
 	}
 	return core, nil
+}
+
+type workflowTaskDependencyCompositionCell struct {
+	mu           sync.RWMutex
+	dependencies workflowrunner.TaskDependencyCounter
+}
+
+func (c *workflowTaskDependencyCompositionCell) bindTaskDependencies(dependencies workflowrunner.TaskDependencyCounter) error {
+	if c == nil {
+		return errors.New("workflow Task dependency composition cell is required")
+	}
+	if dependencies == nil {
+		return errors.New("shared lifecycle-aware Task dependency authority is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dependencies != nil {
+		return errors.New("workflow Task dependency composition bind repeated after shared lifecycle authority was already bound")
+	}
+	c.dependencies = dependencies
+	return nil
+}
+
+func (c *workflowTaskDependencyCompositionCell) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
+	if c == nil {
+		return 0, errors.New("workflow Task dependency composition cell is required")
+	}
+	c.mu.RLock()
+	dependencies := c.dependencies
+	c.mu.RUnlock()
+	if dependencies == nil {
+		return 0, fmt.Errorf("count unsatisfied blockers for Task %q before shared lifecycle-aware dependency authority binding", taskID)
+	}
+	return dependencies.CountUnsatisfiedBlockers(ctx, taskID)
 }
 
 type taskExecutionTargetInfrastructure struct {

@@ -2,11 +2,12 @@
 // payload for a Kent session without executing a model turn or performing any
 // network I/O.
 //
-// Given a session ID (and an optional persistence root), it resolves the session
-// via the SQLite metadata index, reconstructs the production request-assembly path
-// (session store -> runtime.Engine -> llm.Request -> OpenAI transport payload),
-// and writes a diagnostic OpenAI-compatible JSON payload plus the
-// provider-agnostic llm.Request to a file.
+// Given a non-workflow session ID (and an optional persistence root), it resolves
+// the session via the SQLite metadata index, reconstructs the production
+// request-assembly path (session store -> runtime.Engine -> llm.Request -> OpenAI
+// transport payload), and writes a diagnostic OpenAI-compatible JSON payload
+// plus the provider-agnostic llm.Request to a file. Workflow-bound sessions
+// require the live server lifecycle authority and are rejected offline.
 //
 // Payload parameters come from the production HTTPTransport.buildPayload path.
 // The diagnostic JSON is semantically equivalent but may differ byte-for-byte
@@ -39,12 +40,11 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	"core/server/workflowrunner"
 	"core/server/workflowruntime"
-	"core/server/workflowstore"
-	"core/server/workflowview"
 	"core/shared/config"
 )
+
+var errWorkflowRequestRequiresLiveAuthority = errors.New("workflow request capture requires the live Kent server lifecycle authority")
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -152,18 +152,7 @@ func captureSessionRequest(
 		return capturedRequest{}, fmt.Errorf("resolve workflow session ownership: %w", err)
 	}
 	if workflowOwned {
-		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
-		if workflowErr != nil && !errors.Is(workflowErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
-			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)
-		}
-		if workflowErr == nil {
-			resolved = workflowInspection.Plan
-			workflowPrompt = workflowInspection.Prompt
-			workingDirectory = workflowInspection.ExecutionRoot
-			activeSettings = resolved.ActiveSettings
-			activeToolIDs = resolved.EnabledTools
-			activeSources = resolved.Source.Sources
-		}
+		return capturedRequest{}, offlineWorkflowRequestError(sessionID)
 	}
 	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
@@ -289,6 +278,10 @@ func captureSessionRequest(
 	}, nil
 }
 
+func offlineWorkflowRequestError(sessionID string) error {
+	return fmt.Errorf("%w for Session %q; offline workflow request reconstruction is unsupported", errWorkflowRequestRequiresLiveAuthority, sessionID)
+}
+
 func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (config.App, error) {
 	options := config.LoadOptions{
 		ConfigRoot:    persistenceRoot,
@@ -298,22 +291,6 @@ func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (
 		return config.LoadGlobal(options)
 	}
 	return config.Load(bootstrap.WorkspaceRoot, options)
-}
-
-func resolvePersistedWorkflowInspection(ctx context.Context, app config.App, metadataStore *metadata.Store, store *session.Store) (workflowrunner.PersistedWorkflowInspection, error) {
-	workflowStore, err := workflowstore.New(metadataStore)
-	if err != nil {
-		return workflowrunner.PersistedWorkflowInspection{}, err
-	}
-	dependencies, err := workflowview.NewTaskDependencyCounter(metadataStore)
-	if err != nil {
-		return workflowrunner.PersistedWorkflowInspection{}, err
-	}
-	awareness, err := workflowrunner.NewTaskAwarenessSource(workflowStore, dependencies)
-	if err != nil {
-		return workflowrunner.PersistedWorkflowInspection{}, err
-	}
-	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore, awareness)
 }
 
 func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {
