@@ -1061,6 +1061,7 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if interrupted.SessionID == nil {
 		t.Fatal("disabled CAC target lost its assigned Session")
 	}
+	f.waitForControllerCurrentNodeFinalized(t, interrupted.Reference)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("resume disabled CAC target: %v", err)
