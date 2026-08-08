@@ -506,6 +506,58 @@ func TestCreateWorktreeSetupTimeoutKeepsWorktreeAndSessionTarget(t *testing.T) {
 	}
 }
 
+func TestRunSetupRecoveryRetriesTransientScriptPreparationFailure(t *testing.T) {
+	env := newServiceTestEnv(t)
+	worktreeRoot := t.TempDir()
+	markerPath := filepath.Join(t.TempDir(), "recovered")
+	scriptRelpath := filepath.Join("scripts", "appears-before-retry.sh")
+	scriptPath := filepath.Join(env.workspaceRoot, scriptRelpath)
+	resolveCalls := 0
+	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
+		resolveCalls++
+		if resolveCalls == 2 {
+			writeExecutableFile(t, scriptPath, fmt.Sprintf("#!/bin/sh\nprintf recovered > %q\n", markerPath))
+		}
+		return config.WorktreeSettings{SetupScript: scriptRelpath}, nil
+	}
+	observedAttempts := 0
+
+	recovery, err := env.service.runSetupRecovery(env.ctx, setupRecoveryRequest{
+		Attempt: setupExecutionRequest{
+			SourceWorkspaceRoot: env.workspaceRoot,
+			BranchName:          "feature/retry-script-preparation",
+			WorktreeRoot:        worktreeRoot,
+			ScriptPayload: setupScriptPayload{
+				ProjectID:   env.binding.ProjectID,
+				WorkspaceID: env.binding.WorkspaceID,
+				WorktreeID:  "worktree-retry-script-preparation",
+			},
+			CreatedBranch: true,
+		},
+		Observer: setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {
+			observedAttempts++
+		}),
+	})
+	if err != nil {
+		t.Fatalf("runSetupRecovery: %v", err)
+	}
+	if recovery.Err != nil {
+		t.Fatalf("setup recovery error = %v, want recovered preparation", recovery.Err)
+	}
+	if recovery.Result.Completed == nil {
+		t.Fatalf("setup recovery result = %+v, want completed", recovery.Result)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("setup settings resolutions = %d, want 2", resolveCalls)
+	}
+	if observedAttempts != 1 {
+		t.Fatalf("executed setup attempts = %d, want 1", observedAttempts)
+	}
+	if got := waitForFileText(t, markerPath); got != "recovered" {
+		t.Fatalf("recovery marker = %q, want recovered", got)
+	}
+}
+
 func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")

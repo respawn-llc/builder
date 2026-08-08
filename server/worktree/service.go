@@ -1949,15 +1949,10 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 	if req.Observer == nil {
 		return setupRecoveryResult{}, errors.New("setup attempt observer is required")
 	}
-	attempt, err := s.prepareSetupAttempt(req.Attempt)
+	attempt, retryConsumed, err := s.prepareSetupAttemptForRecovery(req.Attempt, true)
 	if err != nil {
-		if _, identified := setupScriptPathFromError(err); identified {
-			return setupRecoveryResult{
-				Result: WorktreeSetupResult{
-					Failed: setupFailureFromError(err, req.Attempt.RetainedWorktree),
-				},
-				Err: err,
-			}, nil
+		if result, identified := setupPreparationFailureResult(err, req.Attempt.RetainedWorktree); identified {
+			return result, nil
 		}
 		return setupRecoveryResult{}, err
 	}
@@ -1971,8 +1966,18 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 		}, nil
 	}
 	if req.RecreateBeforeFirstAttempt {
-		attempt, err = s.recreateSetupAttemptIfClean(ctx, attempt, req.Recreate)
+		var preparationRetried bool
+		attempt, preparationRetried, err = s.recreateSetupAttemptIfClean(
+			ctx,
+			attempt,
+			req.Recreate,
+			!retryConsumed,
+		)
+		retryConsumed = retryConsumed || preparationRetried
 		if err != nil {
+			if result, identified := setupPreparationFailureResult(err, req.Attempt.RetainedWorktree); identified {
+				return result, nil
+			}
 			return setupRecoveryResult{}, err
 		}
 	}
@@ -1988,8 +1993,17 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 			Err:    firstErr,
 		}, nil
 	}
-	attempt, err = s.recreateSetupAttemptIfClean(ctx, attempt, req.Recreate)
+	if retryConsumed {
+		return setupRecoveryResult{
+			Result: WorktreeSetupResult{Failed: setupFailureFromError(firstErr, attempt.retained)},
+			Err:    firstErr,
+		}, nil
+	}
+	attempt, _, err = s.recreateSetupAttemptIfClean(ctx, attempt, req.Recreate, false)
 	if err != nil {
+		if result, identified := setupPreparationFailureResult(err, attempt.retained); identified {
+			return result, nil
+		}
 		return setupRecoveryResult{}, err
 	}
 	finalErr := s.executeSetupAttempt(ctx, *attempt, req.Observer)
@@ -2004,16 +2018,45 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 	}, nil
 }
 
+func (s *Service) prepareSetupAttemptForRecovery(
+	req setupExecutionRequest,
+	retryAvailable bool,
+) (*preparedSetupAttempt, bool, error) {
+	attempt, err := s.prepareSetupAttempt(req)
+	if err == nil || !retryAvailable {
+		return attempt, false, err
+	}
+	if _, identified := setupScriptPathFromError(err); !identified {
+		return nil, false, err
+	}
+	attempt, err = s.prepareSetupAttempt(req)
+	return attempt, true, err
+}
+
+func setupPreparationFailureResult(
+	err error,
+	retained *serverapi.WorktreeTopologyEntry,
+) (setupRecoveryResult, bool) {
+	if _, identified := setupScriptPathFromError(err); !identified {
+		return setupRecoveryResult{}, false
+	}
+	return setupRecoveryResult{
+		Result: WorktreeSetupResult{Failed: setupFailureFromError(err, retained)},
+		Err:    err,
+	}, true
+}
+
 func (s *Service) recreateSetupAttemptIfClean(
 	ctx context.Context,
 	attempt *preparedSetupAttempt,
 	recreate func(context.Context) (setupExecutionRequest, error),
-) (*preparedSetupAttempt, error) {
+	preparationRetryAvailable bool,
+) (*preparedSetupAttempt, bool, error) {
 	if recreate == nil {
-		return attempt, nil
+		return attempt, false, nil
 	}
 	if attempt.recreation == nil {
-		return nil, errors.New("setup recreation requires recorded checkout topology")
+		return nil, false, errors.New("setup recreation requires recorded checkout topology")
 	}
 	_, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(
 		ctx,
@@ -2023,16 +2066,16 @@ func (s *Service) recreateSetupAttemptIfClean(
 		attempt.recreation.RecordedCheckout,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !safelyRecreatable {
-		return attempt, nil
+		return attempt, false, nil
 	}
 	recreated, err := recreate(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return s.prepareSetupAttempt(recreated)
+	return s.prepareSetupAttemptForRecovery(recreated, preparationRetryAvailable)
 }
 
 func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetupAttempt, error) {
