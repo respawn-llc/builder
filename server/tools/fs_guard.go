@@ -286,6 +286,12 @@ func (g FSGuard) isWithinTrustedRoot(real string) (bool, error) {
 	return false, nil
 }
 
+// FilesystemRootContains reports whether real is inside root using the same
+// identity-aware containment rules as native file-access authorization.
+func FilesystemRootContains(root FilesystemRoot, real string) (bool, error) {
+	return isWithinFSGuardRoot(root, real)
+}
+
 func isWithinFSGuardRoot(root FilesystemRoot, real string) (bool, error) {
 	if root.RealPath == "" {
 		return false, nil

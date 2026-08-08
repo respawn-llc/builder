@@ -368,7 +368,11 @@ func validatedFilesystemRoots(workdir, targetRoot string) (tools.FilesystemRoot,
 	if err != nil {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("resolve execution target root: %w", err)
 	}
-	if !filesystemRootContains(target, working.RealPath) {
+	inside, err := tools.FilesystemRootContains(target, working.RealPath)
+	if err != nil {
+		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("validate working directory containment: %w", err)
+	}
+	if !inside {
 		return tools.FilesystemRoot{}, tools.FilesystemRoot{}, fmt.Errorf("working directory %q is outside execution target root %q", workdir, targetRoot)
 	}
 	return working, target, nil
@@ -402,7 +406,11 @@ func validateFilesystemContext(context tools.FilesystemContext) error {
 	if context.Access.WorkingDirectory.Info == nil || context.Access.ExecutionTargetRoot.Info == nil {
 		return fmt.Errorf("%w: required filesystem root is unavailable", os.ErrNotExist)
 	}
-	if !filesystemRootContains(context.Access.ExecutionTargetRoot, context.Access.WorkingDirectory.RealPath) {
+	inside, err := tools.FilesystemRootContains(context.Access.ExecutionTargetRoot, context.Access.WorkingDirectory.RealPath)
+	if err != nil {
+		return err
+	}
+	if !inside {
 		return errors.New("working directory is outside execution target root")
 	}
 	for _, workspace := range context.Access.ProjectWorkspace.Roots {
@@ -423,14 +431,6 @@ func secondaryRootForPath(workspace metadata.ProjectWorkspace) (tools.Filesystem
 		return tools.FilesystemRoot{}, err
 	}
 	return resolved, nil
-}
-
-func filesystemRootContains(root tools.FilesystemRoot, candidate string) bool {
-	relative, err := filepath.Rel(root.RealPath, candidate)
-	if err != nil {
-		return false
-	}
-	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func trustedRootForPath(root string) (tools.FilesystemRoot, error) {

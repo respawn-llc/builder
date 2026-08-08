@@ -2199,14 +2199,16 @@ func (s *Store) ProjectWorkspaceAttached(ctx context.Context, projectID string, 
 	if s == nil || s.queries == nil {
 		return false, errors.New("metadata store is required")
 	}
-	projectID, root = strings.TrimSpace(projectID), strings.TrimSpace(root)
-	if projectID == "" || root == "" {
-		return false, errors.New("project id and workspace root are required")
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return false, errors.New("project id is required")
 	}
-	_, err := s.queries.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{
-		ProjectID: projectID, CanonicalRootPath: root,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
+	selector, err := serverapi.NewProjectWorkspaceSelectorForRoot(root)
+	if err != nil {
+		return false, err
+	}
+	_, err = s.ResolveProjectWorkspaceSelector(ctx, projectID, selector)
+	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		return false, nil
 	}
 	return err == nil, err
