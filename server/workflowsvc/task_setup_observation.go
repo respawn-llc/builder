@@ -94,6 +94,11 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 	case workflowexecution.TaskPreparationFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
 		event.Failed = preparationFailurePayload(result, retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
+		executionTarget, err := taskSetupRecoveryExecutionTarget(preparationErr)
+		if err != nil {
+			panic(fmt.Sprintf("project Workflow Task setup recovery execution target: %v", err))
+		}
+		event.Failed.ExecutionTarget = &executionTarget
 	case workflowexecution.TaskPreparationInterruptionFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
 		event.Failed = nonRetryablePreparationFailure(
@@ -170,6 +175,25 @@ func preparationDiagnostic(err error) string {
 	return err.Error()
 }
 
+func taskSetupRecoveryExecutionTarget(err error) (serverapi.WorkflowExecutionTargetSelection, error) {
+	var typed *workflowexecution.TaskStartPreparationError
+	if !errors.As(err, &typed) {
+		return serverapi.WorkflowExecutionTargetSelection{}, errors.New("Task preparation failure is missing typed setup recovery")
+	}
+	recovery := typed.InterruptionDetail().SetupRecovery
+	if recovery == nil {
+		return serverapi.WorkflowExecutionTargetSelection{}, errors.New("Task preparation failure is missing setup recovery detail")
+	}
+	selection := serverapi.WorkflowExecutionTargetSelection{
+		Mode:      serverapi.WorkflowExecutionTargetMode(recovery.ExecutionTarget.Mode),
+		CustomRef: recovery.ExecutionTarget.CustomRef,
+	}
+	if err := selection.Validate(); err != nil {
+		return serverapi.WorkflowExecutionTargetSelection{}, err
+	}
+	return selection, nil
+}
+
 func taskPreparationError(
 	setupOperationID serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
@@ -218,6 +242,7 @@ func taskPreparationError(
 		SetupOperationID:         uuid.UUID(setupOperationID),
 		Cause:                    workflow.CurrentNodeSetupRecoveryCause(failed.Cause.Kind),
 		Diagnostic:               failed.Diagnostic,
+		ExecutionTarget:          preflight.selection,
 		RetainedWorktree:         retained,
 		RetainedPreviousWorktree: previous,
 	}

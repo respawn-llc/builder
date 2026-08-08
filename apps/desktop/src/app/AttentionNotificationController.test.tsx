@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { createBrowserNativeBridge, type NativeNotificationActivation } from "@app/native-bridge";
 
+import { parseSetupOperationID, type AttentionNotification } from "@/api";
 import { AppServicesProvider, SidebarContext, StatusContext, type SidebarDestination } from "@/app-facade";
 import { createTestServices } from "@/test-support/app-services";
 import { createTestSidebarController } from "@/test-support/sidebar";
@@ -13,6 +14,7 @@ import {
 } from "@/test-support/task-detail";
 import type { StatusNotice } from "@/ui";
 import { AttentionNotificationController } from "./AttentionNotificationController";
+import { attentionNotificationSurfaceKey, attentionToastID } from "./attentionNotificationSurfaces";
 
 it("surfaces one persistent canonical setup notification while no Task route is mounted", async () => {
   const baseBridge = createBrowserNativeBridge();
@@ -57,6 +59,7 @@ it("surfaces one persistent canonical setup notification while no Task route is 
     });
   });
   const pending = setupRecoveryNotification(setupOperationID);
+  const pendingToastID = setupRecoveryToastID(setupOperationID);
 
   act(() => {
     services.transport.emit("attention.notification", {
@@ -64,9 +67,9 @@ it("surfaces one persistent canonical setup notification while no Task route is 
     });
   });
   await waitFor(() => {
-    expect(attentionNotices(notices)).toHaveLength(1);
+    expect(attentionNotices(notices, [pendingToastID])).toHaveLength(1);
   });
-  const notice = attentionNotices(notices)[0];
+  const notice = attentionNotices(notices, [pendingToastID])[0];
   expect(notice?.durationMs).toBe(Infinity);
 
   act(() => {
@@ -75,24 +78,26 @@ it("surfaces one persistent canonical setup notification while no Task route is 
     });
   });
   await waitFor(() => {
-    expect(attentionNotices(notices)).toHaveLength(1);
+    expect(attentionNotices(notices, [pendingToastID])).toHaveLength(1);
   });
 
   const nextSetupOperationID = "99999999-9999-4999-8999-999999999999";
+  const nextPending = setupRecoveryNotification(nextSetupOperationID);
+  const nextToastID = setupRecoveryToastID(nextSetupOperationID);
   act(() => {
     services.transport.emit("attention.notification", {
       event: {
         type: "pending",
         sequence: 3,
         source: "live",
-        pending: setupRecoveryNotification(nextSetupOperationID),
+        pending: nextPending,
       },
     });
   });
   await waitFor(() => {
-    expect(attentionNotices(notices)).toHaveLength(2);
+    expect(attentionNotices(notices, [pendingToastID, nextToastID])).toHaveLength(2);
   });
-  const nextNotice = attentionNotices(notices)[1];
+  const nextNotice = attentionNotices(notices, [nextToastID])[0];
 
   await act(async () => {
     nextNotice?.onClick?.();
@@ -187,107 +192,109 @@ it("maps native setup-notification activation to exact Task-detail focus", async
 it.each(["live", "snapshot"] as const)(
   "continues %s canonical setup attention through Task Detail without setup observation",
   async (source) => {
-  Element.prototype.scrollIntoView = vi.fn();
-  const baseBridge = createBrowserNativeBridge();
-  const services = createTestServices([], {
-    ...baseBridge,
-    window: {
-      ...baseBridge.window,
-      async isFocused() {
-        return true;
-      },
-    },
-  });
-  const notices: StatusNotice[] = [];
-  const destinations: SidebarDestination[] = [];
-  const setupOperationID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-  const view = render(
-    <AppServicesProvider services={services}>
-      <StatusContext.Provider
-        value={{
-          dismiss: vi.fn(),
-          push: vi.fn((notice: StatusNotice) => {
-            notices.push(notice);
-          }),
-        }}
-      >
-        <SidebarContext.Provider
-          value={createTestSidebarController((destination) => {
-            destinations.push(destination);
-          })}
-        >
-          <AttentionNotificationController />
-        </SidebarContext.Provider>
-      </StatusContext.Provider>
-    </AppServicesProvider>,
-  );
-  await waitFor(() => {
-    expect(services.transport.subscriptions).toContainEqual({
-      method: "attention.notification.subscribe",
-      params: {},
-    });
-  });
-
-  act(() => {
-    services.transport.emit("attention.notification", {
-      event: {
-        type: "pending",
-        sequence: 1,
-        source,
-        pending: setupRecoveryNotification(setupOperationID),
-      },
-    });
-  });
-  await waitFor(() => {
-    expect(attentionNotices(notices)).toHaveLength(1);
-  });
-  await act(async () => {
-    attentionNotices(notices)[0]?.onClick?.();
-  });
-  const destination = destinations[0];
-  if (destination?.kind !== "taskDetail") {
-    throw new Error("Expected live setup attention to navigate to Task Detail.");
-  }
-  view.unmount();
-
-  const taskServices = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
-    initialFocus: destination.initialFocus,
-    attention: setupRecoveryTaskAttention(setupOperationID),
-    routes: [
-      {
-        method: "workflow.task.resume",
-        result: {
-          outcome: "applied",
-          applied: {
-            current_nodes: [
-              {
-                node_id: "canonical-node",
-                transition_branch_key: "branch-2",
-                session_id: null,
-              },
-            ],
-          },
+    Element.prototype.scrollIntoView = vi.fn();
+    const baseBridge = createBrowserNativeBridge();
+    const services = createTestServices([], {
+      ...baseBridge,
+      window: {
+        ...baseBridge.window,
+        async isFocused() {
+          return true;
         },
       },
-    ],
-  });
-  const user = userEvent.setup();
-  const resumeButtons = await screen.findAllByTestId("task-detail-resume");
-  expect(resumeButtons).toHaveLength(1);
-  const resumeButton = resumeButtons[0];
-  if (resumeButton === undefined) {
-    throw new Error("Expected the canonical Resume button.");
-  }
-  await user.click(resumeButton);
-  await user.click(await screen.findByTestId("setup-recovery-retry"));
-  await waitFor(() => {
-    expect(getCallCount(taskServices.transport.calls, "workflow.task.resume")).toBe(1);
-  });
-  expect(
-    taskServices.transport.subscriptionStarts.some(
-      (subscription) => subscription.method === "worktree.setup.subscribe",
-    ),
-  ).toBe(false);
+    });
+    const notices: StatusNotice[] = [];
+    const destinations: SidebarDestination[] = [];
+    const setupOperationID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const pending = setupRecoveryNotification(setupOperationID);
+    const pendingToastID = setupRecoveryToastID(setupOperationID);
+    const view = render(
+      <AppServicesProvider services={services}>
+        <StatusContext.Provider
+          value={{
+            dismiss: vi.fn(),
+            push: vi.fn((notice: StatusNotice) => {
+              notices.push(notice);
+            }),
+          }}
+        >
+          <SidebarContext.Provider
+            value={createTestSidebarController((destination) => {
+              destinations.push(destination);
+            })}
+          >
+            <AttentionNotificationController />
+          </SidebarContext.Provider>
+        </StatusContext.Provider>
+      </AppServicesProvider>,
+    );
+    await waitFor(() => {
+      expect(services.transport.subscriptions).toContainEqual({
+        method: "attention.notification.subscribe",
+        params: {},
+      });
+    });
+
+    act(() => {
+      services.transport.emit("attention.notification", {
+        event: {
+          type: "pending",
+          sequence: 1,
+          source,
+          pending,
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(attentionNotices(notices, [pendingToastID])).toHaveLength(1);
+    });
+    await act(async () => {
+      attentionNotices(notices, [pendingToastID])[0]?.onClick?.();
+    });
+    const destination = destinations[0];
+    if (destination?.kind !== "taskDetail") {
+      throw new Error("Expected live setup attention to navigate to Task Detail.");
+    }
+    view.unmount();
+
+    const taskServices = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
+      initialFocus: destination.initialFocus,
+      attention: setupRecoveryTaskAttention(setupOperationID),
+      routes: [
+        {
+          method: "workflow.task.resume",
+          result: {
+            outcome: "applied",
+            applied: {
+              current_nodes: [
+                {
+                  node_id: "canonical-node",
+                  transition_branch_key: "branch-2",
+                  session_id: null,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    const resumeButtons = await screen.findAllByTestId("task-detail-resume");
+    expect(resumeButtons).toHaveLength(1);
+    const resumeButton = resumeButtons[0];
+    if (resumeButton === undefined) {
+      throw new Error("Expected the canonical Resume button.");
+    }
+    await user.click(resumeButton);
+    await user.click(await screen.findByTestId("setup-recovery-retry"));
+    await waitFor(() => {
+      expect(getCallCount(taskServices.transport.calls, "workflow.task.resume")).toBe(1);
+    });
+    expect(
+      taskServices.transport.subscriptionStarts.some(
+        (subscription) => subscription.method === "worktree.setup.subscribe",
+      ),
+    ).toBe(false);
   },
 );
 
@@ -359,6 +366,7 @@ function setupRecoveryTaskAttention(setupOperationID: string) {
             setup_operation_id: setupOperationID,
             cause: "target_preparation",
             diagnostic: "target preparation failed",
+            execution_target: { mode: "default_branch" },
           },
         }),
         occurred_at_unix_ms: 2,
@@ -368,6 +376,38 @@ function setupRecoveryTaskAttention(setupOperationID: string) {
   };
 }
 
-function attentionNotices(notices: readonly StatusNotice[]): readonly StatusNotice[] {
-  return notices.filter((notice) => notice.id.startsWith("attention-k"));
+function attentionNotices(
+  notices: readonly StatusNotice[],
+  expectedIDs: readonly string[],
+): readonly StatusNotice[] {
+  const expected = new Set(expectedIDs);
+  return notices.filter((notice) => expected.has(notice.id));
+}
+
+function setupRecoveryToastID(setupOperationID: string): string {
+  const notification: AttentionNotification = {
+    id: { kind: "interrupted_current_node", uuid: "canonical-attention" },
+    kind: "interrupted_current_node",
+    occurredAt: "2026-08-08T12:00:00Z",
+    revision: 4,
+    question: null,
+    approval: null,
+    workflowApproval: null,
+    interruptedCurrentNode: {
+      message: "Setup needs attention",
+      reason: "workflow_setup_recovery",
+    },
+    target: {
+      kind: "workflow_task",
+      workflowID: "11111111-1111-4111-8111-111111111111",
+      taskID: "task-1",
+      currentNodeID: "canonical-node",
+      currentNodeBranchKey: "branch-2",
+      focus: {
+        kind: "interrupted_current_node",
+        setupOperationID: parseSetupOperationID(setupOperationID),
+      },
+    },
+  };
+  return attentionToastID(attentionNotificationSurfaceKey(notification));
 }

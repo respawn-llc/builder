@@ -180,6 +180,7 @@ type CurrentNodeSetupRecoveryDetail struct {
 	SetupOperationID         uuid.UUID                     `json:"setup_operation_id"`
 	Cause                    CurrentNodeSetupRecoveryCause `json:"cause"`
 	Diagnostic               string                        `json:"diagnostic"`
+	ExecutionTarget          ExecutionTargetSelection      `json:"execution_target"`
 	RetainedWorktree         *CurrentNodeRetainedWorktree  `json:"retained_worktree,omitempty"`
 	RetainedPreviousWorktree *CurrentNodeRetainedWorktree  `json:"retained_previous_worktree,omitempty"`
 }
@@ -207,6 +208,9 @@ func (d CurrentNodeSetupRecoveryDetail) Validate() error {
 	}
 	if !worktreecontract.IsRetryReadySetupFailure(d.Cause) {
 		return errors.New("setup recovery cause must be retry-ready")
+	}
+	if err := d.ExecutionTarget.Validate(); err != nil {
+		return fmt.Errorf("setup recovery execution target: %w", err)
 	}
 	if d.Cause != CurrentNodeSetupRecoveryCauseTargetPreparation && d.RetainedWorktree == nil {
 		return errors.New("setup recovery retained_worktree is required for setup-script failure")

@@ -111,6 +111,9 @@ func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
 				SetupOperationID: setupUUID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed after retry",
+				ExecutionTarget: workflow.ExecutionTargetSelection{
+					Mode: workflow.ExecutionTargetModeHead,
+				},
 				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
 					WorktreeID: "worktree-1",
 					Root:       "/repo/worktree-1",

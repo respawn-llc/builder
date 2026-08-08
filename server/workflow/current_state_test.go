@@ -36,6 +36,9 @@ func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 		SetupOperationID: setupOperationID,
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseProcessExit,
 		Diagnostic:       "setup failed after retry",
+		ExecutionTarget: workflow.ExecutionTargetSelection{
+			Mode: workflow.ExecutionTargetModeHead,
+		},
 		RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
 			WorktreeID: "worktree-1",
 			Root:       "/repo/worktree-1",
@@ -58,9 +61,21 @@ func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 	}
 	if decoded.SetupRecovery == nil ||
 		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
+		decoded.SetupRecovery.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
 		decoded.SetupRecovery.RetainedWorktree == nil ||
 		decoded.SetupRecovery.RetainedWorktree.Root != recovery.RetainedWorktree.Root {
 		t.Fatalf("decoded setup recovery = %+v, want %+v", decoded.SetupRecovery, recovery)
+	}
+}
+
+func TestCurrentNodeSetupRecoveryRequiresExecutionTargetSelection(t *testing.T) {
+	recovery := workflow.CurrentNodeSetupRecoveryDetail{
+		SetupOperationID: uuid.New(),
+		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
+		Diagnostic:       "target preparation failed",
+	}
+	if err := recovery.Validate(); err == nil {
+		t.Fatal("setup recovery without the failed execution target selection validated")
 	}
 }
 
@@ -70,6 +85,9 @@ func TestCurrentNodeSetupRecoveryAllowsTargetPreparationWithoutRetainedWorktree(
 		SetupOperationID: setupOperationID,
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
 		Diagnostic:       "target resolution failed",
+		ExecutionTarget: workflow.ExecutionTargetSelection{
+			Mode: workflow.ExecutionTargetModeDefaultBranch,
+		},
 	}
 	if err := recovery.Validate(); err != nil {
 		t.Fatalf("Validate target-preparation recovery without topology: %v", err)

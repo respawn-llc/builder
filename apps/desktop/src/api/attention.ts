@@ -1,5 +1,6 @@
 import type { ApprovalSnapshot, AttentionQuestionPrompt, TaskCurrentNode } from "./models";
 import type { SetupOperationID } from "./setupOperationID";
+import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
 
 export type TaskSetupRecoveryRetainedWorktree = Readonly<{
   worktreeID: string;
@@ -10,6 +11,7 @@ export type TaskSetupRecovery = Readonly<{
   setupOperationID: SetupOperationID;
   cause: "process_exit" | "timeout" | "target_preparation" | "operational";
   diagnostic: string;
+  executionTarget: WorkflowExecutionTargetSelection;
   retainedWorktree: TaskSetupRecoveryRetainedWorktree | null;
   retainedPreviousWorktree: TaskSetupRecoveryRetainedWorktree | null;
 }>;

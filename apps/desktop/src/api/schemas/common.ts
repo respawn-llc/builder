@@ -31,6 +31,7 @@ import type {
 } from "../attention";
 import { setupOperationIDSchema } from "../setupOperationID";
 import { labelIDListSchema } from "./workflowLabels";
+import { workflowExecutionTargetSelectionSchema } from "./workflowExecutionTarget";
 import { workflowIDSchema } from "./workflowID";
 
 export { workflowIDSchema } from "./workflowID";
@@ -455,6 +456,7 @@ const taskSetupRecoveryDetailSchema = z
         setup_operation_id: setupOperationIDSchema,
         cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
         diagnostic: nonBlankString,
+        execution_target: workflowExecutionTargetSelectionSchema,
         retained_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
         retained_previous_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
       })
@@ -476,6 +478,7 @@ const taskSetupRecoveryDetailSchema = z
     setupOperationID: value.setup_recovery.setup_operation_id,
     cause: value.setup_recovery.cause,
     diagnostic: value.setup_recovery.diagnostic,
+    executionTarget: value.setup_recovery.execution_target,
     retainedWorktree: value.setup_recovery.retained_worktree ?? null,
     retainedPreviousWorktree: value.setup_recovery.retained_previous_worktree ?? null,
   }));

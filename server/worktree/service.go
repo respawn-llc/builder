@@ -263,13 +263,14 @@ type boundManagedTaskWorktree struct {
 
 func (b boundManagedTaskWorktree) setupExecution(settings *config.WorktreeSettings) setupExecutionRequest {
 	return setupExecutionRequest{
-		SourceWorkspaceRoot: b.workspace.RootPath,
-		ResolvedSettings:    settings,
-		BranchName:          b.branchName,
-		WorktreeRoot:        b.record.CanonicalRoot,
-		ScriptPayload:       b.setupPayload,
-		CreatedBranch:       b.materialization.CreatedBranch,
-		RetainedWorktree:    &b.materialization.Worktree,
+		SourceWorkspaceRoot:   b.workspace.RootPath,
+		ResolvedSettings:      settings,
+		BranchName:            b.branchName,
+		WorktreeRoot:          b.record.CanonicalRoot,
+		ScriptPayload:         b.setupPayload,
+		CreatedBranch:         b.materialization.CreatedBranch,
+		RetainedWorktree:      &b.materialization.Worktree,
+		CreationBaseCommitOID: b.record.CreationBaseCommitOID,
 	}
 }
 
@@ -609,7 +610,7 @@ func (s *Service) releaseProvisionalTaskWorktree(
 	if !ok {
 		return nil, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
 	}
-	revision, err := s.git.ResolveHEAD(ctx, record.CanonicalRoot)
+	revision, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(ctx, record.CanonicalRoot, record.CreationBaseCommitOID)
 	if err != nil {
 		return nil, err
 	}
@@ -620,11 +621,7 @@ func (s *Service) releaseProvisionalTaskWorktree(
 		Detached: false,
 	}
 	topology := registeredTopologyEntry(syncedWorktree{record: record, git: live})
-	dirty, err := s.git.ProbeDirtyState(ctx, record.CanonicalRoot)
-	if err != nil {
-		return nil, err
-	}
-	if dirty.Kind != clientui.WorktreeDirtyStateClean {
+	if !safelyRecreatable {
 		if err := s.unbindTaskManagedWorktree(ctx, task); err != nil {
 			return nil, err
 		}
@@ -1845,13 +1842,14 @@ func (e *TaskBranchCollisionError) Error() string {
 }
 
 type setupExecutionRequest struct {
-	SourceWorkspaceRoot string
-	ResolvedSettings    *config.WorktreeSettings
-	BranchName          string
-	WorktreeRoot        string
-	ScriptPayload       setupScriptPayload
-	CreatedBranch       bool
-	RetainedWorktree    *serverapi.WorktreeTopologyEntry
+	SourceWorkspaceRoot   string
+	ResolvedSettings      *config.WorktreeSettings
+	BranchName            string
+	WorktreeRoot          string
+	ScriptPayload         setupScriptPayload
+	CreatedBranch         bool
+	RetainedWorktree      *serverapi.WorktreeTopologyEntry
+	CreationBaseCommitOID *string
 }
 
 type setupAttemptObserver interface {
@@ -1877,11 +1875,12 @@ type setupRecoveryResult struct {
 }
 
 type preparedSetupAttempt struct {
-	started        serverapi.WorktreeSetupStarted
-	scriptPath     string
-	payload        setupScriptPayload
-	timeoutSeconds int
-	retained       *serverapi.WorktreeTopologyEntry
+	started               serverapi.WorktreeSetupStarted
+	scriptPath            string
+	payload               setupScriptPayload
+	timeoutSeconds        int
+	retained              *serverapi.WorktreeTopologyEntry
+	creationBaseCommitOID *string
 }
 
 func (s *Service) taskSetupAttemptObserver(setupOperationID *serverapi.WorktreeSetupOperationID) (setupAttemptObserver, error) {
@@ -1968,11 +1967,11 @@ func (s *Service) recreateSetupAttemptIfClean(
 	if recreate == nil {
 		return attempt, nil
 	}
-	dirtyState, err := s.git.ProbeDirtyState(ctx, attempt.payload.WorktreeRoot)
+	_, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(ctx, attempt.payload.WorktreeRoot, attempt.creationBaseCommitOID)
 	if err != nil {
 		return nil, err
 	}
-	if dirtyState.Kind != clientui.WorktreeDirtyStateClean {
+	if !safelyRecreatable {
 		return attempt, nil
 	}
 	recreated, err := recreate(ctx)
@@ -2026,11 +2025,35 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 			WorktreeRoot:        payload.WorktreeRoot,
 			ScriptPath:          scriptPath,
 		},
-		scriptPath:     scriptPath,
-		payload:        payload,
-		timeoutSeconds: settings.SetupTimeoutSeconds,
-		retained:       req.RetainedWorktree,
+		scriptPath:            scriptPath,
+		payload:               payload,
+		timeoutSeconds:        settings.SetupTimeoutSeconds,
+		retained:              req.RetainedWorktree,
+		creationBaseCommitOID: req.CreationBaseCommitOID,
 	}, nil
+}
+
+func (s *Service) inspectSafeWorktreeRecreation(
+	ctx context.Context,
+	root string,
+	creationBaseCommitOID *string,
+) (GitRevision, bool, error) {
+	revision, err := s.git.ResolveHEAD(ctx, root)
+	if err != nil {
+		return GitRevision{}, false, err
+	}
+	creationBase, err := normalizeOptionalCommitOID(creationBaseCommitOID)
+	if err != nil {
+		return GitRevision{}, false, err
+	}
+	if creationBase == nil || revision.CommitOID != *creationBase {
+		return revision, false, nil
+	}
+	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
+	if err != nil {
+		return GitRevision{}, false, err
+	}
+	return revision, dirtyState.Kind == clientui.WorktreeDirtyStateClean, nil
 }
 
 func (s *Service) executeSetupAttempt(ctx context.Context, attempt preparedSetupAttempt, observer setupAttemptObserver) error {

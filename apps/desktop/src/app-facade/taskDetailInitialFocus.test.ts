@@ -46,4 +46,17 @@ it("keeps exact Current Node and Setup Operation identity through attention-item
   expect(taskDetailInitialFocusRequestKey("task-1", focus)).not.toBe(
     taskDetailInitialFocusRequestKey("task-1", later),
   );
+  expect(
+    taskDetailInitialFocusRequestKey("task-1", {
+      ...focus,
+      currentNodeBranchKey: null,
+      setupOperationID: null,
+    }),
+  ).not.toBe(
+    taskDetailInitialFocusRequestKey("task-1", {
+      ...focus,
+      currentNodeBranchKey: "serial",
+      setupOperationID: null,
+    }),
+  );
 });

@@ -123,6 +123,7 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
             setup_operation_id: setupOperationID,
             cause: "target_preparation",
             diagnostic: "target preparation failed",
+            execution_target: { mode: "custom_ref", custom_ref: "refs/heads/dev" },
           },
         }),
         occurred_at_unix_ms: 2,
@@ -171,7 +172,7 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
   expect(getCallCount(services.transport.calls, "workflow.task.resume")).toBe(1);
   const request = callParams(services.transport.calls, "workflow.task.resume");
   expect(request.setup_operation_id).not.toBe(setupOperationID);
-  expect(request.execution_target).toBeUndefined();
+  expect(request.execution_target).toEqual({ mode: "custom_ref", custom_ref: "refs/heads/dev" });
   expect(
     services.transport.subscriptionStarts.some(
       (subscription) => subscription.method === "worktree.setup.subscribe",

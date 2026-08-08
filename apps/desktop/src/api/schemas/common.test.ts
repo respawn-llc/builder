@@ -173,6 +173,7 @@ describe("attentionItemSchema", () => {
           setup_operation_id: setupOperationID,
           cause: "operational",
           diagnostic: "setup failed after retry",
+          execution_target: { mode: "head" },
           retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
           retained_previous_worktree: {
             worktree_id: "worktree-previous",
@@ -204,6 +205,7 @@ describe("attentionItemSchema", () => {
         setup_operation_id: setupOperationID,
         cause: "target_preparation",
         diagnostic: "target preparation failed",
+        execution_target: { mode: "default_branch" },
       },
     });
 
@@ -234,6 +236,7 @@ describe("attentionItemSchema", () => {
             setup_operation_id: "33333333-3333-4333-8333-333333333333",
             cause: "target_preparation",
             diagnostic: "target preparation failed",
+            execution_target: { mode: "default_branch" },
           },
         }),
       }),

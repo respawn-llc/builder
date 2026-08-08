@@ -204,6 +204,7 @@ func TestWorkflowMutationRetainsLatestStartedPayloadForFailurePresentation(t *te
 				Timeout: &serverapi.WorktreeSetupTimeout{},
 			},
 			Diagnostic:       "setup retry timed out",
+			ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeHead),
 			RetainedWorktree: &retained,
 		},
 	}
@@ -228,7 +229,11 @@ func TestStartSetupFailurePresentationProvidesTypedResumeActions(t *testing.T) {
 					ExitCode: 7,
 				},
 			},
-			Diagnostic:       "setup exited with status 7",
+			Diagnostic: "setup exited with status 7",
+			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+				Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
+				CustomRef: lifecycleStringPointer("refs/heads/dev"),
+			},
 			RetainedWorktree: &retained,
 		},
 	}
@@ -258,7 +263,7 @@ func TestStartSetupFailurePresentationProvidesTypedResumeActions(t *testing.T) {
 		t.Fatalf("presentation = %+v", presentation)
 	}
 	wantActions := []taskLifecycleAction{
-		{Kind: taskLifecycleActionRetryCurrentTarget, Args: []string{"kent", "task", "resume", "KENT-453"}},
+		{Kind: taskLifecycleActionRetryCurrentTarget, Args: []string{"kent", "task", "resume", "KENT-453", "--execution-target", "ref:refs/heads/dev"}},
 		{Kind: taskLifecycleActionChooseNoWorktree, Args: []string{"kent", "task", "resume", "KENT-453", "--execution-target", "none"}},
 		{Kind: taskLifecycleActionChooseHead, Args: []string{"kent", "task", "resume", "KENT-453", "--execution-target", "head"}},
 		{Kind: taskLifecycleActionChooseDefaultBranch, Args: []string{"kent", "task", "resume", "KENT-453", "--execution-target", "default-branch"}},
@@ -415,6 +420,7 @@ func TestTaskResumeFailedSetupReturnsNonzeroAfterAppliedMutation(t *testing.T) {
 						},
 					},
 					Diagnostic:       "setup exited with status 2",
+					ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeHead),
 					RetainedWorktree: &retained,
 				},
 			}
@@ -454,6 +460,7 @@ func TestTaskStartFailedSetupReturnsNonzeroAfterAppliedMutation(t *testing.T) {
 						Timeout: &serverapi.WorktreeSetupTimeout{},
 					},
 					Diagnostic:       "setup timed out twice",
+					ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeDefaultBranch),
 					RetainedWorktree: &retained,
 				},
 			}
@@ -680,7 +687,8 @@ func TestTargetPreparationFailureDoesNotFabricateScriptOrWorktree(t *testing.T) 
 				Kind:        serverapi.WorktreeSetupFailureTargetPreparation,
 				Preparation: &serverapi.WorktreeSetupPreparationFailure{},
 			},
-			Diagnostic: "target revision could not be inspected",
+			Diagnostic:      "target revision could not be inspected",
+			ExecutionTarget: lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeHead),
 		},
 	}
 	outcome, err := projectTaskLifecycleSetupOutcome(
@@ -701,6 +709,12 @@ func TestTargetPreparationFailureDoesNotFabricateScriptOrWorktree(t *testing.T) 
 		outcome.Presentation.RetainedWorktree != nil {
 		t.Fatalf("target-preparation outcome = %+v", outcome)
 	}
+}
+
+func lifecycleSetupExecutionTarget(
+	mode serverapi.WorkflowExecutionTargetMode,
+) *serverapi.WorkflowExecutionTargetSelection {
+	return &serverapi.WorkflowExecutionTargetSelection{Mode: mode}
 }
 
 func TestTaskMoveTypedSetupFailureReturnsNonzeroWithoutSetupSubscription(t *testing.T) {

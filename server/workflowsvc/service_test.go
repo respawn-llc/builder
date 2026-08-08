@@ -1586,10 +1586,11 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	setupID := serverapi.NewWorktreeSetupOperationID()
+	customRef := "refs/heads/dev"
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolveErr: &worktree.GitRevisionResolutionError{
 			Kind:         worktree.GitRevisionResolutionErrorInvalidRevision,
-			RequestedRef: "HEAD",
+			RequestedRef: customRef,
 		},
 	}
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
@@ -1606,7 +1607,8 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 		TaskID:           taskID,
 		SetupOperationID: setupID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
+			Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
+			CustomRef: &customRef,
 		},
 	})
 	if err != nil || response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied {
@@ -1617,6 +1619,9 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 	if !errors.As(preparationErr, &typed) ||
 		typed.InterruptionDetail().SetupRecovery == nil ||
 		typed.InterruptionDetail().SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
+		typed.InterruptionDetail().SetupRecovery.ExecutionTarget.Mode != workflow.ExecutionTargetModeCustomRef ||
+		typed.InterruptionDetail().SetupRecovery.ExecutionTarget.CustomRef == nil ||
+		*typed.InterruptionDetail().SetupRecovery.ExecutionTarget.CustomRef != customRef ||
 		typed.InterruptionDetail().SetupRecovery.RetainedWorktree != nil ||
 		typed.InterruptionDetail().SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
 		t.Fatalf("target preparation error = %T %v, want canonical typed recovery without retained topology", preparationErr, preparationErr)
@@ -1630,6 +1635,10 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 		events[0].Failed == nil ||
 		events[0].Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
 		events[0].Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		events[0].Failed.ExecutionTarget == nil ||
+		events[0].Failed.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeCustomRef ||
+		events[0].Failed.ExecutionTarget.CustomRef == nil ||
+		*events[0].Failed.ExecutionTarget.CustomRef != customRef ||
 		events[0].Failed.RetainedWorktree != nil {
 		t.Fatalf("setup events = %+v, want retry-ready target-preparation failure without retained worktree", events)
 	}

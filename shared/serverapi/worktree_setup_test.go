@@ -2,7 +2,6 @@ package serverapi
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -190,12 +189,25 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 	if err != nil {
 		t.Fatalf("marshal not-required event: %v", err)
 	}
-	for _, forbidden := range []string{"script_path", "stdout", "stderr", "failed", "completed"} {
-		if strings.Contains(string(raw), forbidden) {
+	var eventFields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &eventFields); err != nil {
+		t.Fatalf("decode not-required event fields: %v", err)
+	}
+	for _, forbidden := range []string{"started", "completed", "failed"} {
+		if _, exists := eventFields[forbidden]; exists {
+			t.Fatalf("not-required event serialized inapplicable %q payload: %s", forbidden, raw)
+		}
+	}
+	var notRequiredFields map[string]json.RawMessage
+	if err := json.Unmarshal(eventFields["not_required"], &notRequiredFields); err != nil {
+		t.Fatalf("decode not-required payload fields: %v", err)
+	}
+	for _, forbidden := range []string{"script_path", "stdout", "stderr"} {
+		if _, exists := notRequiredFields[forbidden]; exists {
 			t.Fatalf("not-required event serialized inapplicable %q fact: %s", forbidden, raw)
 		}
 	}
-	if !strings.Contains(string(raw), `"retained_previous_worktree"`) {
+	if _, exists := notRequiredFields["retained_previous_worktree"]; !exists {
 		t.Fatalf("not-required event omitted retained previous worktree: %s", raw)
 	}
 
@@ -217,7 +229,27 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 	if err != nil {
 		t.Fatalf("marshal failed event: %v", err)
 	}
-	if !strings.Contains(string(raw), `"stdout":""`) || strings.Contains(string(raw), `"stderr"`) {
+	eventFields = nil
+	if err := json.Unmarshal(raw, &eventFields); err != nil {
+		t.Fatalf("decode failed event fields: %v", err)
+	}
+	var failedFields map[string]json.RawMessage
+	if err := json.Unmarshal(eventFields["failed"], &failedFields); err != nil {
+		t.Fatalf("decode failed payload fields: %v", err)
+	}
+	var causeFields map[string]json.RawMessage
+	if err := json.Unmarshal(failedFields["cause"], &causeFields); err != nil {
+		t.Fatalf("decode failure cause fields: %v", err)
+	}
+	var timeoutFields map[string]json.RawMessage
+	if err := json.Unmarshal(causeFields["timeout"], &timeoutFields); err != nil {
+		t.Fatalf("decode timeout fields: %v", err)
+	}
+	var stdout string
+	if err := json.Unmarshal(timeoutFields["stdout"], &stdout); err != nil || stdout != "" {
+		t.Fatalf("nullable stdout output was not preserved: %s", raw)
+	}
+	if _, exists := timeoutFields["stderr"]; exists {
 		t.Fatalf("nullable output presence was not preserved: %s", raw)
 	}
 }

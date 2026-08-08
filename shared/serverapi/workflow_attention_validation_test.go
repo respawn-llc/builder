@@ -125,7 +125,7 @@ func TestWorkflowAttentionItemCarriesTypedSetupRecoveryIdentity(t *testing.T) {
 	item := validWorkflowAttentionInterrupted()
 	item.SetupOperationID = &setupOperationID
 	item.DetailJSON = textutil.Value(fmt.Sprintf(
-		`{"code":"workflow_setup_recovery","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"process_exit","diagnostic":"setup failed","retained_worktree":{"worktree_id":"worktree-1","root":"/repo/worktree-1"}}}`,
+		`{"code":"workflow_setup_recovery","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"process_exit","diagnostic":"setup failed","execution_target":{"mode":"head"},"retained_worktree":{"worktree_id":"worktree-1","root":"/repo/worktree-1"}}}`,
 		setupOperationID.String(),
 	))
 	if err := item.Validate(); err != nil {
@@ -142,7 +142,7 @@ func TestWorkflowAttentionItemAcceptsTargetPreparationRecoveryWithoutRetainedWor
 	item := validWorkflowAttentionInterrupted()
 	item.SetupOperationID = &setupOperationID
 	item.DetailJSON = textutil.Value(fmt.Sprintf(
-		`{"code":"workflow_target_preparation_failed","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"target_preparation","diagnostic":"target resolution failed"}}`,
+		`{"code":"workflow_target_preparation_failed","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"target_preparation","diagnostic":"target resolution failed","execution_target":{"mode":"default_branch"}}}`,
 		setupOperationID.String(),
 	))
 	if err := item.Validate(); err != nil {

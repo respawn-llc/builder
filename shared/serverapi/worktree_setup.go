@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/worktreecontract"
@@ -142,11 +143,12 @@ type WorktreeSetupFailureCause struct {
 }
 
 type WorktreeSetupFailed struct {
-	RetryReadiness           WorktreeSetupRetryReadiness `json:"retry_readiness"`
-	Cause                    WorktreeSetupFailureCause   `json:"cause"`
-	Diagnostic               string                      `json:"diagnostic"`
-	RetainedWorktree         *WorktreeTopologyEntry      `json:"retained_worktree,omitempty"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree   `json:"retained_previous_worktree,omitempty"`
+	RetryReadiness           WorktreeSetupRetryReadiness       `json:"retry_readiness"`
+	Cause                    WorktreeSetupFailureCause         `json:"cause"`
+	Diagnostic               string                            `json:"diagnostic"`
+	ExecutionTarget          *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	RetainedWorktree         *WorktreeTopologyEntry            `json:"retained_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree         `json:"retained_previous_worktree,omitempty"`
 }
 
 type WorktreeSetupEvent struct {
@@ -253,6 +255,11 @@ func (p WorktreeSetupFailed) Validate() error {
 	}
 	if strings.TrimSpace(p.Diagnostic) == "" {
 		return errors.New("failed setup event diagnostic is required")
+	}
+	if p.ExecutionTarget != nil {
+		if err := p.ExecutionTarget.Validate(); err != nil {
+			return fmt.Errorf("failed setup event execution target: %w", err)
+		}
 	}
 	if p.RetryReadiness == WorktreeSetupRetryReady &&
 		p.Cause.Kind != WorktreeSetupFailureTargetPreparation &&

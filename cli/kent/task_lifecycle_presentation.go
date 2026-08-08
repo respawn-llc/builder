@@ -200,10 +200,16 @@ func taskLifecycleSetupPresentation(
 	}
 	switch operation {
 	case taskLifecycleOperationStart, taskLifecycleOperationResume:
+		if failed.ExecutionTarget == nil {
+			return taskLifecyclePresentation{}, errors.New("Task setup recovery requires the failed execution target selection")
+		}
 		if len(command.ResumeArgs) == 0 {
 			command.ResumeArgs = []string{config.Command, "task", "resume", command.TaskRef}
 		}
-		presentation.Actions = taskResumeRecoveryActions(command.ResumeArgs)
+		presentation.Actions, err = taskResumeRecoveryActions(command.ResumeArgs, *failed.ExecutionTarget)
+		if err != nil {
+			return taskLifecyclePresentation{}, err
+		}
 	case taskLifecycleOperationMove:
 		if command.Move == nil {
 			return taskLifecyclePresentation{}, errors.New("Move setup recovery requires original command context")
@@ -239,14 +245,21 @@ func taskLifecycleWorktreeFromTopology(topology *serverapi.WorktreeTopologyEntry
 	}, nil
 }
 
-func taskResumeRecoveryActions(base []string) []taskLifecycleAction {
+func taskResumeRecoveryActions(
+	base []string,
+	executionTarget serverapi.WorkflowExecutionTargetSelection,
+) ([]taskLifecycleAction, error) {
+	selector, err := taskExecutionTargetSelector(executionTarget)
+	if err != nil {
+		return nil, err
+	}
 	return []taskLifecycleAction{
-		{Kind: taskLifecycleActionRetryCurrentTarget, Args: append([]string(nil), base...)},
+		{Kind: taskLifecycleActionRetryCurrentTarget, Args: append(append([]string(nil), base...), "--execution-target", selector)},
 		{Kind: taskLifecycleActionChooseNoWorktree, Args: append(append([]string(nil), base...), "--execution-target", "none")},
 		{Kind: taskLifecycleActionChooseHead, Args: append(append([]string(nil), base...), "--execution-target", "head")},
 		{Kind: taskLifecycleActionChooseDefaultBranch, Args: append(append([]string(nil), base...), "--execution-target", "default-branch")},
 		{Kind: taskLifecycleActionChooseCustomRef, Args: append(append([]string(nil), base...), "--execution-target", "ref:<revision>")},
-	}
+	}, nil
 }
 
 func taskMoveRecoveryActions(command taskMoveRecoveryCommand) []taskLifecycleAction {

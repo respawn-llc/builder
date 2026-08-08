@@ -159,7 +159,11 @@ func TestWorkflowTaskMoveContractHasNoSetupCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal move request: %v", err)
 	}
-	if strings.Contains(string(raw), "setup_operation_id") {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode move request fields: %v", err)
+	}
+	if _, exists := fields["setup_operation_id"]; exists {
 		t.Fatalf("manual Move serialized setup correlation: %s", raw)
 	}
 }

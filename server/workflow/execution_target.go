@@ -21,8 +21,8 @@ type ExecutionTargetPolicy struct {
 }
 
 type ExecutionTargetSelection struct {
-	Mode      ExecutionTargetMode
-	CustomRef *string
+	Mode      ExecutionTargetMode `json:"mode"`
+	CustomRef *string             `json:"custom_ref,omitempty"`
 }
 
 type ExecutionTargetUnavailableCause string

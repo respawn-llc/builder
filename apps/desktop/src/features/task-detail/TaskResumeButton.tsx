@@ -75,7 +75,10 @@ export function TaskInitiatingActionProvider({
   }
   function resume(recovery?: TaskSetupRecovery): void {
     if (recovery !== undefined) {
-      continuation.openSetupRecovery(resumeTaskInitiatingAction(taskID), setupRecoveryFailure(recovery));
+      continuation.openSetupRecovery(resumeTaskInitiatingAction(taskID), setupRecoveryFailure(recovery), {
+        kind: "explicit_override",
+        selection: recovery.executionTarget,
+      });
       return;
     }
     run(resumeTaskInitiatingAction(taskID));

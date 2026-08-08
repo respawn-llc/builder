@@ -2816,9 +2816,10 @@ type workflowAttentionInterruptionDetailSchema struct {
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
 	SetupRecovery *struct {
-		SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
-		Cause            WorktreeSetupFailureKind `json:"cause"`
-		Diagnostic       string                   `json:"diagnostic"`
+		SetupOperationID WorktreeSetupOperationID         `json:"setup_operation_id"`
+		Cause            WorktreeSetupFailureKind         `json:"cause"`
+		Diagnostic       string                           `json:"diagnostic"`
+		ExecutionTarget  WorkflowExecutionTargetSelection `json:"execution_target"`
 		RetainedWorktree *struct {
 			WorktreeID string `json:"worktree_id"`
 			Root       string `json:"root"`
@@ -2873,6 +2874,9 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 		if strings.TrimSpace(recovery.Diagnostic) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
+		}
+		if err := recovery.ExecutionTarget.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery execution target is invalid")
 		}
 		if recovery.Cause != WorktreeSetupFailureTargetPreparation && recovery.RetainedWorktree == nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery retained worktree is required")

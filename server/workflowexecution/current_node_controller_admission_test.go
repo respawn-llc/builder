@@ -969,6 +969,9 @@ func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanoni
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
+				ExecutionTarget: workflow.ExecutionTargetSelection{
+					Mode: workflow.ExecutionTargetModeHead,
+				},
 				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
 					WorktreeID: "worktree-primary",
 					Root:       retainedRoot,
@@ -1038,6 +1041,9 @@ func TestCurrentNodeControllerPersistsCanonicalTargetPreparationRecoveryWithoutT
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
 				Diagnostic:       "target resolution failed",
+				ExecutionTarget: workflow.ExecutionTargetSelection{
+					Mode: workflow.ExecutionTargetModeDefaultBranch,
+				},
 			},
 		},
 	)
@@ -1201,6 +1207,9 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
+				ExecutionTarget: workflow.ExecutionTargetSelection{
+					Mode: workflow.ExecutionTargetModeHead,
+				},
 				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
 					WorktreeID: "worktree-primary",
 					Root:       t.TempDir(),

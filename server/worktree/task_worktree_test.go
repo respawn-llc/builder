@@ -154,10 +154,57 @@ func TestPrepareTaskExecutionRootReplacesDifferentCommitCleanWorktree(t *testing
 	if _, err := env.store.GetWorktreeRecordByID(env.ctx, first.Root.Managed.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("clean previous record remains: %v", err)
 	}
-	replacementLeaf := filepath.Base(replacement.Root.Managed.Root)
-	if branch := runGit(t, replacement.Root.Managed.Root, "branch", "--show-current"); branch != replacementLeaf ||
-		!strings.HasPrefix(replacementLeaf, task.ShortID+"-") {
-		t.Fatalf("replacement leaf = %q, want shared Task-related suffix", replacementLeaf)
+	branch := runGit(t, replacement.Root.Managed.Root, "branch", "--show-current")
+	if branch == "" {
+		t.Fatal("replacement worktree has no named branch")
+	}
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branch); branchErr != nil {
+		t.Fatalf("BranchExists: %v", branchErr)
+	} else if !exists {
+		t.Fatalf("replacement branch %q is absent", branch)
+	}
+}
+
+func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanAdvancedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &firstTarget,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
+	}
+	if first.Root.Managed == nil {
+		t.Fatalf("first preparation root = %+v, want managed", first.Root)
+	}
+	advancedPath := filepath.Join(first.Root.Managed.Root, "operator-commit.txt")
+	if err := os.WriteFile(advancedPath, []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write operator commit: %v", err)
+	}
+	runGit(t, first.Root.Managed.Root, "add", "operator-commit.txt")
+	runGit(t, first.Root.Managed.Root, "commit", "-q", "-m", "operator commit")
+	advancedCommit := runGit(t, first.Root.Managed.Root, "rev-parse", "HEAD")
+	nextTarget := advanceTaskWorktreeTestTarget(t, env)
+
+	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &nextTarget,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
+	}
+	if replacement.RetainedPreviousWorktree == nil {
+		t.Fatal("clean advanced worktree was released instead of retained")
+	}
+	if got := runGit(t, first.Root.Managed.Root, "rev-parse", "HEAD"); got != advancedCommit {
+		t.Fatalf("retained worktree HEAD = %q, want operator commit %q", got, advancedCommit)
+	}
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, task.ShortID); branchErr != nil {
+		t.Fatalf("BranchExists: %v", branchErr)
+	} else if !exists {
+		t.Fatalf("operator branch %q was deleted", task.ShortID)
 	}
 }
 
@@ -1589,6 +1636,55 @@ func TestPrepareTaskExecutionRootRecreatesExistingCleanProvisionalRootBeforeSetu
 		t.Fatalf("setup attempt count = %q, want 1", got)
 	}
 	assertSetupAttemptEventsOnly(t, sub, 1)
+}
+
+func TestPrepareTaskExecutionRootDoesNotRecreateCleanAdvancedProvisionalRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	probeName := ".advanced-root-probe"
+	if err := os.WriteFile(filepath.Join(env.workspaceRoot, ".gitignore"), []byte(probeName+"\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "add", ".gitignore")
+	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "ignore advanced-root probe")
+	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	first, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	if err != nil {
+		t.Fatalf("initial PrepareTaskExecutionRoot: %v", err)
+	}
+	firstRoot := taskWorktreeRoot(first.Worktree)
+	if err := os.WriteFile(filepath.Join(firstRoot, "operator-commit.txt"), []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write operator commit: %v", err)
+	}
+	runGit(t, firstRoot, "add", "operator-commit.txt")
+	runGit(t, firstRoot, "commit", "-q", "-m", "operator commit")
+	if err := os.WriteFile(filepath.Join(firstRoot, probeName), []byte("retained"), 0o644); err != nil {
+		t.Fatalf("write advanced-root probe: %v", err)
+	}
+	countPath := filepath.Join(t.TempDir(), "count")
+	scriptRelpath := filepath.Join("scripts", "advanced-clean.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\n[ -e \"$PWD/%s\" ]\n",
+		countPath,
+		countPath,
+		countPath,
+		probeName,
+	))
+	env.service.setupScript = scriptRelpath
+
+	second, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	if err != nil {
+		t.Fatalf("recovery PrepareTaskExecutionRoot: %v", err)
+	}
+	if taskWorktreeRoot(second.Worktree) != firstRoot {
+		t.Fatalf("recovery root = %q, want retained root %q", taskWorktreeRoot(second.Worktree), firstRoot)
+	}
+	if got := waitForFileText(t, countPath); got != "1" {
+		t.Fatalf("setup attempt count = %q, want 1", got)
+	}
+	if got := waitForFileText(t, filepath.Join(firstRoot, probeName)); got != "retained" {
+		t.Fatalf("advanced-root probe = %q, want retained", got)
+	}
 }
 
 func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t *testing.T) {

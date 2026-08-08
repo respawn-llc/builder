@@ -22,7 +22,7 @@ export function taskDetailInitialFocusFromAttentionItem(
 }
 
 export function taskDetailInitialFocusRequestKey(taskID: string, focus: TaskDetailInitialFocus): string {
-  return `${taskID}:${taskDetailInitialFocusSegment(focus)}`;
+  return JSON.stringify([taskID, taskDetailInitialFocusSegment(focus)]);
 }
 
 export function sameTaskDetailInitialFocus(
@@ -57,20 +57,20 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): string {
+function taskDetailInitialFocusSegment(focus: TaskDetailInitialFocus): readonly unknown[] {
   if (focus.kind === "question") {
-    return `question:${focus.askIDs.join(",")}`;
+    return [focus.kind, focus.askIDs];
   }
   if (focus.kind === "approval") {
-    return `approval:${focus.approvalID}`;
+    return [focus.kind, focus.approvalID];
   }
   if (focus.kind === "interrupted_current_node") {
     return [
       focus.kind,
       focus.currentNodeID,
-      focus.currentNodeBranchKey ?? "serial",
-      focus.setupOperationID?.toJSONValue() ?? "ordinary",
-    ].join(":");
+      focus.currentNodeBranchKey,
+      focus.setupOperationID?.toJSONValue() ?? null,
+    ];
   }
-  return focus.kind;
+  return [focus.kind];
 }
