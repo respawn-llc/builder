@@ -308,7 +308,7 @@ func decodeLegacyLocalEntryV0(payload json.RawMessage) (LocalEntryRecord, error)
 	return LocalEntryRecord{
 		Visibility:      visibility,
 		Role:            legacy.Role,
-		Text:            legacy.Text,
+		Text:            optionalLegacyString(legacy.Text),
 		CondensedText:   optionalLegacyString(legacy.CondensedText),
 		DiagnosticKey:   optionalLegacyString(legacy.DiagnosticKey),
 		NoticeID:        optionalLegacyString(legacy.NoticeID),

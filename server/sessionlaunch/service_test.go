@@ -84,10 +84,11 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize event log: %v", err)
 	}
+	eventLogText := "event-log history must not become prompt history"
 	if _, receipt, err := eventLog.AppendRecord(nil, session.LocalEntryRecord{
 		Visibility: session.EntryVisibilityHidden,
 		Role:       "system",
-		Text:       "event-log history must not become prompt history",
+		Text:       &eventLogText,
 	}); err != nil || !receipt.Committed {
 		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}

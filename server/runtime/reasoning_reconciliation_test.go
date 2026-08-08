@@ -86,7 +86,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		var zeroDuration *int64
 		for _, event := range events {
 			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
-			if ok && entry.Text == "zero" {
+			if ok && entry.Text != nil && *entry.Text == "zero" {
 				zeroDuration = entry.DurationMs
 			}
 		}
@@ -131,7 +131,7 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		}
 		for _, event := range events {
 			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
-			if ok && entry.Text == "retry" {
+			if ok && entry.Text != nil && *entry.Text == "retry" {
 				if entry.DurationMs == nil || *entry.DurationMs != 2000 {
 					t.Fatalf("retry duration = %v, want 2000ms", entry.DurationMs)
 				}
@@ -177,12 +177,12 @@ func TestReasoningTraceDurationStartsPerTraceAndSurvivesRetryAndReset(t *testing
 		}
 		for _, event := range events {
 			entry, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
-			if ok && entry.Text == "fresh" {
+			if ok && entry.Text != nil && *entry.Text == "fresh" {
 				if entry.DurationMs == nil || *entry.DurationMs != 300 {
 					t.Fatalf("fresh duration = %v, want 300ms", entry.DurationMs)
 				}
 			}
-			if ok && entry.Text == "old" {
+			if ok && entry.Text != nil && *entry.Text == "old" {
 				t.Fatalf("reset trace was persisted: %+v", entry)
 			}
 		}
@@ -688,7 +688,7 @@ func TestCorrelatedReasoningCommitEmitsOneRowAndConsumesIdentity(t *testing.T) {
 		local, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
 		if ok && local.Role == string(transcript.EntryRoleReasoning) {
 			persistedRows++
-			if local.Text != "trace" {
+			if local.Text == nil || *local.Text != "trace" {
 				t.Fatalf("persisted correlated reasoning row = %+v", local)
 			}
 		}
@@ -736,8 +736,11 @@ func TestReasoningProjectionDoesNotRewritePersistedText(t *testing.T) {
 			if local.DurationMs != nil {
 				t.Fatalf("completed-only duration = %v, want absent", local.DurationMs)
 			}
-			if local.Text != raw {
-				t.Fatalf("persisted reasoning text = %q, want %q", local.Text, raw)
+			if local.Text == nil {
+				t.Fatal("persisted reasoning text is absent")
+			}
+			if *local.Text != raw {
+				t.Fatalf("persisted reasoning text = %q, want %q", *local.Text, raw)
 			}
 		}
 	}

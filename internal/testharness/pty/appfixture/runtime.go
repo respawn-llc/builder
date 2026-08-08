@@ -348,7 +348,7 @@ func seedLocalEntry(entry SeedTranscriptEntryFile) session.LocalEntryRecord {
 	return session.LocalEntryRecord{
 		Visibility:    seedSessionEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
-		Text:          entry.Text,
+		Text:          optionalText(entry.Text),
 		CondensedText: optionalTrimmedText(entry.CondensedText),
 	}
 }

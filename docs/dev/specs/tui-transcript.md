@@ -204,7 +204,7 @@
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
-- Before a fresh Session resource becomes ready after a crash or durability-failure retirement, recovery closes each durable tool call without committed output using the same execution-status-neutral missing-durable-output result. Its model-visible message does not vary by failure cause. Recovery does not infer whether execution finished, expose a stale call as live, or re-execute it. Otherwise Kent restores normal state.
+- Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
 ## Worktree Management

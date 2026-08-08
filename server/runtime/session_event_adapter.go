@@ -259,7 +259,7 @@ func sessionLocalEntryRecordFromRuntime(
 	record := session.LocalEntryRecord{
 		Visibility:       visibility,
 		Role:             entry.Role,
-		Text:             entry.Text,
+		Text:             textutil.OptionalExactString(entry.Text),
 		DurationMs:       textutil.Pointer(entry.DurationMs),
 		CondensedText:    textutil.Pointer(entry.CondensedText),
 		DiagnosticKey:    textutil.Pointer(entry.DiagnosticKey),
@@ -323,10 +323,11 @@ func storedLocalEntryFromSessionRecord(
 	if err != nil {
 		return storedLocalEntry{}, err
 	}
+	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
 		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
 		Role:             record.Role,
-		Text:             record.Text,
+		Text:             text,
 		DurationMs:       textutil.Pointer(record.DurationMs),
 		CondensedText:    textutil.Pointer(record.CondensedText),
 		DiagnosticKey:    textutil.Pointer(record.DiagnosticKey),

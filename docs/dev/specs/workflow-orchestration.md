@@ -358,7 +358,7 @@
 - The Session's current executable Node pauses until the Question is answered.
 - All clients use the same authoritative Question and Approval state. A client marks an interaction resolved only after Kent accepts the answer.
 - A Question belongs to its Session. Workflow attention refers to that Question and does not create a second Task-owned copy.
-- Live Questions and live Approvals exist only within their Exact Execution Scope. A restart does not restore them, and a failed preceding durability barrier does not present them. Kent interrupts the affected Current Node. Before Resume continues, fresh-resource recovery closes each stale tool operation with the same execution-status-neutral missing-durable-output outcome without replaying the blocked interaction.
+- Live Questions and live Approvals exist only within their Exact Execution Scope. A restart does not restore them, and a failed preceding durability barrier does not present them. Kent interrupts the affected Current Node. Session reopening follows the fresh-resource recovery contract in `core-runtime-tools.md`; Resume does not replay the blocked interaction.
 - The bounded active Session transcript supplies Question content to read surfaces. An unfinished transcript operation without a matching Exact Execution Scope does not create a live Question or `waiting_question` Task status.
 - A pending Workflow Transition Approval belongs to the current Task and survives restart.
 - Approval is a Transition Branch property.
@@ -453,7 +453,7 @@
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
 - Restart does not restore live Questions, live Approvals, Automatic Intents, Runtime Gates, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
-- Before Resume continues, fresh-resource Session recovery closes every unfinished durable tool operation in the bounded active transcript segment with the same execution-status-neutral missing-durable-output outcome, including an operation whose Workflow effect was blocked by a commit-certain durability failure. Its model-visible message does not vary by failure cause, and recovery does not infer whether tool execution finished. Resume does not replay answers, apply the blocked Workflow effect, run those tools again, or scan full transcript history.
+- Before Resume continues, the Session satisfies the fresh-resource recovery contract in `core-runtime-tools.md`. Resume does not replay answers or apply a Workflow effect blocked by a durability failure.
 - Kent never retries an interrupted Current Node automatically.
 - Task Interrupt can target one Session or every actively executing agent and Script on the Task. A waiting Question and any state without active execution are not interruptible.
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.

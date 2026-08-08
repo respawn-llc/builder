@@ -372,9 +372,10 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 		if !ok {
 			t.Fatalf("local_entry payload = %T, want session.LocalEntryRecord", payload)
 		}
+		text, _ := textutil.OptionalValue(entryRecord.Text)
 		entries = append(entries, runtime.ChatEntry{
 			Role: entryRecord.Role,
-			Text: entryRecord.Text,
+			Text: text,
 			Visibility: transcript.NormalizeEntryVisibility(
 				transcript.EntryVisibility(entryRecord.Visibility),
 			),

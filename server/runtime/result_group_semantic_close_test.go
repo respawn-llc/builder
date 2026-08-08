@@ -1172,7 +1172,7 @@ func assertRunFailureDiagnosticPrecedesTerminal(
 		entry, ok := mustSessionEventPayload(record).(session.LocalEntryRecord)
 		if ok &&
 			entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) &&
-			entry.Text != "" {
+			entry.Text != nil {
 			durableDiagnostic = true
 			break
 		}

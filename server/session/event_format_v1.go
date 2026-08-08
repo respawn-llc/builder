@@ -140,8 +140,14 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 		payload = normalized
 	case LocalEntryRecord:
 		typed.Role = strings.TrimSpace(typed.Role)
-		typed.Text = strings.TrimSpace(typed.Text)
 		var normalizeErr error
+		if typed.Text, normalizeErr = normalizeOptionalEventText("text", typed.Text); normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		if typed.Text != nil {
+			trimmed := strings.TrimSpace(*typed.Text)
+			typed.Text = &trimmed
+		}
 		if typed.CondensedText, normalizeErr = normalizeOptionalEventText("condensed text", typed.CondensedText); normalizeErr != nil {
 			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
 		}
@@ -256,7 +262,7 @@ const (
 type LocalEntryRecord struct {
 	Visibility       EntryVisibility                    `json:"visibility"`
 	Role             string                             `json:"role"`
-	Text             string                             `json:"text"`
+	Text             *string                            `json:"text"`
 	DurationMs       *int64                             `json:"duration_ms,omitempty"`
 	CondensedText    *string                            `json:"condensed_text,omitempty"`
 	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
@@ -416,8 +422,11 @@ func (r LocalEntryRecord) validate() error {
 	if strings.TrimSpace(r.Role) == "" {
 		return fmt.Errorf("role is required")
 	}
-	if strings.TrimSpace(r.Text) == "" && r.ToolOutputRepair == nil {
+	if r.Text == nil && r.ToolOutputRepair == nil {
 		return fmt.Errorf("text or tool-output repair facts are required")
+	}
+	if r.Text != nil && strings.TrimSpace(*r.Text) == "" {
+		return fmt.Errorf("text must be non-empty when present")
 	}
 	if r.ToolOutputRepair != nil && !r.ToolOutputRepair.Valid() {
 		return fmt.Errorf("tool-output repair facts are invalid")

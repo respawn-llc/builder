@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"core/shared/rollbacktarget"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -462,7 +463,7 @@ func TestEventLogV1LocalEntryRecordRoundTrip(t *testing.T) {
 	record, err := NewEventRecord(3, nil, LocalEntryRecord{
 		Visibility: EntryVisibilityDetail,
 		Role:       "error",
-		Text:       "compaction failed",
+		Text:       stringPointer(" compaction failed "),
 		DurationMs: &durationMs,
 	})
 	if err != nil {
@@ -481,7 +482,8 @@ func TestEventLogV1LocalEntryRecordRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T, want LocalEntryRecord", mustEventRecordPayload(decoded))
 	}
-	if entry.Visibility != EntryVisibilityDetail || entry.Role != "error" || entry.Text != "compaction failed" ||
+	if entry.Visibility != EntryVisibilityDetail || entry.Role != "error" ||
+		entry.Text == nil || *entry.Text != "compaction failed" ||
 		entry.DurationMs == nil || *entry.DurationMs != durationMs {
 		t.Fatalf("entry = %#v", entry)
 	}
@@ -489,10 +491,57 @@ func TestEventLogV1LocalEntryRecordRoundTrip(t *testing.T) {
 	if _, err := NewEventRecord(1, nil, LocalEntryRecord{
 		Visibility: EntryVisibilityDetail,
 		Role:       "reasoning",
-		Text:       "trace",
+		Text:       stringPointer("trace"),
 		DurationMs: &negativeDurationMs,
 	}); err == nil {
 		t.Fatal("negative local-entry duration was accepted")
+	}
+}
+
+func TestEventLogV1TypedRepairNoticePersistsNullText(t *testing.T) {
+	record, err := NewEventRecord(1, nil, LocalEntryRecord{
+		Visibility: EntryVisibilityOngoing,
+		Role:       "error",
+		ToolOutputRepair: &transcript.ToolOutputRepairNotice{
+			Kind:  transcript.ToolOutputRepairFreshResource,
+			Count: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create typed repair notice record: %v", err)
+	}
+
+	line, err := encodeEventRecordV1(record)
+	if err != nil {
+		t.Fatalf("encode typed repair notice record: %v", err)
+	}
+	var encoded struct {
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(line, &encoded); err != nil {
+		t.Fatalf("decode encoded repair notice envelope: %v", err)
+	}
+	text, ok := encoded.Payload["text"]
+	if !ok {
+		t.Fatal("encoded repair notice omitted explicit text absence")
+	}
+	var nullableText *string
+	if err := json.Unmarshal(text, &nullableText); err != nil {
+		t.Fatalf("decode encoded repair notice text: %v", err)
+	}
+	if nullableText != nil {
+		t.Fatalf("encoded repair notice text = %q, want null", *nullableText)
+	}
+	if _, err := NewEventRecord(1, nil, LocalEntryRecord{
+		Visibility: EntryVisibilityOngoing,
+		Role:       "error",
+		Text:       stringPointer(" \t "),
+		ToolOutputRepair: &transcript.ToolOutputRepairNotice{
+			Kind:  transcript.ToolOutputRepairFreshResource,
+			Count: 1,
+		},
+	}); err == nil {
+		t.Fatal("typed repair notice accepted present blank text")
 	}
 }
 
@@ -807,7 +856,7 @@ func TestEventLogV1RejectsInvalidRecordContracts(t *testing.T) {
 		{name: "malformed tool output", seq: 1, payload: ToolCompletionRecord{
 			CallID: "call", Name: "shell", OutputKind: ToolOutputKindFunction, Output: invalidJSON,
 		}},
-		{name: "unknown local visibility", seq: 1, payload: LocalEntryRecord{Visibility: "wide", Role: "error", Text: "failure"}},
+		{name: "unknown local visibility", seq: 1, payload: LocalEntryRecord{Visibility: "wide", Role: "error", Text: stringPointer("failure")}},
 		{name: "unknown compaction engine", seq: 1, payload: HistoryReplacementRecord{Engine: "reviewer", Mode: CompactionModeAuto}},
 		{name: "unknown compaction mode", seq: 1, payload: HistoryReplacementRecord{Engine: "local", Mode: "scheduled"}},
 		{name: "unknown cache digest", seq: 1, payload: CacheRequestObservationRecord{
