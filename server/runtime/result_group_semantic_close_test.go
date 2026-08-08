@@ -956,6 +956,66 @@ func TestBackgroundPendingRecoveryClearFailurePersistsOneDeveloperDiagnostic(t *
 	}
 }
 
+func TestBackgroundCallbackAndPendingRecoveryClearFailuresPersistSeparately(t *testing.T) {
+	t.Parallel()
+	providerErr := &llm.APIStatusError{StatusCode: 401}
+	clearErr := errors.New("background callback pending recovery clear failed")
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{errors: []error{providerErr}},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	steps := &stubExclusiveStepLifecycle{
+		runFn: func(
+			ctx context.Context,
+			_ exclusiveStepOptions,
+			run func(context.Context, string) error,
+		) error {
+			callbackErr := run(ctx, "background-callback-clear")
+			return errors.Join(
+				callbackErr,
+				&pendingModelRecoveryClearError{cause: clearErr},
+			)
+		},
+	}
+	scheduler := &defaultBackgroundNoticeScheduler{
+		engine: engine,
+		steps:  steps,
+	}
+	scheduler.queueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	}, false)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); !errors.Is(
+		err,
+		providerErr,
+	) || !errors.Is(err, errPendingModelRecoveryClear) ||
+		!errors.Is(err, clearErr) {
+		t.Fatalf(
+			"background callback-plus-clear error = %v, want original combined failure",
+			err,
+		)
+	}
+	var diagnostics []string
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics = append(diagnostics, entry.Text)
+		}
+	}
+	if len(diagnostics) != 2 {
+		t.Fatalf(
+			"background callback-plus-clear diagnostics = %d, want one per failure",
+			len(diagnostics),
+		)
+	}
+	if diagnostics[0] == diagnostics[1] {
+		t.Fatal("background pending-clear diagnostic duplicated callback feedback")
+	}
+}
+
 func newProviderFailureOrderingEngine(
 	t *testing.T,
 	config Config,

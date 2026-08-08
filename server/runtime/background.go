@@ -338,7 +338,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 			)
 		}
 	}
-	b.engine.finishRunErrorFeedback(err)
+	b.engine.finishRunErrorFeedback(backgroundFinalFeedbackError(err))
 	if err != nil && b.HasPendingNotices() {
 		b.clearScheduled()
 	}
@@ -366,6 +366,14 @@ func removePendingModelRecoveryClearError(err error) error {
 		_, matches := candidate.(*pendingModelRecoveryClearError)
 		return matches
 	})
+}
+
+func backgroundFinalFeedbackError(err error) error {
+	var clearErr *pendingModelRecoveryClearError
+	if errors.As(err, &clearErr) {
+		return clearErr
+	}
+	return err
 }
 
 func removeBackgroundErrorBranches(
