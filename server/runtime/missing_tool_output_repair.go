@@ -37,9 +37,6 @@ func missingToolOutputInterruptedResult(callID string, name toolspec.ID) tools.R
 	}
 }
 
-// missingToolOutputUnavailableOutput is the cause-independent result recorded
-// by fresh-resource recovery. It describes only the durable fact available at
-// startup and does not infer whether execution began or completed.
 var missingToolOutputUnavailableOutput = json.RawMessage(`{"error":"No committed output is available for this tool call."}`)
 
 type missingToolOutputRepairDisposition uint8
@@ -80,23 +77,12 @@ type danglingToolCall struct {
 	stepID *string
 }
 
-// repairMissingToolOutputsByAppending closes any tool calls in the live
-// projection that lack an output by appending an honest synthetic tool
-// completion for each, plus one operator-facing warning. It returns the number
-// of calls repaired.
-//
-// This is append-only: it persists every completion and the aggregate warning
-// through shared completion preparation/projection in one atomic batch. It never
-// rewrites or removes existing history, so the prompt-cache prefix through each
-// repaired call stays intact. Each completion's provider output item matches the
-// original call kind (function vs custom) via the projection.
-// Each completion retains its call's original Step identity. An explicit repair
-// Step owns only legacy calls whose persisted message has no Step; without
-// either identity, validation fails before any completion is appended.
-//
-// Fresh-resource repair runs before the resource is ready and therefore never
-// defers to stale live starts. Live provider-400 repair keeps the existing
-// guard so it cannot pre-empt a handler that may still produce the real result.
+type steeringMissingToolOutputRepair struct {
+	repairStepID *string
+	disposition  missingToolOutputRepairDisposition
+	repaired     int
+}
+
 func (e *Engine) repairMissingToolOutputsByAppending(
 	repairStepID *string,
 	disposition missingToolOutputRepairDisposition,
@@ -104,6 +90,15 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	if e == nil || e.store == nil {
 		return 0, nil
 	}
+	repair := &steeringMissingToolOutputRepair{repairStepID: textutil.Pointer(repairStepID), disposition: disposition}
+	err := e.steer("", steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{missingToolOutputRepair: repair}}})
+	return repair.repaired, err
+}
+
+func (e *Engine) repairMissingToolOutputsByAppendingRaw(
+	repairStepID *string,
+	disposition missingToolOutputRepairDisposition,
+) (int, error) {
 	policy, err := missingToolOutputPolicy(disposition)
 	if err != nil {
 		return 0, err
@@ -182,7 +177,6 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 			})
 		}
 	}
-
 	records, receipt, appendErr := e.eventLog.AppendRecordBatchAtomic(inputs)
 	if !receipt.Committed {
 		return 0, appendErr

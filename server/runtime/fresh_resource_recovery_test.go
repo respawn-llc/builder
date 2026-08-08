@@ -276,6 +276,16 @@ func assertFreshResourceRepairOnEngine(
 			t.Fatalf("fresh repair retained stale live tool start: %+v", live)
 		}
 	}
+	warningFound := false
+	for _, row := range hydrationSnapshot(t, engine).CommittedRows {
+		if row.Notice != nil && row.Notice.ToolOutputRepair != nil {
+			warningFound = true
+			break
+		}
+	}
+	if !warningFound {
+		t.Fatal("fresh repair snapshot omitted typed warning")
+	}
 	if store.Meta().PendingModelRecovery != nil {
 		t.Fatalf("fresh repair retained pending recovery: %+v", store.Meta().PendingModelRecovery)
 	}

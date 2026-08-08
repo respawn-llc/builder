@@ -46,6 +46,7 @@ type steeringItem struct {
 	resultGroupReport           *steeringResultGroupReport
 	resultGroupFlush            *steeringResultGroupFlush
 	resultGroupClose            *steeringResultGroupClose
+	missingToolOutputRepair     *steeringMissingToolOutputRepair
 	queuedFlush                 *steeringQueuedUserMessageFlush
 	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
@@ -601,6 +602,12 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+	if item.missingToolOutputRepair != nil {
+		repair := item.missingToolOutputRepair
+		repaired, err := e.repairMissingToolOutputsByAppendingRaw(repair.repairStepID, repair.disposition)
+		repair.repaired = repaired
+		return err
+	}
 	if item.resultGroupReport != nil {
 		report := item.resultGroupReport
 		if report.collector == nil {

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -212,6 +213,53 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 	}
 	if got, want := countUserItems(client.calls[1].Items), countUserItems(client.calls[0].Items)+1; got != want {
 		t.Fatalf("retry user-message count = %d, want queued steering to add one item to %d", got, want)
+	}
+}
+
+func TestLiveMissingToolOutputRepairWaitsForOutputSteeringBoundary(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+		ID: "serialized-repair", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+
+	engine.outputMutationMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			engine.outputMutationMu.Unlock()
+		}
+	}()
+	type repairOutcome struct {
+		count int
+		err   error
+	}
+	started := make(chan struct{})
+	done := make(chan repairOutcome, 1)
+	go func() {
+		close(started)
+		count, err := engine.repairMissingToolOutputsByAppending(
+			textutil.Value("step"),
+			missingToolOutputRepairLiveProvider400,
+		)
+		done <- repairOutcome{count: count, err: err}
+	}()
+	<-started
+	select {
+	case outcome := <-done:
+		t.Fatalf("live repair bypassed output steering boundary: %+v", outcome)
+	case <-time.After(100 * time.Millisecond):
+	}
+	engine.outputMutationMu.Unlock()
+	locked = false
+
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || outcome.count != 1 {
+			t.Fatalf("serialized live repair = %+v, want count one", outcome)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serialized live repair did not finish")
 	}
 }
 
