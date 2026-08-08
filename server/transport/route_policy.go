@@ -383,6 +383,8 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.AskAnswerRequest:
 		return p.SessionID, true
+	case serverapi.PromptAnswerBatchRequest:
+		return p.SessionID.String(), true
 	case serverapi.ApprovalListPendingBySessionRequest:
 		return p.SessionID, true
 	case serverapi.ApprovalAnswerRequest:

@@ -293,7 +293,7 @@ func (c *CurrentNodeController) AcceptWorkflowQuestion(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	askID string,
-	response askquestion.AskQuestionResponse,
+	answer askquestion.AskQuestionResolution,
 	submitErr error,
 ) (WorkflowQuestionAcceptance, error) {
 	if c == nil {
@@ -305,9 +305,6 @@ func (c *CurrentNodeController) AcceptWorkflowQuestion(
 	askID = strings.TrimSpace(askID)
 	if askID == "" {
 		return nil, errors.New("workflow ask id is required")
-	}
-	if strings.TrimSpace(response.RequestID) != askID {
-		return nil, errors.New("workflow question response does not match ask id")
 	}
 	var acceptance sessionruntime.PromptResponseAcceptance
 	err := c.permit.Run(ctx, func(ctx context.Context) error {
@@ -327,7 +324,12 @@ func (c *CurrentNodeController) AcceptWorkflowQuestion(
 			}
 			return err
 		}
-		acceptance, err = c.authority.AcceptPromptResponseForScope(resolution.ScopeID, response, submitErr)
+		acceptance, err = c.authority.AcceptPromptResolutionForScope(
+			resolution.ScopeID,
+			askID,
+			answer,
+			submitErr,
+		)
 		return err
 	})
 	if err != nil {

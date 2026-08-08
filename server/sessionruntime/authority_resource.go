@@ -151,7 +151,7 @@ func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(contex
 
 type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
 
-type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestionRequest) (tools.AskQuestionResponse, error)
+type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestionRequest) (tools.AskQuestionResolution, error)
 
 type AgentExecutionRequest struct {
 	Descriptor session.SessionDescriptor
@@ -764,11 +764,11 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		scopeID := scope.ID()
 		askHandler := request.Ask
 		if askHandler == nil {
-			askHandler = func(ctx context.Context, scope ExecutionScope, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
-				return a.AwaitPromptResponse(ctx, scope.ID(), req)
+			askHandler = func(ctx context.Context, scope ExecutionScope, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+				return a.AwaitPromptResolution(ctx, scope.ID(), req)
 			}
 		}
-		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 			return askHandler(ctx, execution.scope, req)
 		})
 		resource.askScope = &scopeID

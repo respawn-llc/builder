@@ -14,6 +14,7 @@ func singleFileAccessScopeForTest(root string, real string, info os.FileInfo) Fi
 }
 
 func TestDefaultUserDeniedIncludesRejectionInstruction(t *testing.T) {
+	commentary := "no"
 	workspace := t.TempDir()
 	real, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
@@ -28,7 +29,7 @@ func TestDefaultUserDeniedIncludesRejectionInstruction(t *testing.T) {
 		Scope:         singleFileAccessScopeForTest(workspace, real, info),
 		WorkspaceOnly: true,
 		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
-			return FSGuardApproval{Decision: FSGuardDecisionDeny, Commentary: "no"}, nil
+			return FSGuardApproval{Decision: FSGuardDecisionDeny, Commentary: &commentary}, nil
 		},
 		RejectionInstruction: "ask user for a safe path",
 		ErrorLabels:          FSGuardErrorLabels{OutsidePath: "outside"},

@@ -2152,10 +2152,12 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
 		t.Fatalf("pending background question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
-		RequestID: pending.requestID,
-		Answer:    "yes",
-	}, nil); err != nil {
+	if err := authority.SubmitPromptResolution(
+		sessionID,
+		pending.requestID,
+		testQuestionResolution("yes"),
+		nil,
+	); err != nil {
 		t.Fatalf("submit background question response: %v", err)
 	}
 	select {
@@ -2696,15 +2698,15 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
-	responseDone := make(chan executionPromptResult, 1)
+	responseDone := make(chan promptAwaitTestResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
 		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
-			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			responseDone <- executionPromptResult{response: response, err: askErr}
+			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
+			responseDone <- promptAwaitTestResult{resolution: resolution, err: askErr}
 			return askErr
 		},
 	})
@@ -2730,16 +2732,22 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		t.Fatalf("pending question snapshot = %+v", snapshot)
 	}
 
-	want := tools.AskQuestionResponse{RequestID: askID, Answer: "yes"}
-	if err := authority.SubmitPromptResponse(sessionID, want, nil); err != nil {
+	if err := authority.SubmitPromptResolution(
+		sessionID,
+		askID,
+		testQuestionResolution("yes"),
+		nil,
+	); err != nil {
 		t.Fatalf("submit prompt response: %v", err)
 	}
 	resolved := <-feed
 	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
 		t.Fatalf("resolved prompt = %+v, want exact resource %v scope %s ask %s", resolved, resource, handle.Scope().ID(), askID)
 	}
-	if result := <-responseDone; result.err != nil || result.response != want {
-		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, want)
+	if result := <-responseDone; result.err != nil {
+		t.Fatalf("prompt resolution error = %v", result.err)
+	} else {
+		requireQuestionAnswer(t, result.resolution, "yes")
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
@@ -2765,7 +2773,7 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 	request := tools.AskQuestionRequest{
 		ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
 	}
-	response := tools.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}
+	resolution := testQuestionResolution("yes")
 
 	authority.mu.Lock()
 	unlocked := false
@@ -2775,10 +2783,10 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 		}
 	}()
 
-	awaitDone := make(chan executionPromptResult, 1)
+	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
 		answer, awaitErr := store.Await(context.Background(), request)
-		awaitDone <- executionPromptResult{response: answer, err: awaitErr}
+		awaitDone <- promptAwaitTestResult{resolution: answer, err: awaitErr}
 	}()
 	select {
 	case pending := <-feed:
@@ -2791,7 +2799,7 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 
 	submitDone := make(chan error, 1)
 	go func() {
-		submitDone <- store.Submit(response, nil)
+		submitDone <- store.Submit(request.ID, resolution, nil)
 	}()
 	select {
 	case submitErr := <-submitDone:
@@ -2803,9 +2811,10 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 	}
 	select {
 	case result := <-awaitDone:
-		if result.err != nil || result.response != response {
-			t.Fatalf("prompt result = %+v, error = %v, want %+v", result.response, result.err, response)
+		if result.err != nil {
+			t.Fatalf("prompt result error = %v", result.err)
 		}
+		requireQuestionAnswer(t, result.resolution, "yes")
 	case <-time.After(time.Second):
 		t.Fatal("prompt cleanup waited for the Authority lock")
 	}
@@ -2848,7 +2857,7 @@ func TestCurrentTaskExecutionSnapshotExposesPendingPromptKinds(t *testing.T) {
 			for _, request := range requests {
 				request := request
 				go func() {
-					_, _ = authority.AwaitPromptResponse(ctx, scope.ID(), request)
+					_, _ = authority.AwaitPromptResolution(ctx, scope.ID(), request)
 				}()
 			}
 			<-ctx.Done()
@@ -2921,7 +2930,7 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
-			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
 		},
 	})
@@ -2932,7 +2941,7 @@ func TestCurrentTaskExecutionSnapshotRejectsDuplicatePendingPromptIDs(t *testing
 		_ = handle.Stop(context.Background())
 	})
 	<-feed
-	if _, err := authority.AwaitPromptResponse(context.Background(), handle.Scope().ID(), request); err == nil {
+	if _, err := authority.AwaitPromptResolution(context.Background(), handle.Scope().ID(), request); err == nil {
 		t.Fatal("duplicate pending prompt was accepted")
 	}
 	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
@@ -2987,15 +2996,15 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	request := tools.AskQuestionRequest{ID: askID, StepID: uuid.NewString(), Question: "Proceed?"}
 	workflowRef := workflowExecutionRefForTest(t, "task-exact-prompt", "node-exact-prompt", nil)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	responseDone := make(chan executionPromptResult, 1)
+	responseDone := make(chan promptAwaitTestResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
 		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
-			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			responseDone <- executionPromptResult{response: response, err: askErr}
+			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
+			responseDone <- promptAwaitTestResult{resolution: resolution, err: askErr}
 			return askErr
 		},
 	})
@@ -3013,12 +3022,18 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	if resolved.ScopeID != handle.Scope().ID() || resolved.SessionID != sessionID || !resolved.CurrentNode.Equal(workflowRef.CurrentNode) {
 		t.Fatalf("prompt resolution = %+v, want scope %s session %s node %v", resolved, handle.Scope().ID(), sessionID, workflowRef.CurrentNode)
 	}
-	response := tools.AskQuestionResponse{RequestID: askID, Answer: "yes"}
-	if err := authority.SubmitPromptResponseForScope(resolved.ScopeID, response, nil); err != nil {
-		t.Fatalf("SubmitPromptResponseForScope: %v", err)
+	if err := authority.SubmitPromptResolutionForScope(
+		resolved.ScopeID,
+		askID,
+		testQuestionResolution("yes"),
+		nil,
+	); err != nil {
+		t.Fatalf("SubmitPromptResolutionForScope: %v", err)
 	}
-	if result := <-responseDone; result.err != nil || result.response != response {
-		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, response)
+	if result := <-responseDone; result.err != nil {
+		t.Fatalf("prompt resolution error = %v", result.err)
+	} else {
+		requireQuestionAnswer(t, result.resolution, "yes")
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
@@ -3051,7 +3066,7 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 		Workflow:   releasedWorkflowLeaseForTest(t, authority, workflowRef),
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
-			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
 		},
 	})
@@ -3062,10 +3077,12 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	if pending.scopeID != handle.Scope().ID() || pending.requestID != askID {
 		t.Fatalf("pending question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
-		RequestID: askID,
-		Answer:    "yes",
-	}, nil); err != nil {
+	if err := authority.SubmitPromptResolution(
+		sessionID,
+		askID,
+		testQuestionResolution("yes"),
+		nil,
+	); err != nil {
 		t.Fatalf("submit prompt response: %v", err)
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {

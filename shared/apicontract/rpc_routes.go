@@ -327,6 +327,7 @@ var routeContracts = []Route{
 	unary[serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](protocol.MethodProcessInlineOutput, AuthServer, ScopeProcessActiveProject, ConnectionControl, DependencyProcessControl),
 	unary[serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](protocol.MethodAskListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyAskView),
 	unary[serverapi.AskAnswerRequest, struct{}](protocol.MethodAskAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
+	unary[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](protocol.MethodPromptAnswerBatch, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	unary[serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](protocol.MethodApprovalListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyApprovalView),
 	unary[serverapi.ApprovalAnswerRequest, struct{}](protocol.MethodApprovalAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	progress[serverapi.RunPromptRequest, serverapi.RunPromptResponse, serverapi.RunPromptProgress](protocol.MethodRunPrompt, ScopeProjectWorkspace, DependencyRunPrompt, protocol.MethodRunPromptProgress),

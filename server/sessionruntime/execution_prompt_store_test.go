@@ -10,15 +10,38 @@ import (
 	"core/shared/runtimeids"
 )
 
+type promptAwaitTestResult struct {
+	resolution tools.AskQuestionResolution
+	err        error
+}
+
+func testQuestionResolution(answer string) tools.AskQuestionAnswer {
+	return tools.AskQuestionAnswer{
+		Freeform: &answer,
+	}
+}
+
+func requireQuestionAnswer(
+	t *testing.T,
+	resolution tools.AskQuestionResolution,
+	want string,
+) {
+	t.Helper()
+	answer, ok := resolution.(tools.AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != want {
+		t.Fatalf("Question resolution = %+v, want freeform %q", resolution, want)
+	}
+}
+
 func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	feed := make(authorityPromptFeed)
 	store := newExecutionPromptStoreForTest(t, feed)
 	first := batchedPromptRequest("ask-1", 0)
 	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan executionPromptResult, 1)
+	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), first)
-		firstResult <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), first)
+		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	pending := <-feed
 	if pending.requestID != first.ID || pending.resolved {
@@ -29,7 +52,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	answerDone := make(chan error, 1)
 	go func() {
 		acceptance, err := store.Accept(
-			tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
+			first.ID,
+			testQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -44,7 +68,7 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 	select {
 	case result := <-firstResult:
-		if result.err != nil || result.response.RequestID != first.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("first prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -56,10 +80,10 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	default:
 	}
 
-	secondResult := make(chan executionPromptResult, 1)
+	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), second)
-		secondResult <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), second)
+		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	select {
@@ -82,7 +106,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	submitDone := make(chan error, 1)
 	go func() {
 		submitDone <- store.Submit(
-			tools.AskQuestionResponse{RequestID: second.ID, Answer: "two"},
+			second.ID,
+			testQuestionResolution("two"),
 			nil,
 		)
 	}()
@@ -95,7 +120,7 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 	select {
 	case result := <-secondResult:
-		if result.err != nil || result.response.RequestID != second.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("second prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -103,14 +128,97 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 }
 
+func TestExecutionPromptStorePreservesCanonicalQuestionResolution(t *testing.T) {
+	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
+	request := tools.AskQuestionRequest{ID: "question", Question: "Proceed?"}
+	result := make(chan promptAwaitTestResult, 1)
+	go func() {
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
+	}()
+	requirePromptPending(t, &store, request.ID)
+
+	freeform := "  exact freeform  "
+	if err := store.Submit(request.ID, tools.AskQuestionAnswer{
+		Freeform: &freeform,
+	}, nil); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("Await: %v", got.err)
+	}
+	answer, ok := got.resolution.(tools.AskQuestionAnswer)
+	if !ok {
+		t.Fatalf("resolution type = %T", got.resolution)
+	}
+	if answer.Freeform == nil || *answer.Freeform != freeform {
+		t.Fatalf("freeform = %v, want exact value", answer.Freeform)
+	}
+}
+
+func TestExecutionPromptStorePreservesExactApprovalCommentary(t *testing.T) {
+	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
+	request := tools.AskQuestionRequest{
+		ID:       "legacy-approval",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []tools.AskQuestionApprovalOption{{
+			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	}
+	result := make(chan promptAwaitTestResult, 1)
+	go func() {
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
+	}()
+	requirePromptPending(t, &store, request.ID)
+
+	commentary := "  exact commentary  "
+	if err := store.Submit(request.ID, tools.AskQuestionApproval{
+		Decision:   tools.AskQuestionApprovalDecisionAllowOnce,
+		Commentary: &commentary,
+	}, nil); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("Await: %v", got.err)
+	}
+	approval, ok := got.resolution.(tools.AskQuestionApproval)
+	if !ok || approval.Commentary == nil || *approval.Commentary != commentary {
+		t.Fatalf("Approval resolution = %+v, want exact commentary", got.resolution)
+	}
+}
+
+func TestPromptInvariantUsesDebugAwarePolicy(t *testing.T) {
+	t.Run("production", func(t *testing.T) {
+		t.Setenv("KENT_DEBUG", "")
+		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+		if err := reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure"); err == nil {
+			t.Fatal("prompt invariant did not surface an error")
+		}
+	})
+	t.Run("debug", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "panic")
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("prompt invariant did not panic in debug mode")
+			}
+		}()
+		_ = reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure")
+	})
+}
+
 func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *testing.T) {
 	feed := newGatedPromptFeed()
 	store := newExecutionPromptStoreForTest(t, feed)
 	request := tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}
-	awaitDone := make(chan executionPromptResult, 1)
+	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), request)
-		awaitDone <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), request)
+		awaitDone <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	<-feed.pendingStarted
 
@@ -177,17 +285,18 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSuccessor(t *testing.T) {
 	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
 	request := batchedPromptRequest("ask-1", 0)
-	result := make(chan executionPromptResult, 1)
+	result := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), request)
-		result <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, request.ID)
 
 	answerDone := make(chan error, 1)
 	go func() {
 		acceptance, err := store.Accept(
-			tools.AskQuestionResponse{RequestID: request.ID, Answer: "one"},
+			request.ID,
+			testQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -221,15 +330,16 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
 	first := batchedPromptRequest("ask-1", 0)
 	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan executionPromptResult, 1)
+	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), first)
-		firstResult <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), first)
+		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, first.ID)
 
 	acceptance, err := store.Accept(
-		tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
+		first.ID,
+		testQuestionResolution("one"),
 		nil,
 	)
 	if err != nil {
@@ -237,28 +347,29 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	}
 	select {
 	case result := <-firstResult:
-		if result.err != nil || result.response.RequestID != first.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("first prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for first prompt response")
 	}
 
-	secondResult := make(chan executionPromptResult, 1)
+	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), second)
-		secondResult <- executionPromptResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), second)
+		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	if err := store.Submit(
-		tools.AskQuestionResponse{RequestID: second.ID, Answer: "two"},
+		second.ID,
+		testQuestionResolution("two"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit second prompt response: %v", err)
 	}
 	select {
 	case result := <-secondResult:
-		if result.err != nil || result.response.RequestID != second.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("second prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -286,7 +397,6 @@ func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               "run-1",
 			StepID:              "step-1",
-			BatchID:             "batch-1",
 			PromptID:            id,
 			BatchPromptIDs:      []string{"ask-1", "ask-2"},
 			CandidateOrdinal:    ordinal,

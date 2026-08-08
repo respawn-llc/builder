@@ -166,11 +166,9 @@ func TestLocalToolRegistrySiblingWorkspaceBypassesNativeToolApprovals(t *testing
 		t.Fatalf("NewLocalToolRegistryBinding: %v", err)
 	}
 	var approvalRequests int
-	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		approvalRequests++
-		return askquestion.AskQuestionResponse{
-			Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny},
-		}, nil
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionDeny}, nil
 	})
 
 	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
@@ -250,11 +248,9 @@ func TestLocalToolRegistryTemporaryPathsBypassNativeToolApprovals(t *testing.T) 
 		t.Fatalf("NewLocalToolRegistryBinding: %v", err)
 	}
 	var approvalRequests int
-	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		approvalRequests++
-		return askquestion.AskQuestionResponse{
-			Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny},
-		}, nil
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionDeny}, nil
 	})
 
 	editHandler, ok := binding.Registry().Get(toolspec.ToolEdit)
@@ -361,11 +357,11 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 		logger,
 		toolspec.ToolViewImage,
 	)
-	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-		if !strings.Contains(req.Question, "Allow reading") {
-			t.Fatalf("expected read-focused approval question, got %q", req.Question)
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+		if !req.Approval || len(req.ApprovalOptions) != 3 {
+			t.Fatalf("outside-path request = %+v, want structured approval", req)
 		}
-		return askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}, nil
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
 	})
 
 	viewImageHandler, ok := registry.Get(toolspec.ToolViewImage)
@@ -534,11 +530,11 @@ func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) 
 		t.Fatalf("write generated pdf: %v", err)
 	}
 	registry, broker := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolViewImage)
-	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-		if !strings.Contains(req.Question, "Allow reading") {
-			t.Fatalf("expected read-focused approval question, got %q", req.Question)
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+		if !req.Approval || len(req.ApprovalOptions) != 3 {
+			t.Fatalf("generated-file request = %+v, want structured approval", req)
 		}
-		return askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}, nil
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
 	})
 
 	viewImageHandler, ok := registry.Get(toolspec.ToolViewImage)
