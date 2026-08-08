@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -194,6 +196,64 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 	}
 	if _, _, found := completionRecordCount(t, liveStore, "live"); found {
 		t.Fatal("invalid disposition appended a completion")
+	}
+}
+
+func TestFreshResourceRepairCommitsAllCompletionsWithAggregateWarning(t *testing.T) {
+	observerErr := errors.New("fresh recovery observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	const recoveryStepID = "recovery-step"
+	steerDanglingToolCall(t, engine, "first-step", llm.ToolCall{
+		ID: "first", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
+	})
+	steerDanglingToolCall(t, engine, "second-step", llm.ToolCall{
+		ID: "second", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`),
+	})
+	gate.FailNext(observerErr)
+
+	repaired, err := engine.repairMissingToolOutputsByAppending(
+		textutil.Value(recoveryStepID),
+		missingToolOutputRepairFreshResource,
+	)
+	if !errors.Is(err, observerErr) {
+		t.Fatalf("fresh repair error = %v, want observer failure", err)
+	}
+	if repaired != 2 {
+		t.Fatalf("fresh repair count = %d, want two committed repairs", repaired)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	assertFreshResourceRepairOnEngine(t, restored, reopened, "first")
+	assertFreshResourceRepairOnEngine(t, restored, reopened, "second")
+	for callID, expectedStepID := range map[string]string{
+		"first":  "first-step",
+		"second": "second-step",
+	} {
+		record, _ := repairCompletionRecord(t, reopened, callID)
+		if stepID := record.StepID(); stepID == nil || *stepID != expectedStepID {
+			t.Fatalf("repair completion %q step = %v, want %q", callID, stepID, expectedStepID)
+		}
+		completions, warnings, found := completionRecordCount(t, reopened, callID)
+		if !found || completions != 1 || warnings != 1 {
+			t.Fatalf(
+				"reopened records for %q = completions:%d warnings:%d found:%t, want 1/1/true",
+				callID,
+				completions,
+				warnings,
+				found,
+			)
+		}
+	}
+	warning := freshResourceRepairWarning(t, reopened)
+	if warning.Kind != transcript.ToolOutputRepairFreshResource || warning.Count != 2 {
+		t.Fatalf("fresh repair warning = %+v, want fresh-resource count two", warning)
 	}
 }
 

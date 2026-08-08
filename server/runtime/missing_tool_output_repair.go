@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -84,10 +85,10 @@ type danglingToolCall struct {
 // completion for each, plus one operator-facing warning. It returns the number
 // of calls repaired.
 //
-// This is append-only: it persists new tool_completed events through the normal
-// steering/completion path and never rewrites or removes existing history, so
-// the prompt-cache prefix through each repaired call stays intact. The provider
-// output item materialized for each completion automatically matches the
+// This is append-only: it persists every completion and the aggregate warning
+// through shared completion preparation/projection in one atomic batch. It never
+// rewrites or removes existing history, so the prompt-cache prefix through each
+// repaired call stays intact. Each completion's provider output item matches the
 // original call kind (function vs custom) via the projection.
 // Each completion retains its call's original Step identity. An explicit repair
 // Step owns only legacy calls whose persisted message has no Step; without
@@ -142,33 +143,80 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 			return 0, fmt.Errorf("repair dangling tool call %q: step id is required", dangling[index].callID)
 		}
 	}
-	repaired := 0
-	for _, call := range dangling {
-		result := missingToolOutputInterruptedResult(call.callID, toolspec.ID(call.name))
-		result.Output = append(json.RawMessage(nil), policy.output...)
-		if err := e.steer(*call.stepID, steerToolCompletionIntent(result)); err != nil {
-			return repaired, err
-		}
-		repaired++
-	}
-	warning := steerLocalEntryIntent(storedLocalEntry{
+	warning := storedLocalEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		ToolOutputRepair: &transcript.ToolOutputRepairNotice{
 			Kind:  policy.repairKind,
 			Count: len(dangling),
 		},
-	})
-	if repairStepID == nil {
-		if err := e.steer("", warning); err != nil {
-			return repaired, err
+	}
+	prepared := make([]preparedFinalizedToolCompletion, 0, len(dangling))
+	inputs := make([]session.EventRecordAppendInput, 0, len(dangling)+1)
+	for index, call := range dangling {
+		result := missingToolOutputInterruptedResult(call.callID, toolspec.ID(call.name))
+		result.Output = append(json.RawMessage(nil), policy.output...)
+		finalized := e.finalizeLiveToolCompletion(result)
+		if finalized.OperatorFeedback != nil {
+			return 0, fmt.Errorf(
+				"repair dangling tool call %q produced unexpected presentation feedback",
+				call.callID,
+			)
 		}
-		return repaired, nil
+		if index == len(dangling)-1 {
+			finalized.OperatorFeedback = &warning
+		}
+		completion, err := e.prepareFinalizedToolCompletion(finalized)
+		if err != nil {
+			return 0, fmt.Errorf("prepare dangling tool call %q repair: %w", call.callID, err)
+		}
+		prepared = append(prepared, completion)
+		for recordIndex, payload := range completion.records {
+			recordStepID := call.stepID
+			if completion.feedback != nil && recordIndex == len(completion.records)-1 {
+				recordStepID = repairStepID
+			}
+			inputs = append(inputs, session.EventRecordAppendInput{
+				StepID:  textutil.Pointer(recordStepID),
+				Payload: payload,
+			})
+		}
 	}
-	if err := e.steer(*repairStepID, warning); err != nil {
-		return repaired, err
+
+	records, receipt, appendErr := e.eventLog.AppendRecordBatchAtomic(inputs)
+	if !receipt.Committed {
+		return 0, appendErr
 	}
-	return repaired, nil
+	recordIndex := 0
+	var projectionErr error
+	for index, completion := range prepared {
+		nextRecordIndex := recordIndex + len(completion.records)
+		feedbackStepID := *dangling[index].stepID
+		if completion.feedback != nil {
+			feedbackStepID, _ = textutil.OptionalExact(repairStepID)
+		}
+		applied, err := e.applyPreparedFinalizedToolCompletion(
+			feedbackStepID,
+			completion,
+			records[recordIndex:nextRecordIndex],
+		)
+		recordIndex = nextRecordIndex
+		if err != nil {
+			projectionErr = errors.Join(projectionErr, err)
+			continue
+		}
+		projectionErr = errors.Join(
+			projectionErr,
+			e.publishCommittedFinalizedToolCompletion(
+				*dangling[index].stepID,
+				feedbackStepID,
+				completion.completion,
+				&applied.completionProvenance,
+				applied.feedbackProvenance,
+			),
+		)
+	}
+	return len(dangling), errors.Join(appendErr, projectionErr)
 }
 
 // itemsHaveDanglingToolCalls reports whether a prepared request item sequence

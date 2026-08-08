@@ -227,7 +227,7 @@ func TestSiblingAbortDiscardsProvisionalJoinedResultCells(t *testing.T) {
 		},
 	}
 	collector, err := newResultGroupCollector(
-		resultGroupRosterFromPreparedCalls(prepared),
+		testResultGroupRosterFromPreparedCalls(prepared),
 	)
 	if err != nil {
 		t.Fatalf("new result group collector: %v", err)
@@ -643,6 +643,21 @@ type toolExecutionProbe struct {
 	called   bool
 	calls    atomic.Int32
 	warnings []tools.ModelWarning
+}
+
+func testResultGroupRosterFromPreparedCalls(calls []executorToolCall) []resultGroupCallIdentity {
+	accepted := acceptedResponseCalls{
+		local: make([]llm.ToolCall, len(calls)),
+		order: make([]acceptedResponseCallRef, len(calls)),
+	}
+	for index, call := range calls {
+		accepted.local[index] = call.call
+		accepted.order[index] = acceptedResponseCallRef{
+			source: acceptedResponseCallLocal,
+			index:  index,
+		}
+	}
+	return resultGroupRosterFromAcceptedCalls(accepted)
 }
 
 type toolDurabilityObservationRecorder struct {

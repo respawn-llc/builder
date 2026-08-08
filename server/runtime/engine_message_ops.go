@@ -117,6 +117,23 @@ func (e *Engine) applyPreparedFinalizedToolCompletion(
 	return applied, nil
 }
 
+func (e *Engine) publishCommittedFinalizedToolCompletion(
+	completionStepID string,
+	feedbackStepID string,
+	completion finalizedToolCompletion,
+	completionProvenance *TranscriptCommittedRowProvenance,
+	feedbackProvenance *TranscriptCommittedRowProvenance,
+) error {
+	result := cloneToolResult(completion.Result)
+	e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
+	err := e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: completionStepID, ToolResult: &result, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(completionProvenance)})
+	if completion.OperatorFeedback == nil {
+		return err
+	}
+	entry := localEntryChatEntryForStep(*completion.OperatorFeedback, feedbackStepID)
+	return errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: feedbackStepID, LocalEntry: entry, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(feedbackProvenance)}))
+}
+
 func (e *Engine) persistToolCompletionRaw(stepID string, result tools.Result) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
 	receipt, provenance, _, err := e.persistFinalizedToolCompletionRaw(
 		stepID,

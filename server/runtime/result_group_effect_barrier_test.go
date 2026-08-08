@@ -867,7 +867,7 @@ func TestFirstQuestionBarrierFatalLeavesNoAttentionBatch(t *testing.T) {
 	roster := []resultGroupCallIdentity{
 		resultGroupIdentityFromToolCall(calls.hosted[0].Call),
 	}
-	roster = append(roster, resultGroupRosterFromPreparedCalls(prepared)...)
+	roster = append(roster, testResultGroupRosterFromPreparedCalls(prepared)...)
 	collector, err := newResultGroupCollector(roster)
 	if err != nil {
 		t.Fatalf("new first-Question collector: %v", err)

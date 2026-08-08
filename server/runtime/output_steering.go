@@ -805,19 +805,13 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		receipt, provenance, feedbackProvenance, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			result := cloneToolResult(completion.Result)
-			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}))
-			if completion.OperatorFeedback != nil {
-				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
-				err = errors.Join(err, e.emitRaw(Event{
-					Kind:                       EventLocalEntryAdded,
-					StepID:                     stepID,
-					LocalEntry:                 entry,
-					CommittedTranscriptChanged: true,
-					CommittedProvenance:        cloneTranscriptCommittedRowProvenance(feedbackProvenance),
-				}))
-			}
+			err = errors.Join(err, e.publishCommittedFinalizedToolCompletion(
+				stepID,
+				stepID,
+				completion,
+				provenance,
+				feedbackProvenance,
+			))
 		}
 		return err
 	}

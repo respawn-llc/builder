@@ -380,14 +380,6 @@ func resultGroupRosterFromAcceptedCalls(calls acceptedResponseCalls) []resultGro
 	return roster
 }
 
-func resultGroupRosterFromPreparedCalls(calls []executorToolCall) []resultGroupCallIdentity {
-	roster := make([]resultGroupCallIdentity, len(calls))
-	for index, call := range calls {
-		roster[index] = resultGroupIdentityFromToolCall(call.call)
-	}
-	return roster
-}
-
 func resultGroupIdentityFromToolCall(call llm.ToolCall) resultGroupCallIdentity {
 	outputKind := session.ToolOutputKindFunction
 	if call.Custom {
