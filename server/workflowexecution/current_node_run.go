@@ -652,7 +652,9 @@ func (c *CurrentNodeController) discardRuns(
 			run.agentActivation.resolve(currentNodeAgentActivationResult{}, cause)
 		}
 		run.stopOnce(reason, cause)
-		c.runs.delete(key)
+		if _, admitting := c.admissionWorkers[key]; !admitting {
+			c.runs.delete(key)
+		}
 	}
 }
 

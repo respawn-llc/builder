@@ -1434,7 +1434,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 			}
 			live.stopOnce(currentNodeRunStopSourceRetired, sessionruntime.ErrExecutionNoLongerLive)
 		}
-		if isLive {
+		if _, admitting := c.admissionWorkers[key]; isLive && !admitting {
 			c.runs.delete(key)
 		}
 		c.interrupts.finishScope(scope.ID())
