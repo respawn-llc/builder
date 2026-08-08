@@ -563,7 +563,7 @@ func TestFinishRunErrorFeedbackPersistsOnlyUnpersistedLifecycleBranch(t *testing
 		return count
 	}
 	callbackErr := errors.New("goal callback failed")
-	if engine.persistRunErrorFeedback(callbackErr) == "" {
+	if _, present := engine.persistRunErrorFeedback(callbackErr); !present {
 		t.Fatal("goal callback failure produced no durable feedback")
 	}
 	before := countFeedback()

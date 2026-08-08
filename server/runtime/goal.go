@@ -652,17 +652,17 @@ func (e *Engine) surfaceRunError(err error) {
 	if _, ok := resultGroupFatalFromError(err); ok {
 		err = removeErrorBranches(err, func(candidate error) bool { _, matches := candidate.(*resultGroupFatal); return matches })
 	}
-	message := e.persistRunErrorFeedback(err)
-	if message == "" {
+	message, present := e.persistRunErrorFeedback(err)
+	if !present {
 		return
 	}
 	e.SetStreamingError(message)
 }
 
-func (e *Engine) persistRunErrorFeedback(err error) string {
+func (e *Engine) persistRunErrorFeedback(err error) (string, bool) {
 	message, ok := runErrorFeedbackMessage(err)
 	if !ok {
-		return ""
+		return "", false
 	}
 	message, appendErr := e.steerRuntimeErrorFeedback(err)
 	if appendErr != nil {
@@ -675,7 +675,7 @@ func (e *Engine) persistRunErrorFeedback(err error) string {
 			Text:       "Failed to persist run error: " + appendErr.Error(),
 		}))
 	}
-	return message
+	return message, true
 }
 
 func (e *Engine) setStreamingRunError(err error) {
@@ -733,7 +733,7 @@ func (e *Engine) withRunErrorFeedbackBeforeStepClose(
 	}
 	return func(ctx context.Context, stepID string) error {
 		err := run(ctx, stepID)
-		if e.persistRunErrorFeedback(err) != "" {
+		if _, present := e.persistRunErrorFeedback(err); present {
 			return &persistedRunCallbackError{cause: err}
 		}
 		return err

@@ -304,7 +304,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		if _, fatal := resultGroupFatalFromError(runErr); fatal {
 			return runErr
 		}
-		if b.engine.persistRunErrorFeedback(runErr) == "" {
+		if _, present := b.engine.persistRunErrorFeedback(runErr); !present {
 			return runErr
 		}
 		persistedCallbackErr = &persistedRunCallbackError{

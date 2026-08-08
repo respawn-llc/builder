@@ -813,7 +813,7 @@ func TestLifecycleTaskSurfacesOnlyUnpersistedTerminalBranches(t *testing.T) {
 			},
 		},
 	)
-	if eng.persistRunErrorFeedback(persistedErr) == "" {
+	if _, present := eng.persistRunErrorFeedback(persistedErr); !present {
 		t.Fatal("initial callback failure produced no durable feedback")
 	}
 	if !eng.launchLifecycleTask(func(context.Context) error {
@@ -842,6 +842,25 @@ func TestLifecycleTaskSurfacesOnlyUnpersistedTerminalBranches(t *testing.T) {
 			t.Fatalf("durable lifecycle feedback entries = %d, want original and ancillary once", feedback)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRunErrorFeedbackPreservesApplicableEmptyMessagePresence(t *testing.T) {
+	eng := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	blankErr := errors.New("")
+	err := eng.withRunErrorFeedbackBeforeStepClose(
+		func(context.Context, string) error { return blankErr },
+	)(context.Background(), "step")
+
+	var persisted *persistedRunCallbackError
+	if !errors.As(err, &persisted) || !errors.Is(err, blankErr) {
+		t.Fatalf("empty-message callback error = %v, want typed persisted wrapper", err)
 	}
 }
 
