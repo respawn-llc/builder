@@ -510,35 +510,17 @@ func (e *Engine) prepareResultGroupProjection(
 	for index, unit := range units {
 		slotIndex := collector.cursor + index
 		if slotIndex >= len(collector.slots) {
-			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"result group projection slot %d exceeds roster %d",
-				slotIndex,
-				len(collector.slots),
-			)
+			return resultGroupProjectionPlan{}, fmt.Errorf("result group projection slot %d exceeds roster %d", slotIndex, len(collector.slots))
 		}
 		slot := collector.slots[slotIndex]
 		if unit.result.CallID != slot.call.CallID {
-			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"result group unit call %q does not match slot %q at ordinal %d",
-				unit.result.CallID,
-				slot.call.CallID,
-				slot.ordinal,
-			)
+			return resultGroupProjectionPlan{}, fmt.Errorf("result group unit call %q does not match slot %q at ordinal %d", unit.result.CallID, slot.call.CallID, slot.ordinal)
 		}
-		completion, err := e.prepareFinalizedToolCompletion(
-			e.finalizeLiveToolCompletion(unit.result),
-		)
+		completion, err := e.prepareFinalizedToolCompletion(e.finalizeLiveToolCompletion(unit.result))
 		if err != nil {
-			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"prepare result group completion %q: %w",
-				slot.call.CallID,
-				err,
-			)
+			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group completion %q: %w", slot.call.CallID, err)
 		}
-		prepared := resultGroupPreparedUnit{
-			completion:      completion,
-			completionStart: len(plan.payloads),
-		}
+		prepared := resultGroupPreparedUnit{completion: completion, completionStart: len(plan.payloads)}
 		plan.payloads = append(plan.payloads, completion.records...)
 		output := llm.Message{
 			Role:        llm.RoleTool,
@@ -549,11 +531,7 @@ func (e *Engine) prepareResultGroupProjection(
 		}
 		preparedOutput, err := e.prepareMessageProjection(stepID, output)
 		if err != nil {
-			return resultGroupProjectionPlan{}, fmt.Errorf(
-				"prepare result group output %q: %w",
-				slot.call.CallID,
-				err,
-			)
+			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group output %q: %w", slot.call.CallID, err)
 		}
 		prepared.output = preparedOutput
 		prepared.outputRecordIndex = len(plan.payloads)
