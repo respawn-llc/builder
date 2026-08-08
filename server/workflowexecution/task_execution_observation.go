@@ -28,6 +28,7 @@ type WorkflowTaskExecutionObservation struct {
 type WorkflowTaskLifecycleReader interface {
 	ObserveSelected(context.Context, []workflow.TaskID) (WorkflowTaskExecutionObservation, error)
 	PendingQuestions(
+		context.Context,
 		workflowstore.LifecycleQuestionCursor,
 		int,
 	) ([]workflowstore.LifecyclePendingQuestion, error)
@@ -110,10 +111,11 @@ func (r workflowTaskLifecycleReader) ObserveSelected(
 }
 
 func (r workflowTaskLifecycleReader) PendingQuestions(
+	ctx context.Context,
 	cursor workflowstore.LifecycleQuestionCursor,
 	limit int,
 ) ([]workflowstore.LifecyclePendingQuestion, error) {
-	return r.capture.PendingQuestions(cursor, limit)
+	return r.capture.PendingQuestions(ctx, cursor, limit)
 }
 
 func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(

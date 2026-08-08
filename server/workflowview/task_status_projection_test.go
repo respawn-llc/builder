@@ -541,6 +541,7 @@ func (r workflowViewTestLifecycleReader) ObserveSelected(
 }
 
 func (r workflowViewTestLifecycleReader) PendingQuestions(
+	_ context.Context,
 	cursor workflowstore.LifecycleQuestionCursor,
 	limit int,
 ) ([]workflowstore.LifecyclePendingQuestion, error) {

@@ -5,27 +5,142 @@ package sqlitelifecyclegen
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type DBTX interface {
 	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
 }
 
-func New(db DBTX) *Queries {
-	return &Queries{db: db}
-}
+func New(db DBTX) *Queries { return &Queries{db: db} }
 
-type Queries struct {
-	db DBTX
-}
+type Queries struct{ db DBTX }
 
-func (q *Queries) WithTx(tx *sql.Tx) *Queries {
-	return &Queries{db: tx}
-}
+func (q *Queries) WithTx(tx *sql.Tx) *Queries { return &Queries{db: tx} }
 
 const deferForeignKeys = "PRAGMA defer_foreign_keys = ON;"
 
 func (q *Queries) DeferForeignKeys(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deferForeignKeys)
 	return err
+}
+
+const createLifecycleQuestionIndex = "CREATE TABLE IF NOT EXISTS lifecycle_question_index (\n    occurred_at_unix_ms INTEGER NOT NULL CHECK (occurred_at_unix_ms > 0),\n    item_id TEXT NOT NULL CHECK (item_id <> '' AND item_id = trim(item_id)),\n    task_id TEXT NOT NULL CHECK (task_id <> '' AND task_id = trim(task_id)),\n    node_id TEXT NOT NULL CHECK (node_id <> '' AND node_id = trim(node_id)),\n    transition_branch_key TEXT CHECK (\n        transition_branch_key IS NULL\n        OR (transition_branch_key <> '' AND transition_branch_key = trim(transition_branch_key))\n    ),\n    scope_id TEXT NOT NULL CHECK (scope_id <> '' AND scope_id = trim(scope_id)),\n    prompt_id TEXT NOT NULL CHECK (prompt_id <> '' AND prompt_id = trim(prompt_id)),\n    PRIMARY KEY (occurred_at_unix_ms DESC, item_id DESC)\n);"
+
+func (q *Queries) CreateLifecycleQuestionIndex(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, createLifecycleQuestionIndex)
+	return err
+}
+
+const clearLifecycleQuestionIndex = "DELETE FROM lifecycle_question_index;"
+
+func (q *Queries) ClearLifecycleQuestionIndex(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearLifecycleQuestionIndex)
+	return err
+}
+
+type LifecycleQuestionRecord struct {
+	OccurredAtUnixMs    int64
+	ItemID              string
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	ScopeID             string
+	PromptID            string
+}
+
+const insertLifecycleQuestion = "INSERT INTO lifecycle_question_index (\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id\n) VALUES (?, ?, ?, ?, ?, ?, ?);"
+
+type InsertLifecycleQuestionParams = LifecycleQuestionRecord
+
+func (q *Queries) InsertLifecycleQuestion(ctx context.Context, arg InsertLifecycleQuestionParams) error {
+	_, err := q.db.ExecContext(ctx, insertLifecycleQuestion,
+		arg.OccurredAtUnixMs,
+		arg.ItemID,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.ScopeID,
+		arg.PromptID,
+	)
+	return err
+}
+
+const deleteLifecycleQuestion = "DELETE FROM lifecycle_question_index\nWHERE occurred_at_unix_ms = ?\n  AND item_id = ?\n  AND task_id = ?\n  AND node_id = ?\n  AND transition_branch_key IS ?\n  AND scope_id = ?\n  AND prompt_id = ?;"
+
+type DeleteLifecycleQuestionParams = LifecycleQuestionRecord
+
+func (q *Queries) DeleteLifecycleQuestion(ctx context.Context, arg DeleteLifecycleQuestionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLifecycleQuestion,
+		arg.OccurredAtUnixMs,
+		arg.ItemID,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.ScopeID,
+		arg.PromptID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read deleted lifecycle Question count: %w", err)
+	}
+	return rows, nil
+}
+
+const anchorLifecycleQuestionIndex = "SELECT EXISTS(\n    SELECT 1\n    FROM lifecycle_question_index\n) AS anchored;"
+
+func (q *Queries) AnchorLifecycleQuestionIndex(ctx context.Context) (bool, error) {
+	var anchored bool
+	err := q.db.QueryRowContext(ctx, anchorLifecycleQuestionIndex).Scan(&anchored)
+	return anchored, err
+}
+
+const listLifecycleQuestions = "SELECT\n    occurred_at_unix_ms,\n    item_id,\n    task_id,\n    node_id,\n    transition_branch_key,\n    scope_id,\n    prompt_id\nFROM lifecycle_question_index\nWHERE ? = 0\n   OR occurred_at_unix_ms < ?\n   OR (occurred_at_unix_ms = ? AND item_id < ?)\nORDER BY occurred_at_unix_ms DESC, item_id DESC\nLIMIT ?;"
+
+type ListLifecycleQuestionsParams struct {
+	CursorActive           int64
+	CursorOccurredAtUnixMs int64
+	CursorItemID           string
+	LimitRows              int64
+}
+
+type ListLifecycleQuestionsRow = LifecycleQuestionRecord
+
+func (q *Queries) ListLifecycleQuestions(ctx context.Context, arg ListLifecycleQuestionsParams) ([]ListLifecycleQuestionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLifecycleQuestions,
+		arg.CursorActive,
+		arg.CursorOccurredAtUnixMs,
+		arg.CursorOccurredAtUnixMs,
+		arg.CursorItemID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLifecycleQuestionsRow
+	for rows.Next() {
+		var item ListLifecycleQuestionsRow
+		if err := rows.Scan(
+			&item.OccurredAtUnixMs,
+			&item.ItemID,
+			&item.TaskID,
+			&item.NodeID,
+			&item.TransitionBranchKey,
+			&item.ScopeID,
+			&item.PromptID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -1,14 +1,29 @@
 package workflowstore
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"hash/fnv"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
+
+const lifecycleQuestionIndexFilePattern = ".lifecycle-question-index-*.sqlite*"
+
+var lifecycleQuestionIndexFiles = struct {
+	sync.Mutex
+	activeByRoot map[string]map[string]struct{}
+}{
+	activeByRoot: make(map[string]map[string]struct{}),
+}
 
 type LifecycleQuestionCursor struct {
 	OccurredAtUnixMs int64
@@ -23,6 +38,31 @@ type LifecyclePendingQuestion struct {
 	Prompt      LifecyclePendingPrompt
 }
 
+type lifecycleQuestionFact struct {
+	occurredAtUnixMs int64
+	itemID           string
+	currentNode      workflow.CurrentNodeReference
+	scopeID          runtimeids.ExecutionScopeID
+	promptID         string
+}
+
+type lifecycleQuestionFactIdentity struct {
+	occurredAtUnixMs int64
+	itemID           string
+}
+
+type lifecycleQuestionIndex struct {
+	db      *sql.DB
+	queries *sqlitelifecyclegen.Queries
+	root    string
+	path    string
+}
+
+type lifecycleQuestionReadSnapshot struct {
+	tx      *sql.Tx
+	queries *sqlitelifecyclegen.Queries
+}
+
 func LifecycleQuestionItemID(sessionID runtimeids.SessionID, promptID string) (string, error) {
 	trimmedPromptID := strings.TrimSpace(promptID)
 	if sessionID.IsZero() || trimmedPromptID == "" || trimmedPromptID != promptID {
@@ -31,143 +71,180 @@ func LifecycleQuestionItemID(sessionID runtimeids.SessionID, promptID string) (s
 	return "question:" + sessionID.String() + ":" + promptID, nil
 }
 
-type lifecycleQuestionKey struct {
-	occurredAtUnixMs int64
-	itemID           string
-}
-
-type lifecycleQuestionLocator struct {
-	taskID      workflow.TaskID
-	currentNode workflow.CurrentNodeReferenceKey
-	scopeID     runtimeids.ExecutionScopeID
-	promptID    string
-}
-
-type lifecycleQuestionIndexNode struct {
-	key      lifecycleQuestionKey
-	locator  lifecycleQuestionLocator
-	priority uint64
-	left     *lifecycleQuestionIndexNode
-	right    *lifecycleQuestionIndexNode
-}
-
-func lifecycleQuestionKeyBefore(left, right lifecycleQuestionKey) bool {
-	if left.occurredAtUnixMs != right.occurredAtUnixMs {
-		return left.occurredAtUnixMs > right.occurredAtUnixMs
+func openLifecycleQuestionIndex(ctx context.Context, persistenceRoot string) (*lifecycleQuestionIndex, error) {
+	persistenceRoot = strings.TrimSpace(persistenceRoot)
+	if persistenceRoot == "" {
+		return nil, errors.New("lifecycle Question index persistence root is required")
 	}
-	return left.itemID > right.itemID
+	file, err := createLifecycleQuestionIndexFile(persistenceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("create lifecycle Question index: %w", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("close lifecycle Question index seed: %w", err),
+			unregisterLifecycleQuestionIndexFile(persistenceRoot, path),
+			removeLifecycleQuestionIndexFiles(path),
+		)
+	}
+	dsnURL := url.URL{Scheme: "file", Path: path}
+	query := url.Values{}
+	query.Add("_pragma", "journal_mode(WAL)")
+	query.Add("_pragma", "synchronous(NORMAL)")
+	query.Add("_pragma", "busy_timeout(5000)")
+	dsnURL.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", dsnURL.String())
+	if err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("open lifecycle Question index: %w", err),
+			unregisterLifecycleQuestionIndexFile(persistenceRoot, path),
+			removeLifecycleQuestionIndexFiles(path),
+		)
+	}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	queries := sqlitelifecyclegen.New(db)
+	if err := queries.CreateLifecycleQuestionIndex(ctx); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("create lifecycle Question index schema: %w", err),
+			db.Close(),
+			unregisterLifecycleQuestionIndexFile(persistenceRoot, path),
+			removeLifecycleQuestionIndexFiles(path),
+		)
+	}
+	if err := queries.ClearLifecycleQuestionIndex(ctx); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("clear lifecycle Question index: %w", err),
+			db.Close(),
+			unregisterLifecycleQuestionIndexFile(persistenceRoot, path),
+			removeLifecycleQuestionIndexFiles(path),
+		)
+	}
+	return &lifecycleQuestionIndex{
+		db:      db,
+		queries: queries,
+		root:    persistenceRoot,
+		path:    path,
+	}, nil
 }
 
-func lifecycleQuestionPriority(key lifecycleQuestionKey) uint64 {
-	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(fmt.Sprintf("%d\x00%s", key.occurredAtUnixMs, key.itemID)))
-	return hash.Sum64()
+func createLifecycleQuestionIndexFile(persistenceRoot string) (*os.File, error) {
+	lifecycleQuestionIndexFiles.Lock()
+	defer lifecycleQuestionIndexFiles.Unlock()
+	paths, err := filepath.Glob(filepath.Join(persistenceRoot, lifecycleQuestionIndexFilePattern))
+	if err != nil {
+		return nil, fmt.Errorf("list stale lifecycle Question indexes: %w", err)
+	}
+	active := lifecycleQuestionIndexFiles.activeByRoot[persistenceRoot]
+	var cleanupErr error
+	for _, path := range paths {
+		basePath := strings.TrimSuffix(strings.TrimSuffix(path, "-shm"), "-wal")
+		if _, live := active[basePath]; live {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove stale lifecycle Question index %q: %w", path, err))
+		}
+	}
+	if cleanupErr != nil {
+		return nil, cleanupErr
+	}
+	file, err := os.CreateTemp(persistenceRoot, ".lifecycle-question-index-*.sqlite")
+	if err != nil {
+		return nil, fmt.Errorf("create lifecycle Question index: %w", err)
+	}
+	if active == nil {
+		active = make(map[string]struct{})
+		lifecycleQuestionIndexFiles.activeByRoot[persistenceRoot] = active
+	}
+	active[file.Name()] = struct{}{}
+	return file, nil
 }
 
-func cloneLifecycleQuestionNode(node *lifecycleQuestionIndexNode) *lifecycleQuestionIndexNode {
-	if node == nil {
+func unregisterLifecycleQuestionIndexFile(persistenceRoot string, path string) error {
+	lifecycleQuestionIndexFiles.Lock()
+	defer lifecycleQuestionIndexFiles.Unlock()
+	active := lifecycleQuestionIndexFiles.activeByRoot[persistenceRoot]
+	delete(active, path)
+	if len(active) == 0 {
+		delete(lifecycleQuestionIndexFiles.activeByRoot, persistenceRoot)
+	}
+	return nil
+}
+
+func removeLifecycleQuestionIndexFiles(path string) error {
+	var cleanupErr error
+	for _, candidate := range []string{path, path + "-shm", path + "-wal"} {
+		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove lifecycle Question index %q: %w", candidate, err))
+		}
+	}
+	return cleanupErr
+}
+
+func (i *lifecycleQuestionIndex) close() error {
+	if i == nil {
 		return nil
 	}
-	cloned := *node
-	return &cloned
-}
-
-func rotateLifecycleQuestionRight(root *lifecycleQuestionIndexNode) *lifecycleQuestionIndexNode {
-	next := cloneLifecycleQuestionNode(root.left)
-	root = cloneLifecycleQuestionNode(root)
-	root.left = next.right
-	next.right = root
-	return next
-}
-
-func rotateLifecycleQuestionLeft(root *lifecycleQuestionIndexNode) *lifecycleQuestionIndexNode {
-	next := cloneLifecycleQuestionNode(root.right)
-	root = cloneLifecycleQuestionNode(root)
-	root.right = next.left
-	next.left = root
-	return next
-}
-
-func insertLifecycleQuestion(
-	root *lifecycleQuestionIndexNode,
-	key lifecycleQuestionKey,
-	locator lifecycleQuestionLocator,
-) (*lifecycleQuestionIndexNode, error) {
-	if root == nil {
-		return &lifecycleQuestionIndexNode{
-			key:      key,
-			locator:  locator,
-			priority: lifecycleQuestionPriority(key),
-		}, nil
+	var clearErr error
+	if i.queries != nil {
+		clearErr = i.queries.ClearLifecycleQuestionIndex(context.Background())
 	}
-	if key == root.key {
-		return nil, fmt.Errorf("lifecycle Question index contains duplicate item %q", key.itemID)
+	var closeErr error
+	if i.db != nil {
+		closeErr = i.db.Close()
 	}
-	next := cloneLifecycleQuestionNode(root)
-	var err error
-	if lifecycleQuestionKeyBefore(key, root.key) {
-		next.left, err = insertLifecycleQuestion(root.left, key, locator)
-		if err == nil && next.left.priority < next.priority {
-			next = rotateLifecycleQuestionRight(next)
+	removeErr := removeLifecycleQuestionIndexFiles(i.path)
+	unregisterErr := unregisterLifecycleQuestionIndexFile(i.root, i.path)
+	i.db = nil
+	i.queries = nil
+	i.root = ""
+	i.path = ""
+	return errors.Join(clearErr, closeErr, removeErr, unregisterErr)
+}
+
+func (i *lifecycleQuestionIndex) beginRead(ctx context.Context) (*lifecycleQuestionReadSnapshot, error) {
+	if i == nil || i.db == nil {
+		return nil, errors.New("lifecycle Question index is required")
+	}
+	tx, err := i.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin lifecycle Question index read: %w", err)
+	}
+	queries := sqlitelifecyclegen.New(tx)
+	if _, err := queries.AnchorLifecycleQuestionIndex(ctx); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("anchor lifecycle Question index read: %w", err),
+			tx.Rollback(),
+		)
+	}
+	return &lifecycleQuestionReadSnapshot{tx: tx, queries: queries}, nil
+}
+
+func (s *lifecycleQuestionReadSnapshot) close() error {
+	if s == nil || s.tx == nil {
+		return nil
+	}
+	err := s.tx.Rollback()
+	if errors.Is(err, sql.ErrTxDone) {
+		err = nil
+	}
+	s.tx = nil
+	s.queries = nil
+	return err
+}
+
+func lifecycleQuestionFacts(taskID workflow.TaskID, entry lifecycleTaskEntry) ([]lifecycleQuestionFact, error) {
+	facts := make([]lifecycleQuestionFact, 0)
+	for _, exact := range entry.exact {
+		if exact.CurrentNode.TaskID != taskID {
+			return nil, fmt.Errorf(
+				"lifecycle Question Exact Current Node belongs to Task %q, want %q",
+				exact.CurrentNode.TaskID,
+				taskID,
+			)
 		}
-	} else {
-		next.right, err = insertLifecycleQuestion(root.right, key, locator)
-		if err == nil && next.right.priority < next.priority {
-			next = rotateLifecycleQuestionLeft(next)
-		}
-	}
-	return next, err
-}
-
-func mergeLifecycleQuestionIndexes(left, right *lifecycleQuestionIndexNode) *lifecycleQuestionIndexNode {
-	switch {
-	case left == nil:
-		return right
-	case right == nil:
-		return left
-	case left.priority < right.priority:
-		next := cloneLifecycleQuestionNode(left)
-		next.right = mergeLifecycleQuestionIndexes(left.right, right)
-		return next
-	default:
-		next := cloneLifecycleQuestionNode(right)
-		next.left = mergeLifecycleQuestionIndexes(left, right.left)
-		return next
-	}
-}
-
-func removeLifecycleQuestion(
-	root *lifecycleQuestionIndexNode,
-	key lifecycleQuestionKey,
-) (*lifecycleQuestionIndexNode, error) {
-	if root == nil {
-		return nil, fmt.Errorf("lifecycle Question index item %q is absent", key.itemID)
-	}
-	if key == root.key {
-		return mergeLifecycleQuestionIndexes(root.left, root.right), nil
-	}
-	next := cloneLifecycleQuestionNode(root)
-	var err error
-	if lifecycleQuestionKeyBefore(key, root.key) {
-		next.left, err = removeLifecycleQuestion(root.left, key)
-	} else {
-		next.right, err = removeLifecycleQuestion(root.right, key)
-	}
-	return next, err
-}
-
-func lifecycleQuestionFacts(
-	taskID workflow.TaskID,
-	entry lifecycleTaskEntry,
-) ([]struct {
-	key     lifecycleQuestionKey
-	locator lifecycleQuestionLocator
-}, error) {
-	facts := make([]struct {
-		key     lifecycleQuestionKey
-		locator lifecycleQuestionLocator
-	}, 0)
-	for currentNodeKey, exact := range entry.exact {
 		if exact.Agent == nil {
 			continue
 		}
@@ -180,125 +257,263 @@ func lifecycleQuestionFacts(
 			if err != nil {
 				return nil, err
 			}
-			facts = append(facts, struct {
-				key     lifecycleQuestionKey
-				locator lifecycleQuestionLocator
-			}{
-				key: lifecycleQuestionKey{occurredAtUnixMs: occurredAtUnixMs, itemID: itemID},
-				locator: lifecycleQuestionLocator{
-					taskID:      taskID,
-					currentNode: currentNodeKey,
-					scopeID:     exact.ScopeID,
-					promptID:    prompt.ID,
-				},
+			facts = append(facts, lifecycleQuestionFact{
+				occurredAtUnixMs: occurredAtUnixMs,
+				itemID:           itemID,
+				currentNode:      exact.CurrentNode,
+				scopeID:          exact.ScopeID,
+				promptID:         prompt.ID,
 			})
 		}
 	}
 	return facts, nil
 }
 
-func updateLifecycleQuestionIndex(
-	index *lifecycleQuestionIndexNode,
+func lifecycleQuestionFactKey(fact lifecycleQuestionFact) lifecycleQuestionFactIdentity {
+	return lifecycleQuestionFactIdentity{
+		occurredAtUnixMs: fact.occurredAtUnixMs,
+		itemID:           fact.itemID,
+	}
+}
+
+func lifecycleQuestionFactEqual(left, right lifecycleQuestionFact) bool {
+	if left.occurredAtUnixMs != right.occurredAtUnixMs ||
+		left.itemID != right.itemID ||
+		!left.currentNode.Equal(right.currentNode) ||
+		left.scopeID != right.scopeID ||
+		left.promptID != right.promptID {
+		return false
+	}
+	return true
+}
+
+func lifecycleQuestionFactsByKey(
+	facts []lifecycleQuestionFact,
+) (map[lifecycleQuestionFactIdentity]lifecycleQuestionFact, error) {
+	byKey := make(map[lifecycleQuestionFactIdentity]lifecycleQuestionFact, len(facts))
+	for _, fact := range facts {
+		key := lifecycleQuestionFactKey(fact)
+		if _, duplicate := byKey[key]; duplicate {
+			return nil, fmt.Errorf("lifecycle Question index contains duplicate item %q", fact.itemID)
+		}
+		byKey[key] = fact
+	}
+	return byKey, nil
+}
+
+func validateLifecycleQuestionFactsUnchanged(
 	taskID workflow.TaskID,
 	before lifecycleTaskEntry,
 	after lifecycleTaskEntry,
-) (*lifecycleQuestionIndexNode, error) {
+) error {
 	beforeFacts, err := lifecycleQuestionFacts(taskID, before)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	afterFacts, err := lifecycleQuestionFacts(taskID, after)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	next := index
-	for _, fact := range beforeFacts {
-		next, err = removeLifecycleQuestion(next, fact.key)
-		if err != nil {
-			return nil, err
+	beforeByKey, err := lifecycleQuestionFactsByKey(beforeFacts)
+	if err != nil {
+		return err
+	}
+	afterByKey, err := lifecycleQuestionFactsByKey(afterFacts)
+	if err != nil {
+		return err
+	}
+	if len(beforeByKey) != len(afterByKey) {
+		return errors.New("lifecycle pending Questions may change only through Exact prompt publication")
+	}
+	for key, beforeFact := range beforeByKey {
+		afterFact, exists := afterByKey[key]
+		if !exists || !lifecycleQuestionFactEqual(beforeFact, afterFact) {
+			return errors.New("lifecycle pending Questions may change only through Exact prompt publication")
 		}
 	}
-	for _, fact := range afterFacts {
-		next, err = insertLifecycleQuestion(next, fact.key, fact.locator)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return next, nil
+	return nil
 }
 
-func lifecycleQuestionAfterCursor(key lifecycleQuestionKey, cursor LifecycleQuestionCursor) bool {
-	if !cursor.HasValue {
-		return true
+func (i *lifecycleQuestionIndex) replaceTaskQuestions(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	before lifecycleTaskEntry,
+	after lifecycleTaskEntry,
+) (err error) {
+	beforeFacts, err := lifecycleQuestionFacts(taskID, before)
+	if err != nil {
+		return err
 	}
-	return key.occurredAtUnixMs < cursor.OccurredAtUnixMs ||
-		(key.occurredAtUnixMs == cursor.OccurredAtUnixMs && key.itemID < cursor.ItemID)
+	afterFacts, err := lifecycleQuestionFacts(taskID, after)
+	if err != nil {
+		return err
+	}
+	beforeByKey, err := lifecycleQuestionFactsByKey(beforeFacts)
+	if err != nil {
+		return err
+	}
+	afterByKey, err := lifecycleQuestionFactsByKey(afterFacts)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for key, beforeFact := range beforeByKey {
+		afterFact, exists := afterByKey[key]
+		if !exists || !lifecycleQuestionFactEqual(beforeFact, afterFact) {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		for key, afterFact := range afterByKey {
+			beforeFact, exists := beforeByKey[key]
+			if !exists || !lifecycleQuestionFactEqual(beforeFact, afterFact) {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin lifecycle Question index mutation: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	queries := sqlitelifecyclegen.New(tx)
+	for key, beforeFact := range beforeByKey {
+		afterFact, exists := afterByKey[key]
+		if exists && lifecycleQuestionFactEqual(beforeFact, afterFact) {
+			continue
+		}
+		deleted, deleteErr := queries.DeleteLifecycleQuestion(ctx, lifecycleQuestionDeleteParams(beforeFact))
+		if deleteErr != nil {
+			return fmt.Errorf("delete lifecycle Question index item %q: %w", beforeFact.itemID, deleteErr)
+		}
+		if deleted != 1 {
+			return fmt.Errorf("lifecycle Question index item %q delete count = %d, want 1", beforeFact.itemID, deleted)
+		}
+	}
+	for key, afterFact := range afterByKey {
+		beforeFact, exists := beforeByKey[key]
+		if exists && lifecycleQuestionFactEqual(beforeFact, afterFact) {
+			continue
+		}
+		if insertErr := queries.InsertLifecycleQuestion(ctx, lifecycleQuestionInsertParams(afterFact)); insertErr != nil {
+			return fmt.Errorf("insert lifecycle Question index item %q: %w", afterFact.itemID, insertErr)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit lifecycle Question index mutation: %w", err)
+	}
+	return nil
+}
+
+func lifecycleQuestionInsertParams(fact lifecycleQuestionFact) sqlitelifecyclegen.InsertLifecycleQuestionParams {
+	params := sqlitelifecyclegen.InsertLifecycleQuestionParams{
+		OccurredAtUnixMs: fact.occurredAtUnixMs,
+		ItemID:           fact.itemID,
+		TaskID:           string(fact.currentNode.TaskID),
+		NodeID:           string(fact.currentNode.NodeID),
+		ScopeID:          fact.scopeID.String(),
+		PromptID:         fact.promptID,
+	}
+	if branchKey, present := fact.currentNode.TransitionBranchKey(); present {
+		params.TransitionBranchKey = sql.NullString{
+			String: string(branchKey),
+			Valid:  true,
+		}
+	}
+	return params
+}
+
+func lifecycleQuestionDeleteParams(fact lifecycleQuestionFact) sqlitelifecyclegen.DeleteLifecycleQuestionParams {
+	return lifecycleQuestionInsertParams(fact)
 }
 
 func lifecycleQuestionPage(
-	index *lifecycleQuestionIndexNode,
+	ctx context.Context,
+	snapshot *lifecycleQuestionReadSnapshot,
 	root lifecycleRoot,
 	cursor LifecycleQuestionCursor,
 	limit int,
 ) ([]LifecyclePendingQuestion, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if snapshot == nil || snapshot.queries == nil {
+		return nil, errors.New("lifecycle Question read snapshot is required")
+	}
 	if limit <= 0 {
 		return nil, errors.New("lifecycle Question page limit must be positive")
 	}
-	if cursor.HasValue && (cursor.OccurredAtUnixMs <= 0 || strings.TrimSpace(cursor.ItemID) == "") {
+	if cursor.HasValue &&
+		(cursor.OccurredAtUnixMs <= 0 ||
+			strings.TrimSpace(cursor.ItemID) == "" ||
+			strings.TrimSpace(cursor.ItemID) != cursor.ItemID) {
 		return nil, errors.New("lifecycle Question cursor is invalid")
 	}
-	if cursor.HasValue && strings.TrimSpace(cursor.ItemID) != cursor.ItemID {
-		return nil, errors.New("lifecycle Question cursor item id is invalid")
+	rows, err := snapshot.queries.ListLifecycleQuestions(ctx, sqlitelifecyclegen.ListLifecycleQuestionsParams{
+		CursorActive:           boolInt64(cursor.HasValue),
+		CursorOccurredAtUnixMs: cursor.OccurredAtUnixMs,
+		CursorItemID:           cursor.ItemID,
+		LimitRows:              int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list lifecycle Questions: %w", err)
 	}
-	out := make([]LifecyclePendingQuestion, 0, limit)
-	var visit func(*lifecycleQuestionIndexNode) error
-	visit = func(node *lifecycleQuestionIndexNode) error {
-		if node == nil || len(out) == limit {
-			return nil
+	out := make([]LifecyclePendingQuestion, 0, len(rows))
+	for _, row := range rows {
+		taskID := workflow.TaskID(row.TaskID)
+		var branchKey *workflow.TransitionBranchKey
+		if row.TransitionBranchKey.Valid {
+			value := workflow.TransitionBranchKey(row.TransitionBranchKey.String)
+			branchKey = &value
 		}
-		if err := visit(node.left); err != nil {
-			return err
+		reference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeID(row.NodeID), branchKey)
+		if err != nil {
+			return nil, fmt.Errorf("decode lifecycle Question Current Node: %w", err)
 		}
-		if len(out) == limit {
-			return nil
+		key, err := reference.Key()
+		if err != nil {
+			return nil, err
 		}
-		if lifecycleQuestionAfterCursor(node.key, cursor) {
-			entry, exists := root[node.locator.taskID]
-			if !exists {
-				return fmt.Errorf("lifecycle Question index Task %q is absent", node.locator.taskID)
-			}
-			exact, exists := entry.exact[node.locator.currentNode]
-			if !exists || exact.ScopeID != node.locator.scopeID || exact.Agent == nil {
-				return fmt.Errorf("lifecycle Question index Exact scope %s is absent", node.locator.scopeID)
-			}
-			var prompt *LifecyclePendingPrompt
-			for index := range exact.PendingPrompts {
-				if exact.PendingPrompts[index].ID == node.locator.promptID {
-					prompt = &exact.PendingPrompts[index]
-					break
-				}
-			}
-			if prompt == nil || prompt.CreatedAt.UnixMilli() != node.key.occurredAtUnixMs {
-				return fmt.Errorf("lifecycle Question index prompt %q is inconsistent", node.locator.promptID)
-			}
-			expectedItemID, err := LifecycleQuestionItemID(exact.Agent.SessionID, prompt.ID)
-			if err != nil {
-				return err
-			}
-			if expectedItemID != node.key.itemID {
-				return fmt.Errorf("lifecycle Question index item %q does not match %q", node.key.itemID, expectedItemID)
-			}
-			out = append(out, LifecyclePendingQuestion{
-				TaskID:      node.locator.taskID,
-				CurrentNode: exact.CurrentNode,
-				SessionID:   exact.Agent.SessionID,
-				Prompt:      cloneLifecyclePendingPrompt(*prompt),
-			})
+		entry, exists := root[taskID]
+		if !exists {
+			return nil, fmt.Errorf("lifecycle Question index Task %q is absent", taskID)
 		}
-		return visit(node.right)
-	}
-	if err := visit(index); err != nil {
-		return nil, err
+		exact, exists := entry.exact[key]
+		if !exists || exact.ScopeID.String() != row.ScopeID || exact.Agent == nil {
+			return nil, fmt.Errorf("lifecycle Question index Exact scope %q is absent", row.ScopeID)
+		}
+		var prompt *LifecyclePendingPrompt
+		for index := range exact.PendingPrompts {
+			if exact.PendingPrompts[index].ID == row.PromptID {
+				prompt = &exact.PendingPrompts[index]
+				break
+			}
+		}
+		if prompt == nil || prompt.CreatedAt.UnixMilli() != row.OccurredAtUnixMs {
+			return nil, fmt.Errorf("lifecycle Question index prompt %q is inconsistent", row.PromptID)
+		}
+		expectedItemID, err := LifecycleQuestionItemID(exact.Agent.SessionID, prompt.ID)
+		if err != nil {
+			return nil, err
+		}
+		if expectedItemID != row.ItemID {
+			return nil, fmt.Errorf("lifecycle Question index item %q does not match %q", row.ItemID, expectedItemID)
+		}
+		out = append(out, LifecyclePendingQuestion{
+			TaskID:      taskID,
+			CurrentNode: exact.CurrentNode,
+			SessionID:   exact.Agent.SessionID,
+			Prompt:      cloneLifecyclePendingPrompt(*prompt),
+		})
 	}
 	return out, nil
 }
@@ -312,4 +527,11 @@ func cloneLifecyclePendingPrompt(prompt LifecyclePendingPrompt) LifecyclePending
 		cloned.RecommendedOptionIndex = &value
 	}
 	return cloned
+}
+
+func boolInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }

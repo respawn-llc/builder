@@ -71,7 +71,7 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 	) error {
 		snapshot := *a
 		snapshot.queries = durableSnapshot.queries
-		questions, err := reader.PendingQuestions(workflowstore.LifecycleQuestionCursor{
+		questions, err := reader.PendingQuestions(ctx, workflowstore.LifecycleQuestionCursor{
 			OccurredAtUnixMs: cursor.occurredAtUnixMs,
 			ItemID:           cursor.itemID,
 			HasValue:         cursor.hasValue,

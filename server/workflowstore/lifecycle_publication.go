@@ -346,11 +346,11 @@ type lifecycleRoot map[workflow.TaskID]lifecycleTaskEntry
 // LifecyclePublication is the sole owner of publishing a compatible durable
 // lifecycle commit and immutable runtime root.
 type LifecyclePublication struct {
-	mu        sync.RWMutex
-	store     *Store
-	root      lifecycleRoot
-	questions *lifecycleQuestionIndexNode
-	closed    bool
+	mu            sync.RWMutex
+	store         *Store
+	root          lifecycleRoot
+	questionIndex *lifecycleQuestionIndex
+	closed        bool
 }
 
 type preparedSQLLifecycleMutation struct {
@@ -423,8 +423,7 @@ func (p *LifecyclePublication) publishPrepared(
 		return errors.Join(ErrLifecyclePublicationClosed, prepared.rollback())
 	}
 	candidate := cloneLifecycleRoot(p.root)
-	candidateQuestions, err := applyTaskLifecycleDelta(candidate, p.questions, delta)
-	if err != nil {
+	if err := applyTaskLifecycleDelta(candidate, delta); err != nil {
 		return errors.Join(err, prepared.rollback())
 	}
 	if err := context.Cause(ctx); err != nil {
@@ -434,7 +433,6 @@ func (p *LifecyclePublication) publishPrepared(
 		return err
 	}
 	p.root = candidate
-	p.questions = candidateQuestions
 	return nil
 }
 
@@ -769,15 +767,13 @@ func (p *LifecyclePublication) PublishExactRegistration(
 		return err
 	}
 	candidate := cloneLifecycleRoot(p.root)
-	candidateQuestions, err := applyTaskLifecycleDelta(candidate, p.questions, delta)
-	if err != nil {
+	if err := applyTaskLifecycleDelta(candidate, delta); err != nil {
 		return err
 	}
 	if err := activation.Activate(); err != nil {
 		return err
 	}
 	p.root = candidate
-	p.questions = candidateQuestions
 	return nil
 }
 
@@ -877,13 +873,11 @@ func (p *LifecyclePublication) patchExact(
 			}
 			before := cloneLifecycleTaskEntry(entry)
 			entry.exact[key] = cloned
-			candidateQuestions, err := updateLifecycleQuestionIndex(p.questions, taskID, before, entry)
-			if err != nil {
+			if err := p.questionIndex.replaceTaskQuestions(ctx, taskID, before, entry); err != nil {
 				return err
 			}
 			candidate[taskID] = entry
 			p.root = candidate
-			p.questions = candidateQuestions
 			return nil
 		}
 	}
@@ -971,12 +965,10 @@ func (p *LifecyclePublication) Publish(
 		return err
 	}
 	candidate := cloneLifecycleRoot(p.root)
-	candidateQuestions, err := applyTaskLifecycleDelta(candidate, p.questions, delta)
-	if err != nil {
+	if err := applyTaskLifecycleDelta(candidate, delta); err != nil {
 		return err
 	}
 	p.root = candidate
-	p.questions = candidateQuestions
 	return nil
 }
 
@@ -1056,9 +1048,17 @@ func NewLifecyclePublication(store *Store) (*LifecyclePublication, error) {
 	if store == nil {
 		return nil, errors.New("lifecycle publication store is required")
 	}
+	questionIndex, err := openLifecycleQuestionIndex(
+		context.Background(),
+		store.metadata.PersistenceRoot(),
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &LifecyclePublication{
-		store: store,
-		root:  make(lifecycleRoot),
+		store:         store,
+		root:          make(lifecycleRoot),
+		questionIndex: questionIndex,
 	}, nil
 }
 
@@ -1092,8 +1092,7 @@ func (p *LifecyclePublication) PublishResume(
 		return nil, errors.Join(ErrLifecyclePublicationClosed, prepared.rollback())
 	}
 	candidate := cloneLifecycleRoot(p.root)
-	candidateQuestions, err := applyTaskLifecycleDelta(candidate, p.questions, delta.delta)
-	if err != nil {
+	if err := applyTaskLifecycleDelta(candidate, delta.delta); err != nil {
 		return nil, errors.Join(err, prepared.rollback())
 	}
 	if err := context.Cause(ctx); err != nil {
@@ -1103,7 +1102,6 @@ func (p *LifecyclePublication) PublishResume(
 		return nil, err
 	}
 	p.root = candidate
-	p.questions = candidateQuestions
 	return prepared.interruptedAttention(), nil
 }
 
@@ -1129,24 +1127,20 @@ func cloneLifecycleTaskEntry(source lifecycleTaskEntry) lifecycleTaskEntry {
 	return cloned
 }
 
-func applyTaskLifecycleDelta(
-	root lifecycleRoot,
-	questions *lifecycleQuestionIndexNode,
-	delta TaskLifecycleDelta,
-) (*lifecycleQuestionIndexNode, error) {
+func applyTaskLifecycleDelta(root lifecycleRoot, delta TaskLifecycleDelta) error {
 	if delta.taskID == "" {
-		return nil, errors.New("lifecycle delta Task id is required")
+		return errors.New("lifecycle delta Task id is required")
 	}
 	before := root[delta.taskID]
 	entry := cloneLifecycleTaskEntry(before)
 	for _, change := range delta.runs {
 		key, err := change.CurrentNode.Key()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		_, present := entry.runs[key]
 		if present != (change.Expect == LifecycleFieldPresent) {
-			return nil, fmt.Errorf("lifecycle Run predecessor conflict for Current Node %v", change.CurrentNode)
+			return fmt.Errorf("lifecycle Run predecessor conflict for Current Node %v", change.CurrentNode)
 		}
 		if change.Next == LifecycleFieldPresent {
 			entry.runs[key] = change.CurrentNode
@@ -1157,14 +1151,14 @@ func applyTaskLifecycleDelta(
 	for _, change := range delta.exact {
 		key, err := change.CurrentNode.Key()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		current, present := entry.exact[key]
 		switch {
 		case change.ExpectScope == nil && present:
-			return nil, fmt.Errorf("lifecycle Exact predecessor conflict for Current Node %v: expected absent, found %s", change.CurrentNode, current.ScopeID)
+			return fmt.Errorf("lifecycle Exact predecessor conflict for Current Node %v: expected absent, found %s", change.CurrentNode, current.ScopeID)
 		case change.ExpectScope != nil && (!present || current.ScopeID != *change.ExpectScope):
-			return nil, fmt.Errorf("lifecycle Exact predecessor conflict for Current Node %v: expected %s", change.CurrentNode, *change.ExpectScope)
+			return fmt.Errorf("lifecycle Exact predecessor conflict for Current Node %v: expected %s", change.CurrentNode, *change.ExpectScope)
 		}
 		if change.Next == nil {
 			delete(entry.exact, key)
@@ -1177,7 +1171,7 @@ func applyTaskLifecycleDelta(
 	} else {
 		root[delta.taskID] = entry
 	}
-	return updateLifecycleQuestionIndex(questions, delta.taskID, before, entry)
+	return validateLifecycleQuestionFactsUnchanged(delta.taskID, before, entry)
 }
 
 func cloneCurrentNodeReferences(source []workflow.CurrentNodeReference) []workflow.CurrentNodeReference {
@@ -1298,19 +1292,19 @@ type LifecycleBoundedReadCapture interface {
 	CurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	QueuedCurrentNodes(workflow.TaskID) []workflow.CurrentNodeReference
 	ExactExecutions(workflow.TaskID) []LifecycleExactExecution
-	PendingQuestions(LifecycleQuestionCursor, int) ([]LifecyclePendingQuestion, error)
+	PendingQuestions(context.Context, LifecycleQuestionCursor, int) ([]LifecyclePendingQuestion, error)
 }
 
 // LifecycleCapture pins one immutable runtime root and its matching durable
 // SQLite read snapshot until Close.
 type lifecycleCapture struct {
-	durable   *lifecycleReadSnapshot
-	root      lifecycleRoot
-	questions *lifecycleQuestionIndexNode
-	token     string
-	release   func()
-	mu        sync.Mutex
-	closed    bool
+	durable          *lifecycleReadSnapshot
+	questionSnapshot *lifecycleQuestionReadSnapshot
+	root             lifecycleRoot
+	token            string
+	release          func()
+	mu               sync.Mutex
+	closed           bool
 }
 
 func (p *LifecyclePublication) Capture(ctx context.Context) (LifecycleCapture, error) {
@@ -1389,21 +1383,25 @@ func (p *LifecyclePublication) capture(ctx context.Context) (*lifecycleCapture, 
 		p.mu.RUnlock()
 		return nil, err
 	}
+	questionSnapshot, err := p.questionIndex.beginRead(ctx)
+	if err != nil {
+		p.mu.RUnlock()
+		return nil, errors.Join(err, durable.close())
+	}
 	root := p.root
-	questions := p.questions
 	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
 		return lifecycleTaskState(root, taskID)
 	})
 	if err != nil {
 		p.mu.RUnlock()
-		return nil, errors.Join(err, durable.close())
+		return nil, errors.Join(err, durable.close(), questionSnapshot.close())
 	}
 	capture := &lifecycleCapture{
-		durable:   durable,
-		root:      root,
-		questions: questions,
-		token:     token,
-		release:   release,
+		durable:          durable,
+		questionSnapshot: questionSnapshot,
+		root:             root,
+		token:            token,
+		release:          release,
 	}
 	p.mu.RUnlock()
 	return capture, nil
@@ -1468,8 +1466,9 @@ func (p *LifecyclePublication) Close() error {
 	}
 	p.closed = true
 	p.root = nil
-	p.questions = nil
-	return nil
+	err := p.questionIndex.close()
+	p.questionIndex = nil
+	return err
 }
 
 func (c *lifecycleCapture) CurrentNodes(
@@ -1531,6 +1530,7 @@ func (c *lifecycleCapture) ExactExecutions(taskID workflow.TaskID) []LifecycleEx
 }
 
 func (c *lifecycleCapture) PendingQuestions(
+	ctx context.Context,
 	cursor LifecycleQuestionCursor,
 	limit int,
 ) ([]LifecyclePendingQuestion, error) {
@@ -1539,7 +1539,7 @@ func (c *lifecycleCapture) PendingQuestions(
 	if c.closed {
 		return nil, errors.New("lifecycle capture is closed")
 	}
-	return lifecycleQuestionPage(c.questions, c.root, cursor, limit)
+	return lifecycleQuestionPage(ctx, c.questionSnapshot, c.root, cursor, limit)
 }
 
 func (c *lifecycleCapture) stateToken() (string, error) {
@@ -1573,13 +1573,13 @@ func (c *lifecycleCapture) Close() error {
 		return nil
 	}
 	c.closed = true
-	err := c.durable.close()
+	err := errors.Join(c.durable.close(), c.questionSnapshot.close())
 	if c.release != nil {
 		c.release()
 	}
 	c.durable = nil
+	c.questionSnapshot = nil
 	c.root = nil
-	c.questions = nil
 	c.token = ""
 	c.release = nil
 	return err
