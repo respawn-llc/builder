@@ -81,7 +81,7 @@ export function TaskDetailContent({
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     taskID: detail.id,
-    base: serverDraft,
+    base: restored?.base ?? serverDraft,
     draft: restored?.draft ?? serverDraft,
   }));
   const [editingComment, setEditingComment] = useState<Readonly<{ id: string; body: string }> | null>(restored?.editingComment ?? null);
@@ -106,6 +106,7 @@ export function TaskDetailContent({
   }
   const update = useUpdateTask(detail.id, detail.projectID);
   useTaskDetailRetainedCapture({
+    base: draftState.base,
     descriptionPresentation,
     draft: draftState.draft,
     editingComment,
@@ -262,6 +263,7 @@ function hasRelationshipNavigation(
 }
 
 function useTaskDetailRetainedCapture({
+  base,
   descriptionPresentation,
   draft,
   editingComment,
@@ -270,6 +272,7 @@ function useTaskDetailRetainedCapture({
   scrollElement,
   selectedTab,
 }: Readonly<{
+  base: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   draft: TaskDraft;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -281,6 +284,7 @@ function useTaskDetailRetainedCapture({
   useEffect(() => {
     if (navigator === undefined || scrollElement === null) return;
     return navigator.registerCapture(() => ({
+      base,
       descriptionPresentation,
       draft,
       editingComment,
@@ -289,6 +293,7 @@ function useTaskDetailRetainedCapture({
       selectedTab,
     }));
   }, [
+    base,
     descriptionPresentation,
     draft,
     editingComment,
@@ -300,6 +305,7 @@ function useTaskDetailRetainedCapture({
 }
 
 type TaskDetailRetainedState = Readonly<{
+  base: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   draft: TaskDraft;
   editingComment: Readonly<{ id: string; body: string }> | null;
@@ -309,6 +315,7 @@ type TaskDetailRetainedState = Readonly<{
 }>;
 
 const taskDetailRetainedStateSchema = z.object({
+  base: z.object({ body: z.string(), title: z.string() }),
   descriptionPresentation: z.object({ editing: z.boolean(), expanded: z.boolean() }),
   draft: z.object({ body: z.string(), title: z.string() }),
   editingComment: z.object({ body: z.string(), id: z.string() }).nullable(),

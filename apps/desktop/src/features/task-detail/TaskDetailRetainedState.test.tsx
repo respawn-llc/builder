@@ -14,6 +14,7 @@ describe("Task Detail retained sidebar state", () => {
   it("layers retained unsaved interface state over refreshed Task data before capture", async () => {
     const pageNavigator = createTestSidebarNavigator();
     const retainedState = {
+      base: { body: "Need operator input", title: "Resolve blocker" },
       descriptionPresentation: { editing: false, expanded: true },
       draft: { body: "Unsaved body", title: "Unsaved title" },
       editingComment: { body: "Unsaved edited comment", id: "comment-1" },
@@ -50,6 +51,24 @@ describe("Task Detail retained sidebar state", () => {
       }),
     );
     expect(latest()).not.toHaveProperty("questionSelections");
+  });
+
+  it("lets refreshed server data replace a previously clean draft", async () => {
+    mountTaskDetailSurface(taskDetailResponse, {
+      attention: emptyTaskAttentionResponse,
+      retainedState: {
+        base: { body: "Old body", title: "Old title" },
+        descriptionPresentation: { editing: false, expanded: false },
+        draft: { body: "Old body", title: "Old title" },
+        editingComment: null,
+        newCommentBody: "",
+        scrollOffsetPx: 0,
+        selectedTab: "comments",
+      },
+    });
+
+    expect(await screen.findByDisplayValue("Resolve blocker")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Old title")).not.toBeInTheDocument();
   });
 
   it("preserves overlay composition while opening a dependency Task", async () => {

@@ -181,3 +181,12 @@
 
 - [x] Prove destination equality with distinct Task Detail and custom destination values.
 - [x] Run final automated verification and commit the fourth remediation round.
+
+## Pull-request review remediation
+
+- [x] Preserve retained Task draft cleanliness so refreshed server values replace old clean snapshots.
+- [x] Restore Link Workflow creation and Workflow Inspector delete/copy header actions through destination-owned composition.
+- [x] Publish fresh sidebar views for availability changes and defer pixel restoration until Task Detail's existing reads are ready.
+- [x] Reject the redundant distinct-Task-ID assertion because existing provider behavior already covers distinct destinations and the policy suite remains behavior-focused.
+- [x] Reject the navigation-rejection claim because `AppNavigation` already absorbs/logs failures; reject stale Project Back fallback because stale means a replacement owns the surface; keep post-unmount root-open guards deferred to KENT-457 because KENT-356 explicitly forbids cancel flags.
+- [x] Verify the complete remediation round and prepare its atomic commit, push, and thread resolutions.

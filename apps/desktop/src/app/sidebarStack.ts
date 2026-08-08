@@ -41,7 +41,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
   };
   const notify = (capability: Capability) => {
     if (capability.active && current()?.capability === capability) {
-      publish(view);
+      emit(view.entries, view.phase, view.transitionDirection);
     }
   };
   const createEntry = (destination: SidebarDestination, retainedState?: unknown): SidebarStackEntry => {

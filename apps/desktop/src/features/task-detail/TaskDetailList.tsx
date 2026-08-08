@@ -177,7 +177,11 @@ export function TaskDetailList({
       onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
-      pixelOffsetRequest={pixelOffsetRequest}
+      pixelOffsetRequest={
+        !attention.isPending && !(selectedTab === "comments" ? comments.isPending : activity.isPending)
+          ? pixelOffsetRequest
+          : undefined
+      }
       rowSpacing="compact"
       renderItem={(item) => (
         <TaskDetailListRow

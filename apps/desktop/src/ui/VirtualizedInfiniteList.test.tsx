@@ -36,10 +36,12 @@ vi.mock("@tanstack/react-virtual", () => ({
 function List({
   hasNextPage = false,
   onLoadMore = () => undefined,
+  ready = true,
   request,
 }: Readonly<{
   hasNextPage?: boolean;
   onLoadMore?: () => void;
+  ready?: boolean;
   request?: VirtualizedPixelOffsetRequest | undefined;
 }>) {
   return (
@@ -51,7 +53,7 @@ function List({
       items={["a", "b", "c"]}
       loadingLabel="Loading"
       onLoadMore={onLoadMore}
-      pixelOffsetRequest={request}
+      pixelOffsetRequest={ready ? request : undefined}
       renderItem={(item) => item}
     />
   );
@@ -64,7 +66,11 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
   });
 
   it("applies each valid request key once through the virtualizer after rows mount", () => {
-    const view = render(<List request={createVirtualizedPixelOffsetRequest("restore-1", 240)} />);
+    const request = createVirtualizedPixelOffsetRequest("restore-1", 240);
+    const view = render(<List ready={false} request={request} />);
+    expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
+
+    view.rerender(<List request={request} />);
     expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(240, { behavior: "auto" });
 
     view.rerender(<List request={createVirtualizedPixelOffsetRequest("restore-1", 480)} />);
