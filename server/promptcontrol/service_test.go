@@ -16,12 +16,13 @@ import (
 )
 
 type stubPromptResponder struct {
-	calls     int
-	awaits    int
-	sessionID string
-	response  askquestion.AskQuestionResponse
-	err       error
-	submitErr error
+	calls      int
+	awaits     int
+	sessionID  string
+	promptID   string
+	resolution askquestion.AskQuestionResolution
+	err        error
+	submitErr  error
 
 	batchCalls    int
 	batchSession  runtimeids.SessionID
@@ -40,14 +41,16 @@ func (a stubPromptAcceptance) AwaitSuccessor(context.Context) error {
 	return nil
 }
 
-func (s *stubPromptResponder) AcceptPromptResponse(
+func (s *stubPromptResponder) AcceptPromptResolution(
 	sessionID string,
-	resp askquestion.AskQuestionResponse,
+	promptID string,
+	resolution askquestion.AskQuestionResolution,
 	err error,
 ) (PromptResponseAcceptance, error) {
 	s.calls++
 	s.sessionID = sessionID
-	s.response = resp
+	s.promptID = promptID
+	s.resolution = resolution
 	s.err = err
 	if s.submitErr != nil {
 		return nil, s.submitErr
@@ -88,9 +91,10 @@ func (a cancellationAfterAcceptance) AwaitSuccessor(ctx context.Context) error {
 	}
 }
 
-func (r *cancellationAfterAcceptanceResponder) AcceptPromptResponse(
+func (r *cancellationAfterAcceptanceResponder) AcceptPromptResolution(
 	_ string,
-	_ askquestion.AskQuestionResponse,
+	_ string,
+	_ askquestion.AskQuestionResolution,
 	_ error,
 ) (PromptResponseAcceptance, error) {
 	r.mu.Lock()
@@ -153,8 +157,31 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	if responder.awaits != 1 {
 		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
-	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
-		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
+	answer, ok := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	if responder.sessionID != "session-1" || responder.promptID != "ask-1" || !ok ||
+		answer.Answer == nil || *answer.Answer != "hello" {
+		t.Fatalf("unexpected stored resolution: session=%q prompt=%q resolution=%+v", responder.sessionID, responder.promptID, responder.resolution)
+	}
+}
+
+func TestServiceAnswerAskPreservesExactLegacyQuestionSlots(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-exact")
+	req.Answer = "  answer  "
+	req.FreeformAnswer = "  freeform  "
+
+	if err := service.AnswerAsk(context.Background(), req); err != nil {
+		t.Fatalf("AnswerAsk: %v", err)
+	}
+	answer, ok := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	if !ok {
+		t.Fatalf("resolution type = %T", responder.resolution)
+	}
+	if answer.Answer == nil || *answer.Answer != req.Answer {
+		t.Fatalf("Answer slot = %v, want exact submitted value", answer.Answer)
+	}
+	if answer.FreeformAnswer == nil || *answer.FreeformAnswer != req.FreeformAnswer {
+		t.Fatalf("FreeformAnswer slot = %v, want exact submitted value", answer.FreeformAnswer)
 	}
 }
 
@@ -166,8 +193,9 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	if responder.response.SelectedOptionNumber != nil {
-		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	if answer.SelectedOptionNumber != nil {
+		t.Fatalf("selected option = %v, want nil", *answer.SelectedOptionNumber)
 	}
 }
 
@@ -276,14 +304,29 @@ func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
 	}
-	if responder.response.RequestID != "approval-1" {
-		t.Fatalf("unexpected response: %+v", responder.response)
+	if responder.promptID != "approval-1" {
+		t.Fatalf("unexpected prompt id: %q", responder.promptID)
 	}
 	if responder.err == nil || responder.err.Error() != serverapi.ErrPromptAlreadyResolved.Error() {
 		t.Fatalf("unexpected prompt error: %v", responder.err)
 	}
-	if responder.response.Approval != nil {
-		t.Fatalf("unexpected approval payload for prompt error: %+v", responder.response.Approval)
+	if responder.resolution != nil {
+		t.Fatalf("unexpected resolution for prompt error: %+v", responder.resolution)
+	}
+}
+
+func TestServiceAnswerApprovalPreservesExactCommentary(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	req := approvalAnswerRequest("req-exact-approval")
+	commentary := "  exact commentary  "
+	req.Commentary = &commentary
+
+	if err := service.AnswerApproval(context.Background(), req); err != nil {
+		t.Fatalf("AnswerApproval: %v", err)
+	}
+	approval, ok := responder.resolution.(askquestion.AskQuestionApproval)
+	if !ok || approval.Commentary == nil || *approval.Commentary != commentary {
+		t.Fatalf("Approval resolution = %+v, want exact commentary", responder.resolution)
 	}
 }
 
@@ -327,17 +370,17 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResu
 	}
 	question, ok := responder.batchCommands[0].Payload.(sessionruntime.PromptQuestionAnswerCommand)
 	if !ok ||
-		question.SelectedOptionNumber == nil ||
-		*question.SelectedOptionNumber != 2 ||
-		question.Freeform == nil ||
-		*question.Freeform != "question commentary" {
+		question.Answer.SelectedOptionNumber == nil ||
+		*question.Answer.SelectedOptionNumber != 2 ||
+		question.Answer.Freeform == nil ||
+		*question.Answer.Freeform != "question commentary" {
 		t.Fatalf("question command = %+v", responder.batchCommands[0])
 	}
 	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
 	if !ok ||
-		approval.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
-		approval.Commentary == nil ||
-		*approval.Commentary != "approval commentary" {
+		approval.Answer.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
+		approval.Answer.Commentary == nil ||
+		*approval.Answer.Commentary != "approval commentary" {
 		t.Fatalf("approval command = %+v", responder.batchCommands[1])
 	}
 	if _, ok := responder.batchCommands[2].Payload.(sessionruntime.PromptDeclinedCommand); !ok {
@@ -366,14 +409,14 @@ func TestServiceAnswerPromptBatchPreservesAbsentOptionalText(t *testing.T) {
 	if !ok {
 		t.Fatalf("question command = %+v", responder.batchCommands[0])
 	}
-	if question.Freeform != nil {
+	if question.Answer.Freeform != nil {
 		t.Fatal("absent Question freeform became present")
 	}
 	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
 	if !ok {
 		t.Fatalf("approval command = %+v", responder.batchCommands[1])
 	}
-	if approval.Commentary != nil {
+	if approval.Answer.Commentary != nil {
 		t.Fatal("absent Approval commentary became present")
 	}
 }

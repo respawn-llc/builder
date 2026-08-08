@@ -563,16 +563,17 @@ type authorityPromptResponder struct {
 	authority *sessionruntime.Authority
 }
 
-func (r authorityPromptResponder) AcceptPromptResponse(
+func (r authorityPromptResponder) AcceptPromptResolution(
 	sessionID string,
-	response askquestion.AskQuestionResponse,
+	promptID string,
+	resolution askquestion.AskQuestionResolution,
 	submitErr error,
 ) (promptcontrol.PromptResponseAcceptance, error) {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return nil, err
 	}
-	return r.authority.AcceptPromptResponse(id, response, submitErr)
+	return r.authority.AcceptPromptResolution(id, promptID, resolution, submitErr)
 }
 
 func (r authorityPromptResponder) ResolvePromptBatch(

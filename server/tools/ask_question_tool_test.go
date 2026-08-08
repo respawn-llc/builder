@@ -24,20 +24,24 @@ func testApprovalRequest(id string) AskQuestionRequest {
 	}
 }
 
+func testQuestionAnswer(text string) AskQuestionAnswer {
+	return AskQuestionAnswer{Freeform: textutil.Value(text)}
+}
+
 func TestBrokerFIFOQueue(t *testing.T) {
 	b := NewAskQuestionBroker()
 
 	ctx := context.Background()
 	type out struct {
-		id   string
-		resp AskQuestionResponse
-		err  error
+		id         string
+		resolution AskQuestionResolution
+		err        error
 	}
 	ch := make(chan out, 2)
 
 	go func() {
 		resp, err := b.Ask(ctx, AskQuestionRequest{ID: "q1", Question: "one?"})
-		ch <- out{id: "q1", resp: resp, err: err}
+		ch <- out{id: "q1", resolution: resp, err: err}
 	}()
 	for i := 0; i < 100; i++ {
 		if len(b.Pending()) == 1 {
@@ -47,7 +51,7 @@ func TestBrokerFIFOQueue(t *testing.T) {
 	}
 	go func() {
 		resp, err := b.Ask(ctx, AskQuestionRequest{ID: "q2", Question: "two?"})
-		ch <- out{id: "q2", resp: resp, err: err}
+		ch <- out{id: "q2", resolution: resp, err: err}
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -59,10 +63,10 @@ func TestBrokerFIFOQueue(t *testing.T) {
 		t.Fatalf("pending not fifo: %+v", pending)
 	}
 
-	if err := b.Submit("q1", AskQuestionResponse{Answer: "a1"}); err != nil {
+	if err := b.Submit("q1", testQuestionAnswer("a1")); err != nil {
 		t.Fatalf("submit q1: %v", err)
 	}
-	if err := b.Submit("q2", AskQuestionResponse{Answer: "a2"}); err != nil {
+	if err := b.Submit("q2", testQuestionAnswer("a2")); err != nil {
 		t.Fatalf("submit q2: %v", err)
 	}
 
@@ -72,7 +76,11 @@ func TestBrokerFIFOQueue(t *testing.T) {
 		if item.err != nil {
 			t.Fatalf("ask result err: %v", item.err)
 		}
-		got[item.id] = item.resp.Answer
+		answer, ok := item.resolution.(AskQuestionAnswer)
+		if !ok || answer.Freeform == nil {
+			t.Fatalf("Question resolution = %+v", item.resolution)
+		}
+		got[item.id] = *answer.Freeform
 	}
 
 	if got["q1"] != "a1" || got["q2"] != "a2" {
@@ -83,9 +91,9 @@ func TestBrokerFIFOQueue(t *testing.T) {
 func TestAskQuestionToolSkipsPreparedBatchWhenBrokerReturnsBeforeHandler(t *testing.T) {
 	b := NewAskQuestionBroker()
 	handlerCalled := false
-	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
 		handlerCalled = true
-		return AskQuestionResponse{}, nil
+		return AskQuestionAnswer{}, nil
 	})
 	tool := NewAskQuestionTool(b, func() bool { return true })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,14 +138,14 @@ func TestSubmitApprovalResponse(t *testing.T) {
 	b := NewAskQuestionBroker()
 	ctx := context.Background()
 	type out struct {
-		resp AskQuestionResponse
-		err  error
+		resolution AskQuestionResolution
+		err        error
 	}
 	done := make(chan out, 1)
 
 	go func() {
 		resp, err := b.Ask(ctx, testApprovalRequest("approval"))
-		done <- out{resp: resp, err: err}
+		done <- out{resolution: resp, err: err}
 	}()
 
 	for i := 0; i < 100; i++ {
@@ -147,8 +155,9 @@ func TestSubmitApprovalResponse(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	approval := &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowSession, Commentary: "trusted path"}
-	if err := b.Submit("approval", AskQuestionResponse{Approval: approval}); err != nil {
+	commentary := "trusted path"
+	approval := AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowSession, Commentary: &commentary}
+	if err := b.Submit("approval", approval); err != nil {
 		t.Fatalf("submit approval: %v", err)
 	}
 
@@ -157,18 +166,15 @@ func TestSubmitApprovalResponse(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("ask approval: %v", result.err)
 		}
-		if result.resp.RequestID != "approval" {
-			t.Fatalf("request id = %q, want approval", result.resp.RequestID)
-		}
-		if result.resp.Approval == nil || *result.resp.Approval != *approval {
-			t.Fatalf("approval payload = %+v, want %+v", result.resp.Approval, approval)
+		if result.resolution != approval {
+			t.Fatalf("approval resolution = %+v, want %+v", result.resolution, approval)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for approval response")
 	}
 }
 
-func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
+func TestValidateAskQuestionResolutionForApprovalPrompt(t *testing.T) {
 	req := AskQuestionRequest{
 		ID:       "approval",
 		Question: "approve?",
@@ -178,41 +184,34 @@ func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
 			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
 		},
 	}
-	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Answer: "allow"}); !errors.Is(err, ErrAskQuestionApprovalRequiresResponse) {
+	if err := ValidateAskQuestionResolution(req, testQuestionAnswer("allow")); !errors.Is(err, ErrAskQuestionApprovalRequiresResponse) {
 		t.Fatalf("ordinary answer to approval prompt error = %v, want approval response required", err)
 	}
-	selectedOption := 1
-	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{
-		Approval:             &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny},
-		Answer:               "deny",
-		FreeformAnswer:       "mixed",
-		SelectedOptionNumber: &selectedOption,
-	}); !errors.Is(err, ErrAskQuestionApprovalForbidsOrdinaryAnswer) {
-		t.Fatalf("mixed approval response error = %v, want ordinary answer fields rejected", err)
-	}
-	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowSession}}); err == nil {
+	if err := ValidateAskQuestionResolution(req, AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowSession}); err == nil {
 		t.Fatal("expected unoffered approval decision to be rejected")
 	}
-	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny, Commentary: "no"}}); err != nil {
+	commentary := "no"
+	if err := ValidateAskQuestionResolution(req, AskQuestionApproval{Decision: AskQuestionApprovalDecisionDeny, Commentary: &commentary}); err != nil {
 		t.Fatalf("valid approval response rejected: %v", err)
 	}
 }
 
-func TestValidateAskQuestionResponseRejectsInvalidSelectedOption(t *testing.T) {
+func TestValidateAskQuestionResolutionRejectsInvalidSelectedOption(t *testing.T) {
 	for _, option := range []int{0, -1, 2} {
-		if err := ValidateAskQuestionResponse(
+		if err := ValidateAskQuestionResolution(
 			AskQuestionRequest{ID: "ask-1", Question: "Proceed?", Suggestions: []string{"yes"}},
-			AskQuestionResponse{SelectedOptionNumber: &option},
+			AskQuestionAnswer{SelectedOptionNumber: &option},
 		); err == nil {
 			t.Fatalf("expected selected option %d to be rejected", option)
 		}
 	}
 }
 
-func TestValidateAskQuestionResponseRejectsApprovalPayloadForOrdinaryQuestion(t *testing.T) {
-	err := ValidateAskQuestionResponse(AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}, AskQuestionResponse{
-		Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowOnce},
-	})
+func TestValidateAskQuestionResolutionRejectsApprovalForOrdinaryQuestion(t *testing.T) {
+	err := ValidateAskQuestionResolution(
+		AskQuestionRequest{ID: "ask-1", Question: "Proceed?"},
+		AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowOnce},
+	)
 	if !errors.Is(err, ErrAskQuestionNonApprovalForbidsApproval) {
 		t.Fatalf("approval payload to ordinary prompt error = %v, want forbidden approval payload", err)
 	}
@@ -231,11 +230,11 @@ func TestApprovalAskRequiresApprovalOptions(t *testing.T) {
 
 func TestApprovalAskIgnoresRecommendedOptionIndex(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 		if req.RecommendedOptionIndex != 0 {
 			t.Fatalf("expected recommended option index ignored for approval ask, got %+v", req)
 		}
-		return AskQuestionResponse{RequestID: req.ID, Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowOnce}}, nil
+		return AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowOnce}, nil
 	})
 
 	req := testApprovalRequest("approval")
@@ -244,7 +243,8 @@ func TestApprovalAskIgnoresRecommendedOptionIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Approval == nil || resp.Approval.Decision != AskQuestionApprovalDecisionAllowOnce {
+	approval, ok := resp.(AskQuestionApproval)
+	if !ok || approval.Decision != AskQuestionApprovalDecisionAllowOnce {
 		t.Fatalf("unexpected approval response: %+v", resp)
 	}
 }
@@ -264,8 +264,8 @@ func TestApprovalAskRejectsSuggestions(t *testing.T) {
 
 func TestFreeformAskRejectsEmptyResponse(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID}, nil
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
+		return AskQuestionAnswer{}, nil
 	})
 
 	_, err := b.Ask(context.Background(), AskQuestionRequest{ID: "freeform", Question: "what else?"})
@@ -282,15 +282,15 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type out struct {
-		resp AskQuestionResponse
-		err  error
+		resolution AskQuestionResolution
+		err        error
 	}
 	done := make(chan out, 1)
 	approvalReq := testApprovalRequest("approval")
 
 	go func() {
 		resp, err := b.Ask(ctx, approvalReq)
-		done <- out{resp: resp, err: err}
+		done <- out{resolution: resp, err: err}
 	}()
 
 	for i := 0; i < 100; i++ {
@@ -300,14 +300,14 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	if err := b.Submit("approval", AskQuestionResponse{Answer: "allow once"}); err == nil {
+	if err := b.Submit("approval", testQuestionAnswer("allow once")); err == nil {
 		t.Fatal("expected submit error for plain-string approval response")
 	} else if !errors.Is(err, ErrAskQuestionApprovalRequiresResponse) {
 		t.Fatalf("unexpected submit error: %v", err)
 	}
 
-	valid := &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowOnce}
-	if err := b.Submit("approval", AskQuestionResponse{Approval: valid}); err != nil {
+	valid := AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowOnce}
+	if err := b.Submit("approval", valid); err != nil {
 		t.Fatalf("submit valid approval: %v", err)
 	}
 
@@ -316,8 +316,8 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("ask approval: %v", result.err)
 		}
-		if result.resp.Approval == nil || *result.resp.Approval != *valid {
-			t.Fatalf("approval payload = %+v, want %+v", result.resp.Approval, valid)
+		if result.resolution != valid {
+			t.Fatalf("approval resolution = %+v, want %+v", result.resolution, valid)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for approval response")
@@ -326,8 +326,8 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 
 func TestAskHandlerRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{Answer: "allow once"}, nil
+	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
+		return testQuestionAnswer("allow once"), nil
 	})
 
 	_, err := b.Ask(context.Background(), testApprovalRequest("approval"))
@@ -341,21 +341,22 @@ func TestAskHandlerRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 
 func TestAskHandlerModeDoesNotQueuePendingRequest(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID, Answer: "handled"}, nil
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
+		return testQuestionAnswer("handled"), nil
 	})
 
 	resp, err := b.Ask(context.Background(), AskQuestionRequest{ID: "sync", Question: "one?"})
 	if err != nil {
 		t.Fatalf("ask: %v", err)
 	}
-	if resp.Answer != "handled" {
+	answer, ok := resp.(AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != "handled" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 	if pending := b.Pending(); len(pending) != 0 {
 		t.Fatalf("expected no pending requests in handler mode, got %+v", pending)
 	}
-	if err := b.Submit("sync", AskQuestionResponse{Answer: "late"}); err == nil {
+	if err := b.Submit("sync", testQuestionAnswer("late")); err == nil {
 		t.Fatal("expected submit to reject non-queued sync request")
 	}
 }
@@ -401,10 +402,13 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	default:
 	}
 
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(2), FreeformAnswer: "need extra context"}); err != nil {
+	if err := b.Submit("call-queued", AskQuestionAnswer{
+		SelectedOptionNumber: textutil.Value(2),
+		Freeform:             textutil.Value("need extra context"),
+	}); err != nil {
 		t.Fatalf("submit answer: %v", err)
 	}
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(1)}); err == nil {
+	if err := b.Submit("call-queued", AskQuestionAnswer{SelectedOptionNumber: textutil.Value(1)}); err == nil {
 		t.Fatal("expected duplicate submission to fail after queued tool answer")
 	}
 
@@ -435,9 +439,9 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
 	b := NewAskQuestionBroker()
 	var got AskQuestionRequest
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 		got = req
-		return AskQuestionResponse{RequestID: req.ID, Answer: "answer"}, nil
+		return testQuestionAnswer("answer"), nil
 	})
 	tool := NewAskQuestionTool(b, func() bool { return true })
 	meta := &AskQuestionBatchMetadata{
@@ -505,9 +509,9 @@ func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testi
 func TestAskHandlerModePrefersContextCancellationAfterHandlerReturns(t *testing.T) {
 	b := NewAskQuestionBroker()
 	release := make(chan struct{})
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 		<-release
-		return AskQuestionResponse{RequestID: req.ID, Answer: "handled"}, nil
+		return testQuestionAnswer("handled"), nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -608,29 +612,28 @@ func TestToolCallRejectsUnsupportedFields(t *testing.T) {
 func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 	tests := []struct {
 		id, input, condensedText string
-		response                 AskQuestionResponse
+		resolution               AskQuestionResolution
 	}{
 		{
 			"call-structured",
 			`{"question":"Pick one","suggestions":["alpha","beta"],"recommended_option_index":1}`,
 			"beta\nUser also said:\nneed extra context",
-			AskQuestionResponse{
-				RequestID:            "call-structured",
+			AskQuestionAnswer{
 				SelectedOptionNumber: textutil.Value(2),
-				FreeformAnswer:       "need extra context",
+				Freeform:             textutil.Value("need extra context"),
 			},
 		},
 		{"call-freeform", `{"question":"What else?","suggestions":["alpha","beta"],"recommended_option_index":1}`,
-			"need extra context", AskQuestionResponse{RequestID: "call-freeform", FreeformAnswer: "need extra context"}},
+			"need extra context", testQuestionAnswer("need extra context")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			b := NewAskQuestionBroker()
-			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
-				if req.ID != tt.response.RequestID {
-					t.Fatalf("request id = %q, want %q", req.ID, tt.response.RequestID)
+			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
+				if req.ID != tt.id {
+					t.Fatalf("request id = %q, want %q", req.ID, tt.id)
 				}
-				return tt.response, nil
+				return tt.resolution, nil
 			})
 			result := callAskQuestionTool(t, b, tt.id, tt.input)
 			if result.IsError {
@@ -663,7 +666,7 @@ func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			b := NewAskQuestionBroker()
-			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 				if req.ID != tt.id {
 					t.Fatalf("request id = %q, want %q", req.ID, tt.id)
 				}
@@ -673,7 +676,7 @@ func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
 				if !slices.Equal(req.Suggestions, tt.suggestions) {
 					t.Fatalf("suggestions = %q, want %q", req.Suggestions, tt.suggestions)
 				}
-				return AskQuestionResponse{RequestID: req.ID, FreeformAnswer: "typed answer"}, nil
+				return testQuestionAnswer("typed answer"), nil
 			})
 			if result := callAskQuestionTool(t, b, tt.id, tt.input); result.IsError {
 				t.Fatalf("expected success result, got %+v", result)
@@ -684,8 +687,8 @@ func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
 
 func TestToolCallRejectsApprovalPayloadReturnedByHandler(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
-		return AskQuestionResponse{RequestID: req.ID, Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny}}, nil
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
+		return AskQuestionApproval{Decision: AskQuestionApprovalDecisionDeny}, nil
 	})
 	result := callAskQuestionTool(t, b, "call-approval-payload", `{"question":"What should I do?"}`)
 	if !result.IsError {

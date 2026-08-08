@@ -12,7 +12,6 @@ import (
 	"core/server/runtime"
 	"core/server/tools"
 	"core/server/workflow"
-	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -316,43 +315,9 @@ func (e *execution) cleanup() error {
 }
 
 type executionPromptResult struct {
-	resolution promptResolution
+	resolution tools.AskQuestionResolution
+	err        error
 }
-
-type promptResolution interface {
-	promptResolution()
-}
-
-type promptQuestionResolution struct {
-	selectedOptionNumber *int
-	text                 *promptQuestionText
-}
-
-func (promptQuestionResolution) promptResolution() {}
-
-type promptQuestionTextTarget uint8
-
-const (
-	promptQuestionTextTargetAnswer promptQuestionTextTarget = iota + 1
-	promptQuestionTextTargetFreeform
-)
-
-type promptQuestionText struct {
-	target promptQuestionTextTarget
-	value  string
-}
-
-type promptApprovalResolution struct {
-	answer PromptApprovalAnswerCommand
-}
-
-func (promptApprovalResolution) promptResolution() {}
-
-type promptFailureResolution struct {
-	cause error
-}
-
-func (promptFailureResolution) promptResolution() {}
 
 // PromptResponseAcceptance is returned after a prompt response mutation has
 // been accepted. Successor observation is latched, so every retry sees the
@@ -435,13 +400,13 @@ func newExecutionPromptStore(authority *Authority, scope ExecutionScope, feed Ex
 	}
 }
 
-func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionRequest) (response tools.AskQuestionResponse, returnErr error) {
+func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionRequest) (response tools.AskQuestionResolution, returnErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	requestID := strings.TrimSpace(req.ID)
 	if requestID == "" {
-		return tools.AskQuestionResponse{}, errors.New("prompt request id is required")
+		return nil, errors.New("prompt request id is required")
 	}
 	snapshot := ExecutionPromptSnapshot{
 		Scope:     s.scope,
@@ -454,16 +419,16 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		publicationDone: make(chan struct{}),
 	}
 	if s.authority == nil {
-		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
+		return nil, errors.New("session runtime authority is required")
 	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return tools.AskQuestionResponse{}, context.Canceled
+		return nil, context.Canceled
 	}
 	if _, exists := s.pending[requestID]; exists {
 		s.mu.Unlock()
-		return tools.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
+		return nil, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = entry
 	s.mu.Unlock()
@@ -472,7 +437,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 		delete(s.pending, requestID)
 		s.mu.Unlock()
 		close(entry.publicationDone)
-		return tools.AskQuestionResponse{}, err
+		return nil, err
 	}
 	close(entry.publicationDone)
 	s.mu.Lock()
@@ -493,22 +458,27 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	}()
 	select {
 	case <-ctx.Done():
-		return tools.AskQuestionResponse{}, context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	case result := <-entry.response:
-		return legacyPromptResult(requestID, result.resolution)
+		return result.resolution, result.err
 	}
 }
 
-func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr error) error {
-	_, err := s.submit(resp, submitErr, false)
+func (s *executionPromptStore) Submit(
+	requestID string,
+	resolution tools.AskQuestionResolution,
+	submitErr error,
+) error {
+	_, err := s.submit(requestID, resolution, submitErr, false)
 	return err
 }
 
 func (s *executionPromptStore) Accept(
-	resp tools.AskQuestionResponse,
+	requestID string,
+	resolution tools.AskQuestionResolution,
 	submitErr error,
 ) (PromptResponseAcceptance, error) {
-	acceptance, err := s.submit(resp, submitErr, true)
+	acceptance, err := s.submit(requestID, resolution, submitErr, true)
 	if err != nil {
 		return PromptResponseAcceptance{}, err
 	}
@@ -516,11 +486,12 @@ func (s *executionPromptStore) Accept(
 }
 
 func (s *executionPromptStore) submit(
-	resp tools.AskQuestionResponse,
+	requestID string,
+	resolution tools.AskQuestionResolution,
 	submitErr error,
 	latchSuccessor bool,
 ) (PromptResponseAcceptance, error) {
-	requestID := strings.TrimSpace(resp.RequestID)
+	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return PromptResponseAcceptance{}, errors.New("prompt response request id is required")
 	}
@@ -537,7 +508,7 @@ func (s *executionPromptStore) submit(
 			serverapi.ErrPromptNotFound,
 		)
 	}
-	if err := validatePromptResponse(entry, resp, submitErr); err != nil {
+	if err := validatePromptResolution(entry, resolution, submitErr); err != nil {
 		s.mu.Unlock()
 		return PromptResponseAcceptance{}, err
 	}
@@ -552,13 +523,8 @@ func (s *executionPromptStore) submit(
 			)
 		}
 		s.mu.Unlock()
-		publicationErr := s.deliverPromptResolution(entry, promptFailureResolution{cause: err})
+		publicationErr := s.deliverPromptResolution(entry, nil, err)
 		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
-	}
-	resolution, err := promptResolutionFromLegacy(entry.snapshot.Request, resp, submitErr)
-	if err != nil {
-		s.mu.Unlock()
-		return PromptResponseAcceptance{}, err
 	}
 	acceptance := PromptResponseAcceptance{}
 	var observation *promptSuccessorObservation
@@ -581,110 +547,8 @@ func (s *executionPromptStore) submit(
 		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	s.mu.Unlock()
-	publicationErr := s.deliverPromptResolution(entry, resolution)
+	publicationErr := s.deliverPromptResolution(entry, resolution, submitErr)
 	return acceptance, publicationErr
-}
-
-func promptResolutionFromLegacy(
-	req tools.AskQuestionRequest,
-	resp tools.AskQuestionResponse,
-	submitErr error,
-) (promptResolution, error) {
-	if submitErr != nil {
-		return promptFailureResolution{cause: submitErr}, nil
-	}
-	if req.Approval {
-		if resp.Approval == nil {
-			return nil, reportPromptInvariant(
-				"translate_legacy_approval_response",
-				req.ID,
-				"validated approval response is missing its approval payload",
-			)
-		}
-		answer := PromptApprovalAnswerCommand{Decision: resp.Approval.Decision}
-		if commentary := strings.TrimSpace(resp.Approval.Commentary); commentary != "" {
-			answer.Commentary = &commentary
-		}
-		return promptApprovalResolution{answer: answer}, nil
-	}
-	answer := PromptQuestionAnswerCommand{
-		SelectedOptionNumber: resp.SelectedOptionNumber,
-	}
-	resolution := promptQuestionResolution{
-		selectedOptionNumber: answer.SelectedOptionNumber,
-	}
-	if freeform := strings.TrimSpace(resp.FreeformAnswer); freeform != "" {
-		resolution.text = &promptQuestionText{
-			target: promptQuestionTextTargetFreeform,
-			value:  freeform,
-		}
-	} else if answer := strings.TrimSpace(resp.Answer); answer != "" {
-		resolution.text = &promptQuestionText{
-			target: promptQuestionTextTargetAnswer,
-			value:  answer,
-		}
-	}
-	return resolution, nil
-}
-
-func legacyPromptResult(
-	requestID string,
-	resolution promptResolution,
-) (tools.AskQuestionResponse, error) {
-	switch typed := resolution.(type) {
-	case promptQuestionResolution:
-		if typed.selectedOptionNumber == nil && typed.text == nil {
-			return tools.AskQuestionResponse{}, reportPromptInvariant(
-				"deliver_prompt_question",
-				requestID,
-				"Question resolution has neither a selected option nor freeform text",
-			)
-		}
-		response := tools.AskQuestionResponse{
-			RequestID:            requestID,
-			SelectedOptionNumber: typed.selectedOptionNumber,
-		}
-		if typed.text == nil {
-			return response, nil
-		}
-		if strings.TrimSpace(typed.text.value) == "" {
-			return tools.AskQuestionResponse{}, reportPromptInvariant(
-				"deliver_prompt_question",
-				requestID,
-				"Question resolution text is blank",
-			)
-		}
-		switch typed.text.target {
-		case promptQuestionTextTargetAnswer:
-			response.Answer = typed.text.value
-		case promptQuestionTextTargetFreeform:
-			response.FreeformAnswer = typed.text.value
-		default:
-			return tools.AskQuestionResponse{}, reportPromptInvariant(
-				"deliver_prompt_question",
-				requestID,
-				fmt.Sprintf("text target %d is invalid", typed.text.target),
-			)
-		}
-		return response, nil
-	case promptApprovalResolution:
-		return approvalResolutionResponse(clientui.PromptID(requestID), typed.answer), nil
-	case promptFailureResolution:
-		if typed.cause == nil {
-			return tools.AskQuestionResponse{}, reportPromptInvariant(
-				"deliver_prompt_failure",
-				requestID,
-				"failure resolution has no cause",
-			)
-		}
-		return tools.AskQuestionResponse{RequestID: requestID}, typed.cause
-	default:
-		return tools.AskQuestionResponse{}, reportPromptInvariant(
-			"deliver_prompt_resolution",
-			requestID,
-			fmt.Sprintf("resolution type %T is invalid", resolution),
-		)
-	}
 }
 
 func reportPromptInvariant(operation string, promptID string, detail string) error {
@@ -814,7 +678,7 @@ func (s *executionPromptStore) publishClosure(closure executionPromptClosure) er
 func (s *executionPromptStore) releaseClosure(closure executionPromptClosure) {
 	for _, entry := range closure.entries {
 		entry.response <- executionPromptResult{
-			resolution: promptFailureResolution{cause: closure.err},
+			err: closure.err,
 		}
 	}
 	s.mu.Lock()
@@ -938,40 +802,50 @@ func (s *executionPromptStore) publishResolved(snapshot ExecutionPromptSnapshot)
 	return s.feed.PromptResolvedScope(snapshot.Scope, snapshot.Request.ID)
 }
 
-func (a *Authority) AwaitPromptResponse(ctx context.Context, scopeID runtimeids.ExecutionScopeID, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+func (a *Authority) AwaitPromptResolution(
+	ctx context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+	req tools.AskQuestionRequest,
+) (tools.AskQuestionResolution, error) {
 	if a == nil {
-		return tools.AskQuestionResponse{}, errors.New("session runtime authority is required")
+		return nil, errors.New("session runtime authority is required")
 	}
 	if _, err := runtimeids.ParseStepID(req.StepID); err != nil {
-		return tools.AskQuestionResponse{}, fmt.Errorf("pending prompt step identity: %w", err)
+		return nil, fmt.Errorf("pending prompt step identity: %w", err)
 	}
 	a.mu.Lock()
 	execution := a.byScope[scopeID]
 	a.mu.Unlock()
 	if execution == nil || execution.scope.Kind() != ExecutionScopeAgent {
-		return tools.AskQuestionResponse{}, fmt.Errorf("execution scope %s is unavailable", scopeID)
+		return nil, fmt.Errorf("execution scope %s is unavailable", scopeID)
 	}
 	return execution.prompts.Await(ctx, req)
 }
 
-func (a *Authority) SubmitPromptResponse(sessionID runtimeids.SessionID, resp tools.AskQuestionResponse, err error) error {
+func (a *Authority) SubmitPromptResolution(
+	sessionID runtimeids.SessionID,
+	promptID string,
+	resolution tools.AskQuestionResolution,
+	err error,
+) error {
 	execution := a.sessionExecution(sessionID)
 	if execution == nil {
 		return fmt.Errorf("session %s has no active execution", sessionID)
 	}
-	return execution.prompts.Submit(resp, err)
+	return execution.prompts.Submit(promptID, resolution, err)
 }
 
-func (a *Authority) AcceptPromptResponse(
+func (a *Authority) AcceptPromptResolution(
 	sessionID runtimeids.SessionID,
-	resp tools.AskQuestionResponse,
+	promptID string,
+	resolution tools.AskQuestionResolution,
 	err error,
 ) (PromptResponseAcceptance, error) {
 	execution := a.sessionExecution(sessionID)
 	if execution == nil {
 		return PromptResponseAcceptance{}, fmt.Errorf("session %s has no active execution", sessionID)
 	}
-	return execution.prompts.Accept(resp, err)
+	return execution.prompts.Accept(promptID, resolution, err)
 }
 
 // ResolvePendingWorkflowPrompt selects one exact live Agent scope by Task and
@@ -1020,27 +894,33 @@ func (a *Authority) ResolvePendingWorkflowPrompt(taskID workflow.TaskID, askID s
 	return *resolved, nil
 }
 
-// SubmitPromptResponseForScope delivers an answer only to its previously
+// SubmitPromptResolutionForScope delivers an answer only to its previously
 // resolved exact scope. A scope retirement between resolve and submit is a
 // stale prompt, never a reason to redirect by Session.
-func (a *Authority) SubmitPromptResponseForScope(scopeID runtimeids.ExecutionScopeID, resp tools.AskQuestionResponse, err error) error {
+func (a *Authority) SubmitPromptResolutionForScope(
+	scopeID runtimeids.ExecutionScopeID,
+	promptID string,
+	resolution tools.AskQuestionResolution,
+	err error,
+) error {
 	execution, resolveErr := a.agentExecutionByScope(scopeID)
 	if resolveErr != nil {
 		return resolveErr
 	}
-	return execution.prompts.Submit(resp, err)
+	return execution.prompts.Submit(promptID, resolution, err)
 }
 
-func (a *Authority) AcceptPromptResponseForScope(
+func (a *Authority) AcceptPromptResolutionForScope(
 	scopeID runtimeids.ExecutionScopeID,
-	resp tools.AskQuestionResponse,
+	promptID string,
+	resolution tools.AskQuestionResolution,
 	err error,
 ) (PromptResponseAcceptance, error) {
 	execution, resolveErr := a.agentExecutionByScope(scopeID)
 	if resolveErr != nil {
 		return PromptResponseAcceptance{}, resolveErr
 	}
-	return execution.prompts.Accept(resp, err)
+	return execution.prompts.Accept(promptID, resolution, err)
 }
 
 func (a *Authority) agentExecutionByScope(scopeID runtimeids.ExecutionScopeID) (*execution, error) {

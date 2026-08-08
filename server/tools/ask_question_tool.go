@@ -77,25 +77,12 @@ type AskQuestionApprovalOption struct {
 	Label    string                      `json:"label"`
 }
 
-type AskQuestionApprovalPayload struct {
-	Decision   AskQuestionApprovalDecision `json:"decision"`
-	Commentary string                      `json:"commentary,omitempty"`
-}
-
-type AskQuestionResponse struct {
-	RequestID            string                      `json:"request_id"`
-	Answer               string                      `json:"answer,omitempty"`
-	SelectedOptionNumber *int                        `json:"selected_option_number,omitempty"`
-	FreeformAnswer       string                      `json:"freeform_answer,omitempty"`
-	Approval             *AskQuestionApprovalPayload `json:"approval,omitempty"`
-}
-
 type AskQuestionBroker struct {
 	mu    sync.Mutex
 	queue []*pending
 	// onAsk switches the broker into synchronous handler mode. When unset, Ask
 	// uses queued submit mode and requests complete only via Submit.
-	onAsk func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)
+	onAsk func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)
 }
 
 type pending struct {
@@ -105,31 +92,31 @@ type pending struct {
 }
 
 type responseResult struct {
-	response AskQuestionResponse
-	err      error
+	resolution AskQuestionResolution
+	err        error
 }
 
 func NewAskQuestionBroker() *AskQuestionBroker {
 	return &AskQuestionBroker{}
 }
 
-func (b *AskQuestionBroker) SetAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)) {
+func (b *AskQuestionBroker) SetAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onAsk = handler
 }
 
-func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 	if req.ID == "" {
 		req.ID = uuid.NewString()
 	}
 	req.Suggestions = normalizedSuggestions(req.Suggestions)
 	req.RecommendedOptionIndex = normalizedRecommendedOptionIndex(req.RecommendedOptionIndex, len(req.Suggestions))
 	if req.Question == "" {
-		return AskQuestionResponse{}, errors.New("question is required")
+		return nil, errors.New("question is required")
 	}
 	if err := validateRequest(req); err != nil {
-		return AskQuestionResponse{}, err
+		return nil, err
 	}
 
 	h := b.askHandler()
@@ -143,33 +130,30 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	return b.askQueued(ctx, req)
 }
 
-func (b *AskQuestionBroker) askHandler() func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) askHandler() func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.onAsk
 }
 
-func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler func(context.Context, AskQuestionRequest) (AskQuestionResolution, error)) (AskQuestionResolution, error) {
 	if err := ctx.Err(); err != nil {
-		return AskQuestionResponse{}, err
+		return nil, err
 	}
-	resp, err := handler(ctx, req)
+	resolution, err := handler(ctx, req)
 	if err != nil {
-		return AskQuestionResponse{}, err
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return AskQuestionResponse{}, err
+		return nil, err
 	}
-	if resp.RequestID == "" {
-		resp.RequestID = req.ID
+	if err := ValidateAskQuestionResolution(req, resolution); err != nil {
+		return nil, err
 	}
-	if err := validateResponse(req, resp); err != nil {
-		return AskQuestionResponse{}, err
-	}
-	return resp, nil
+	return resolution, nil
 }
 
-func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
 
 	p := &pending{req: req, ch: make(chan responseResult, 1)}
 	b.mu.Lock()
@@ -179,31 +163,28 @@ func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionReques
 
 	select {
 	case <-ctx.Done():
-		return AskQuestionResponse{}, ctx.Err()
+		return nil, ctx.Err()
 	case rr := <-p.ch:
 		return b.finishQueuedResponse(req, rr)
 	}
 }
 
-func (b *AskQuestionBroker) finishQueuedResponse(req AskQuestionRequest, rr responseResult) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) finishQueuedResponse(req AskQuestionRequest, rr responseResult) (AskQuestionResolution, error) {
 	if rr.err != nil {
-		return AskQuestionResponse{}, rr.err
+		return nil, rr.err
 	}
-	if rr.response.RequestID == "" {
-		rr.response.RequestID = req.ID
+	if err := ValidateAskQuestionResolution(req, rr.resolution); err != nil {
+		return nil, err
 	}
-	if err := validateResponse(req, rr.response); err != nil {
-		return AskQuestionResponse{}, err
-	}
-	return rr.response, nil
+	return rr.resolution, nil
 }
 
-func (b *AskQuestionBroker) Submit(requestID string, resp AskQuestionResponse) error {
+func (b *AskQuestionBroker) Submit(requestID string, resolution AskQuestionResolution) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, p := range b.queue {
 		if p.req.ID == requestID {
-			return b.deliverPendingResponseLocked(p, responseResult{response: resp})
+			return b.deliverPendingResponseLocked(p, responseResult{resolution: resolution})
 		}
 	}
 	return fmt.Errorf("request %s not found", requestID)
@@ -214,10 +195,7 @@ func (b *AskQuestionBroker) deliverPendingResponseLocked(p *pending, rr response
 		return fmt.Errorf("request %s already completed", p.req.ID)
 	}
 	if rr.err == nil {
-		if rr.response.RequestID == "" {
-			rr.response.RequestID = p.req.ID
-		}
-		if err := validateResponse(p.req, rr.response); err != nil {
+		if err := ValidateAskQuestionResolution(p.req, rr.resolution); err != nil {
 			return err
 		}
 	}
@@ -285,90 +263,12 @@ func normalizedRecommendedOptionIndex(index int, suggestionCount int) int {
 	return index
 }
 
-func validateResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
-	return ValidateAskQuestionResponse(req, resp)
-}
-
-func ValidateAskQuestionResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
-	if !req.Approval {
-		if resp.Approval != nil {
-			return ErrAskQuestionNonApprovalForbidsApproval
-		}
-		if resp.SelectedOptionNumber != nil {
-			if *resp.SelectedOptionNumber <= 0 {
-				return fmt.Errorf("selected option number must be positive when present")
-			}
-			if len(req.Suggestions) == 0 {
-				return ErrAskQuestionSelectedOptionRequiresSuggest
-			}
-			if *resp.SelectedOptionNumber > len(req.Suggestions) {
-				return fmt.Errorf("selected option number %d is out of range", *resp.SelectedOptionNumber)
-			}
-			return nil
-		}
-		if normalizedFreeformAnswer(resp) == "" {
-			return ErrAskQuestionNonApprovalRequiresAnswer
-		}
-		return nil
-	}
-	if resp.Approval == nil {
-		return ErrAskQuestionApprovalRequiresResponse
-	}
-	if resp.SelectedOptionNumber != nil || strings.TrimSpace(resp.Answer) != "" || strings.TrimSpace(resp.FreeformAnswer) != "" {
-		return ErrAskQuestionApprovalForbidsOrdinaryAnswer
-	}
-	if err := validateApprovalDecision(resp.Approval.Decision); err != nil {
-		return err
-	}
-	for _, option := range req.ApprovalOptions {
-		if option.Decision == resp.Approval.Decision {
-			return nil
-		}
-	}
-	return fmt.Errorf("approval decision %q was not offered", resp.Approval.Decision)
-}
-
-func normalizedFreeformAnswer(resp AskQuestionResponse) string {
-	if trimmed := strings.TrimSpace(resp.FreeformAnswer); trimmed != "" {
-		return trimmed
-	}
-	return strings.TrimSpace(resp.Answer)
-}
-
-func buildToolOutputSummary(resp AskQuestionResponse) (string, error) {
-	freeform := normalizedFreeformAnswer(resp)
-	if resp.SelectedOptionNumber != nil {
-		return selectedOptionToolOutputSummary(*resp.SelectedOptionNumber, freeform), nil
-	}
-	if freeform == "" {
-		return "", ErrAskQuestionNonApprovalRequiresAnswer
-	}
-	return "User answered: " + freeform, nil
-}
-
 func selectedOptionToolOutputSummary(optionNumber int, freeform string) string {
 	base := fmt.Sprintf("User chose option #%d.", optionNumber)
 	if freeform == "" {
 		return base
 	}
 	return base + " They also said: " + freeform
-}
-
-func buildCondensedToolOutputText(req AskQuestionRequest, resp AskQuestionResponse) string {
-	freeform := normalizedFreeformAnswer(resp)
-	if resp.SelectedOptionNumber == nil {
-		return freeform
-	}
-	suggestions := normalizedSuggestions(req.Suggestions)
-	optionIndex := *resp.SelectedOptionNumber - 1
-	if optionIndex < 0 || optionIndex >= len(suggestions) {
-		return ""
-	}
-	base := suggestions[optionIndex]
-	if freeform == "" {
-		return base
-	}
-	return base + "\nUser also said:\n" + freeform
 }
 
 func validateApprovalDecision(decision AskQuestionApprovalDecision) error {
@@ -478,12 +378,12 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 		req.ToolCallID = c.ID
 		req.QuestionBatch = &batch
 	}
-	resp, err := t.broker.Ask(ctx, req)
+	resolution, err := t.broker.Ask(ctx, req)
 	if err != nil {
 		notifyAskQuestionBatchSkipped(c)
 		return ErrorResult(c, err.Error()), nil
 	}
-	summary, summaryErr := buildToolOutputSummary(resp)
+	summary, summaryErr := buildResolutionToolOutputSummary(resolution)
 	if summaryErr != nil {
 		return Result{}, summaryErr
 	}
@@ -491,9 +391,13 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 	if marshalErr != nil {
 		return Result{}, marshalErr
 	}
+	condensed, condensedErr := buildResolutionCondensedToolOutputText(req, resolution)
+	if condensedErr != nil {
+		return Result{}, condensedErr
+	}
 	return Result{
 		CallID: c.ID, Name: c.Name, Output: body,
-		CondensedText: textutil.OptionalExactString(buildCondensedToolOutputText(req, resp)),
+		CondensedText: textutil.OptionalExactString(condensed),
 	}, nil
 }
 

@@ -46,7 +46,7 @@ type Service struct {
 		EnsureTaskQuiescent(workflow.TaskID) error
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-		AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResponse, error) (workflowexecution.WorkflowQuestionAcceptance, error)
+		AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 	}
 }
 
@@ -168,7 +168,7 @@ func WithCurrentNodeExecution(execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-	AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResponse, error) (workflowexecution.WorkflowQuestionAcceptance, error)
+	AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 }) Option {
 	return func(s *Service) {
 		s.currentNodeExecution = execution
@@ -1938,30 +1938,30 @@ func (s *Service) acceptWorkflowTaskQuestion(
 	ctx context.Context,
 	req serverapi.WorkflowTaskQuestionAnswerRequest,
 ) (workflowexecution.WorkflowQuestionAcceptance, error) {
-	var (
-		response  askquestion.AskQuestionResponse
-		submitErr error
-	)
+	var resolution askquestion.AskQuestionResolution
+	var submitErr error
 	if strings.TrimSpace(req.ErrorMessage) != "" {
-		response = askquestion.AskQuestionResponse{RequestID: req.AskID}
 		submitErr = errors.New(req.ErrorMessage)
+	} else if req.Approval != nil {
+		commentary := req.Approval.Commentary
+		resolution = askquestion.AskQuestionLegacyApproval{
+			Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
+			Commentary: &commentary,
+		}
 	} else {
-		response = askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
-		if req.Approval != nil {
-			response = askquestion.AskQuestionResponse{
-				RequestID: req.AskID,
-				Approval: &askquestion.AskQuestionApprovalPayload{
-					Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
-					Commentary: req.Approval.Commentary,
-				},
-			}
+		answer := req.Answer
+		freeform := req.FreeformAnswer
+		resolution = askquestion.AskQuestionLegacyAnswer{
+			Answer:               &answer,
+			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
+			FreeformAnswer:       &freeform,
 		}
 	}
 	acceptance, err := s.currentNodeExecution.AcceptWorkflowQuestion(
 		ctx,
 		workflow.TaskID(req.TaskID),
 		req.AskID,
-		response,
+		resolution,
 		submitErr,
 	)
 	if err != nil {

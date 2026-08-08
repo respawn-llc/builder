@@ -19,22 +19,33 @@ const (
 	outsideWorkspaceDenySuggestion         = runtimewire.OutsideWorkspaceDenySuggestion
 )
 
-func TestOutsideWorkspaceApprovalFromResponse(t *testing.T) {
+func testOutsideWorkspaceApprovalResolution(
+	decision askquestion.AskQuestionApprovalDecision,
+	commentary string,
+) askquestion.AskQuestionApproval {
+	resolution := askquestion.AskQuestionApproval{Decision: decision}
+	if commentary != "" {
+		resolution.Commentary = &commentary
+	}
+	return resolution
+}
+
+func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
 	tests := []struct {
-		name string
-		resp askquestion.AskQuestionResponse
-		want patchtool.OutsideWorkspaceApproval
+		name       string
+		resolution askquestion.AskQuestionResolution
+		want       patchtool.OutsideWorkspaceApproval
 	}{
-		{name: "allow once", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}, want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce}},
-		{name: "allow session", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowSession}}, want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowSession}},
-		{name: "deny", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny}}, want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}},
-		{name: "allow once with commentary", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Commentary: "approved, but keep it small"}}, want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce, Commentary: "approved, but keep it small"}},
-		{name: "deny with commentary", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny, Commentary: "no because this is protected"}}, want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: "no because this is protected"}},
+		{name: "allow once", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce}},
+		{name: "allow session", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowSession}},
+		{name: "deny", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, ""), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}},
+		{name: "allow once with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, "approved, but keep it small"), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce, Commentary: "approved, but keep it small"}},
+		{name: "deny with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, "no because this is protected"), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: "no because this is protected"}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := runtimewire.OutsideWorkspaceApprovalFromResponse(tc.resp)
+			got, err := runtimewire.OutsideWorkspaceApprovalFromResolution(tc.resolution)
 			if err != nil {
 				t.Fatalf("parse approval response: %v", err)
 			}
@@ -45,18 +56,18 @@ func TestOutsideWorkspaceApprovalFromResponse(t *testing.T) {
 	}
 }
 
-func TestOutsideWorkspaceApprovalFromResponseRejectsMissingOrInvalidPayload(t *testing.T) {
+func TestOutsideWorkspaceApprovalFromResolutionRejectsMissingOrInvalidPayload(t *testing.T) {
 	tests := []struct {
-		name string
-		resp askquestion.AskQuestionResponse
+		name       string
+		resolution askquestion.AskQuestionResolution
 	}{
-		{name: "missing payload", resp: askquestion.AskQuestionResponse{}},
-		{name: "invalid decision", resp: askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: "maybe"}}},
+		{name: "missing payload"},
+		{name: "invalid decision", resolution: askquestion.AskQuestionApproval{Decision: "maybe"}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := runtimewire.OutsideWorkspaceApprovalFromResponse(tc.resp); err == nil {
+			if _, err := runtimewire.OutsideWorkspaceApprovalFromResolution(tc.resolution); err == nil {
 				t.Fatal("expected error")
 			}
 		})
@@ -66,7 +77,7 @@ func TestOutsideWorkspaceApprovalFromResponseRejectsMissingOrInvalidPayload(t *t
 func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	askCalls := 0
-	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		askCalls++
 		if !req.Approval {
 			t.Fatalf("expected approval=true for outside-workspace ask")
@@ -86,7 +97,7 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 		if !strings.Contains(req.Question, "Allow editing /tmp/x.txt (outside workspace dir)?") {
 			t.Fatalf("unexpected approval question text: %q", req.Question)
 		}
-		return askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowSession}}, nil
+		return testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, ""), nil
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
@@ -113,8 +124,8 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 
 func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
-	broker.SetAskHandler(func(context.Context, askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-		return askquestion.AskQuestionResponse{}, errors.New("ask failed")
+	broker.SetAskHandler(func(context.Context, askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+		return nil, errors.New("ask failed")
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
@@ -127,12 +138,12 @@ func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 func TestOutsideWorkspaceApproverUsesReadPromptText(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	askCalls := 0
-	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		askCalls++
 		if !strings.Contains(req.Question, "Allow reading /tmp/x.pdf (outside workspace dir)?") {
 			t.Fatalf("unexpected read approval question text: %q", req.Question)
 		}
-		return askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}, nil
+		return testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, ""), nil
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "reading")
@@ -189,10 +200,10 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 	default:
 	}
 
-	if err := broker.Submit(pending[0].ID, askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny, Commentary: "no"}}); err != nil {
+	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, "no")); err != nil {
 		t.Fatalf("submit denial: %v", err)
 	}
-	if err := broker.Submit(pending[0].ID, askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}); err == nil {
+	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, "")); err == nil {
 		t.Fatal("expected duplicate approval resolution to fail")
 	}
 
@@ -232,7 +243,7 @@ func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *
 	}()
 
 	pending := waitForPendingApprovals(t, broker, 1)
-	if err := broker.Submit(pending[0].ID, askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowSession}}); err != nil {
+	if err := broker.Submit(pending[0].ID, testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, "")); err != nil {
 		t.Fatalf("submit allow-session approval: %v", err)
 	}
 

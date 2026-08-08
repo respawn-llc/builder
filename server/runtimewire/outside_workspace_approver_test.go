@@ -11,12 +11,9 @@ import (
 func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	var received askquestion.AskQuestionRequest
-	broker.SetAskHandler(func(_ context.Context, request askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, request askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		received = request
-		return askquestion.AskQuestionResponse{
-			RequestID: request.ID,
-			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
-		}, nil
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
 	})
 	approver := NewOutsideWorkspaceApprover(broker, "editing")
 

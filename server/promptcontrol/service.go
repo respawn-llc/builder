@@ -17,7 +17,12 @@ import (
 )
 
 type PendingPromptResponder interface {
-	AcceptPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) (PromptResponseAcceptance, error)
+	AcceptPromptResolution(
+		sessionID string,
+		promptID string,
+		resolution askquestion.AskQuestionResolution,
+		err error,
+	) (PromptResponseAcceptance, error)
 	ResolvePromptBatch(
 		context.Context,
 		runtimeids.SessionID,
@@ -78,13 +83,14 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 	}
 	acceptance, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(context.Context) (PromptResponseAcceptance, error) {
 		if req.ErrorMessage != "" {
-			return s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
+			return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, nil, errors.New(req.ErrorMessage))
 		}
-		return s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
-			RequestID:            req.AskID,
-			Answer:               req.Answer,
+		answer := req.Answer
+		freeform := req.FreeformAnswer
+		return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, askquestion.AskQuestionLegacyAnswer{
+			Answer:               &answer,
 			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       req.FreeformAnswer,
+			FreeformAnswer:       &freeform,
 		}, nil)
 	})
 	if err != nil {
@@ -113,15 +119,12 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 	}
 	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
 		if req.ErrorMessage != "" {
-			_, err := s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.ApprovalID}, errors.New(req.ErrorMessage))
+			_, err := s.prompts.AcceptPromptResolution(req.SessionID, req.ApprovalID, nil, errors.New(req.ErrorMessage))
 			return struct{}{}, err
 		}
-		_, err := s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
-			RequestID: req.ApprovalID,
-			Approval: &askquestion.AskQuestionApprovalPayload{
-				Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
-				Commentary: commentary,
-			},
+		_, err := s.prompts.AcceptPromptResolution(req.SessionID, req.ApprovalID, askquestion.AskQuestionApproval{
+			Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
+			Commentary: textutil.Pointer(req.Commentary),
 		}, nil)
 		return struct{}{}, err
 	})
@@ -144,13 +147,17 @@ func (s *PromptControlService) AnswerPromptBatch(
 		switch {
 		case entry.QuestionAnswer != nil:
 			command.Payload = sessionruntime.PromptQuestionAnswerCommand{
-				SelectedOptionNumber: textutil.Pointer(entry.QuestionAnswer.SelectedOptionNumber),
-				Freeform:             entry.QuestionAnswer.Freeform,
+				Answer: askquestion.AskQuestionAnswer{
+					SelectedOptionNumber: textutil.Pointer(entry.QuestionAnswer.SelectedOptionNumber),
+					Freeform:             entry.QuestionAnswer.Freeform,
+				},
 			}
 		case entry.ApprovalAnswer != nil:
 			command.Payload = sessionruntime.PromptApprovalAnswerCommand{
-				Decision:   askquestion.AskQuestionApprovalDecision(entry.ApprovalAnswer.Decision),
-				Commentary: entry.ApprovalAnswer.Commentary,
+				Answer: askquestion.AskQuestionApproval{
+					Decision:   askquestion.AskQuestionApprovalDecision(entry.ApprovalAnswer.Decision),
+					Commentary: entry.ApprovalAnswer.Commentary,
+				},
 			}
 		case entry.Declined != nil:
 			command.Payload = sessionruntime.PromptDeclinedCommand{}

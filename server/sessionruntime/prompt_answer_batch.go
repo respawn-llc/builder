@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"core/server/tools"
@@ -14,15 +13,13 @@ import (
 )
 
 type PromptQuestionAnswerCommand struct {
-	SelectedOptionNumber *int
-	Freeform             *string
+	Answer tools.AskQuestionAnswer
 }
 
 func (PromptQuestionAnswerCommand) promptAnswerPayload() {}
 
 type PromptApprovalAnswerCommand struct {
-	Decision   tools.AskQuestionApprovalDecision
-	Commentary *string
+	Answer tools.AskQuestionApproval
 }
 
 func (PromptApprovalAnswerCommand) promptAnswerPayload() {}
@@ -55,7 +52,8 @@ type PromptAnswerResult struct {
 type preparedPromptAnswer struct {
 	command    PromptAnswerCommand
 	entry      *executionPromptEntry
-	resolution promptResolution
+	resolution tools.AskQuestionResolution
+	submitErr  error
 }
 
 func PendingPromptOrderLess(leftCreatedAt time.Time, leftID string, rightCreatedAt time.Time, rightID string) bool {
@@ -126,7 +124,7 @@ func (s *executionPromptStore) ResolvePromptBatch(
 		if entry == nil || entry.snapshot.Request.StepID != stepID.String() {
 			continue
 		}
-		resolution, err := promptResolutionForCommand(entry, command)
+		resolution, submitErr, err := promptResolutionForCommand(entry, command)
 		if err != nil {
 			s.mu.RUnlock()
 			return nil, err
@@ -135,6 +133,7 @@ func (s *executionPromptStore) ResolvePromptBatch(
 			command:    command,
 			entry:      entry,
 			resolution: resolution,
+			submitErr:  submitErr,
 		})
 	}
 	s.mu.RUnlock()
@@ -166,7 +165,7 @@ func (s *executionPromptStore) resolvePreparedPromptAnswer(answer preparedPrompt
 	if !removed {
 		return false, nil
 	}
-	return true, s.deliverPromptResolution(answer.entry, answer.resolution)
+	return true, s.deliverPromptResolution(answer.entry, answer.resolution, answer.submitErr)
 }
 
 func (s *executionPromptStore) removePromptEntryLocked(requestID string, expected *executionPromptEntry) bool {
@@ -179,93 +178,49 @@ func (s *executionPromptStore) removePromptEntryLocked(requestID string, expecte
 
 func (s *executionPromptStore) deliverPromptResolution(
 	entry *executionPromptEntry,
-	resolution promptResolution,
+	resolution tools.AskQuestionResolution,
+	submitErr error,
 ) error {
 	<-entry.publicationDone
 	publicationErr := s.publishResolved(entry.snapshot)
-	entry.response <- executionPromptResult{resolution: resolution}
+	entry.response <- executionPromptResult{resolution: resolution, err: submitErr}
 	return publicationErr
 }
 
 func promptResolutionForCommand(
 	entry *executionPromptEntry,
 	command PromptAnswerCommand,
-) (promptResolution, error) {
+) (tools.AskQuestionResolution, error, error) {
 	if entry == nil {
-		return nil, errors.New("pending prompt entry is required")
+		return nil, nil, errors.New("pending prompt entry is required")
 	}
+	var submitErr error
+	var resolution tools.AskQuestionResolution
 	switch answer := command.Payload.(type) {
 	case PromptQuestionAnswerCommand:
-		response := questionResolutionResponse(command.PromptID, answer)
-		if err := validatePromptResponse(entry, response, nil); err != nil {
-			return nil, err
-		}
-		if _, err := preparedSuccessorPromptIDs(entry.snapshot.Request, nil); err != nil {
-			return nil, err
-		}
-		resolution := promptQuestionResolution{
-			selectedOptionNumber: answer.SelectedOptionNumber,
-		}
-		if answer.Freeform != nil {
-			resolution.text = &promptQuestionText{
-				target: promptQuestionTextTargetFreeform,
-				value:  *answer.Freeform,
-			}
-		}
-		return resolution, nil
+		resolution = answer.Answer
 	case PromptApprovalAnswerCommand:
-		response := approvalResolutionResponse(command.PromptID, answer)
-		if err := validatePromptResponse(entry, response, nil); err != nil {
-			return nil, err
-		}
-		if _, err := preparedSuccessorPromptIDs(entry.snapshot.Request, nil); err != nil {
-			return nil, err
-		}
-		return promptApprovalResolution{answer: answer}, nil
+		resolution = answer.Answer
 	case PromptDeclinedCommand:
-		if err := validatePromptResponse(entry, tools.AskQuestionResponse{}, context.Canceled); err != nil {
-			return nil, err
-		}
-		if _, err := preparedSuccessorPromptIDs(entry.snapshot.Request, context.Canceled); err != nil {
-			return nil, err
-		}
-		return promptFailureResolution{cause: context.Canceled}, nil
+		submitErr = context.Canceled
 	default:
-		return nil, errors.New("prompt answer command disposition is invalid")
+		return nil, nil, errors.New("prompt answer command payload is invalid")
 	}
+	if err := validatePromptResolution(entry, resolution, submitErr); err != nil {
+		return nil, nil, err
+	}
+	if _, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr); err != nil {
+		return nil, nil, err
+	}
+	if submitErr != nil {
+		return nil, submitErr, nil
+	}
+	return resolution, nil, nil
 }
 
-func questionResolutionResponse(
-	promptID clientui.PromptID,
-	answer PromptQuestionAnswerCommand,
-) tools.AskQuestionResponse {
-	response := tools.AskQuestionResponse{
-		RequestID:            string(promptID),
-		SelectedOptionNumber: answer.SelectedOptionNumber,
-	}
-	if answer.Freeform != nil {
-		response.FreeformAnswer = *answer.Freeform
-	}
-	return response
-}
-
-func approvalResolutionResponse(
-	promptID clientui.PromptID,
-	answer PromptApprovalAnswerCommand,
-) tools.AskQuestionResponse {
-	payload := &tools.AskQuestionApprovalPayload{Decision: answer.Decision}
-	if answer.Commentary != nil {
-		payload.Commentary = *answer.Commentary
-	}
-	return tools.AskQuestionResponse{
-		RequestID: string(promptID),
-		Approval:  payload,
-	}
-}
-
-func validatePromptResponse(
+func validatePromptResolution(
 	entry *executionPromptEntry,
-	response tools.AskQuestionResponse,
+	resolution tools.AskQuestionResolution,
 	submitErr error,
 ) error {
 	if entry == nil {
@@ -274,7 +229,7 @@ func validatePromptResponse(
 	if submitErr != nil {
 		return nil
 	}
-	return tools.ValidateAskQuestionResponse(entry.snapshot.Request, response)
+	return tools.ValidateAskQuestionResolution(entry.snapshot.Request, resolution)
 }
 
 func validatePromptAnswerCommands(commands []PromptAnswerCommand) error {
@@ -286,31 +241,19 @@ func validatePromptAnswerCommands(commands []PromptAnswerCommand) error {
 		if err := command.PromptID.Validate(); err != nil {
 			return fmt.Errorf("prompt answer command %d: %w", index, err)
 		}
+		var resolution tools.AskQuestionResolution
 		switch answer := command.Payload.(type) {
 		case PromptQuestionAnswerCommand:
-			if answer.SelectedOptionNumber == nil && answer.Freeform == nil {
-				return fmt.Errorf("prompt answer command %d question answer is required", index)
-			}
-			if answer.SelectedOptionNumber != nil && *answer.SelectedOptionNumber <= 0 {
-				return fmt.Errorf("prompt answer command %d selected option number must be positive", index)
-			}
-			if answer.Freeform != nil && strings.TrimSpace(*answer.Freeform) == "" {
-				return fmt.Errorf("prompt answer command %d freeform must be non-blank", index)
-			}
+			resolution = answer.Answer
 		case PromptApprovalAnswerCommand:
-			switch answer.Decision {
-			case tools.AskQuestionApprovalDecisionAllowOnce,
-				tools.AskQuestionApprovalDecisionAllowSession,
-				tools.AskQuestionApprovalDecisionDeny:
-			default:
-				return fmt.Errorf("prompt answer command %d approval decision is invalid", index)
-			}
-			if answer.Commentary != nil && strings.TrimSpace(*answer.Commentary) == "" {
-				return fmt.Errorf("prompt answer command %d commentary must be non-blank", index)
-			}
+			resolution = answer.Answer
 		case PromptDeclinedCommand:
+			resolution = tools.AskQuestionDeclined{}
 		default:
-			return fmt.Errorf("prompt answer command %d has an invalid answer variant", index)
+			return fmt.Errorf("prompt answer command %d has an invalid payload variant", index)
+		}
+		if err := tools.ValidateAskQuestionResolutionShape(resolution); err != nil {
+			return fmt.Errorf("prompt answer command %d: %w", index, err)
 		}
 		if _, exists := seen[command.PromptID]; exists {
 			return fmt.Errorf("prompt answer command prompt id %q is duplicated", command.PromptID)

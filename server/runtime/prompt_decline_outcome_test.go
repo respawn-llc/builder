@@ -13,8 +13,8 @@ import (
 
 func TestDeclinedQuestionProducesErrorToolCompletionWithoutSyntheticUserMessage(t *testing.T) {
 	broker := tools.NewAskQuestionBroker()
-	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
-		return tools.AskQuestionResponse{}, context.Canceled
+	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
+		return nil, context.Canceled
 	})
 	var eventMu sync.Mutex
 	var events []Event

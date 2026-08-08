@@ -215,15 +215,27 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	pending := fixture.startPendingPrompt(t, reference, request)
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 
-	if err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, "different-ask-id", askquestion.AskQuestionResponse{RequestID: "different-ask-id", Answer: "yes"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
+	if err := fixture.answerWorkflowQuestion(
+		context.Background(),
+		reference.TaskID,
+		"different-ask-id",
+		currentNodeLegacyQuestionAnswer("yes"),
+		nil,
+	); !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("unknown prompt answer error = %v, want prompt not found", err)
 	}
-	if err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil); err != nil {
+	if err := fixture.answerWorkflowQuestion(
+		context.Background(),
+		reference.TaskID,
+		request.ID,
+		currentNodeLegacyQuestionAnswer("yes"),
+		nil,
+	); err != nil {
 		t.Fatalf("AnswerWorkflowQuestion: %v", err)
 	}
 	select {
 	case result := <-pending.result:
-		if result.err != nil || result.response.RequestID != request.ID || result.response.Answer != "yes" {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("prompt result = %+v, want exact successful answer", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -282,14 +294,14 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 		}
 	})
 	handle, sessionID := fixture.startQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-		response, err := fixture.authority.AwaitPromptResponse(ctx, scope.ID(), first)
-		firstResult <- currentNodePromptResult{response: response, err: err}
+		resolution, err := fixture.authority.AwaitPromptResolution(ctx, scope.ID(), first)
+		firstResult <- currentNodePromptResult{resolution: resolution, err: err}
 		if err != nil {
 			return err
 		}
 		<-allowSuccessor
-		response, err = fixture.authority.AwaitPromptResponse(ctx, scope.ID(), second)
-		secondResult <- currentNodePromptResult{response: response, err: err}
+		resolution, err = fixture.authority.AwaitPromptResolution(ctx, scope.ID(), second)
+		secondResult <- currentNodePromptResult{resolution: resolution, err: err}
 		return err
 	})
 	fixture.waitForPendingPrompt(t, reference.TaskID, firstID)
@@ -308,13 +320,13 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 			context.Background(),
 			reference.TaskID,
 			firstID,
-			askquestion.AskQuestionResponse{RequestID: firstID, Answer: "one"},
+			currentNodeLegacyQuestionAnswer("one"),
 			nil,
 		)
 	}()
 	select {
 	case result := <-firstResult:
-		if result.err != nil || result.response.RequestID != firstID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("first prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -327,7 +339,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 			context.Background(),
 			independentReference.TaskID,
 			independentRequest.ID,
-			askquestion.AskQuestionResponse{RequestID: independentRequest.ID, Answer: "independent"},
+			currentNodeLegacyQuestionAnswer("independent"),
 			nil,
 		)
 	}()
@@ -341,7 +353,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 	}
 	select {
 	case result := <-independent.result:
-		if result.err != nil || result.response.RequestID != independentRequest.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("independent prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -366,12 +378,17 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 	case <-time.After(3 * time.Second):
 		t.Fatal("answer did not return after successor became pending")
 	}
-	if err := fixture.authority.SubmitPromptResponse(sessionID, askquestion.AskQuestionResponse{RequestID: secondID, Answer: "two"}, nil); err != nil {
+	if err := fixture.authority.SubmitPromptResolution(
+		sessionID,
+		secondID,
+		currentNodeLegacyQuestionAnswer("two"),
+		nil,
+	); err != nil {
 		t.Fatalf("submit second prompt: %v", err)
 	}
 	select {
 	case result := <-secondResult:
-		if result.err != nil || result.response.RequestID != secondID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("second prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -408,7 +425,7 @@ func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariant
 		context.Background(),
 		reference.TaskID,
 		request.ID,
-		askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"},
+		currentNodeLegacyQuestionAnswer("yes"),
 		nil,
 	)
 	var invariantErr sessionruntime.PromptBatchInvariantError
@@ -443,7 +460,13 @@ func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *t
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 	fixture.store.setBindingError(workflowstore.ErrSessionNotCurrentWorkflowNode)
 
-	err := fixture.answerWorkflowQuestion(context.Background(), reference.TaskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
+	err := fixture.answerWorkflowQuestion(
+		context.Background(),
+		reference.TaskID,
+		request.ID,
+		currentNodeLegacyQuestionAnswer("yes"),
+		nil,
+	)
 	if !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("ownership mismatch answer error = %v, want prompt not found", err)
 	}
@@ -478,7 +501,13 @@ func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 	second := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"), request)
 	fixture.waitForAmbiguousPendingPrompt(t, taskID, request.ID)
 
-	err := fixture.answerWorkflowQuestion(context.Background(), taskID, request.ID, askquestion.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
+	err := fixture.answerWorkflowQuestion(
+		context.Background(),
+		taskID,
+		request.ID,
+		currentNodeLegacyQuestionAnswer("yes"),
+		nil,
+	)
 	if !errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous) {
 		t.Fatalf("ambiguous prompt answer error = %v, want prompt ambiguity", err)
 	}

@@ -11,8 +11,28 @@ import (
 )
 
 type promptAwaitTestResult struct {
-	response tools.AskQuestionResponse
-	err      error
+	resolution tools.AskQuestionResolution
+	err        error
+}
+
+func testLegacyQuestionResolution(answer string) tools.AskQuestionLegacyAnswer {
+	freeform := ""
+	return tools.AskQuestionLegacyAnswer{
+		Answer:         &answer,
+		FreeformAnswer: &freeform,
+	}
+}
+
+func requireLegacyQuestionAnswer(
+	t *testing.T,
+	resolution tools.AskQuestionResolution,
+	want string,
+) {
+	t.Helper()
+	answer, ok := resolution.(tools.AskQuestionLegacyAnswer)
+	if !ok || answer.Answer == nil || *answer.Answer != want {
+		t.Fatalf("legacy Question resolution = %+v, want Answer %q", resolution, want)
+	}
 }
 
 func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
@@ -22,8 +42,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	second := batchedPromptRequest("ask-2", 1)
 	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), first)
-		firstResult <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), first)
+		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	pending := <-feed
 	if pending.requestID != first.ID || pending.resolved {
@@ -34,7 +54,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	answerDone := make(chan error, 1)
 	go func() {
 		acceptance, err := store.Accept(
-			tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
+			first.ID,
+			testLegacyQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -49,7 +70,7 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 	select {
 	case result := <-firstResult:
-		if result.err != nil || result.response.RequestID != first.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("first prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -63,8 +84,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 
 	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), second)
-		secondResult <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), second)
+		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	select {
@@ -87,7 +108,8 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	submitDone := make(chan error, 1)
 	go func() {
 		submitDone <- store.Submit(
-			tools.AskQuestionResponse{RequestID: second.ID, Answer: "two"},
+			second.ID,
+			testLegacyQuestionResolution("two"),
 			nil,
 		)
 	}()
@@ -100,11 +122,80 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 	select {
 	case result := <-secondResult:
-		if result.err != nil || result.response.RequestID != second.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("second prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for second prompt response")
+	}
+}
+
+func TestExecutionPromptStorePreservesExactLegacyQuestionSlots(t *testing.T) {
+	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
+	request := tools.AskQuestionRequest{ID: "legacy-question", Question: "Proceed?"}
+	result := make(chan promptAwaitTestResult, 1)
+	go func() {
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
+	}()
+	requirePromptPending(t, &store, request.ID)
+
+	answer := "  exact answer  "
+	freeform := "  exact freeform  "
+	if err := store.Submit(request.ID, tools.AskQuestionLegacyAnswer{
+		Answer:         &answer,
+		FreeformAnswer: &freeform,
+	}, nil); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("Await: %v", got.err)
+	}
+	legacy, ok := got.resolution.(tools.AskQuestionLegacyAnswer)
+	if !ok {
+		t.Fatalf("resolution type = %T", got.resolution)
+	}
+	if legacy.Answer == nil || *legacy.Answer != answer {
+		t.Fatalf("Answer slot = %v, want exact value", legacy.Answer)
+	}
+	if legacy.FreeformAnswer == nil || *legacy.FreeformAnswer != freeform {
+		t.Fatalf("FreeformAnswer slot = %v, want exact value", legacy.FreeformAnswer)
+	}
+}
+
+func TestExecutionPromptStorePreservesExactApprovalCommentary(t *testing.T) {
+	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
+	request := tools.AskQuestionRequest{
+		ID:       "legacy-approval",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []tools.AskQuestionApprovalOption{{
+			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	}
+	result := make(chan promptAwaitTestResult, 1)
+	go func() {
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
+	}()
+	requirePromptPending(t, &store, request.ID)
+
+	commentary := "  exact commentary  "
+	if err := store.Submit(request.ID, tools.AskQuestionApproval{
+		Decision:   tools.AskQuestionApprovalDecisionAllowOnce,
+		Commentary: &commentary,
+	}, nil); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatalf("Await: %v", got.err)
+	}
+	approval, ok := got.resolution.(tools.AskQuestionApproval)
+	if !ok || approval.Commentary == nil || *approval.Commentary != commentary {
+		t.Fatalf("Approval resolution = %+v, want exact commentary", got.resolution)
 	}
 }
 
@@ -133,8 +224,8 @@ func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *tes
 	request := tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}
 	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), request)
-		awaitDone <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), request)
+		awaitDone <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	<-feed.pendingStarted
 
@@ -203,15 +294,16 @@ func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSucc
 	request := batchedPromptRequest("ask-1", 0)
 	result := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), request)
-		result <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), request)
+		result <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, request.ID)
 
 	answerDone := make(chan error, 1)
 	go func() {
 		acceptance, err := store.Accept(
-			tools.AskQuestionResponse{RequestID: request.ID, Answer: "one"},
+			request.ID,
+			testLegacyQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -247,13 +339,14 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	second := batchedPromptRequest("ask-2", 1)
 	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), first)
-		firstResult <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), first)
+		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, first.ID)
 
 	acceptance, err := store.Accept(
-		tools.AskQuestionResponse{RequestID: first.ID, Answer: "one"},
+		first.ID,
+		testLegacyQuestionResolution("one"),
 		nil,
 	)
 	if err != nil {
@@ -261,7 +354,7 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	}
 	select {
 	case result := <-firstResult:
-		if result.err != nil || result.response.RequestID != first.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("first prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
@@ -270,19 +363,20 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 
 	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
-		response, err := store.Await(context.Background(), second)
-		secondResult <- promptAwaitTestResult{response: response, err: err}
+		resolution, err := store.Await(context.Background(), second)
+		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	if err := store.Submit(
-		tools.AskQuestionResponse{RequestID: second.ID, Answer: "two"},
+		second.ID,
+		testLegacyQuestionResolution("two"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit second prompt response: %v", err)
 	}
 	select {
 	case result := <-secondResult:
-		if result.err != nil || result.response.RequestID != second.ID {
+		if result.err != nil || result.resolution == nil {
 			t.Fatalf("second prompt result = %+v", result)
 		}
 	case <-time.After(3 * time.Second):
