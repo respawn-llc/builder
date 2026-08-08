@@ -58,8 +58,15 @@ export function SidebarRouteChangeCloser() {
 
 export function SidebarHost() {
   const { t } = useTranslation();
-  const { activeDestination, closeSidebar, phase, resizeSidebar, resolveSidebar, sidebarWidthPx } =
-    useSidebar();
+  const {
+    activeDestination,
+    closeSidebar,
+    completeCurrent,
+    phase,
+    resizeSidebar,
+    resolveSidebar,
+    sidebarWidthPx,
+  } = useSidebar();
   const sizePreference = useMemo(() => sidebarSizePreference(activeDestination), [activeDestination]);
   const titleId = useId();
   const sidebarRef = useRef<HTMLElement | null>(null);
@@ -298,6 +305,7 @@ export function SidebarHost() {
           <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
             <SidebarDestinationView
               closeSidebar={closeSidebar}
+              completeCurrent={completeCurrent}
               destination={activeDestination}
               resolveSidebar={resolveSidebar}
             />

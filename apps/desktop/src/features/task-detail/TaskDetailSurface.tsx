@@ -7,16 +7,24 @@ import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
+import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
 
 export type TaskDetailSurfaceProps = Readonly<{
   taskId: string;
   enabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
+  onDeleteDismiss: TaskDetailDeleteDismissal;
   onMutated?: (() => void) | undefined;
 }>;
 
-export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: TaskDetailSurfaceProps) {
+export function TaskDetailSurface({
+  taskId,
+  enabled,
+  initialFocus,
+  onDeleteDismiss,
+  onMutated,
+}: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const reportLabelError = useCallback(
@@ -50,6 +58,7 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
           comments={comments}
           detail={detail.data}
           initialFocus={initialFocus}
+          onDeleteDismiss={onDeleteDismiss}
           onMutated={onMutated}
         />
       </TaskDetailAssignmentScope>

@@ -10,8 +10,10 @@ import {
   type DescriptionPresentationState,
 } from "./TaskDetailDescriptionPresentation";
 import { TaskDetailList } from "./TaskDetailList";
+import { TaskDeleteProvider } from "./TaskDeleteButton";
+import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import { TaskResumeProvider } from "./TaskResumeButton";
+import { TaskInitiatingActionProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -33,6 +35,7 @@ export function TaskDetailContent({
   comments,
   detail,
   initialFocus,
+  onDeleteDismiss,
   onMutated,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
@@ -40,6 +43,7 @@ export function TaskDetailContent({
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
+  onDeleteDismiss: TaskDetailDeleteDismissal;
   onMutated?: (() => void) | undefined;
 }>) {
   const { t } = useTranslation();
@@ -122,70 +126,93 @@ export function TaskDetailContent({
   }
 
   return (
-    <TaskResumeProvider key={detail.id} onApplied={mutations.refresh} taskID={detail.id}>
-      <TaskDetailList
-      activity={activity}
-      attention={attention}
-      comments={comments}
-      detail={detail}
-      disabled={connection.phase !== "connected"}
-      draft={draft}
-      descriptionPresentation={descriptionPresentation}
-      editingComment={editingComment}
-      initialFocus={initialFocus}
-      mutations={mutations}
-      newCommentBody={newCommentBody}
-      onDraftChange={(nextDraft) => {
-        setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
-      }}
-      onDescriptionPresentationChange={setDescriptionPresentation}
-      onAddDependency={(direction) => {
+    <TaskInitiatingActionProvider
+      key={detail.id}
+      onApplied={mutations.refresh}
+      onViewDependencies={(taskID) => {
         const destination = {
-          boardQueryWorkflowID: detail.workflowID,
-          initialSourceWorkspaceID: detail.sourceWorkspace.id,
-          kind: "newTask" as const,
-          mode: "overlay" as const,
-          pendingRelationship: {
-            originTaskID: detail.id,
-            newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
-          },
-          projectID: detail.projectID,
-          workflowID: detail.workflowID,
+          kind: "taskDetail" as const,
+          initialFocus: { kind: "dependencies" as const },
+          taskID,
         };
         if (activeDestination?.kind === "taskDetail") {
-          replaceSidebar(destination);
-        } else {
-          void openSidebar(destination);
-        }
-      }}
-      onRemoveDependency={(pair) => {
-        mutations.removeDependency.mutate(pair);
-      }}
-      onSelectDependencyTask={(taskID) => {
-        if (activeDestination?.kind === "taskDetail") {
           replaceSidebar({
-            kind: "taskDetail",
-            taskID,
-            ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
-            ...(activeDestination.onMutated === undefined ? {} : { onMutated: activeDestination.onMutated }),
+            ...activeDestination,
+            ...destination,
           });
           return;
         }
-        void navigation.replaceTask(taskID);
+        void openSidebar(destination);
       }}
-      onNewCommentBodyChange={setNewCommentBody}
-      onEditingCommentChange={setEditingComment}
-      onQuestionSelectionChange={(askID, selection) => {
-        setQuestionSelections((previous) => new Map(previous).set(askID, selection));
-      }}
-      onSaveDraft={saveDraft}
-      questionSelections={questionSelections}
-      selectedTab={selectedTab}
-      setTab={setSelectedTab}
-      updateError={update.error}
-        updatePending={update.isPending}
-      />
-    </TaskResumeProvider>
+      taskID={detail.id}
+    >
+      <TaskDeleteProvider onDismiss={onDeleteDismiss} taskID={detail.id}>
+        <TaskDetailList
+          activity={activity}
+          attention={attention}
+          comments={comments}
+          detail={detail}
+          disabled={connection.phase !== "connected"}
+          draft={draft}
+          descriptionPresentation={descriptionPresentation}
+          editingComment={editingComment}
+          initialFocus={initialFocus}
+          mutations={mutations}
+          newCommentBody={newCommentBody}
+          onDraftChange={(nextDraft) => {
+            setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+          }}
+          onDescriptionPresentationChange={setDescriptionPresentation}
+          onAddDependency={(direction) => {
+            const destination = {
+              boardQueryWorkflowID: detail.workflowID,
+              initialSourceWorkspaceID: detail.sourceWorkspace.id,
+              kind: "newTask" as const,
+              mode: "overlay" as const,
+              pendingRelationship: {
+                originTaskID: detail.id,
+                newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
+              },
+              projectID: detail.projectID,
+              workflowID: detail.workflowID,
+            };
+            if (activeDestination?.kind === "taskDetail") {
+              replaceSidebar(destination);
+            } else {
+              void openSidebar(destination);
+            }
+          }}
+          onRemoveDependency={(pair) => {
+            mutations.removeDependency.mutate(pair);
+          }}
+          onSelectDependencyTask={(taskID) => {
+            if (activeDestination?.kind === "taskDetail") {
+              replaceSidebar({
+                kind: "taskDetail",
+                taskID,
+                ...(activeDestination.mode === undefined ? {} : { mode: activeDestination.mode }),
+                ...(activeDestination.onMutated === undefined
+                  ? {}
+                  : { onMutated: activeDestination.onMutated }),
+              });
+              return;
+            }
+            void navigation.replaceTask(taskID);
+          }}
+          onNewCommentBodyChange={setNewCommentBody}
+          onEditingCommentChange={setEditingComment}
+          onQuestionSelectionChange={(askID, selection) => {
+            setQuestionSelections((previous) => new Map(previous).set(askID, selection));
+          }}
+          onSaveDraft={saveDraft}
+          questionSelections={questionSelections}
+          selectedTab={selectedTab}
+          setTab={setSelectedTab}
+          updateError={update.error}
+          updatePending={update.isPending}
+        />
+      </TaskDeleteProvider>
+    </TaskInitiatingActionProvider>
   );
 }
 

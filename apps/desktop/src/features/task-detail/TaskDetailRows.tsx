@@ -20,7 +20,8 @@ import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskDetailLabels } from "./TaskDetailLabels";
-import { TaskResumeButton } from "./TaskResumeButton";
+import { TaskDeleteButton } from "./TaskDeleteButton";
+import { TaskResumeButton, TaskStartButton } from "./TaskResumeButton";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -88,18 +89,25 @@ export function TaskHeaderIsland({
         type="text"
         value={title}
       />
-      {dirty ? (
-        <Button
-          aria-label={t("task.save")}
-          className="shrink-0"
-          data-testid="task-detail-save"
-          disabled={!canSaveDraft}
-          size="icon"
-          type="submit"
-          variant="primary"
-        >
-          <Save aria-hidden="true" size={16} strokeWidth={1.75} />
-        </Button>
+      {dirty || detail.actions.canDelete ? (
+        <span className="relative block h-9 w-9 shrink-0" data-testid="task-detail-title-action-slot">
+          <Button
+            aria-label={t("task.save")}
+            aria-hidden={!dirty}
+            className={`absolute inset-0 transition-opacity motion-reduce:transition-none ${
+              dirty ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+            }`}
+            data-testid="task-detail-save"
+            disabled={!canSaveDraft || !dirty}
+            size="icon"
+            tabIndex={dirty ? undefined : -1}
+            type="submit"
+            variant="primary"
+          >
+            <Save aria-hidden="true" size={16} strokeWidth={1.75} />
+          </Button>
+          {detail.actions.canDelete ? <TaskDeleteButton active={!dirty} disabled={disabled} /> : null}
+        </span>
       ) : null}
     </form>
   );
@@ -142,7 +150,10 @@ export function DescriptionIsland({
   });
 
   return (
-    <div className="grid min-h-0 min-w-0 gap-[var(--space-2)]" data-testid="task-description-input-frame">
+    <div
+      className="task-detail-description-island grid min-h-0 min-w-0 gap-[var(--space-2)]"
+      data-testid="task-description-input-frame"
+    >
       {presentation.editing && !disabled ? (
         <DescriptionEditor
           describedBy={descriptionError.length > 0 ? descriptionErrorId : undefined}
@@ -208,7 +219,7 @@ function DescriptionEditor({
       autoFocus
       className={cx(
         fieldIslandInputClassName(1),
-        "block min-h-[220px] min-w-0 resize-none p-[var(--space-2)] font-mono",
+        "task-detail-description-surface block min-h-[220px] min-w-0 resize-none p-[var(--space-2)] font-mono",
       )}
       id={id}
       onBlur={onBlur}
@@ -243,13 +254,13 @@ function DescriptionReadView({
   const overflows = useDescriptionOverflow({ contentRef, enabled: !expanded, viewportRef });
   const affordancePhase = useOpacityExit(!expanded && overflows);
   return (
-    <div className="relative min-w-0">
+    <div className="task-detail-description-shell relative min-w-0">
       <div
         aria-label={t("task.description")}
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1),
-          "block min-w-0 p-[var(--space-2)]",
+          "task-detail-description-surface block min-w-0 p-[var(--space-2)]",
           !disabled && "cursor-text",
           expanded ? "overflow-visible" : "max-h-[clamp(5lh,50dvh,10lh)] overflow-hidden",
         )}
@@ -431,22 +442,36 @@ function TaskActionPanel({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
+  const interruptTarget = taskInterruptTarget(detail);
+  const interruptFullLabel =
+    interruptTarget === null ? t("board.interrupt") : t("task.interruptChat", { name: interruptTarget });
+  const interruptVisibleLabel =
+    interruptTarget === null
+      ? interruptFullLabel
+      : t("task.interruptChat", { name: ellipsizeActionTarget(interruptTarget) });
   return (
     <>
-      <div className="grid gap-[var(--space-2)] pt-[var(--space-1)]">
-        <TaskOpenButtons detail={detail} disabled={disabled} />
-        {detail.actions.canResume ? (
+      <div
+        className="flex min-w-0 flex-wrap items-center justify-start gap-[var(--space-2)] pt-[var(--space-1)]"
+        data-testid="task-detail-action-flow"
+      >
+        {detail.actions.canStart ? (
+          <TaskStartButton disabled={disabled} />
+        ) : detail.actions.canResume ? (
           <TaskResumeButton disabled={disabled} />
         ) : null}
+        <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canInterrupt ? (
           <Button
+            aria-label={interruptFullLabel}
             disabled={disabled || mutations.interrupt.isPending}
             onClick={() => {
               mutations.interrupt.mutate(undefined);
             }}
-            variant="secondary"
+            title={interruptFullLabel}
+            variant="danger"
           >
-            {t("board.interrupt")}
+            {interruptVisibleLabel}
           </Button>
         ) : null}
       </div>
@@ -476,21 +501,27 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
 
   return (
     <>
-      {detail.liveSessionIDs.map((sessionID) => (
-        <Button
-          disabled={disabled}
-          key={sessionID}
-          onClick={() => {
-            setOpenError("");
-            void openInCli(sessionID).catch((cause: unknown) => {
-              setOpenError(errorMessage(cause));
-            });
-          }}
-          variant="secondary"
-        >
-          {t("task.openInCli")} <span className="truncate font-mono">{sessionID}</span>
-        </Button>
-      ))}
+      {detail.liveSessions.map((session) => {
+        const target = taskLiveSessionTarget(session);
+        const fullLabel = t("task.openChat", { name: target });
+        return (
+          <Button
+            aria-label={fullLabel}
+            disabled={disabled}
+            key={session.sessionID}
+            onClick={() => {
+              setOpenError("");
+              void openInCli(session.sessionID).catch((cause: unknown) => {
+                setOpenError(errorMessage(cause));
+              });
+            }}
+            title={fullLabel}
+            variant="secondary"
+          >
+            {t("task.openChat", { name: ellipsizeActionTarget(target) })}
+          </Button>
+        );
+      })}
       {canOpenScript
         ? detail.currentScripts.map((script) => (
             <Button
@@ -511,6 +542,29 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
       {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>
   );
+}
+
+type TaskLiveSession = TaskDetail["liveSessions"][number];
+
+function taskLiveSessionTarget(session: TaskLiveSession): string {
+  if (session.sessionName !== null) {
+    return session.sessionName;
+  }
+  return session.nodeDisplayName.length > 0 ? session.nodeDisplayName : session.sessionID;
+}
+
+function taskInterruptTarget(detail: TaskDetail): string | null {
+  if (detail.liveSessions.length === 1 && detail.currentScripts.length === 0) {
+    const session = detail.liveSessions[0];
+    if (session !== undefined) {
+      return taskLiveSessionTarget(session);
+    }
+  }
+  return null;
+}
+
+function ellipsizeActionTarget(value: string): string {
+  return value.length <= 32 ? value : `${value.slice(0, 31)}…`;
 }
 
 function TaskStatusText({

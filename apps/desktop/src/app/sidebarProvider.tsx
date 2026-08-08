@@ -95,6 +95,23 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [clearCloseTimeout],
   );
 
+  const completeCurrent = useCallback(
+    (
+      expected: SidebarDestination,
+      result: Exclude<SidebarResult, SidebarCanceledResult>,
+    ): "accepted" | "stale" => {
+      if (activeDestinationRef.current !== expected || pendingRef.current === null) {
+        return "stale";
+      }
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      pending.resolve(result);
+      animateClosed();
+      return "accepted";
+    },
+    [animateClosed],
+  );
+
   const replaceSidebar = useCallback(
     (destination: SidebarDestination): void => {
       if (activeDestinationRef.current === null || pendingRef.current === null) {
@@ -146,6 +163,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     () => ({
       activeDestination,
       closeSidebar,
+      completeCurrent,
       openSidebar,
       replaceSidebar,
       phase,
@@ -156,6 +174,7 @@ export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>)
     [
       activeDestination,
       closeSidebar,
+      completeCurrent,
       openSidebar,
       phase,
       replaceSidebar,

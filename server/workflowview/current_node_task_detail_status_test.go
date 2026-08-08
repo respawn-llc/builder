@@ -102,8 +102,11 @@ func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 		detail.AttentionCount != 1 ||
 		detail.Actions.CanInterrupt ||
 		detail.Actions.CanDelete ||
-		len(detail.LiveSessionIDs) != 1 ||
-		detail.LiveSessionIDs[0] != agentTarget.sessionID.String() {
+		len(detail.LiveSessions) != 1 ||
+		detail.LiveSessions[0].SessionID != agentTarget.sessionID.String() ||
+		detail.LiveSessions[0].SessionName == nil ||
+		*detail.LiveSessions[0].SessionName != "Current Node session" ||
+		detail.LiveSessions[0].NodeDisplayName != "Agent" {
 		t.Fatalf("cross-surface detail = %+v", detail)
 	}
 	if !reflect.DeepEqual(detail.Actions, cards.Cards[0].Actions) ||
@@ -442,19 +445,21 @@ func assertRealTaskStatusAcrossSurfaces(
 	}
 	switch target := expected.live.(type) {
 	case taskStatusNoLiveTarget:
-		if len(detail.LiveSessionIDs) != 0 || len(detail.CurrentScripts) != 0 {
-			t.Fatalf("durable detail live targets = sessions %v scripts %+v, want none", detail.LiveSessionIDs, detail.CurrentScripts)
+		if len(detail.LiveSessions) != 0 || len(detail.CurrentScripts) != 0 {
+			t.Fatalf("durable detail live targets = sessions %v scripts %+v, want none", detail.LiveSessions, detail.CurrentScripts)
 		}
 	case taskStatusAgentTarget:
-		if !reflect.DeepEqual(detail.LiveSessionIDs, []string{target.sessionID.String()}) || len(detail.CurrentScripts) != 0 {
-			t.Fatalf("agent detail live targets = sessions %v scripts %+v", detail.LiveSessionIDs, detail.CurrentScripts)
+		if len(detail.LiveSessions) != 1 ||
+			detail.LiveSessions[0].SessionID != target.sessionID.String() ||
+			len(detail.CurrentScripts) != 0 {
+			t.Fatalf("agent detail live targets = sessions %v scripts %+v", detail.LiveSessions, detail.CurrentScripts)
 		}
 	case taskStatusScriptTarget:
-		if len(detail.LiveSessionIDs) != 0 ||
+		if len(detail.LiveSessions) != 0 ||
 			len(detail.CurrentScripts) != 1 ||
 			detail.CurrentScripts[0].Path != target.path ||
 			detail.CurrentScripts[0].CurrentNode.NodeID != string(expected.nodeID) {
-			t.Fatalf("script detail live targets = sessions %v scripts %+v", detail.LiveSessionIDs, detail.CurrentScripts)
+			t.Fatalf("script detail live targets = sessions %v scripts %+v", detail.LiveSessions, detail.CurrentScripts)
 		}
 		if len(cards.Cards[0].ActiveNodeIDs) != 1 || cards.Cards[0].ActiveNodeIDs[0] != string(expected.nodeID) {
 			t.Fatalf("script board active nodes = %v, want node %q", cards.Cards[0].ActiveNodeIDs, expected.nodeID)

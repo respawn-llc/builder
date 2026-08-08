@@ -176,7 +176,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		ExecutionTarget:      executionTarget,
 		WorktreePath:         worktreePath,
 		CurrentNodes:         ProjectCurrentNodes(projected.CurrentNodes),
-		LiveSessionIDs:       append(make([]string, 0, len(projected.LiveSessionIDs)), projected.LiveSessionIDs...),
+		LiveSessions:         append(make([]serverapi.WorkflowTaskLiveSession, 0, len(projected.LiveSessions)), projected.LiveSessions...),
 		CurrentScripts:       append(make([]serverapi.WorkflowTaskCurrentScript, 0, len(projected.CurrentScripts)), projected.CurrentScripts...),
 		RetainedSessionCount: int(retainedSessionCount),
 		Status:               projected.Status,

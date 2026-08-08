@@ -554,6 +554,17 @@
   .task-detail-body-split {
     grid-template-columns: minmax(0, 65fr) minmax(0, 35fr);
   }
+
+  .task-detail-body-split > * {
+    min-height: 100%;
+    align-self: stretch;
+  }
+
+  .task-detail-description-island,
+  .task-detail-description-shell,
+  .task-detail-description-surface {
+    height: 100%;
+  }
 }
 
 .floating-notice-collapsed-danger {

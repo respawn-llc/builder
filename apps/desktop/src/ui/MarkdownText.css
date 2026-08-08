@@ -1,10 +1,17 @@
 .markdown-text {
   display: grid;
-  min-width: 0;
+  min-inline-size: 0;
+  max-inline-size: 100%;
   gap: var(--space-2);
   color: inherit;
   line-height: 1.55;
   overflow-wrap: anywhere;
+}
+
+.markdown-text > *,
+.markdown-text :where(div, p, blockquote, ul, ol, li, table) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
 }
 
 .markdown-text-inline {
@@ -89,6 +96,9 @@
 }
 
 .markdown-text code {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border: 1px solid var(--color-outline);
   border-radius: var(--radius-s);
   background: var(--color-island-2);
@@ -98,7 +108,10 @@
 }
 
 .markdown-text pre {
-  overflow: auto;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--color-outline);
   border-radius: var(--radius-m);
   background: var(--color-island-1);
@@ -106,18 +119,27 @@
 }
 
 .markdown-text pre code {
+  max-inline-size: none;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
   border: 0;
   background: transparent;
   padding: 0;
 }
 
 .markdown-text table {
+  max-inline-size: 100%;
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.94em;
 }
 
 .markdown-text :where(th, td) {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border: 1px solid var(--color-outline);
   padding: var(--space-2);
   text-align: start;

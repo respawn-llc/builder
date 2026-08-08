@@ -351,7 +351,7 @@ func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal empty detail: %v", err)
 	}
-	for _, requiredArray := range []string{"live_session_ids", "current_scripts"} {
+	for _, requiredArray := range []string{"live_sessions", "current_scripts"} {
 		if !jsonFieldPresent(t, data, requiredArray) {
 			t.Fatalf("task detail omitted required array %q: %s", requiredArray, data)
 		}
@@ -399,7 +399,7 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
 		Summary:        WorkflowTaskSummary{ID: "task-1"},
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
-		LiveSessionIDs: []string{},
+		LiveSessions:   []WorkflowTaskLiveSession{},
 		CurrentScripts: []WorkflowTaskCurrentScript{},
 		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 		ExecutionTarget: &WorkflowExecutionTarget{
@@ -426,17 +426,20 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	}
 
 	invalid = valid
-	invalid.Task.LiveSessionIDs = nil
+	invalid.Task.LiveSessions = nil
 	if err := invalid.Validate(); err == nil {
-		t.Fatal("task detail response accepted a null live_session_ids collection")
+		t.Fatal("task detail response accepted a null live_sessions collection")
 	}
 }
 
 func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T) {
-	liveSessionIDs := make([]string, 0, 201)
+	liveSessions := make([]WorkflowTaskLiveSession, 0, 201)
 	currentScripts := make([]WorkflowTaskCurrentScript, 0, 201)
 	for index := range 201 {
-		liveSessionIDs = append(liveSessionIDs, fmt.Sprintf("session-%03d", index))
+		liveSessions = append(liveSessions, WorkflowTaskLiveSession{
+			SessionID:       fmt.Sprintf("session-%03d", index),
+			NodeDisplayName: fmt.Sprintf("Agent %03d", index),
+		})
 		currentScripts = append(currentScripts, WorkflowTaskCurrentScript{
 			CurrentNode: WorkflowTaskCurrentNode{NodeID: fmt.Sprintf("node-%03d", index)},
 			Path:        "script",
@@ -445,12 +448,55 @@ func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T)
 	response := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
 		Summary:        WorkflowTaskSummary{ID: "task-1"},
 		CurrentNodes:   []WorkflowTaskCurrentNode{},
-		LiveSessionIDs: liveSessionIDs,
+		LiveSessions:   liveSessions,
 		CurrentScripts: currentScripts,
 		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
 	}}
 	if err := response.Validate(); err != nil {
 		t.Fatalf("all current execution targets rejected: %v", err)
+	}
+}
+
+func TestWorkflowTaskGetResponseValidatesLiveSessionMetadata(t *testing.T) {
+	sessionName := "Review chat"
+	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		Summary:      WorkflowTaskSummary{ID: "task-1"},
+		CurrentNodes: []WorkflowTaskCurrentNode{},
+		LiveSessions: []WorkflowTaskLiveSession{{
+			SessionID:       "session-1",
+			SessionName:     &sessionName,
+			NodeDisplayName: "Code Review",
+		}},
+		CurrentScripts: []WorkflowTaskCurrentScript{},
+		Dependencies:   emptyWorkflowTaskDependenciesForTest(),
+	}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid live Session metadata rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*WorkflowTaskGetResponse){
+		"blank Session ID": func(response *WorkflowTaskGetResponse) {
+			response.Task.LiveSessions[0].SessionID = " "
+		},
+		"blank Session name": func(response *WorkflowTaskGetResponse) {
+			blank := " "
+			response.Task.LiveSessions[0].SessionName = &blank
+		},
+		"blank Agent Node display name": func(response *WorkflowTaskGetResponse) {
+			response.Task.LiveSessions[0].NodeDisplayName = " "
+		},
+		"duplicate Session ID": func(response *WorkflowTaskGetResponse) {
+			response.Task.LiveSessions = append(response.Task.LiveSessions, response.Task.LiveSessions[0])
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := valid
+			response.Task.LiveSessions = append([]WorkflowTaskLiveSession(nil), valid.Task.LiveSessions...)
+			mutate(&response)
+			if err := response.Validate(); err == nil {
+				t.Fatalf("invalid live Session metadata accepted: %+v", response.Task.LiveSessions)
+			}
+		})
 	}
 }
 

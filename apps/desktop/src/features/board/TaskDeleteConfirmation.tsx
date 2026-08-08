@@ -7,31 +7,8 @@ import { invalidateAllTaskSearches } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { NativeDialogWindow } from "@/shared/native-dialog";
-import { Button, Dialog } from "@/ui";
-import { taskDeleteDialogWidth, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
-
-export function TaskDeleteConfirmationFallbackDialog({
-  disabled,
-  onClose,
-  onConfirm,
-}: Readonly<{
-  disabled: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-}>) {
-  const { t } = useTranslation();
-  return (
-    <Dialog
-      closeLabel={t("app.close")}
-      onClose={onClose}
-      open
-      title={t("board.deleteTaskTitle")}
-      width={taskDeleteDialogWidth}
-    >
-      <TaskDeleteConfirmationContent disabled={disabled} onCancel={onClose} onConfirm={onConfirm} />
-    </Dialog>
-  );
-}
+import { TaskDeleteConfirmationContent, taskDeleteDialogWidth } from "@/shared/task-delete";
+import type { TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 
 export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
   const { t } = useTranslation();
@@ -94,35 +71,5 @@ export function TaskDeleteWindowRoute({ taskID }: TaskDeleteTarget) {
         onConfirm={() => void confirmDelete()}
       />
     </NativeDialogWindow>
-  );
-}
-
-function TaskDeleteConfirmationContent({
-  actionError = "",
-  disabled,
-  onCancel,
-  onConfirm,
-}: Readonly<{
-  actionError?: string | undefined;
-  disabled: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}>) {
-  const { t } = useTranslation();
-  return (
-    <div className="grid gap-[var(--space-3)]">
-      <p className="m-0 text-sm text-[var(--color-on-island)]">{t("board.deleteTaskBody")}</p>
-      {actionError.length > 0 ? (
-        <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-error)]">{actionError}</p>
-      ) : null}
-      <div className="grid grid-cols-2 gap-[var(--space-2)]">
-        <Button className="w-full" disabled={disabled} onClick={onCancel}>
-          {t("app.cancel")}
-        </Button>
-        <Button className="w-full" disabled={disabled} onClick={onConfirm} variant="danger">
-          {t("board.deleteTaskConfirm")}
-        </Button>
-      </div>
-    </div>
   );
 }

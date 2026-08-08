@@ -14,6 +14,8 @@ import {
   type Highlighter,
   type ThemedTokenWithVariants,
 } from "shiki";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 import { Streamdown, type Components, type CustomRendererProps, type ExtraProps } from "streamdown";
 
 import { Checkbox } from "./radix/checkbox";
@@ -102,6 +104,7 @@ function MarkdownCore({
         isAnimating={animated}
         mode="streaming"
         plugins={{ renderers: [{ component: HighlightedCode, language: languageKeys }] }}
+        remarkPlugins={[[remarkGfm, {}], remarkBreaks]}
         {...(onChange === undefined ? {} : { parseMarkdownIntoBlocksFn: singleMarkdownBlock })}
       >
         {value}

@@ -10,10 +10,12 @@ import type { SidebarController, SidebarDestination } from "@/app-facade";
 
 export function SidebarDestinationView({
   closeSidebar,
+  completeCurrent,
   destination,
   resolveSidebar,
 }: Readonly<{
   closeSidebar: SidebarController["closeSidebar"];
+  completeCurrent: SidebarController["completeCurrent"];
   destination: SidebarDestination;
   resolveSidebar: SidebarController["resolveSidebar"];
 }>): ReactElement {
@@ -38,6 +40,13 @@ export function SidebarDestinationView({
       <TaskDetailSurface
         enabled
         initialFocus={destination.initialFocus}
+        onDeleteDismiss={async () => {
+          const result = completeCurrent(destination, {
+            destination: "taskDetail",
+            status: "closed",
+          });
+          return { kind: result };
+        }}
         onMutated={destination.onMutated}
         taskId={destination.taskID}
       />

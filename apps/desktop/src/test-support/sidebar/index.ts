@@ -10,6 +10,9 @@ export function createTestSidebarController(
     closeSidebar() {
       return;
     },
+    completeCurrent() {
+      return "stale";
+    },
     async openSidebar(destination) {
       onOpen(destination);
       return { status: "canceled", reason: "closed" };

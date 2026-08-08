@@ -111,6 +111,10 @@ export type SidebarDestination =
 export type SidebarController = Readonly<{
   activeDestination: SidebarDestination | null;
   closeSidebar(reason?: SidebarCancelReason): void;
+  completeCurrent(
+    expected: SidebarDestination,
+    result: Exclude<SidebarResult, SidebarCanceledResult>,
+  ): "accepted" | "stale";
   openSidebar(destination: SidebarDestination): Promise<SidebarResult>;
   replaceSidebar(destination: SidebarDestination): void;
   phase: SidebarPhase;
