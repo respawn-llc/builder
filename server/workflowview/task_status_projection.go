@@ -26,6 +26,13 @@ type TaskStatusCaptureSource interface {
 	) error
 }
 
+type TaskStatusLifecycleQuerySource interface {
+	CaptureWorkflowTaskLifecycleQuery(
+		context.Context,
+		func(string, *sqlitegen.Queries) error,
+	) error
+}
+
 type TaskStatusObservation struct {
 	Live               workflowexecution.WorkflowTaskExecutionObservation
 	LiveTaskStatesJSON string
@@ -49,6 +56,7 @@ type TaskStatusProjection struct {
 	workflowStore *workflowstore.Store
 	projector     *TaskProjector
 	capture       TaskStatusCaptureSource
+	queryCapture  TaskStatusLifecycleQuerySource
 }
 
 func NewTaskStatusProjection(
@@ -73,6 +81,10 @@ func NewTaskStatusProjection(
 		workflowStore: workflowStore,
 		projector:     projector,
 		capture:       capture,
+		queryCapture: func() TaskStatusLifecycleQuerySource {
+			source, _ := capture.(TaskStatusLifecycleQuerySource)
+			return source
+		}(),
 	}, nil
 }
 
@@ -244,6 +256,39 @@ func (p *TaskStatusProjection) WithSnapshot(
 				Live:               live,
 				LiveTaskStatesJSON: liveTaskStatesJSON,
 			}, durable)
+		},
+	)
+}
+
+func (p *TaskStatusProjection) WithLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *TaskStatusDurableSnapshot) error,
+) error {
+	if p == nil {
+		return errors.New("task status projection is required")
+	}
+	if operation == nil {
+		return errors.New("task status lifecycle query operation is required")
+	}
+	if p.queryCapture == nil {
+		return errors.New("task status lifecycle query source is required")
+	}
+	return p.queryCapture.CaptureWorkflowTaskLifecycleQuery(
+		ctx,
+		func(token string, queries *sqlitegen.Queries) error {
+			if strings.TrimSpace(token) == "" {
+				return errors.New("task status lifecycle query token is required")
+			}
+			durable := &TaskStatusDurableSnapshot{
+				queries:       queries,
+				workflowStore: p.workflowStore,
+				projector:     p.projector,
+			}
+			defer func() {
+				durable.closed = true
+				durable.queries = nil
+			}()
+			return operation(token, durable)
 		},
 	)
 }

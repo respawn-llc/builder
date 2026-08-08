@@ -1288,11 +1288,42 @@ type LifecycleCapture interface {
 type lifecycleCapture struct {
 	durable *lifecycleReadSnapshot
 	root    lifecycleRoot
+	token   string
+	release func()
 	mu      sync.Mutex
 	closed  bool
 }
 
 func (p *LifecyclePublication) Capture(ctx context.Context) (LifecycleCapture, error) {
+	return p.capture(ctx)
+}
+
+func (p *LifecyclePublication) CaptureQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) (err error) {
+	if operation == nil {
+		return errors.New("lifecycle query operation is required")
+	}
+	capture, err := p.capture(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := capture.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	token, err := capture.stateToken()
+	if err != nil {
+		return err
+	}
+	return capture.WithQueries(func(queries *sqlitegen.Queries) error {
+		return operation(token, queries)
+	})
+}
+
+func (p *LifecyclePublication) capture(ctx context.Context) (*lifecycleCapture, error) {
 	if p == nil || p.store == nil {
 		return nil, errors.New("LifecyclePublication is required")
 	}
@@ -1309,9 +1340,65 @@ func (p *LifecyclePublication) Capture(ctx context.Context) (LifecycleCapture, e
 		p.mu.RUnlock()
 		return nil, err
 	}
-	capture := &lifecycleCapture{durable: durable, root: p.root}
+	root := p.root
+	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
+		return lifecycleTaskState(root, taskID)
+	})
+	if err != nil {
+		p.mu.RUnlock()
+		return nil, errors.Join(err, durable.close())
+	}
+	capture := &lifecycleCapture{
+		durable: durable,
+		root:    root,
+		token:   token,
+		release: release,
+	}
 	p.mu.RUnlock()
 	return capture, nil
+}
+
+func lifecycleTaskState(root lifecycleRoot, rawTaskID string) (sqlitegen.LifecycleTaskQueryState, error) {
+	taskID := workflow.TaskID(strings.TrimSpace(rawTaskID))
+	if taskID == "" || string(taskID) != rawTaskID {
+		return sqlitegen.LifecycleTaskQueryState{}, errors.New("lifecycle Task state id is invalid")
+	}
+	entry, owned := root[taskID]
+	if !owned {
+		return sqlitegen.LifecycleTaskQueryState{}, nil
+	}
+	state := sqlitegen.LifecycleTaskStateOwned
+	nodeIDs := make(map[workflow.NodeID]struct{}, len(entry.runs))
+	for key := range entry.runs {
+		nodeIDs[entry.runs[key].NodeID] = struct{}{}
+		if _, running := entry.exact[key]; running {
+			state |= sqlitegen.LifecycleTaskStateRunning
+		} else {
+			state |= sqlitegen.LifecycleTaskStateQueued
+		}
+	}
+	for _, exact := range entry.exact {
+		state |= sqlitegen.LifecycleTaskStateRunning
+		for _, prompt := range exact.PendingPrompts {
+			switch prompt.Kind {
+			case LifecyclePendingPromptQuestion:
+				state |= sqlitegen.LifecycleTaskStateWaitingQuestion
+			case LifecyclePendingPromptSessionApproval:
+				state |= sqlitegen.LifecycleTaskStateWaitingApproval
+			default:
+				return sqlitegen.LifecycleTaskQueryState{}, fmt.Errorf("lifecycle Task %q has invalid pending prompt kind %d", taskID, prompt.Kind)
+			}
+		}
+	}
+	currentNodeIDs := make([]string, 0, len(nodeIDs))
+	for nodeID := range nodeIDs {
+		currentNodeIDs = append(currentNodeIDs, string(nodeID))
+	}
+	sort.Strings(currentNodeIDs)
+	return sqlitegen.LifecycleTaskQueryState{
+		Flags:          state,
+		CurrentNodeIDs: currentNodeIDs,
+	}, nil
 }
 
 func (p *LifecyclePublication) Close() error {
@@ -1386,6 +1473,15 @@ func (c *lifecycleCapture) ExactExecutions(taskID workflow.TaskID) []LifecycleEx
 	return exact
 }
 
+func (c *lifecycleCapture) stateToken() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.token == "" {
+		return "", errors.New("lifecycle capture is closed")
+	}
+	return c.token, nil
+}
+
 func (c *lifecycleCapture) WithQueries(operation func(*sqlitegen.Queries) error) error {
 	if operation == nil {
 		return errors.New("lifecycle capture query operation is required")
@@ -1409,8 +1505,13 @@ func (c *lifecycleCapture) Close() error {
 	}
 	c.closed = true
 	err := c.durable.close()
+	if c.release != nil {
+		c.release()
+	}
 	c.durable = nil
 	c.root = nil
+	c.token = ""
+	c.release = nil
 	return err
 }
 

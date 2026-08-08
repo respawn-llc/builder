@@ -3875,6 +3875,7 @@ label_filter_args AS (
         CAST(?5 AS INTEGER) AS dependency_filter,
         CAST(?6 AS TEXT) AS live_task_states_json
 ),
+
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
@@ -3956,6 +3957,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 
 effective_current_nodes AS (
     SELECT
@@ -4109,6 +4111,7 @@ WITH
 args AS (
     SELECT CAST(?1 AS TEXT) AS live_task_states_json
 ),
+
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
@@ -4190,6 +4193,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 
 effective_current_nodes AS (
     SELECT
@@ -7531,7 +7535,7 @@ args AS (
             (CAST(?15 AS INTEGER) >= 6 AND CAST(?26 AS TEXT) = 'labels') OR
             (CAST(?15 AS INTEGER) >= 7 AND CAST(?28 AS TEXT) = 'labels')
         THEN 1 ELSE 0 END AS labels_requested,
-        CAST(?30 AS TEXT) AS live_task_states_json,
+        CAST(?30 AS TEXT) AS lifecycle_state_token,
         CAST(?31 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
@@ -7542,65 +7546,43 @@ visible_columns AS (
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
 ),
-live_task_states AS (
-    SELECT
-        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-        CAST(json_extract(value, '$.has_lifecycle_override') AS INTEGER) AS has_lifecycle_override,
-        CAST(json_extract(value, '$.current_node_ids') AS TEXT) AS current_node_ids_json,
-        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
-        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
-        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
-        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
-    FROM json_each((SELECT live_task_states_json FROM args))
-),
+
 effective_status AS (
     SELECT
         durable.task_id,
         CAST(CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0 THEN 0
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) != 0 THEN 0
             ELSE durable.is_done
         END AS INTEGER) AS is_done,
         CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
               AND durable.is_done != 0 THEN 'done'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN (
-                COALESCE(live.has_lifecycle_override, 0) != 0
-                AND COALESCE(live.has_waiting_approval, 0) != 0
-            )
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 'waiting_question'
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
               OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_running, 0) != 0 THEN 'running'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 'running'
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
             ELSE durable.kind
         END AS kind,
         CAST(CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
               AND durable.is_done != 0 THEN 1
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN (
-                COALESCE(live.has_lifecycle_override, 0) != 0
-                AND COALESCE(live.has_waiting_approval, 0) != 0
-            )
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 2
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
               OR durable.kind = 'waiting_approval' THEN 3
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_running, 0) != 0 THEN 5
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 5
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
             ELSE durable.primary_status_rank
         END AS INTEGER) AS primary_status_rank,
         CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-                THEN live.current_node_ids_json
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) != 0
+                THEN kent_lifecycle_current_node_ids_v1((SELECT lifecycle_state_token FROM args), durable.task_id)
             ELSE durable.node_ids_json
         END AS node_ids_json,
         CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
+            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
               AND durable.is_done != 0 THEN durable.attention_types_json
             ELSE (
                 SELECT json_group_array(attention_type)
@@ -7610,19 +7592,17 @@ effective_status AS (
                     WHERE existing_attention.value != 'question'
                     UNION
                     SELECT 'question'
-                    WHERE COALESCE(live.has_lifecycle_override, 0) != 0
-                      AND COALESCE(live.waiting_question, 0) != 0
+                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0
                     UNION
                     SELECT 'approval'
-                    WHERE COALESCE(live.has_lifecycle_override, 0) != 0
-                      AND COALESCE(live.has_waiting_approval, 0) != 0
+                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
                     ORDER BY attention_type ASC
                 )
             )
         END AS attention_types_json
     FROM workflow_task_status_records durable
-    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 ),
+
 
 current_positions AS (
     SELECT
@@ -7631,18 +7611,15 @@ current_positions AS (
     FROM args
     CROSS JOIN project_workflow_links task_link
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    LEFT JOIN live_task_states live
-      ON live.task_id = t.id
-     AND live.has_lifecycle_override != 0
     LEFT JOIN task_current_nodes current_node
       ON current_node.task_id = t.id
-     AND live.task_id IS NULL
-    LEFT JOIN json_each(live.current_node_ids_json) root_node
-      ON live.task_id IS NOT NULL
+     AND (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) = 0
+    LEFT JOIN json_each(kent_lifecycle_current_node_ids_v1(args.lifecycle_state_token, t.id)) root_node
+      ON (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) != 0
     WHERE task_link.project_id = args.project_id
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND t.project_workflow_link_id = task_link.id
-      AND (root_node.value IS NOT NULL OR current_node.node_id IS NOT NULL)
+      AND COALESCE(root_node.value, current_node.node_id) IS NOT NULL
 ),
 column_positions AS (
     SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank
@@ -8032,7 +8009,7 @@ type ListWorkflowTaskListRowsParams struct {
 	Sort6Desc            int64
 	Sort7Field           string
 	Sort7Desc            int64
-	LiveTaskStatesJson   string
+	LifecycleStateToken  string
 	LimitRows            int64
 	ExcludedLabelIdsJson interface{}
 }
@@ -8100,7 +8077,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.Sort6Desc,
 		arg.Sort7Field,
 		arg.Sort7Desc,
-		arg.LiveTaskStatesJson,
+		arg.LifecycleStateToken,
 		arg.LimitRows,
 		arg.ExcludedLabelIdsJson,
 	)
@@ -8166,6 +8143,7 @@ requested_task_ids AS (
 args AS (
     SELECT CAST(?2 AS TEXT) AS live_task_states_json
 ),
+
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
@@ -8247,6 +8225,7 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 )
+
 
 SELECT
     task_id,

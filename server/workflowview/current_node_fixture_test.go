@@ -192,6 +192,31 @@ func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskExecutions(
 	return captureWorkflowViewTestObservation(ctx, s.store, observation, operation)
 }
 
+func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) error {
+	observation, err := s.ObserveWorkflowTaskExecutions(nil)
+	if err != nil {
+		return err
+	}
+	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
+		return testLifecycleTaskState(observation, workflow.TaskID(taskID))
+	})
+	if err != nil {
+		return err
+	}
+	defer release()
+	return captureWorkflowViewTestObservation(
+		ctx,
+		s.store,
+		observation,
+		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
+			return operation(token, queries)
+		},
+	)
+}
+
 func captureWorkflowViewTestObservation(
 	ctx context.Context,
 	store *workflowstore.Store,

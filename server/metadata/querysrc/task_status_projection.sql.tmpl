@@ -1,3 +1,60 @@
+{{if .LifecycleStateToken}}
+{{.Indent}}effective_status AS (
+{{.Indent}}    SELECT
+{{.Indent}}        durable.task_id,
+{{.Indent}}        CAST(CASE
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) != 0 THEN 0
+{{.Indent}}            ELSE durable.is_done
+{{.Indent}}        END AS INTEGER) AS is_done,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}              AND durable.is_done != 0 THEN 'done'
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 8) != 0 THEN 'waiting_question'
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 16) != 0
+{{.Indent}}              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 2) != 0 THEN 'running'
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 4) != 0 THEN 'queued'
+{{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+{{.Indent}}            ELSE durable.kind
+{{.Indent}}        END AS kind,
+{{.Indent}}        CAST(CASE
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}              AND durable.is_done != 0 THEN 1
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 8) != 0 THEN 2
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 16) != 0
+{{.Indent}}              OR durable.kind = 'waiting_approval' THEN 3
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 2) != 0 THEN 5
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 4) != 0 THEN 6
+{{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+{{.Indent}}            ELSE durable.primary_status_rank
+{{.Indent}}        END AS INTEGER) AS primary_status_rank,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) != 0
+{{.Indent}}                THEN kent_lifecycle_current_node_ids_v1({{.LifecycleStateToken}}, durable.task_id)
+{{.Indent}}            ELSE durable.node_ids_json
+{{.Indent}}        END AS node_ids_json,
+{{.Indent}}        CASE
+{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
+{{.Indent}}              AND durable.is_done != 0 THEN durable.attention_types_json
+{{.Indent}}            ELSE (
+{{.Indent}}                SELECT json_group_array(attention_type)
+{{.Indent}}                FROM (
+{{.Indent}}                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+{{.Indent}}                    FROM json_each(durable.attention_types_json) existing_attention
+{{.Indent}}                    WHERE existing_attention.value != 'question'
+{{.Indent}}                    UNION
+{{.Indent}}                    SELECT 'question'
+{{.Indent}}                    WHERE (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 8) != 0
+{{.Indent}}                    UNION
+{{.Indent}}                    SELECT 'approval'
+{{.Indent}}                    WHERE (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 16) != 0
+{{.Indent}}                    ORDER BY attention_type ASC
+{{.Indent}}                )
+{{.Indent}}            )
+{{.Indent}}        END AS attention_types_json
+{{.Indent}}    FROM workflow_task_status_records durable
+{{.Indent}}){{.Suffix}}
+{{else}}
 {{.Indent}}live_task_states AS (
 {{.Indent}}    SELECT
 {{.Indent}}        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
@@ -79,3 +136,4 @@
 {{.Indent}}    FROM workflow_task_status_records durable
 {{.Indent}}    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 {{.Indent}}){{.Suffix}}
+{{end}}

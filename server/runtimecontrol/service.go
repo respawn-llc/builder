@@ -307,6 +307,21 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 	return s.authority.WithCurrentRuntime(ctx, id, fn)
 }
 
+func (s *Service) withRuntimeResource(
+	ctx context.Context,
+	sessionID string,
+	fn func(context.Context, runtimeids.SessionResourceRef, *runtime.Engine) error,
+) error {
+	if s == nil || s.authority == nil {
+		return errors.New("session runtime authority is required")
+	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return s.authority.WithCurrentRuntimeResource(ctx, id, fn)
+}
+
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
 	return sessionruntime.MergeContexts(contexts...)
 }
@@ -639,6 +654,7 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	interruptActive := req.TargetOperationRef == nil
 	targetQueuedMessage := false
 	var cancelResult runtimeops.CancellationResult
+	var observedRuntime *runtimeids.SessionResourceRef
 	if req.TargetOperationRef != nil {
 		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
 		var err error
@@ -652,7 +668,13 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 		}
 	}
-	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+	err := s.withRuntimeResource(ctx, sessionID, func(
+		_ context.Context,
+		resource runtimeids.SessionResourceRef,
+		engine *runtime.Engine,
+	) error {
+		observed := resource
+		observedRuntime = &observed
 		for _, ref := range pendingRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
@@ -685,8 +707,8 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return serverapi.RuntimeInterruptResponse{}, err
 			}
 		}
-		if !workflowHandled {
-			err = s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if !workflowHandled && observedRuntime != nil {
+			err = s.authority.WithRuntime(ctx, *observedRuntime, func(_ context.Context, engine *runtime.Engine) error {
 				return engine.Interrupt()
 			})
 			if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {

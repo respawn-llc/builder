@@ -33,16 +33,16 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 }
 
 type workflowTaskListQueryRequest struct {
-	projectID          string
-	narrowed           *workflowTaskListNarrowedQueryFacts
-	statusKinds        []serverapi.WorkflowTaskStatusKind
-	attentionKinds     []serverapi.WorkflowTaskAttentionKind
-	labelFilter        workflowTaskLabelFilterFacts
-	dependencyFilter   *bool
-	sortSelectors      []serverapi.WorkflowTaskListSort
-	liveTaskStatesJSON string
-	offset             int
-	limit              int
+	projectID           string
+	narrowed            *workflowTaskListNarrowedQueryFacts
+	statusKinds         []serverapi.WorkflowTaskStatusKind
+	attentionKinds      []serverapi.WorkflowTaskAttentionKind
+	labelFilter         workflowTaskLabelFilterFacts
+	dependencyFilter    *bool
+	sortSelectors       []serverapi.WorkflowTaskListSort
+	lifecycleStateToken string
+	offset              int
+	limit               int
 }
 
 type workflowTaskListNarrowedQueryFacts struct {
@@ -144,7 +144,7 @@ func (l *TaskList) queryRows(
 		Sort6Desc:            workflowTaskListSortDescending(req.sortSelectors, 5),
 		Sort7Field:           string(workflowTaskListSortSelector(req.sortSelectors, 6).Field),
 		Sort7Desc:            workflowTaskListSortDescending(req.sortSelectors, 6),
-		LiveTaskStatesJson:   req.liveTaskStatesJSON,
+		LifecycleStateToken:  req.lifecycleStateToken,
 		LimitRows:            int64(req.limit),
 	})
 	if err != nil {

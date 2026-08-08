@@ -951,8 +951,28 @@ func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResou
 }
 
 func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	return a.WithCurrentRuntimeResource(
+		ctx,
+		sessionID,
+		func(ctx context.Context, _ runtimeids.SessionResourceRef, engine *runtime.Engine) error {
+			return callback(ctx, engine)
+		},
+	)
+}
+
+func (a *Authority) WithCurrentRuntimeResource(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	callback func(context.Context, runtimeids.SessionResourceRef, *runtime.Engine) error,
+) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
+	}
+	if callback == nil {
+		return errors.New("agent resource callback is required")
 	}
 	if sessionID.IsZero() {
 		return errors.New("session id is required")
@@ -966,7 +986,10 @@ func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids
 			fmt.Errorf("session %s has no active runtime available", sessionID),
 		)
 	}
-	return resource.withEngine(ctx, resource.ref, callback)
+	ref := resource.ref
+	return resource.withEngine(ctx, ref, func(ctx context.Context, engine *runtime.Engine) error {
+		return callback(ctx, ref, engine)
+	})
 }
 
 func (a *Authority) WithLiveExecutionRuntime(

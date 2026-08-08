@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -416,9 +417,11 @@ func realTaskStatusApprovalRequest() tools.AskQuestionRequest {
 }
 
 type staticTaskStatusLiveObservationSource struct {
-	store       *workflowstore.Store
-	observation workflowexecution.WorkflowTaskExecutionObservation
-	calls       *int
+	store         *workflowstore.Store
+	observation   workflowexecution.WorkflowTaskExecutionObservation
+	calls         *int
+	snapshotCalls *int
+	queryCalls    *int
 }
 
 type countingTaskStatusLiveObservationSource struct {
@@ -435,6 +438,18 @@ func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	return s.source.CaptureWorkflowTaskExecutions(ctx, taskIDs, operation)
 }
 
+func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) error {
+	*s.calls++
+	source, ok := s.source.(TaskStatusLifecycleQuerySource)
+	if !ok {
+		return errors.New("counted task status source has no lifecycle query capture")
+	}
+	return source.CaptureWorkflowTaskLifecycleQuery(ctx, operation)
+}
+
 func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
 	_ []workflow.TaskID,
@@ -443,7 +458,98 @@ func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	if s.calls != nil {
 		*s.calls++
 	}
+	if s.snapshotCalls != nil {
+		*s.snapshotCalls++
+	}
 	return captureWorkflowViewTestObservation(ctx, s.store, s.observation, operation)
+}
+
+func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) error {
+	if s.queryCalls != nil {
+		*s.queryCalls++
+	}
+	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
+		return testLifecycleTaskState(s.observation, workflow.TaskID(taskID))
+	})
+	if err != nil {
+		return err
+	}
+	defer release()
+	return captureWorkflowViewTestObservation(
+		ctx,
+		s.store,
+		s.observation,
+		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
+			return operation(token, queries)
+		},
+	)
+}
+
+func testLifecycleTaskState(
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+	taskID workflow.TaskID,
+) (sqlitegen.LifecycleTaskQueryState, error) {
+	lifecycle, owned := observation.Lifecycle[taskID]
+	if !owned {
+		return sqlitegen.LifecycleTaskQueryState{}, nil
+	}
+	state := sqlitegen.LifecycleTaskStateOwned
+	nodeIDs := make(map[workflow.NodeID]struct{}, len(lifecycle.CurrentNodes))
+	for _, currentNode := range lifecycle.CurrentNodes {
+		nodeIDs[currentNode.Reference.NodeID] = struct{}{}
+	}
+	exactKeys := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(lifecycle.ExactExecutions))
+	for _, exact := range lifecycle.ExactExecutions {
+		key, err := exact.CurrentNode.Key()
+		if err != nil {
+			return sqlitegen.LifecycleTaskQueryState{}, err
+		}
+		exactKeys[key] = struct{}{}
+		state |= sqlitegen.LifecycleTaskStateRunning
+		for _, prompt := range exact.PendingPrompts {
+			switch prompt.Kind {
+			case workflowstore.LifecyclePendingPromptQuestion:
+				state |= sqlitegen.LifecycleTaskStateWaitingQuestion
+			case workflowstore.LifecyclePendingPromptSessionApproval:
+				state |= sqlitegen.LifecycleTaskStateWaitingApproval
+			default:
+				return sqlitegen.LifecycleTaskQueryState{}, fmt.Errorf("invalid test lifecycle prompt kind %d", prompt.Kind)
+			}
+		}
+	}
+	for _, queued := range lifecycle.QueuedCurrentNodes {
+		key, err := queued.Key()
+		if err != nil {
+			return sqlitegen.LifecycleTaskQueryState{}, err
+		}
+		if _, running := exactKeys[key]; !running {
+			state |= sqlitegen.LifecycleTaskStateQueued
+		}
+	}
+	for _, execution := range observation.Executions[taskID].Executions {
+		for _, prompt := range execution.PendingPrompts {
+			switch prompt.Kind {
+			case sessionruntime.PendingPromptKindQuestion:
+				state |= sqlitegen.LifecycleTaskStateWaitingQuestion
+			case sessionruntime.PendingPromptKindSessionApproval:
+				state |= sqlitegen.LifecycleTaskStateWaitingApproval
+			default:
+				return sqlitegen.LifecycleTaskQueryState{}, fmt.Errorf("invalid test pending prompt kind %q", prompt.Kind)
+			}
+		}
+	}
+	currentNodeIDs := make([]string, 0, len(nodeIDs))
+	for nodeID := range nodeIDs {
+		currentNodeIDs = append(currentNodeIDs, string(nodeID))
+	}
+	sort.Strings(currentNodeIDs)
+	return sqlitegen.LifecycleTaskQueryState{
+		Flags:          state,
+		CurrentNodeIDs: currentNodeIDs,
+	}, nil
 }
 
 func (taskStatusProjectionTestRunner) StartCurrentNode(

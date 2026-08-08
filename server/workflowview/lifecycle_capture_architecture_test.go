@@ -31,7 +31,7 @@ func TestLifecycleSensitiveReadModelsUseSharedCaptureBoundary(t *testing.T) {
 					return true
 				}
 				switch selector.Sel.Name {
-				case "WithSnapshot":
+				case "WithSnapshot", "WithLifecycleQuery":
 					captures++
 				case "BeginTx", "WithTx", "ObserveWorkflowTaskExecutions",
 					"CurrentWorkflowTaskExecutionSnapshots",
@@ -51,6 +51,34 @@ func TestLifecycleSensitiveReadModelsUseSharedCaptureBoundary(t *testing.T) {
 					captures,
 					minimumCaptures,
 				)
+			}
+		})
+	}
+}
+
+func TestPagedTaskReadsUseBoundedLifecycleQuery(t *testing.T) {
+	t.Parallel()
+	for _, fileName := range []string{"task_list.go", "task_search.go"} {
+		fileName := fileName
+		t.Run(fileName, func(t *testing.T) {
+			t.Parallel()
+			file := parseWorkflowViewArchitectureFile(t, fileName)
+			boundedCaptures := 0
+			ast.Inspect(file, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				switch selector.Sel.Name {
+				case "WithLifecycleQuery":
+					boundedCaptures++
+				case "WithSnapshot":
+					t.Errorf("%s materializes the complete lifecycle set through WithSnapshot", fileName)
+				}
+				return true
+			})
+			if boundedCaptures != 1 {
+				t.Fatalf("%s bounded lifecycle captures = %d, want 1", fileName, boundedCaptures)
 			}
 		})
 	}

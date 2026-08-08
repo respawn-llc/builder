@@ -18,6 +18,15 @@ func (c *CurrentNodeController) ActivateOrAttachRetainedSession(
 	sessionID runtimeids.SessionID,
 	ownerID string,
 ) (sessionruntime.RuntimeAttachment, bool, error) {
+	return c.activateOrAttachRetainedSession(ctx, sessionID, ownerID, true)
+}
+
+func (c *CurrentNodeController) activateOrAttachRetainedSession(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	ownerID string,
+	reclassifyRetired bool,
+) (sessionruntime.RuntimeAttachment, bool, error) {
 	if c == nil {
 		return sessionruntime.RuntimeAttachment{}, false, errors.New("current node workflow controller is required")
 	}
@@ -161,11 +170,24 @@ func (c *CurrentNodeController) ActivateOrAttachRetainedSession(
 	if outcome == nil {
 		return sessionruntime.RuntimeAttachment{}, true, errors.New("retained Workflow Session activation has no Agent outcome")
 	}
+	return c.attachRetainedSessionOutcome(ctx, sessionID, ownerID, outcome, reclassifyRetired)
+}
+
+func (c *CurrentNodeController) attachRetainedSessionOutcome(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	ownerID string,
+	outcome *currentNodeAgentActivationOutcome,
+	reclassifyRetired bool,
+) (sessionruntime.RuntimeAttachment, bool, error) {
 	activated, err := outcome.await(ctx)
 	if err != nil {
 		return sessionruntime.RuntimeAttachment{}, true, err
 	}
 	attachment, err := c.authority.AttachWorkflowRuntime(ctx, activated.resource, activated.scopeID, ownerID)
+	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) && reclassifyRetired {
+		return c.activateOrAttachRetainedSession(ctx, sessionID, ownerID, false)
+	}
 	if err != nil {
 		return sessionruntime.RuntimeAttachment{}, true, err
 	}

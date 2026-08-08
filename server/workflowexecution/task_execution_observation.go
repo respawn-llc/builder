@@ -40,6 +40,25 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 	return observation, err
 }
 
+func (c *CurrentNodeController) CaptureWorkflowTaskLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if operation == nil {
+		return errors.New("workflow Task lifecycle query operation is required")
+	}
+	queryPublication, ok := c.publication.(interface {
+		CaptureQuery(context.Context, func(string, *sqlitegen.Queries) error) error
+	})
+	if !ok {
+		return errors.New("workflow lifecycle publication does not support bounded queries")
+	}
+	return queryPublication.CaptureQuery(ctx, operation)
+}
+
 func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,

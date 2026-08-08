@@ -193,13 +193,19 @@ type runtimeControlWorkflowSessionInterruptor struct {
 	handled bool
 	err     error
 	calls   []runtimeids.SessionID
+	hook    func(context.Context, runtimeids.SessionID) error
 }
 
 func (i *runtimeControlWorkflowSessionInterruptor) InterruptSessionExecution(
-	_ context.Context,
+	ctx context.Context,
 	sessionID runtimeids.SessionID,
 ) (bool, error) {
 	i.calls = append(i.calls, sessionID)
+	if i.hook != nil {
+		if err := i.hook(ctx, sessionID); err != nil {
+			return false, err
+		}
+	}
 	return i.handled, i.err
 }
 
@@ -474,6 +480,59 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	if client == nil {
 		client = &runtimeControlFakeClient{}
 	}
+	plan := newRuntimeControlTestPlan(t, store, client, registry, cfg)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "runtimecontrol-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open authority runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	var engine *runtime.Engine
+	if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority runtime: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new session descriptor: %v", err)
+	}
+	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, current *session.Store) error {
+		store = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority session store: %v", err)
+	}
+	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
+	service := NewService(authority).
+		WithPromptHistoryStore(history).
+		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	return store, engine, service
+}
+
+func newRuntimeControlTestPlan(
+	t *testing.T,
+	store *session.Store,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg runtime.Config,
+) sessionruntime.AgentRuntimePlan {
+	t.Helper()
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
 	settings.Reviewer.Frequency = "off"
@@ -518,48 +577,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	if err != nil {
 		t.Fatalf("new authority runtime plan: %v", err)
 	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: t.TempDir(),
-		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
-	})
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "runtimecontrol-test",
-		Runtime:   &plan,
-	}); err != nil {
-		t.Fatalf("open authority runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	var engine *runtime.Engine
-	if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
-		engine = current
-		return nil
-	}); err != nil {
-		t.Fatalf("resolve authority runtime: %v", err)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new session descriptor: %v", err)
-	}
-	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, current *session.Store) error {
-		store = current
-		return nil
-	}); err != nil {
-		t.Fatalf("resolve authority session store: %v", err)
-	}
-	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(authority).
-		WithPromptHistoryStore(history).
-		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
-	return store, engine, service
+	return plan
 }
 
 func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
@@ -2510,6 +2528,91 @@ func TestServiceWorkflowInterruptReconcilesQueuedInputOnce(t *testing.T) {
 	case <-discarded:
 		t.Fatal("workflow Interrupt discarded queued input more than once")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestServiceOrdinaryInterruptStaysBoundToObservedRuntimeGeneration(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	var original runtimeids.SessionResourceRef
+	if err := service.authority.WithCurrentRuntimeResource(
+		context.Background(),
+		sessionID,
+		func(_ context.Context, resource runtimeids.SessionResourceRef, _ *runtime.Engine) error {
+			original = resource
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("observe original runtime: %v", err)
+	}
+
+	replacementClient := newCancelObservingRuntimeControlClient()
+	replacementPlan := newRuntimeControlTestPlan(t, store, replacementClient, nil, runtime.Config{})
+	var replacementEngine *runtime.Engine
+	replacementDone := make(chan error, 1)
+	service.WithWorkflowSessionInterruptor(&runtimeControlWorkflowSessionInterruptor{
+		hook: func(ctx context.Context, _ runtimeids.SessionID) error {
+			if _, err := service.authority.ReleaseRuntime(ctx, sessionruntime.RuntimeReleaseRequest{
+				Resource:  original,
+				OwnerID:   "runtimecontrol-test",
+				DropOwner: true,
+				Policy:    sessionruntime.RuntimeReleaseClose,
+			}); err != nil {
+				return err
+			}
+			attachment, err := service.authority.OpenRuntime(ctx, sessionruntime.RuntimeOpenRequest{
+				SessionID: sessionID,
+				OwnerID:   "runtimecontrol-replacement",
+				Runtime:   &replacementPlan,
+			})
+			if err != nil {
+				return err
+			}
+			if err := service.authority.WithRuntime(
+				ctx,
+				attachment.Resource(),
+				func(_ context.Context, engine *runtime.Engine) error {
+					replacementEngine = engine
+					return nil
+				},
+			); err != nil {
+				return err
+			}
+			go func() {
+				_, err := replacementEngine.SubmitUserMessage(context.Background(), "replacement turn")
+				replacementDone <- err
+			}()
+			select {
+			case <-replacementClient.started:
+				return nil
+			case <-time.After(time.Second):
+				return errors.New("replacement runtime turn did not start")
+			}
+		},
+	})
+
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-observed-generation",
+		SessionID:       sessionID.String(),
+	}); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-replacementClient.ctxCanceled:
+		t.Fatal("ordinary Interrupt canceled a replacement runtime generation")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(replacementClient.release)
+	select {
+	case err := <-replacementDone:
+		if err != nil {
+			t.Fatalf("replacement runtime turn: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement runtime turn did not finish")
 	}
 }
 

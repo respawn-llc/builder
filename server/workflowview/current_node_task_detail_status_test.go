@@ -1113,12 +1113,16 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 			}},
 		},
 	}
+	snapshotCalls := 0
+	queryCalls := 0
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
-			store: fixture.store,
+			store:         fixture.store,
+			snapshotCalls: &snapshotCalls,
+			queryCalls:    &queryCalls,
 			observation: workflowTaskExecutionObservationForTest(
 				t,
 				map[workflow.TaskID][]workflow.CurrentNode{
@@ -1154,6 +1158,9 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 		len(page.Tasks[0].Status.AttentionTypes) != 1 ||
 		page.Tasks[0].Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindApproval {
 		t.Fatalf("live approval Task List page = %+v", page)
+	}
+	if snapshotCalls != 0 || queryCalls != 1 {
+		t.Fatalf("Task List lifecycle captures = snapshots:%d queries:%d, want bounded query capture only", snapshotCalls, queryCalls)
 	}
 }
 

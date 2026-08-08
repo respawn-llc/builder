@@ -2825,6 +2825,22 @@ func (s workflowViewStatusObservationSource) CaptureWorkflowTaskExecutions(
 	})
 }
 
+func (s workflowViewStatusObservationSource) CaptureWorkflowTaskLifecycleQuery(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries) error,
+) (err error) {
+	publication, err := workflowstore.NewLifecyclePublication(s.store)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := publication.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return publication.CaptureQuery(ctx, operation)
+}
+
 func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
 	result := make(map[workflow.TaskID]bool, len(taskIDs))
 	for _, taskID := range taskIDs {

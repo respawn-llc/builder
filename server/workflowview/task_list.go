@@ -90,19 +90,19 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	}
 	var page workflowTaskListPageResult
 	var labelIDsByTask map[string][]string
-	err = l.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+	err = l.projection.WithLifecycleQuery(ctx, func(lifecycleStateToken string, durable *TaskStatusDurableSnapshot) error {
 		var err error
 		page, err = l.queryRows(ctx, durable.queries, workflowTaskListQueryRequest{
-			projectID:          projectID,
-			narrowed:           narrowedQuery,
-			statusKinds:        req.StatusKinds,
-			attentionKinds:     req.AttentionKinds,
-			labelFilter:        labelFilter,
-			dependencyFilter:   req.DependencyFilter,
-			sortSelectors:      sortSelectors,
-			offset:             window.Offset,
-			limit:              window.Limit + 1,
-			liveTaskStatesJSON: observation.LiveTaskStatesJSON,
+			projectID:           projectID,
+			narrowed:            narrowedQuery,
+			statusKinds:         req.StatusKinds,
+			attentionKinds:      req.AttentionKinds,
+			labelFilter:         labelFilter,
+			dependencyFilter:    req.DependencyFilter,
+			sortSelectors:       sortSelectors,
+			offset:              window.Offset,
+			limit:               window.Limit + 1,
+			lifecycleStateToken: lifecycleStateToken,
 		})
 		if err != nil {
 			return err

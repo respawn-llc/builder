@@ -124,7 +124,7 @@ type ListTaskSearchPageDescriptorsParams struct {
 	ContextClusters           int64
 	OffsetRows                int64
 	LimitRows                 int64
-	LiveTaskStatesJson        string
+	LifecycleStateToken       string
 	ShortIDCaseMode           int64
 }
 
@@ -161,7 +161,7 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.ContextClusters,
 		arg.OffsetRows,
 		arg.LimitRows,
-		arg.LiveTaskStatesJson,
+		arg.LifecycleStateToken,
 		arg.ShortIDCaseMode,
 	)
 	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 12)

@@ -1495,7 +1495,7 @@ args AS (
             (CAST(sqlc.arg(sort_selector_count) AS INTEGER) >= {{.Index}} AND CAST(sqlc.arg(sort_{{.Index}}_field) AS TEXT) = 'labels'){{if not .Last}} OR{{end}}
 {{- end}}
         THEN 1 ELSE 0 END AS labels_requested,
-        CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json,
+        CAST(sqlc.arg(lifecycle_state_token) AS TEXT) AS lifecycle_state_token,
         CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
@@ -1506,7 +1506,7 @@ visible_columns AS (
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
 ),
-{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
+{{taskLifecycleStatusProjection "" "(SELECT lifecycle_state_token FROM args)" ","}}
 current_positions AS (
     SELECT
         t.id AS task_id,
@@ -1514,18 +1514,15 @@ current_positions AS (
     FROM args
     CROSS JOIN project_workflow_links task_link
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    LEFT JOIN live_task_states live
-      ON live.task_id = t.id
-     AND live.has_lifecycle_override != 0
     LEFT JOIN task_current_nodes current_node
       ON current_node.task_id = t.id
-     AND live.task_id IS NULL
-    LEFT JOIN json_each(live.current_node_ids_json) root_node
-      ON live.task_id IS NOT NULL
+     AND (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) = 0
+    LEFT JOIN json_each(kent_lifecycle_current_node_ids_v1(args.lifecycle_state_token, t.id)) root_node
+      ON (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) != 0
     WHERE task_link.project_id = args.project_id
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND t.project_workflow_link_id = task_link.id
-      AND (root_node.value IS NOT NULL OR current_node.node_id IS NOT NULL)
+      AND COALESCE(root_node.value, current_node.node_id) IS NOT NULL
 ),
 column_positions AS (
     SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank
@@ -4003,7 +4000,7 @@ args AS (
         CAST(?8 AS INTEGER) AS context_clusters,
         CAST(?9 AS INTEGER) AS offset_rows,
         CAST(?10 AS INTEGER) AS limit_rows,
-        CAST(?11 AS TEXT) AS live_task_states_json,
+        CAST(?11 AS TEXT) AS lifecycle_state_token,
         CAST(?12 AS INTEGER) AS short_id_case_mode
 ),
 literal_args AS (
@@ -4011,7 +4008,7 @@ literal_args AS (
     FROM args
     WHERE mode = 'literal'
 ),
-{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
+{{taskLifecycleStatusProjection "" "(SELECT lifecycle_state_token FROM args)" ","}}
 matching_sources AS (
     SELECT
         task.id AS task_id,

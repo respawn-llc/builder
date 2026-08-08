@@ -465,12 +465,16 @@ func TestTaskSearchAppliesPinnedLifecycleOverrideBeforeStatusFilterAndPagination
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference override: %v", err)
 	}
+	snapshotCalls := 0
+	queryCalls := 0
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
-			store: fixture.store,
+			store:         fixture.store,
+			snapshotCalls: &snapshotCalls,
+			queryCalls:    &queryCalls,
 			observation: workflowexecution.WorkflowTaskExecutionObservation{
 				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
 					task.ID: {
@@ -503,6 +507,9 @@ func TestTaskSearchAppliesPinnedLifecycleOverrideBeforeStatusFilterAndPagination
 	}
 	if response.NextOffset != nil {
 		t.Fatalf("Task Search pinned lifecycle next offset = %v, want none", response.NextOffset)
+	}
+	if snapshotCalls != 0 || queryCalls != 1 {
+		t.Fatalf("Task Search lifecycle captures = snapshots:%d queries:%d, want bounded query capture only", snapshotCalls, queryCalls)
 	}
 }
 

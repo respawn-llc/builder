@@ -87,6 +87,37 @@ func TestActivateOrAttachRetainedSessionJoinsBoardResume(t *testing.T) {
 	}
 }
 
+func TestAttachRetainedSessionOutcomeReclassifiesRetiredExecution(t *testing.T) {
+	fixture := newRetainedSessionActivationFixture(t)
+	fixture.store.mu.Lock()
+	delete(fixture.store.taskBySession, fixture.sessionID)
+	delete(fixture.store.currentSessionContexts, fixture.sessionID)
+	fixture.store.mu.Unlock()
+
+	resource, err := runtimeids.NewSessionResourceRef(fixture.sessionID, 1)
+	if err != nil {
+		t.Fatalf("NewSessionResourceRef: %v", err)
+	}
+	outcome := newCurrentNodeAgentActivationOutcome()
+	outcome.resolve(currentNodeAgentActivationResult{
+		resource: resource,
+		scopeID:  runtimeids.NewExecutionScopeID(),
+	}, nil)
+	_, handled, err := fixture.controller.attachRetainedSessionOutcome(
+		context.Background(),
+		fixture.sessionID,
+		"owner-retired",
+		outcome,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("attach retired retained Session outcome: %v", err)
+	}
+	if handled {
+		t.Fatal("retired retained Session execution was not reclassified as ordinary")
+	}
+}
+
 func TestObserveWorkflowTaskExecutionsExcludesAuthorityScopeAbsentFromPinnedRoot(t *testing.T) {
 	fixture := newRetainedSessionActivationFixture(t)
 	if _, handled, err := fixture.controller.ActivateOrAttachRetainedSession(

@@ -53,7 +53,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	var rows []sqlitegen.ListTaskSearchPageDescriptorsRow
 	var groups []serverapi.TaskSearchGroup
 	var hasNext bool
-	err = s.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+	err = s.projection.WithLifecycleQuery(ctx, func(lifecycleStateToken string, durable *TaskStatusDurableSnapshot) error {
 		if err := s.validateSchemaAndScope(ctx, durable.queries, req); err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 			}
 		}
 		var err error
-		rows, err = s.queryPage(ctx, durable.queries, observation.LiveTaskStatesJSON, req, offset)
+		rows, err = s.queryPage(ctx, durable.queries, lifecycleStateToken, req, offset)
 		if err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func (s *TaskSearch) validateSchemaAndScope(ctx context.Context, queries *sqlite
 	return nil
 }
 
-func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, liveTaskStatesJSON string, req serverapi.TaskSearchRequest, offset int) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
+func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, lifecycleStateToken string, req serverapi.TaskSearchRequest, offset int) ([]sqlitegen.ListTaskSearchPageDescriptorsRow, error) {
 	projectIDsJSON, err := taskSearchOptionalJSON(taskSearchProjectIDs(req))
 	if err != nil {
 		return nil, fmt.Errorf("encode task search project ids: %w", err)
@@ -154,7 +154,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, 
 		ContextClusters:     int64(req.Context),
 		OffsetRows:          int64(offset),
 		LimitRows:           int64(req.PageSize + 1),
-		LiveTaskStatesJson:  liveTaskStatesJSON,
+		LifecycleStateToken: lifecycleStateToken,
 		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	})
 }

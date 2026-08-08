@@ -583,7 +583,7 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		ContextClusters:     20,
 		OffsetRows:          0,
 		LimitRows:           100,
-		LiveTaskStatesJson:  "[]",
+		LifecycleStateToken: taskSearchNoLifecycleStateToken,
 		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	}
 }
@@ -600,10 +600,21 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.ContextClusters,
 		params.OffsetRows,
 		params.LimitRows,
-		params.LiveTaskStatesJson,
+		params.LifecycleStateToken,
 		params.ShortIDCaseMode,
 	}
 }
+
+var taskSearchNoLifecycleStateToken = func() string {
+	token, release, err := RegisterLifecycleTaskStateResolver(func(string) (LifecycleTaskQueryState, error) {
+		return LifecycleTaskQueryState{}, nil
+	})
+	if err != nil {
+		panic(fmt.Sprintf("register task-search lifecycle Task state resolver: %v", err))
+	}
+	_ = release
+	return token
+}()
 
 func createTaskSearchPageDescriptorFixture(t *testing.T, db *sql.DB) {
 	t.Helper()
