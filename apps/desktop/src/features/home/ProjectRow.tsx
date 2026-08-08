@@ -4,13 +4,13 @@ import { Pencil } from "lucide-react";
 import type { ProjectSummary } from "@/api";
 import { formatHomeRelativePath } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { HomeListCard } from "@/ui";
 
 export function ProjectRow({ project }: Readonly<{ project: ProjectSummary }>) {
   const navigation = useAppNavigation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const { homePath, nativeBridge } = useAppServices();
   const editLabel = useProjectEditLabel(project.name);
   const workspacePathLabel = formatHomeRelativePath(
@@ -26,7 +26,7 @@ export function ProjectRow({ project }: Readonly<{ project: ProjectSummary }>) {
           aria-label={editLabel}
           className="absolute top-[var(--space-3)] right-[var(--space-3)] grid h-9 w-9 place-items-center rounded-full border border-[var(--color-outline)] bg-[var(--color-island-1)] text-[var(--color-on-island)]"
           onClick={() => {
-            void openSidebar({ kind: "projectEdit", mode: "overlay", projectID: project.id });
+            open({ kind: "projectEdit", mode: "overlay", projectID: project.id });
           }}
           type="button"
         >

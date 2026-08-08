@@ -160,6 +160,24 @@ func TestTaskSearchRawFTS5PreservesSourceLocalExpressionSemantics(t *testing.T) 
 	}
 }
 
+func TestTaskSearchRawFTS5ExcludesShortIDs(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	createTaskSearchTaskAtSequence(t, fixture, 345, "Exact identifier", "ordinary body")
+
+	response, err := search.Search(fixture.ctx, serverapi.TaskSearchRequest{
+		Mode:     serverapi.TaskSearchModeFTS5,
+		Query:    "345",
+		Context:  serverapi.TaskSearchDefaultContext,
+		PageSize: serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("raw Search for Short ID text: %v", err)
+	}
+	if len(response.Groups) != 0 {
+		t.Fatalf("raw Short ID Search = %+v, want no Short ID source", response)
+	}
+}
+
 func TestTaskSearchRawSchemaFailuresRemainOperational(t *testing.T) {
 	for _, test := range []struct {
 		name   string

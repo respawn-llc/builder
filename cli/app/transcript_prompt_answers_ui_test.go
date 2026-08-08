@@ -24,6 +24,7 @@ func approvalCommentary(request serverapi.ApprovalAnswerRequest) string {
 }
 
 type deadlineThenSuccessPromptControl struct {
+	singlePromptOnlyControl
 	mu           sync.Mutex
 	askRequests  []serverapi.AskAnswerRequest
 	firstStarted chan struct{}
@@ -60,12 +61,14 @@ func TestApprovalAnswerOmitsAbsentCommentary(t *testing.T) {
 }
 
 type scriptedAskPromptControl struct {
+	singlePromptOnlyControl
 	mu          sync.Mutex
 	results     []error
 	askRequests []serverapi.AskAnswerRequest
 }
 
 type deadlineThenSuccessApprovalControl struct {
+	singlePromptOnlyControl
 	mu               sync.Mutex
 	approvalRequests []serverapi.ApprovalAnswerRequest
 	firstStarted     chan struct{}

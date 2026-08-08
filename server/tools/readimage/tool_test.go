@@ -507,13 +507,14 @@ func TestCall_OutsideWorkspaceRejectionIncludesReadSpecificGuidance(t *testing.T
 	workspace := t.TempDir()
 	outside := filepath.Join(outsideNonTempDir(t), "outside.png")
 	writeReadImageTestPath(t, outside, tinyPNG)
+	commentary := "keep it inside the repo"
 
 	tool := newReadImageTestTool(
 		t,
 		workspace,
 		true,
 		WithOutsideWorkspaceApprover(func(context.Context, patchtool.OutsideWorkspaceRequest) (patchtool.OutsideWorkspaceApproval, error) {
-			return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: "keep it inside the repo"}, nil
+			return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: &commentary}, nil
 		}),
 	)
 

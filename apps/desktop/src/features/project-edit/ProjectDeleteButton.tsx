@@ -9,7 +9,7 @@ import { completeProjectDeletion } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import type { SidebarPageNavigator } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { Button, compactDialogWidth, Dialog } from "@/ui";
@@ -22,11 +22,10 @@ type ProjectDeleteTarget = Readonly<{
   projectID: string;
 }>;
 
-export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string }>) {
+export function ProjectDeleteButton({ navigator, projectID }: Readonly<{ navigator: SidebarPageNavigator; projectID: string }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const connection = useConnectionSnapshot();
-  const { closeSidebar } = useSidebar();
   const navigation = useAppNavigation();
   const { push } = useStatusController();
   const queryClient = useQueryClient();
@@ -47,9 +46,9 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
           return;
         }
         close();
+        const closeOutcome = navigator.close();
         await completeProjectDeletion({
-          closeSidebar,
-          navigateHome: navigation.openHome,
+          navigateHome: closeOutcome === "accepted" ? navigation.openHome : undefined,
           projectID,
           pushDeletedToast: () => {
             push({
@@ -69,7 +68,7 @@ export function ProjectDeleteButton({ projectID }: Readonly<{ projectID: string 
         });
       }
     },
-    [closeSidebar, mutation, navigation.openHome, projectID, push, queryClient, t],
+    [mutation, navigation.openHome, navigator, projectID, push, queryClient, t],
   );
 
   const deleteDialog = useNativeDialogFallback<ProjectDeleteTarget>({

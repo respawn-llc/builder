@@ -100,7 +100,7 @@ func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testi
 	projectPendingPromptForTest(registry, "session-1", req)
 
 	pending := nextRegistryAttentionEvent(t, desktopSub)
-	batchID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")
+	batchID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, registryTestStepID)
 	if pending.Pending.ID != batchID {
 		t.Fatalf("pending id = %q", pending.Pending.ID)
 	}
@@ -217,7 +217,7 @@ func TestRuntimeRegistrySkippedFirstTaskQuestionPreparesBatchBeforeMaterializati
 	resolvePendingPromptForTest(registry, "session-1", "ask-2")
 	registry.MarkTaskQuestionCleared(*second.QuestionBatch, "ask-2")
 	resolved := nextRegistryAttentionEvent(t, desktopSub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")) {
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, registryTestStepID)) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
@@ -280,7 +280,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *te
 	if pending.Source != clientui.AttentionNotificationSourceSnapshot || pending.Type != clientui.AttentionNotificationEventPending {
 		t.Fatalf("snapshot event = %+v", pending)
 	}
-	if pending.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1") || pending.Pending.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
+	if pending.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindQuestion, registryTestStepID) || pending.Pending.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
 		t.Fatalf("snapshot pending = %+v", pending.Pending)
 	}
 	if pending.Pending.Target.Focus == nil || len(pending.Pending.Target.Focus.AskIDs) != 2 || pending.Pending.Target.Focus.AskIDs[0] != "ask-1" {
@@ -301,7 +301,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *te
 	}
 	registry.MarkTaskQuestionCleared(*req.QuestionBatch, "ask-1")
 	resolved := nextRegistryAttentionEvent(t, sub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")) {
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, registryTestStepID)) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
@@ -344,8 +344,7 @@ func taskBatchAskRequest(id string) askquestion.AskQuestionRequest {
 		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
 			Origin:              askquestion.AskQuestionOriginModelTool,
 			RunID:               "run-1",
-			StepID:              "step-1",
-			BatchID:             "batch-1",
+			StepID:              registryTestStepID,
 			PromptID:            id,
 			BatchPromptIDs:      []string{"ask-1", "ask-2"},
 			CandidateOrdinal:    0,

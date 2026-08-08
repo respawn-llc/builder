@@ -119,6 +119,17 @@ func TestManagedRootAllocatorAllowsParentContainingSourceWorkspace(t *testing.T)
 	}
 }
 
+func TestManagedRootAllocatorTrimsExemptRootBeforeOverlapCheck(t *testing.T) {
+	base := t.TempDir()
+	existing := filepath.Join(base, "existing")
+	exempt := "  " + existing + "  "
+	allocator := newManagedRootAllocator(base, strings.NewReader("entropy"))
+
+	if err := allocator.validateNoManagedRootOverlap(existing, []string{existing}, &exempt); err != nil {
+		t.Fatalf("whitespace-padded exempt root was not honored: %v", err)
+	}
+}
+
 func TestManagedRootAllocatorReservesRegularAndTaskLeaves(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "worktrees")
 	workspace := filepath.Join(t.TempDir(), "Builder CLI")
@@ -237,6 +248,7 @@ func TestManagedRootAllocatorPanicsAfterCollisionAttemptsAreExhausted(t *testing
 func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "base")
 	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	source := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	absolute := filepath.Join(t.TempDir(), "outside")
@@ -246,8 +258,9 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "tilde", request: "~/requested", want: filepath.Join(home, "requested")},
-		{name: "absolute outside base", request: absolute, want: absolute},
+		{name: "tilde outside base", request: "~/requested", wantErr: true},
+		{name: "absolute outside base", request: absolute, wantErr: true},
+		{name: "absolute under base", request: filepath.Join(base, "explicit"), want: filepath.Join(base, "explicit")},
 		{name: "relative under base", request: "nested/requested", want: filepath.Join(allocator.base.path, "nested/requested")},
 		{name: "dot", request: ".", wantErr: true},
 		{name: "dot dot", request: "..", wantErr: true},
@@ -256,7 +269,7 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := allocator.resolveExplicitRoot(tt.request)
+			got, err := allocator.resolveExplicitRoot(tt.request, source)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("resolveExplicitRoot(%q) succeeded", tt.request)
@@ -266,7 +279,7 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveExplicitRoot(%q): %v", tt.request, err)
 			}
-			want, err := config.CanonicalWorkspaceRoot(tt.want)
+			want, err := config.ResolveExistingAncestorRealPath(tt.want)
 			if err != nil {
 				t.Fatalf("canonical expected root: %v", err)
 			}
@@ -274,6 +287,35 @@ func TestManagedRootAllocatorExplicitRootContract(t *testing.T) {
 				t.Fatalf("resolveExplicitRoot(%q) = %q, want %q", tt.request, got, want)
 			}
 		})
+	}
+}
+
+func TestManagedRootAllocatorRejectsRelativeSymlinkEscape(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base")
+	outside := t.TempDir()
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "link")); err != nil {
+		t.Fatalf("symlink base child: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	if _, err := allocator.resolveExplicitRoot("link/new", t.TempDir()); err == nil {
+		t.Fatal("relative symlink escape was accepted")
+	}
+}
+
+func TestManagedRootAllocatorRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "source")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	allocator := newManagedRootAllocator(base, bytes.NewReader(nil))
+	for _, request := range []string{"source/nested", source} {
+		if _, err := allocator.resolveExplicitRoot(request, source); err == nil {
+			t.Fatalf("explicit root %q overlapped source workspace", request)
+		}
 	}
 }
 

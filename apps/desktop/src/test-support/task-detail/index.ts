@@ -10,7 +10,13 @@ import {
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { SidebarContext } from "@/app-facade";
+import {
+  SidebarRootContext,
+  type SidebarPageNavigator,
+  type SidebarRootController,
+  type SidebarMode,
+  type TaskDetailInitialFocus,
+} from "@/app-facade";
 import { TaskDetailSurface, type TaskDetailDeleteDismissal } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
@@ -373,16 +379,17 @@ export type TaskDetailFixtureOptions = Readonly<{
   attention?: JsonValue;
   asks?: unknown;
   comments?: unknown;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   nativeBridge?: NativeBridge | undefined;
+  navigator?: SidebarPageNavigator | undefined;
   onDeleteDismiss?: TaskDetailDeleteDismissal | undefined;
+  onMutated?: (() => void) | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
   path?: string | undefined;
+  retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
   routes?: readonly FakeRoute[] | undefined;
 }>;
-
-export type MountedTaskDetailServices = TestAppServices &
-  Readonly<{
-    unmountTaskDetail(): void;
-  }>;
 
 export function createTaskDetailTestServices(
   task: JsonValue,
@@ -419,6 +426,11 @@ export function createTaskDetailTestServices(
   );
 }
 
+export type MountedTaskDetailServices = TestAppServices &
+  Readonly<{
+    unmountTaskDetail(): void;
+  }>;
+
 export function mountTaskDetailSurface(
   task: JsonValue,
   options: TaskDetailFixtureOptions = {},
@@ -431,14 +443,39 @@ export function mountTaskDetailSurface(
   const mounted = render(
     createElement(RouterContextProvider, {
       router,
-      children: createElement(SidebarContext.Provider, {
+      children: createElement(SidebarRootContext.Provider, {
         value: createTestSidebarController(),
         children: createElement(TestAppProviders, {
-          children: createElement(TaskDetailSurface, {
-            enabled: true,
-            onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
-            taskId: "task-1",
-          }),
+          children: createElement(
+            TaskDetailSurface,
+            options.navigator === undefined
+              ? {
+                  enabled: true,
+                  initialFocus: options.initialFocus,
+                  onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
+                  onMutated: options.onMutated,
+                  openSidebar: options.openSidebar,
+                  retainedState: options.retainedState,
+                  sidebarMode: options.sidebarMode,
+                  taskId: "task-1",
+                }
+              : {
+                  enabled: true,
+                  initialFocus: options.initialFocus,
+                  navigator: options.navigator,
+                  onMutated: options.onMutated,
+                  openSidebar: options.openSidebar,
+                  retainedState: options.retainedState,
+                  sidebarDestination: {
+                    kind: "taskDetail",
+                    taskID: "task-1",
+                    ...(options.sidebarMode === undefined ? {} : { mode: options.sidebarMode }),
+                    ...(options.onMutated === undefined ? {} : { onMutated: options.onMutated }),
+                  },
+                  sidebarMode: options.sidebarMode,
+                  taskId: "task-1",
+                },
+          ),
           services,
         }),
       }),

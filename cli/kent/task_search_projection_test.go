@@ -67,6 +67,36 @@ func TestTaskSearchPlainProjectionPreservesHitKindsAndRemainingCount(t *testing.
 	}
 }
 
+func TestTaskSearchPlainProjectionUsesHeaderForShortIDHit(t *testing.T) {
+	response := serverapi.TaskSearchResponse{
+		Mode: serverapi.TaskSearchModeLiteral,
+		Groups: []serverapi.TaskSearchGroup{{
+			ProjectID:     "project-1",
+			ProjectKey:    "KNT",
+			TaskID:        "task-1",
+			ShortID:       "KNT-345",
+			WorkflowID:    "workflow-1",
+			Title:         "Task",
+			Status:        serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog, NativeState: serverapi.WorkflowTaskNativeStateActive},
+			TotalHitCount: 4,
+			Hits: []serverapi.TaskSearchHit{{
+				Ordinal: 1,
+				Source:  serverapi.TaskSearchSource{Kind: serverapi.TaskSearchSourceKindShortID},
+				Literal: &serverapi.TaskSearchLiteralHit{Match: "345"},
+			}},
+		}},
+	}
+
+	projection, err := taskSearchPlainProjectionFromResponse(response)
+	if err != nil {
+		t.Fatalf("taskSearchPlainProjectionFromResponse: %v", err)
+	}
+	group := projection.Groups[0]
+	if len(group.Lines) != 0 || group.RemainingHitCount != 3 {
+		t.Fatalf("Short ID plain projection = %#v, want header-only hit with 3 remaining", group)
+	}
+}
+
 func TestTaskSearchPlainRendererWritesCompleteHierarchyWithoutBlankMetadataRows(t *testing.T) {
 	projection := taskSearchPlainProjection{
 		Groups: []taskSearchPlainGroup{{

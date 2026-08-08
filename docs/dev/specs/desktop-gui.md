@@ -41,7 +41,7 @@
 - Choosing a directory already attached to a Project opens that Project. Choosing an unattached directory opens Project creation with an editable name and Project Key; the default name is the directory basename.
 - A Project Key is editable at any time, is unique, uses 2–8 uppercase letters or digits, begins with a letter, and is the prefix for future Task Short IDs. Existing Task Short IDs remain unchanged and resolvable.
 - Project name is one line, 1–80 visible characters, and has no leading or trailing whitespace. Name and key save together; an unchanged persisted key, including an empty one, does not block a name-only save. Back discards unsaved name and key edits.
-- Changing the default workspace or attaching or detaching a workspace applies immediately. Workspace lists use infinite scroll, put the default first, then use newest attachment first, and contain at most 100 entries per request.
+- Changing the default workspace or attaching or detaching a workspace applies immediately. Workspace lists use infinite scroll, contain at most 100 entries per request, show the default first when it belongs to the bounded collection, then use newest attachment first, and stop at the global Project Workspace collection limit.
 - A workspace row shows path, default status, and unlink action. Choosing an already attached path focuses its existing row or gives equivalent feedback.
 - Unlink confirmation explains that files remain on disk, retained Sessions remain readable, and active work blocks removal. It requires no typed confirmation.
 - A Project without a linked default Workflow shows a blocker and disables New Task while directing the operator to configure a Workflow. An invalid linked Workflow remains visible and permits Backlog Task creation.
@@ -118,6 +118,8 @@
 - A board has a `Search` chip immediately after the Unblocked chip. It uses the same visual treatment and height as the Labels chip.
 - The board Search chip opens Project-scoped Search that spans every Workflow linked to that Project.
 - Selecting either Search entry point opens the single centered command-palette dialog over a blurred backdrop. The board entry point filters results to the current Project, while the application-chrome entry point searches every Project. The dialog uses a frosted-glass surface.
+- Global Search applies no Project or status condition.
+- Project-scoped Search applies only the current Project and no status or other condition.
 - Opening either entry point while Search is open replaces the dialog's navigation scope instead of opening another dialog.
 - Opening Search animates the backdrop from unblurred to blurred. Its island fades in while moving upward by 30 pixels into place.
 - Closing Search reverses that motion: the backdrop unblurs while the island fades and moves 30 pixels downward. Search remains mounted until the complete exit finishes. Search uses the fast motion duration. These motions are subject to reduced-motion preference.
@@ -125,7 +127,7 @@
 - The search input is an inline top row separated from the results by one thin divider. The input is not a nested island.
 - The dialog focuses the input when it opens.
 - Search uses the existing case-insensitive literal Task Search contract.
-- Search includes Task titles, complete bodies, and Comments.
+- Search includes Task Short IDs, titles, complete bodies, and Comments.
 - Desktop submits a nonblank searchable query 300 milliseconds after the last
   edit.
 - A blank query, a literal query without a searchable trigram, or a searchable
@@ -155,17 +157,16 @@
   display name from Node IDs.
 - Task Short ID uses the ordinary foreground color. The title uses the same
   typographic hierarchy as a Task card.
-- A result previews at most the first three hits in their server-provided
-  order. Desktop does not rerank hits.
+- A result previews at most the first three returned non-Short-ID hits in their server-provided order. Desktop does not rerank hits.
+- A returned Short ID hit uses the existing Task Short ID header without additional emphasis or a duplicate preview and does not consume a preview position.
+- Desktop applies the preview allowance independently to each returned Task group, including a repeated group on a continuation page.
 - Each hit preview shows the server-provided matching fragment and emphasizes
   the matching text. It does not show a text source-kind label or a general
   horizontal inset.
 - Comment-hit previews use a message-bubble icon in the same muted foreground
   color as the surrounding hit text. They have no connector bar or additional
   horizontal inset.
-- When the Task has undisplayed hits after the last preview, the result shows a
-  plain muted `…N more hits` line using the server-provided total hit count and
-  hit ordinals.
+- When the Task has undisplayed hits after the highest ordinal represented by the Short ID header or a preview, the result shows a plain muted `…N more hits` line using the server-provided total hit count and hit ordinals.
 - When a result set arrives, its first Task group is selected unless a retained
   selection still identifies a group in that result set.
 - Up Arrow and Down Arrow move selection without moving focus from the input.
@@ -273,11 +274,36 @@
 - `queued` and `running` use a spinner.
 - `waiting_approval` and `interrupted` use a secondary-colored circle.
 - `waiting_question` uses a primary-colored circle.
-- Selecting a related-Task row replaces the current Task Detail with that Task
-  in the same sidebar or Task Detail presentation.
-- Dependency navigation has no sidebar-local Back or Forward action.
-- Closing Task Detail after dependency navigation closes the current Task Detail
-  as usual.
+- The Desktop sidebar owns a navigation stack for sidebar-local movement.
+- Opening a root sidebar destination replaces the prior sidebar stack.
+- Selecting a related Task pushes Task Detail onto the sidebar stack.
+- Selecting a Task already retained in the stack returns to that Task and discards every later destination.
+- Dependency Add pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Successful related-Task creation atomically creates the Task and relationship, then replaces New Task with the created Task Detail.
+- Back returns to the preceding sidebar destination.
+- Back is hidden at the root.
+- X closes the complete sidebar stack.
+- The sidebar has no Forward action.
+- The sidebar retains at most 50 destinations.
+- A push beyond the limit preserves the root and evicts the oldest non-root destination.
+- Only the current destination remains mounted and live.
+- Back restores Task Detail scroll position, description expansion, selected Comments or Activity tab, unsaved Task title and body edits, unsaved new-comment text, and one edited-comment draft.
+- Restored Task Detail refreshes server-authoritative data and layers retained unsaved input over it.
+- Inactive Task Detail data follows the ordinary Desktop query-cache lifetime.
+- A mounted Task or Project destination that receives a typed missing result goes Back, including closing when it is the root.
+- Missing retained destinations are skipped lazily when Back reveals them.
+- Leaving the Desktop screen that owns a root sidebar closes that root unless another root has replaced it.
+- Completion from a replaced destination does not close or change the replacement sidebar.
+- Related New Task disables header Back and X only while its atomic creation request is pending.
+- Ordinary New Task keeps header Back and X available while its request is pending.
+- A failed related creation restores header Back and X and preserves the form recovery path.
+- Successful Project deletion from Project Edit closes that mounted Project Edit sidebar.
+- Scroll restoration resumes at the nearest available loaded position and ordinary edge-driven loading continues from there.
+- Inbox Previous and Next replace the current Inbox Task without adding sidebar history.
+- Related-Task navigation and Dependency Add are unavailable while a Task or comment save is pending.
+- Relationship Remove keeps its independent availability while another Task Detail save is pending.
+- Pop out opens only the current Task and closes its originating sidebar after the separate window opens.
+- A pop-out completion from a replaced destination leaves the replacement sidebar open.
 - Each relationship row has an accessible trailing Remove action rendered as a
   minimal uncircled red `X`.
 - Remove acts immediately without confirmation.

@@ -155,7 +155,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
 	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
-		RuntimeClientFactory: opts.RuntimeClientFactory,
+		RuntimeClientFactory:   opts.RuntimeClientFactory,
+		ManagedWorktreeBaseDir: cfg.Settings.Worktrees.BaseDir,
 		RecoveredWarningProvider: func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {
@@ -562,16 +563,26 @@ type authorityPromptResponder struct {
 	authority *sessionruntime.Authority
 }
 
-func (r authorityPromptResponder) AcceptPromptResponse(
+func (r authorityPromptResponder) AcceptPromptResolution(
 	sessionID string,
-	response askquestion.AskQuestionResponse,
+	promptID string,
+	resolution askquestion.AskQuestionResolution,
 	submitErr error,
 ) (promptcontrol.PromptResponseAcceptance, error) {
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return nil, err
 	}
-	return r.authority.AcceptPromptResponse(id, response, submitErr)
+	return r.authority.AcceptPromptResolution(id, promptID, resolution, submitErr)
+}
+
+func (r authorityPromptResponder) ResolvePromptBatch(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	commands []sessionruntime.PromptAnswerCommand,
+) ([]sessionruntime.PromptAnswerResult, error) {
+	return r.authority.ResolvePromptBatch(ctx, sessionID, stepID, commands)
 }
 
 type authorityStepLifecycle struct {

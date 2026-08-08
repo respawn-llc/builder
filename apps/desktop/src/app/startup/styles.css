@@ -546,6 +546,10 @@
   animation: sidebar-slide-out var(--motion-fast) both;
 }
 
+.app-sidebar-page {
+  will-change: opacity, transform;
+}
+
 .task-detail-island-stack {
   container-type: inline-size;
 }
@@ -576,6 +580,14 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .app-sidebar-page[data-direction="push"] {
+    animation: sidebar-page-push var(--motion-fast) both;
+  }
+
+  .app-sidebar-page[data-direction="back"] {
+    animation: sidebar-page-back var(--motion-fast) both;
+  }
+
   .command-palette-size-motion {
     transition: height var(--motion-morph);
   }
@@ -660,5 +672,19 @@
 
   .view-transition-route::view-transition-new(root) {
     animation: route-fade-scale var(--motion-fast) both;
+  }
+}
+
+@keyframes sidebar-page-push {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes sidebar-page-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
   }
 }

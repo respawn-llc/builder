@@ -19,9 +19,7 @@ type input struct {
 }
 
 type Tool struct {
-	workspaceRoot                string
-	workspaceRootReal            string
-	workspaceRootInfo            os.FileInfo
+	fileAccessScope              tools.FileAccessScope
 	workspaceOnly                bool
 	allowOutsideWorkspace        bool
 	outsideWorkspaceApprover     OutsideWorkspaceApprover
@@ -44,11 +42,20 @@ func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error
 	if err != nil {
 		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("stat workspace root: %w", err))
 	}
-	t := &Tool{workspaceRoot: abs, workspaceRootReal: real, workspaceRootInfo: rootInfo, workspaceOnly: workspaceOnly}
+	t := &Tool{
+		fileAccessScope: tools.FileAccessScope{
+			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
+		},
+		workspaceOnly: workspaceOnly,
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)
 		}
+	}
+	if err := tools.ValidateFileAccessScope(t.fileAccessScope); err != nil {
+		return nil, fmt.Errorf("validate file access scope: %w", err)
 	}
 	return t, nil
 }
@@ -77,7 +84,9 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	}
 	foreignManagedWorktree, err := t.targetsForeignManagedWorktree(doc)
 	if err != nil {
-		return tools.ErrorResult(c, err.Error()), nil
+		return tools.ErrorResultWith(c, err.Error(), func(any) (json.RawMessage, error) {
+			return json.Marshal(errorPayload(err))
+		}), nil
 	}
 	if foreignManagedWorktree {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
@@ -124,12 +133,19 @@ func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, er
 			if err != nil {
 				return false, err
 			}
-			if t.managedWorktreePathContext.IsForeignManagedWorktreePath(path, resolved) {
-				return true, nil
+			if err := t.checkForeignManagedWorktreePath(resolved); err != nil {
+				return false, err
 			}
 		}
 	}
 	return false, nil
+}
+
+func (t *Tool) checkForeignManagedWorktreePath(resolved string) error {
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved) {
+		return fmt.Errorf("%s", tools.ForeignManagedWorktreeEditDeniedMessage)
+	}
+	return nil
 }
 
 func (t *Tool) apply(
@@ -169,5 +185,5 @@ func (t *Tool) apply(
 		return nil, err
 	}
 	defer cleanupStagedFiles(states)
-	return commitStagedFiles(states, state.deleteTargets)
+	return commitStagedFiles(t, states, state.deleteTargets)
 }

@@ -48,6 +48,12 @@ func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) O
 	}
 }
 
+func WithFileAccessScope(scope tools.FileAccessScope) Option {
+	return func(t *Tool) {
+		t.fileAccessScope = scope.Clone()
+	}
+}
+
 const outsideWorkspaceRejectionInstruction = "If it's essential to the task, ask the user to make the edit manually at the end of the task."
 
 func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, approvedOutside map[string]bool) (string, error) {
@@ -55,7 +61,17 @@ func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, app
 	if err != nil {
 		return "", err
 	}
-	return t.guardResolvedPath(ctx, path, real, approvedOutside)
+	if err := t.checkForeignManagedWorktreePath(real); err != nil {
+		return "", err
+	}
+	real, err = t.guardResolvedPath(ctx, path, real, approvedOutside)
+	if err != nil {
+		return "", err
+	}
+	if err := t.checkForeignManagedWorktreePath(real); err != nil {
+		return "", err
+	}
+	return real, nil
 }
 
 func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {
@@ -64,7 +80,7 @@ func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {
 	}
 	candidate := path
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.workspaceRoot, candidate)
+		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
 	}
 	candidate = filepath.Clean(candidate)
 
@@ -87,10 +103,8 @@ func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {
 }
 
 func (t *Tool) guardResolvedPath(ctx context.Context, path string, real string, approvedOutside map[string]bool) (string, error) {
-	guard := NewOutsideWorkspaceGuardWithPolicy(
-		t.workspaceRoot,
-		t.workspaceRootReal,
-		t.workspaceRootInfo,
+	guard := NewOutsideWorkspaceGuardWithScope(
+		t.fileAccessScope,
 		t.workspaceOnly,
 		t.allowOutsideWorkspace,
 		t.outsideWorkspaceApprover,

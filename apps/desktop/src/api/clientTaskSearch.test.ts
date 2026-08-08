@@ -156,6 +156,74 @@ describe("ApiClient task search", () => {
     });
   });
 
+  it("decodes a literal Short ID hit", async () => {
+    const response = {
+      ...literalResponse,
+      groups: [
+        {
+          ...literalGroup,
+          total_hit_count: 1,
+          hits: [
+            {
+              ordinal: 1,
+              source: { kind: "short_id" },
+              literal: {
+                before: "KNT-",
+                match: "345",
+                after: "",
+                left_truncated: false,
+                right_truncated: false,
+              },
+            },
+          ],
+        },
+      ],
+    } as const;
+    const client = new ApiClient(
+      new FakeRpcTransport([{ method: "workflow.task.search", result: response }]),
+    );
+
+    await expect(client.searchTasks(literalInput)).resolves.toMatchObject({
+      groups: [
+        {
+          hits: [
+            {
+              source: { kind: "short_id" },
+              literal: { match: "345" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects a raw FTS5 Short ID hit", async () => {
+    const response = {
+      ...literalResponse,
+      mode: "fts5",
+      groups: [
+        {
+          ...literalGroup,
+          total_hit_count: 1,
+          hits: [
+            {
+              ordinal: 1,
+              source: { kind: "short_id" },
+              fts5: { snippet: "345" },
+            },
+          ],
+        },
+      ],
+    } as const;
+    const client = new ApiClient(
+      new FakeRpcTransport([{ method: "workflow.task.search", result: response }]),
+    );
+
+    await expect(client.searchTasks({ ...literalInput, mode: "fts5" })).rejects.toBeInstanceOf(
+      ContractError,
+    );
+  });
+
   it.each([
     {
       name: "an unexpected response field",

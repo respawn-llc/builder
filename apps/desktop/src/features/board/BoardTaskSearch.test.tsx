@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
 import { appI18n } from "@/i18n";
-import { SidebarContext, type SidebarController } from "@/app-facade";
+import { SidebarRootContext, type SidebarRootController } from "@/app-facade";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import {
   TaskSearchGlobalTrigger,
@@ -96,21 +96,124 @@ const searchResponse = {
   ],
 } as const;
 
-const testSidebarController: SidebarController = {
-  activeDestination: null,
-  closeSidebar: vi.fn(),
-  completeCurrent: vi.fn(() => "stale" as const),
-  openSidebar: async () => ({ status: "canceled", reason: "closed" }),
-  phase: "open",
-  replaceSidebar: vi.fn(),
-  resolveSidebar: vi.fn(),
-  resizeSidebar: vi.fn(),
-  sidebarWidthPx: 0,
+const shortIDSearchResponse = {
+  mode: "literal",
+  groups: [
+    {
+      project_id: "project-1",
+      project_key: "KNT",
+      task_id: "task-exact",
+      short_id: "KNT-345",
+      workflow_id: "workflow-1",
+      title: "Exact identifier",
+      status: {
+        kind: "active",
+        native_state: "active",
+        node_ids: ["node-1"],
+        attention_types: [],
+      },
+      total_hit_count: 6,
+      hits: [
+        {
+          ordinal: 1,
+          source: { kind: "short_id" },
+          literal: {
+            before: "KNT-",
+            match: "345",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 2,
+          source: { kind: "title" },
+          literal: {
+            before: "",
+            match: "Preview two",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 3,
+          source: { kind: "body" },
+          literal: {
+            before: "",
+            match: "Preview three",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 4,
+          source: { kind: "comment", comment_id: "comment-1" },
+          literal: {
+            before: "",
+            match: "Preview four",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 5,
+          source: { kind: "body" },
+          literal: {
+            before: "",
+            match: "Preview five",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+      ],
+    },
+    {
+      project_id: "project-1",
+      project_key: "KNT",
+      task_id: "task-text",
+      short_id: "KNT-999",
+      workflow_id: "workflow-1",
+      title: "345 title match",
+      status: {
+        kind: "backlog",
+        native_state: "active",
+        node_ids: [],
+        attention_types: [],
+      },
+      total_hit_count: 1,
+      hits: [
+        {
+          ordinal: 1,
+          source: { kind: "title" },
+          literal: {
+            before: "",
+            match: "345",
+            after: " title match",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+      ],
+    },
+  ],
+} as const;
+
+const openSidebarRoot = vi.fn<SidebarRootController["open"]>(() => ({
+  lifecycle: Promise.resolve("closed" as const),
+  release: vi.fn(),
+}));
+const testSidebarRoots: SidebarRootController = {
+  open: openSidebarRoot,
 };
 
 describe("Board Task Search", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    openSidebarRoot.mockClear();
   });
 
   afterEach(() => {
@@ -189,6 +292,26 @@ describe("Board Task Search", () => {
     expect(services.transport.dedicatedCalls[0]?.params).not.toHaveProperty("project_ids");
   });
 
+  it("opens a global Search result as an owned sidebar root", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+
+    renderSearch(services, null);
+    fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(openSidebarRoot).toHaveBeenCalledWith({
+        kind: "taskDetail",
+        mode: "overlay",
+        taskID: "task-1",
+      });
+    });
+  });
+
   it("replaces an open Project Search with the single global dialog", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
@@ -236,6 +359,65 @@ describe("Board Task Search", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("selects the exact numeric Short ID without duplicating its preview", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([
+      { method: "workflow.task.search", result: shortIDSearchResponse },
+    ]);
+    const onOpenTask = vi.fn();
+
+    renderSearch(services, "project-short-id", onOpenTask);
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "345" } });
+    const options = await screen.findAllByRole("option");
+    const exact = options[0];
+    if (exact === undefined) {
+      throw new Error("Short ID Search requires an exact result.");
+    }
+    expect(exact).toHaveAttribute("aria-selected", "true");
+    expect(within(exact).getByText("KNT-345")).toBeInTheDocument();
+    expect(within(exact).queryByText("345")).not.toBeInTheDocument();
+    expect(within(exact).getByText("Preview two")).toBeInTheDocument();
+    expect(within(exact).getByText("Preview three")).toBeInTheDocument();
+    expect(within(exact).getByText("Preview four")).toBeInTheDocument();
+    expect(within(exact).queryByText("Preview five")).not.toBeInTheDocument();
+    expect(within(exact).getByText("…2 more hits")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(onOpenTask).toHaveBeenCalledWith("task-exact");
+    });
+  });
+
+  it("derives continuation previews and remaining hits from that returned group", async () => {
+    vi.useRealTimers();
+    const continuationResponse = {
+      ...shortIDSearchResponse,
+      groups: [
+        {
+          ...shortIDSearchResponse.groups[0],
+          hits: shortIDSearchResponse.groups[0].hits.slice(1),
+        },
+      ],
+    };
+    const services = createTestServices([
+      { method: "workflow.task.search", result: continuationResponse },
+    ]);
+
+    renderSearch(services, "project-continuation");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    fireEvent.change(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") }), {
+      target: { value: "345" },
+    });
+    const result = await screen.findByRole("option");
+    expect(within(result).getByText("Preview two")).toBeInTheDocument();
+    expect(within(result).getByText("Preview three")).toBeInTheDocument();
+    expect(within(result).getByText("Preview four")).toBeInTheDocument();
+    expect(within(result).queryByText("Preview five")).not.toBeInTheDocument();
+    expect(within(result).getByText("…2 more hits")).toBeInTheDocument();
+  });
+
   it("retains one query while rerunning Search in the next Project scope", async () => {
     vi.useRealTimers();
     const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
@@ -247,7 +429,9 @@ describe("Board Task Search", () => {
       expect(services.transport.dedicatedCalls).toHaveLength(1);
     });
 
-    view.rerender(renderProjectSearchTree(services, "project-second"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-second"),
+    );
 
     expect(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") })).toHaveValue("search");
     await waitFor(() => {
@@ -269,7 +453,9 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(firstInput, { key: "ArrowDown" });
     expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
 
-    view.rerender(renderProjectSearchTree(services, "project-second"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-second"),
+    );
     const secondInput = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
     await waitFor(() => {
       expect(screen.getAllByRole("option")).toHaveLength(2);
@@ -278,7 +464,9 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(secondInput, { key: "ArrowUp" });
     expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true");
 
-    view.rerender(renderProjectSearchTree(services, "project-first"));
+    view.rerender(
+      renderProjectSearchTree(services, "project-first"),
+    );
     await waitFor(() => {
       expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
     });
@@ -400,10 +588,10 @@ function renderSearch(
   return render(
     <TestAppProviders services={services}>
       <TaskSearchProvider>
-        <SidebarContext.Provider value={testSidebarController}>
+        <SidebarRootContext.Provider value={testSidebarRoots}>
           <TaskSearchHost />
           {search}
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </TaskSearchProvider>
     </TestAppProviders>,
   );
@@ -416,10 +604,10 @@ function renderProjectSearchTree(
   return (
     <TestAppProviders services={services}>
       <TaskSearchProvider>
-        <SidebarContext.Provider value={testSidebarController}>
+        <SidebarRootContext.Provider value={testSidebarRoots}>
           <TaskSearchHost />
           <TaskSearchProjectTrigger onOpenTask={vi.fn()} projectID={projectID} />
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </TaskSearchProvider>
     </TestAppProviders>
   );

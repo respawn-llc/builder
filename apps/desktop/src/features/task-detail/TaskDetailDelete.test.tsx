@@ -4,6 +4,7 @@ import { vi } from "vitest";
 
 import { RpcError, rpcErrorCodes } from "@/api";
 import { appI18n } from "@/i18n";
+import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import { getCallCount, mountTaskDetailSurface, taskDetailResponse } from "@/test-support/task-detail";
 
 const statusError = vi.hoisted(() => vi.fn(() => "status-error"));
@@ -89,6 +90,26 @@ it("dismisses its exact host after successful deletion", async () => {
   await waitFor(() => {
     expect(getCallCount(services.transport.calls, "workflow.task.delete")).toBe(1);
     expect(onDeleteDismiss).toHaveBeenCalledOnce();
+  });
+});
+
+it("dismisses the exact current sidebar page after successful deletion", async () => {
+  const navigator = createTestSidebarNavigator();
+  mountTaskDetailSurface(taskWithDelete(true), {
+    navigator,
+    routes: [{ method: "workflow.task.delete", result: {} }],
+  });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: appI18n.t("board.deleteTask") }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: appI18n.t("board.deleteTaskConfirm"),
+    }),
+  );
+
+  await waitFor(() => {
+    expect(navigator.close).toHaveBeenCalledOnce();
   });
 });
 

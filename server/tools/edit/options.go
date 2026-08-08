@@ -27,3 +27,9 @@ func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) O
 		t.managedWorktreePathContext = context
 	}
 }
+
+func WithFileAccessScope(scope tools.FileAccessScope) Option {
+	return func(t *Tool) {
+		t.fileAccessScope = scope.Clone()
+	}
+}

@@ -627,6 +627,46 @@ func writeWorkflowContextFixture(t *testing.T, f *currentNodeRunnerFixture) {
 	}
 }
 
+func TestCurrentNodeAgentWritesToSiblingWorkspaceThroughCreatedRuntime(t *testing.T) {
+	sibling := t.TempDir()
+	target := filepath.Join(sibling, "workflow.txt")
+	if err := os.WriteFile(target, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write workflow sibling fixture: %v", err)
+	}
+	input, err := json.Marshal(map[string]string{
+		"path":       target,
+		"old_string": "before",
+		"new_string": "workflow sibling",
+	})
+	if err != nil {
+		t.Fatalf("marshal sibling edit input: %v", err)
+	}
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedToolBatch("write sibling", llm.ToolCall{
+			ID:    "sibling-patch",
+			Name:  string(toolspec.ToolEdit),
+			Input: input,
+		}),
+		ScriptedToolBatch("complete", llm.ToolCall{
+			ID:    "complete-sibling",
+			Name:  string(toolspec.ToolCompleteNode),
+			Input: json.RawMessage(`{"transition":"done","commentary":"done"}`),
+		}),
+		ScriptedFinalAnswer("done"),
+	)
+	if _, err := f.metadata.AttachWorkspaceToProject(context.Background(), f.projectID, sibling); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
+	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(t, f.store, string(config.WorkflowCompletionModeTool))
+	task := f.createTask(t, workflowID)
+	currentNode := f.startTask(t, task)
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	if data, err := os.ReadFile(target); err != nil || string(data) != "workflow sibling\n" {
+		t.Fatalf("workflow sibling file = %q, error = %v", data, err)
+	}
+}
+
 func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
@@ -1021,6 +1061,7 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if interrupted.SessionID == nil {
 		t.Fatal("disabled CAC target lost its assigned Session")
 	}
+	f.waitForControllerCurrentNodeFinalized(t, interrupted.Reference)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("resume disabled CAC target: %v", err)
@@ -1329,12 +1370,41 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		time.Sleep(10 * time.Millisecond)
 	}
 	initialRuntime := f.runtimeRequests()[0]
+	siblingWorkspace := t.TempDir()
+	canonicalSiblingWorkspace, err := config.CanonicalWorkspaceRoot(siblingWorkspace)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot sibling: %v", err)
+	}
+	if _, err := f.metadata.AttachWorkspaceToProject(context.Background(), f.projectID, canonicalSiblingWorkspace); err != nil {
+		t.Fatalf("AttachWorkspaceToProject sibling: %v", err)
+	}
+	projectBoundary, err := f.metadata.ResolveProjectWorkspaceBoundary(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("ResolveProjectWorkspaceBoundary: %v", err)
+	}
+	interactiveFilesystemContext, err := runtimewire.NewFilesystemContext(f.workspace, f.workspace, projectBoundary)
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	if len(interactiveFilesystemContext.Access.ProjectWorkspace.Roots) != 2 {
+		t.Fatalf("workflow runtime Project Workspace roots = %+v, want source and sibling", interactiveFilesystemContext.Access.ProjectWorkspace.Roots)
+	}
+	foundSibling := false
+	for _, root := range interactiveFilesystemContext.Access.ProjectWorkspace.Roots {
+		if root.RealPath == canonicalSiblingWorkspace {
+			foundSibling = true
+			break
+		}
+	}
+	if !foundSibling {
+		t.Fatalf("workflow runtime roots = %+v, want sibling %q", interactiveFilesystemContext.Access.ProjectWorkspace.Roots, canonicalSiblingWorkspace)
+	}
 	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     initialRuntime.ActiveSettings,
-		EnabledTools: initialRuntime.EnabledTools,
-		Workdir:      f.workspace,
-		Sources:      initialRuntime.Sources,
-		Client:       f.client,
+		Settings:          initialRuntime.ActiveSettings,
+		EnabledTools:      initialRuntime.EnabledTools,
+		FilesystemContext: interactiveFilesystemContext,
+		Sources:           initialRuntime.Sources,
+		Client:            f.client,
 	})
 	if err != nil {
 		t.Fatalf("build attached Session runtime: %v", err)

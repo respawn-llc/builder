@@ -184,7 +184,6 @@ func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, s
 			Origin:              askquestion.AskQuestionOriginModelTool,
 			RunID:               "run-" + taskID,
 			StepID:              gatewayAttentionStepID,
-			BatchID:             "batch-" + taskID,
 			PromptID:            askID,
 			BatchPromptIDs:      []string{askID},
 			CandidateOrdinal:    0,

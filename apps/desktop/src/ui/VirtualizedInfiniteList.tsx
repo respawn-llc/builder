@@ -8,6 +8,10 @@ import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitia
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
+import {
+  requireVirtualizedPixelOffsetRequest,
+  type VirtualizedPixelOffsetRequest,
+} from "./virtualizedPixelOffsetRequest";
 
 export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 
@@ -43,6 +47,7 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   onScrollElementChange?: ((element: HTMLDivElement | null) => void) | undefined;
   pinnedItemKeys?: ReadonlySet<string> | undefined;
+  pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
 }>;
 
 export function VirtualizedInfiniteList<TItem>({
@@ -77,7 +82,9 @@ export function VirtualizedInfiniteList<TItem>({
   nextBoundary,
   onScrollElementChange,
   pinnedItemKeys,
+  pixelOffsetRequest,
 }: VirtualizedInfiniteListProps<TItem>) {
+  const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const setScrollElement = useCallback(
     (element: HTMLDivElement | null) => {
@@ -87,6 +94,7 @@ export function VirtualizedInfiniteList<TItem>({
     [onScrollElementChange],
   );
   const lastInitialScrollKeyRef = useRef<string | null>(null);
+  const lastPixelOffsetKeyRef = useRef<string | null>(null);
   const lastLoadPreviousKeyRef = useRef<string | null>(null);
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
@@ -245,6 +253,19 @@ export function VirtualizedInfiniteList<TItem>({
     items,
     virtualizer,
   ]);
+
+  useEffect(() => {
+    if (
+      validatedPixelOffsetRequest === undefined ||
+      items.length === 0 ||
+      scrollRef.current === null ||
+      lastPixelOffsetKeyRef.current === validatedPixelOffsetRequest.key
+    ) {
+      return;
+    }
+    lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
+    virtualizer.scrollToOffset(validatedPixelOffsetRequest.offsetPx, { behavior: "auto" });
+  }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);

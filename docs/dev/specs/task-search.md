@@ -6,6 +6,7 @@
 - Search includes every Task lifecycle status by default. Repeatable/comma-separated typed `--status` filters use the same primary Task-status values as task listing.
 - The default positional query is one literal substring. Search operators and punctuation have no special meaning in this mode. Literal hits are non-overlapping occurrences ordered from left to right in their source.
 - Default literal matching ignores case and removable diacritics according to the FTS5 trigram search contract. It does not promise universal Unicode case folding or universal diacritic equivalence. `--case-sensitive` requires exact original case and diacritics.
+- Literal mode also searches Task Short IDs as case-insensitive substrings. `--case-sensitive` does not change Short ID matching.
 - `--fts5` interprets the positional query as a raw FTS5 expression with public `title`, `body`, and `comment` columns. One raw-mode hit represents one matching title, Task-body, or Comment-body source document with one selected snippet, not one phrase occurrence. `--case-sensitive` is invalid with `--fts5`.
 - Raw FTS5 snippets use empty highlight and omission markers. Clients do not add raw omission markers.
 - Raw boolean terms must match within one source document; terms split between a Task title and body do not jointly satisfy one expression.
@@ -13,10 +14,14 @@
 - `--context` defaults to `20` and accepts `1..64`. Literal mode returns that many Unicode grapheme clusters on each side of an occurrence. Raw FTS5 mode uses it as the snippet token budget.
 - Literal results separate original `before`, `match`, and `after` text and identify truncation on each side. Clients add one `…` on each side where text was omitted.
 - A normalized literal match includes every complete original grapheme cluster that contributed to the match, including removed combining marks. `match` never splits an original grapheme. Case-sensitive mode requires exact original code points and does not equate NFC and NFD spellings.
+- Each Task with a matching Short ID contributes exactly one Short ID hit. If the query occurs more than once in the Short ID, that hit uses the first left-to-right occurrence.
+- A Short ID hit contributes to the Task's total hit count and breadth-first pagination.
 - A successful Task or Comment creation, edit, or deletion is reflected in search immediately. If Kent cannot update search, the source change fails and remains unapplied.
-- Search ranks each Task by its strongest matching title, body, or Comment under the requested mode. A case-insensitive candidate without a case-sensitive occurrence cannot retain or rank a Task in case-sensitive mode.
+- In literal mode, a complete Short ID match or a query equal to the canonical decimal form of the Task's project-local sequence ranks before every partial Short ID match.
+- In literal mode, every partial Short ID match ranks before every Task retained only by a title, body, or Comment match.
+- Among Tasks without a Short ID match, Search ranks each Task by its strongest matching title, body, or Comment under the requested mode. A case-insensitive text candidate without a case-sensitive occurrence cannot retain or rank a Task in case-sensitive mode.
 - Ranking weights title, body, and Comment sources. A strong body match can outrank another Task's weaker title match. Title-before-body-before-Comment is absolute only for hit order within one Task.
-- Within one Task, title occurrences precede body occurrences. Task title and body results precede Comment results. Remaining ties are deterministic.
+- Within one Task, a Short ID hit precedes title occurrences. Title occurrences precede body occurrences. Task title and body results precede Comment results. Remaining ties are deterministic.
 - Search pagination is breadth-first by per-Task hit ordinal: every matching Task's first hit precedes any Task's second hit, and so on. Later pages may repeat a Task with later hits.
 - Each hit ordinal is 1-based. Each page selects hits in breadth-first order and then groups the selected hits by Task. Task groups follow the order of their first selected hit. Hits inside a group retain their absolute per-Task order.
 - Equal-rank Comment hits use newest-first creation time. Equal creation times use persistent Comment ID descending as the final Comment tie-breaker.
@@ -24,13 +29,13 @@
 - When more hits exist, `next_offset` equals the request offset plus the number of returned hits. A continuation repeats the same search choices with that offset.
 - When more hits exist, the CLI writes `Next offset: `<n>`` to standard error after either plain or JSON output.
 - Search does not retain or persist pagination state between requests. A changed result set can make a later offset repeat or skip hits.
-- Plain output renders `SHORT-ID: title`, unlabeled title/body hit lines, a lowercase `comments:` heading only when the page contains Comment hits for that Task, Comment hit lines, and `[N more hits]` when later hits remain. It exposes no line numbers, persistent Comment IDs, status, workflow, score, author, or date.
+- Plain output renders `SHORT-ID: title`, unlabeled title/body hit lines, a lowercase `comments:` heading only when the page contains Comment hits for that Task, Comment hit lines, and `[N more hits]` when later hits remain. When a page contains a Short ID hit, the `SHORT-ID: title` header represents it without a duplicate fragment line. Plain output exposes no line numbers, persistent Comment IDs, status, workflow, score, author, or date.
 - Plain literal hits use `…` only on a side with omitted source text. Plain output trims fragment edges, folds Unicode whitespace runs to one ASCII space, never terminal-width-truncates, and emits each hit as one physical terminal line; structured output preserves the original segments.
 - A valid empty search prints `No matches.` and succeeds.
 - JSON output is an object with `mode`, `groups`, and optional `next_offset`. `mode` is the discriminator and is either `literal` or `fts5`. Empty results use `groups: []`; an absent next offset is omitted.
 - Each JSON group has exactly `project_id`, `project_key`, `task_id`, `short_id`, `workflow_id`, `title`, `status`, `total_hit_count`, and `hits`.
 - Each JSON `status` has `kind`, `native_state`, optional `node_ids`, and optional `attention_types`.
-- Each JSON hit has exactly `ordinal`, `source`, and one mode payload. `source` has `kind` and optional `comment_id`. `source.kind` is `title`, `body`, or `comment`. Comment hits include `comment_id`; title and body hits omit it.
+- Each JSON hit has exactly `ordinal`, `source`, and one mode payload. `source` has `kind` and optional `comment_id`. `source.kind` is `short_id`, `title`, `body`, or `comment`. Comment hits include `comment_id`; Short ID, title, and body hits omit it.
 - Literal-mode hits have `literal` and omit `fts5`. `literal` has `before`, `match`, `after`, `left_truncated`, and `right_truncated`.
 - Raw-mode hits have `fts5` and omit `literal`. `fts5` has `snippet`.
 - JSON output does not expose ranking scores or a flat duplicate hit list.
@@ -41,4 +46,7 @@
 - Persisted Task fields in one response use one point-in-time view. Live Task activity is observed separately.
 - Task status and status filtering combine that durable view with the separately captured live activity view.
 - If a Workflow transition overlaps the request, the response may briefly combine durable fields from before the transition with live status facts from after it, or the reverse. Search text, hit counts, filters, and source metadata remain internally consistent.
+- Short ID candidate selection must not scan every persisted Task.
+- Task Search must support Short ID matching in a persistence root with up to 1,000,000 Tasks.
+- The supported size boundary does not promise a numeric response time.
 - Search does not retain all matching Tasks, sources, or occurrences in memory.

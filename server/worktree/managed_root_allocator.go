@@ -109,7 +109,7 @@ func (a *managedRootAllocator) automaticBase() (string, error) {
 	return a.base.path, nil
 }
 
-func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string, error) {
+func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string, sourceWorkspaceRoot string) (string, error) {
 	trimmed := strings.TrimSpace(requestedRoot)
 	if trimmed == "" {
 		return "", errors.New("requested managed worktree root is required")
@@ -118,22 +118,81 @@ func (a *managedRootAllocator) resolveExplicitRoot(requestedRoot string) (string
 	if err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(expanded) {
-		return config.CanonicalWorkspaceRoot(expanded)
-	}
 	base, err := a.automaticBase()
 	if err != nil {
 		return "", err
 	}
-	cleaned := filepath.Clean(expanded)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("relative worktree root %q escapes base dir", requestedRoot)
+	var candidate string
+	if filepath.IsAbs(expanded) {
+		candidate = expanded
+	} else {
+		cleaned := filepath.Clean(expanded)
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("relative worktree root %q escapes base dir", requestedRoot)
+		}
+		candidate = filepath.Join(base, cleaned)
 	}
-	candidate := filepath.Join(base, cleaned)
-	if !sameOrDescendantPath(base, candidate) {
-		return "", fmt.Errorf("managed worktree path %q escapes base %q", candidate, base)
+	resolved, err := config.ResolveExistingAncestorRealPath(candidate)
+	if err != nil {
+		return "", err
 	}
-	return config.CanonicalWorkspaceRoot(candidate)
+	return a.validateResolvedRoot(resolved, sourceWorkspaceRoot, requestedRoot)
+}
+
+func (a *managedRootAllocator) validatePersistedRoot(root string, sourceWorkspaceRoot string) (string, error) {
+	resolved, err := config.ResolveExistingPathRealPath(strings.TrimSpace(root))
+	if err != nil {
+		return "", fmt.Errorf("resolve persisted managed worktree root: %w", err)
+	}
+	return a.validateResolvedRoot(resolved, sourceWorkspaceRoot, root)
+}
+
+func (a *managedRootAllocator) validateResolvedRoot(resolved string, sourceWorkspaceRoot string, requestedRoot string) (string, error) {
+	base, err := a.automaticBase()
+	if err != nil {
+		return "", err
+	}
+	if !sameOrDescendantPath(base, resolved) {
+		return "", fmt.Errorf("managed worktree root %q is outside base %q", requestedRoot, base)
+	}
+	source, err := config.CanonicalWorkspaceRoot(sourceWorkspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize source workspace root: %w", err)
+	}
+	if sameOrDescendantPath(source, resolved) || sameOrDescendantPath(resolved, source) {
+		return "", fmt.Errorf("managed worktree root %q overlaps source workspace %q", requestedRoot, source)
+	}
+	return resolved, nil
+}
+
+func (a *managedRootAllocator) validateNoManagedRootOverlap(candidate string, existingRoots []string, exemptRoot *string) error {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return errors.New("managed worktree root is required")
+	}
+	var normalizedExemptRoot *string
+	if exemptRoot != nil {
+		normalized := strings.TrimSpace(*exemptRoot)
+		if normalized == "" {
+			return errors.New("exempt managed worktree root is required")
+		}
+		normalizedExemptRoot = &normalized
+	}
+	for _, existingRoot := range existingRoots {
+		existingRoot = strings.TrimSpace(existingRoot)
+		if existingRoot == "" {
+			return errors.New("existing managed worktree root is required")
+		}
+		if normalizedExemptRoot != nil &&
+			sameOrDescendantPath(existingRoot, *normalizedExemptRoot) &&
+			sameOrDescendantPath(*normalizedExemptRoot, existingRoot) {
+			continue
+		}
+		if sameOrDescendantPath(existingRoot, candidate) || sameOrDescendantPath(candidate, existingRoot) {
+			return fmt.Errorf("managed worktree root %q overlaps existing managed worktree root %q", candidate, existingRoot)
+		}
+	}
+	return nil
 }
 
 func (a *managedRootAllocator) ensureWorkspaceParent(workspaceRoot string) (string, error) {

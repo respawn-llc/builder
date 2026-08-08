@@ -1,194 +1,118 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
-  SidebarContext,
-  type SidebarCanceledResult,
-  type SidebarCancelReason,
-  type SidebarDestination,
-  type SidebarPhase,
-  type SidebarResult,
-} from "@/app-facade";
-import {
+  SidebarRootContext,
+  SidebarShellContext,
+  initialSidebarWidthForViewport,
   sidebarSizePreference,
   sidebarWidthProfile,
   sidebarWidthProfileEquals,
+  type ResolvedSidebarWidth,
+  type SidebarDestination,
+  type SidebarDestinationPolicy,
+  type SidebarNavigationOutcome,
   type SidebarWidthProfile,
 } from "@/app-facade";
-import { initialSidebarWidthForViewport, type ResolvedSidebarWidth } from "@/app-facade";
+import {
+  createSidebarStack,
+  emptySidebarStackView,
+  type SidebarStackView,
+} from "./sidebarStack";
+import { SidebarCurrentPageContext, type SidebarCurrentPage } from "./sidebarPageContext";
 
-const sidebarExitAnimationMs = 140;
-type SidebarWidthEntry = Readonly<{
-  profile: SidebarWidthProfile;
-  widthPx: number;
-}>;
-type SidebarWidths = readonly SidebarWidthEntry[];
 const defaultSidebarWidthProfile: SidebarWidthProfile = { kind: "custom", sizing: null };
-
-type PendingSidebar = Readonly<{
-  resolve: (result: SidebarResult) => void;
-}>;
-
-export function SidebarProvider({ children }: Readonly<{ children: ReactNode }>) {
-  const [activeDestination, setActiveDestination] = useState<SidebarDestination | null>(null);
+type SidebarWidthEntry = Readonly<{ profile: SidebarWidthProfile; widthPx: number }>;
+type SidebarWidths = readonly SidebarWidthEntry[];
+export function SidebarProvider({
+  children,
+  policy,
+}: Readonly<{ children: ReactNode; policy: SidebarDestinationPolicy }>) {
+  const [view, setView] = useState<SidebarStackView>(emptySidebarStackView);
   const [activeWidthProfile, setActiveWidthProfile] =
     useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
-  const [phase, setPhase] = useState<SidebarPhase>("open");
   const [sidebarWidths, setSidebarWidths] = useState<SidebarWidths>(() => [
     { profile: defaultSidebarWidthProfile, widthPx: defaultSidebarWidth() },
   ]);
-  const sidebarWidthPx =
-    sidebarWidthForProfile(sidebarWidths, activeWidthProfile) ?? defaultSidebarWidth(activeDestination);
-  const activeDestinationRef = useRef<SidebarDestination | null>(activeDestination);
-  const pendingRef = useRef<PendingSidebar | null>(null);
-  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearCloseTimeout = useCallback(() => {
-    if (closeTimeoutRef.current !== null) {
-      clearTimeout(closeTimeoutRef.current);
-      closeTimeoutRef.current = null;
-    }
-  }, []);
-
-  const animateClosed = useCallback(() => {
-    clearCloseTimeout();
-    setPhase("closing");
-    closeTimeoutRef.current = setTimeout(() => {
-      closeTimeoutRef.current = null;
-      setActiveDestination(null);
-      setPhase("open");
-    }, sidebarExitAnimationMs);
-  }, [clearCloseTimeout]);
-
-  const closeSidebar = useCallback(
-    (reason: SidebarCancelReason = "closed") => {
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      pending?.resolve({ status: "canceled", reason });
-      if (activeDestinationRef.current !== null) {
-        animateClosed();
-      }
-    },
-    [animateClosed],
-  );
-
-  const openSidebar = useCallback(
-    async (destination: SidebarDestination): Promise<SidebarResult> => {
-      clearCloseTimeout();
-      const nextProfile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(nextProfile);
-      setSidebarWidths((current) => {
-        if (sidebarWidthForProfile(current, nextProfile) !== undefined) {
-          return current;
-        }
-        return [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }];
-      });
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      pending?.resolve({ status: "canceled", reason: "replaced" });
-      setPhase("open");
-      activeDestinationRef.current = destination;
-      setActiveDestination(destination);
-      return new Promise<SidebarResult>((resolve) => {
-        pendingRef.current = { resolve };
-      });
-    },
-    [clearCloseTimeout],
-  );
-
-  const completeCurrent = useCallback(
-    (
-      expected: SidebarDestination,
-      result: Exclude<SidebarResult, SidebarCanceledResult>,
-    ): "accepted" | "stale" => {
-      if (activeDestinationRef.current !== expected || pendingRef.current === null) {
-        return "stale";
-      }
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      pending.resolve(result);
-      animateClosed();
-      return "accepted";
-    },
-    [animateClosed],
-  );
-
-  const replaceSidebar = useCallback(
-    (destination: SidebarDestination): void => {
-      if (activeDestinationRef.current === null || pendingRef.current === null) {
-        throw new Error("Sidebar replacement requires an active destination lifecycle.");
-      }
-      clearCloseTimeout();
-      const nextProfile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(nextProfile);
+  const publish = useCallback((next: SidebarStackView) => {
+    const destination = next.entries.at(-1)?.destination;
+    if (destination !== undefined) {
+      const profile = sidebarWidthProfile(destination);
+      setActiveWidthProfile(profile);
       setSidebarWidths((current) =>
-        sidebarWidthForProfile(current, nextProfile) === undefined
-          ? [...current, { profile: nextProfile, widthPx: defaultSidebarWidth(destination) }]
+        sidebarWidthForProfile(current, profile) === undefined
+          ? [...current, { profile, widthPx: defaultSidebarWidth(destination) }]
           : current,
       );
-      setPhase("open");
-      activeDestinationRef.current = destination;
-      setActiveDestination(destination);
-    },
-    [clearCloseTimeout],
-  );
-
-  const resolveSidebar = useCallback(
-    (result: Exclude<SidebarResult, SidebarCanceledResult>) => {
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      pending?.resolve(result);
-      if (activeDestinationRef.current !== null) {
-        animateClosed();
-      }
-    },
-    [animateClosed],
-  );
-
-  const resizeSidebar = useCallback(
+    }
+    setView(next);
+  }, []);
+  const [stack] = useState(() => createSidebarStack(policy, publish));
+  const resize = useCallback(
     (width: ResolvedSidebarWidth) => {
       setSidebarWidths((current) => setSidebarWidthForProfile(current, activeWidthProfile, width.px));
     },
     [activeWidthProfile],
   );
 
-  useEffect(() => {
-    return clearCloseTimeout;
-  }, [clearCloseTimeout]);
+  useEffect(() => stack.dispose, [stack]);
 
-  useEffect(() => {
-    activeDestinationRef.current = activeDestination;
-  }, [activeDestination]);
-
-  const value = useMemo(
+  const current = view.entries.at(-1);
+  const availability = current?.capability.availability;
+  const rootValue = useMemo(() => ({ open: stack.open }), [stack]);
+  const shellValue = useMemo(
     () => ({
-      activeDestination,
-      closeSidebar,
-      completeCurrent,
-      openSidebar,
-      replaceSidebar,
-      phase,
-      resizeSidebar,
-      resolveSidebar,
-      sidebarWidthPx,
+      activeDestination: current?.destination ?? null,
+      back: (): SidebarNavigationOutcome =>
+        current === undefined || view.entries.length === 1 || availability?.back === false
+          ? "unavailable"
+          : current.navigator.back(),
+      backAvailable: availability?.back ?? true,
+      canGoBack: view.entries.length > 1,
+      close: (): SidebarNavigationOutcome =>
+        current === undefined || availability?.close === false
+          ? "unavailable"
+          : current.navigator.close(),
+      closeAvailable: availability?.close ?? true,
+      phase: view.phase,
+      resize,
+      sidebarWidthPx:
+        sidebarWidthForProfile(sidebarWidths, activeWidthProfile) ??
+        defaultSidebarWidth(current?.destination),
+      transitionDirection: view.transitionDirection,
     }),
-    [
-      activeDestination,
-      closeSidebar,
-      completeCurrent,
-      openSidebar,
-      phase,
-      replaceSidebar,
-      resizeSidebar,
-      resolveSidebar,
-      sidebarWidthPx,
-    ],
+    [activeWidthProfile, availability, current, resize, sidebarWidths, view],
   );
+  const pageValue = useMemo<SidebarCurrentPage | null>(() => {
+    if (current === undefined) {
+      return null;
+    }
+    return current.retainedState === undefined
+      ? {
+          Boundary: current.Boundary,
+          destination: current.destination,
+          navigator: current.navigator,
+        }
+      : {
+          Boundary: current.Boundary,
+          destination: current.destination,
+          navigator: current.navigator,
+          retainedState: current.retainedState,
+        };
+  }, [current]);
 
-  return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;
+  return (
+    <SidebarRootContext.Provider value={rootValue}>
+      <SidebarShellContext.Provider value={shellValue}>
+        <SidebarCurrentPageContext.Provider value={pageValue}>
+          {children}
+        </SidebarCurrentPageContext.Provider>
+      </SidebarShellContext.Provider>
+    </SidebarRootContext.Provider>
+  );
 }
 
-function defaultSidebarWidth(destination: SidebarDestination | null = null): number {
-  const sizePreference = sidebarSizePreference(destination);
+function defaultSidebarWidth(destination?: SidebarDestination): number {
+  const sizePreference = sidebarSizePreference(destination ?? null);
   if (typeof window === "undefined") {
     return initialSidebarWidthForViewport(0, sizePreference);
   }

@@ -11,7 +11,7 @@ import {
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
@@ -39,7 +39,6 @@ import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
 import { useBoardResumeAction } from "./useBoardResumeAction";
-import { taskDetailRouteShouldClose } from "./taskDetailRouteLifecycle";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
@@ -79,12 +78,13 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
   const reportBoardLoadError = useBoardLoadErrorReporter();
   const membershipRefreshRef = useRef<BoardMembershipRefreshRef["current"]>(ignoreBoardMembershipRefresh);
   return (
-    <ProjectLabelsProvider
+    <SidebarRootOwner>
+      <ProjectLabelsProvider
       onBackgroundError={reportBoardLoadError}
       onMembershipRefresh={async (effect) => membershipRefreshRef.current(effect)}
       projectID={projectId}
       subscribeToProject={false}
-    >
+      >
       <BoardRouteWithLabels
         membershipRefreshRef={membershipRefreshRef}
         onBackgroundError={reportBoardLoadError}
@@ -92,7 +92,8 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
         selectedTaskId={selectedTaskId}
         workflowId={workflowId}
       />
-    </ProjectLabelsProvider>
+      </ProjectLabelsProvider>
+    </SidebarRootOwner>
   );
 }
 
@@ -142,7 +143,6 @@ function BoardRouteData({
   const { t } = useTranslation();
   const { push } = useStatusController();
   const navigation = useAppNavigation();
-  const { activeDestination, closeSidebar } = useSidebar();
   const reportBoardNavigationError = useCallback(
     (error: unknown) => {
       push({
@@ -162,17 +162,11 @@ function BoardRouteData({
     // The task detail sidebar is opened independently of the route, so closing
     // the route task alone would leave it mounted and refetching the now-deleted
     // task into an error state. Close it too when it targets the deleted task.
-    if (activeDestination?.kind === "taskDetail" && activeDestination.taskID === selectedTaskId) {
-      closeSidebar();
-    }
     void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
   }, [
-    activeDestination,
-    closeSidebar,
     navigation,
     projectId,
     reportBoardNavigationError,
-    selectedTaskId,
     workflowId,
   ]);
   useProjectBoardSubscription(projectId, workflowId, {
@@ -244,7 +238,7 @@ function BoardContent({
     stopDragAutoScroll();
     setActiveDrag(null);
   }, [stopDragAutoScroll]);
-  const { activeDestination, openSidebar, replaceSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
@@ -342,13 +336,14 @@ function BoardContent({
       return;
     }
     let active = true;
-    void openSidebar({
+    const root = open({
       kind: "taskDetail",
       mode: "overlay",
       onMutated: undefined,
       taskID: selectedTaskId,
-    }).then((result) => {
-      if (active && taskDetailRouteShouldClose(result)) {
+    });
+    void root.lifecycle.then((outcome) => {
+      if (active && outcome === "closed") {
         void navigation
           .closeProjectTask(board.projectID, board.selectedWorkflow.id)
           .catch(reportNavigationError);
@@ -356,12 +351,13 @@ function BoardContent({
     });
     return () => {
       active = false;
+      root.release();
     };
   }, [
     board.projectID,
     board.selectedWorkflow.id,
     navigation,
-    openSidebar,
+    open,
     reportNavigationError,
     selectedTaskId,
   ]);
@@ -527,11 +523,7 @@ function BoardContent({
       mode: "overlay" as const,
       taskID,
     };
-    if (activeDestination?.kind === "taskDetail") {
-      replaceSidebar(destination);
-      return;
-    }
-    void openSidebar(destination);
+    open(destination);
   }
 
   function selectWorkflow(workflowID: string): void {
@@ -545,7 +537,7 @@ function BoardContent({
   }
 
   function openNewTask(): void {
-    void openSidebar({
+    open({
       boardQueryWorkflowID,
       kind: "newTask",
       mode: "overlay",
@@ -555,7 +547,7 @@ function BoardContent({
   }
 
   function openLinkWorkflow(): void {
-    void openSidebar({
+    open({
       kind: "linkWorkflow",
       mode: "overlay",
       projectID: board.projectID,

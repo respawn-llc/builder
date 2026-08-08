@@ -68,8 +68,9 @@ func outsideUpdateApprovalError(
 }
 
 func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
+	commentary := "not allowed by policy"
 	errMessage, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: "not allowed by policy"}, nil
+		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: &commentary}, nil
 	})
 	want := "Patch failed: user denied the edit for " + target + ".\nUser said: not allowed by policy"
 	if errMessage != want {
@@ -265,6 +266,20 @@ func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
 	assertAlias("/var/tmp", "/private/var/tmp")
 }
 
+func TestExistingPathAliasesIgnoreMissingOrNonDirectoryRoots(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if aliases := existingPathAliases(missing); len(aliases) != 0 {
+		t.Fatalf("missing path aliases = %v, want none", aliases)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a root"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if aliases := existingPathAliases(file); len(aliases) != 0 {
+		t.Fatalf("file path aliases = %v, want none", aliases)
+	}
+}
+
 func findCaseVariantExistingAlias(path string) (string, bool) {
 	canonical := filepath.Clean(path)
 	canonicalInfo, err := os.Stat(canonical)
@@ -390,13 +405,13 @@ func toolError(t *testing.T, result tools.Result) string {
 }
 
 type toolFailureErrorPayload struct {
-	Error      string `json:"error"`
-	Kind       string `json:"kind,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	NearLine   bool   `json:"near_line,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	Commentary string `json:"commentary,omitempty"`
+	Error      string  `json:"error"`
+	Kind       string  `json:"kind,omitempty"`
+	Path       string  `json:"path,omitempty"`
+	Line       int     `json:"line,omitempty"`
+	NearLine   bool    `json:"near_line,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Commentary *string `json:"commentary,omitempty"`
 }
 
 func toolFailurePayload(t *testing.T, result tools.Result) toolFailureErrorPayload {

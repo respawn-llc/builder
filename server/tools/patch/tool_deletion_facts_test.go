@@ -95,7 +95,7 @@ func TestCommitDeletionFactsUseRemovedSnapshotAndDisappearOnRollback(t *testing.
 			t.Fatalf("seed target: %v", err)
 		}
 		id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 4}
-		facts, err := commitStagedFiles(nil, map[string]wholeFileDeletionTarget{
+		facts, err := commitStagedFiles(nil, nil, map[string]wholeFileDeletionTarget{
 			target: {OperationIDs: []patchformat.WholeFileDeletionOperationID{id}},
 		})
 		if err != nil || len(facts) != 1 ||
@@ -121,6 +121,7 @@ func TestCommitDeletionFactsUseRemovedSnapshotAndDisappearOnRollback(t *testing.
 		}
 		t.Cleanup(func() { _ = os.Remove(stage) })
 		facts, err := commitStagedFiles(
+			nil,
 			[]*patchFileState{{Exists: true, NewPath: blocker, Original: blocker, StagedPath: stage}},
 			map[string]wholeFileDeletionTarget{
 				deleteTarget: {OperationIDs: []patchformat.WholeFileDeletionOperationID{{HunkOrdinal: 0}}},
