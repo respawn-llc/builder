@@ -170,18 +170,9 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 			if _, exists := currentNodeKeys[key]; !exists {
 				return "", fmt.Errorf("workflow lifecycle queued Run has no Current Node override: %v", queued)
 			}
-			running := false
-			for _, exactKey := range exactScopes {
-				if exactKey == key {
-					running = true
-					break
-				}
-			}
-			if !running {
-				state.HasQueued = true
-			}
 		}
 		matchedExact := make(map[runtimeids.ExecutionScopeID]struct{}, len(exactScopes))
+		executionStatuses := make([]workflowstore.LifecycleTaskExecutionStatus, 0, len(exactScopes))
 		for _, execution := range observation.Executions[taskID].Executions {
 			key, err := execution.Ref.CurrentNode.Key()
 			if err != nil {
@@ -200,11 +191,11 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 				)
 			}
 			matchedExact[execution.ScopeID] = struct{}{}
-			state.HasRunning = true
-			state.WaitingQuestion = state.WaitingQuestion ||
-				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion)
-			state.HasWaitingApproval = state.HasWaitingApproval ||
-				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval)
+			executionStatuses = append(executionStatuses, workflowstore.LifecycleTaskExecutionStatus{
+				CurrentNode:     execution.Ref.CurrentNode,
+				WaitingQuestion: execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion),
+				WaitingApproval: execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval),
+			})
 		}
 		if len(matchedExact) != len(exactScopes) {
 			return "", fmt.Errorf(
@@ -214,6 +205,14 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 				len(matchedExact),
 			)
 		}
+		status, err := workflowstore.DeriveLifecycleTaskStatus(taskID, lifecycle.QueuedCurrentNodes, executionStatuses)
+		if err != nil {
+			return "", err
+		}
+		state.HasRunning = status.HasRunning
+		state.HasQueued = status.HasQueued
+		state.WaitingQuestion = status.WaitingQuestion
+		state.HasWaitingApproval = status.WaitingApproval
 		states = append(states, state)
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })

@@ -1367,38 +1367,43 @@ func lifecycleTaskState(root lifecycleRoot, rawTaskID string) (sqlitegen.Lifecyc
 	if !owned {
 		return sqlitegen.LifecycleTaskQueryState{}, nil
 	}
-	state := sqlitegen.LifecycleTaskStateOwned
-	nodeIDs := make(map[workflow.NodeID]struct{}, len(entry.runs))
-	for key := range entry.runs {
-		nodeIDs[entry.runs[key].NodeID] = struct{}{}
-		if _, running := entry.exact[key]; running {
-			state |= sqlitegen.LifecycleTaskStateRunning
-		} else {
-			state |= sqlitegen.LifecycleTaskStateQueued
-		}
+	queued := make([]workflow.CurrentNodeReference, 0, len(entry.runs))
+	for _, reference := range entry.runs {
+		queued = append(queued, reference)
 	}
+	executions := make([]LifecycleTaskExecutionStatus, 0, len(entry.exact))
 	for _, exact := range entry.exact {
-		state |= sqlitegen.LifecycleTaskStateRunning
+		execution := LifecycleTaskExecutionStatus{CurrentNode: exact.CurrentNode}
 		for _, prompt := range exact.PendingPrompts {
 			switch prompt.Kind {
 			case LifecyclePendingPromptQuestion:
-				state |= sqlitegen.LifecycleTaskStateWaitingQuestion
+				execution.WaitingQuestion = true
 			case LifecyclePendingPromptSessionApproval:
-				state |= sqlitegen.LifecycleTaskStateWaitingApproval
+				execution.WaitingApproval = true
 			default:
 				return sqlitegen.LifecycleTaskQueryState{}, fmt.Errorf("lifecycle Task %q has invalid pending prompt kind %d", taskID, prompt.Kind)
 			}
 		}
+		executions = append(executions, execution)
 	}
-	currentNodeIDs := make([]string, 0, len(nodeIDs))
-	for nodeID := range nodeIDs {
-		currentNodeIDs = append(currentNodeIDs, string(nodeID))
+	status, err := DeriveLifecycleTaskStatus(taskID, queued, executions)
+	if err != nil {
+		return sqlitegen.LifecycleTaskQueryState{}, err
 	}
-	sort.Strings(currentNodeIDs)
-	return sqlitegen.LifecycleTaskQueryState{
-		Flags:          state,
-		CurrentNodeIDs: currentNodeIDs,
-	}, nil
+	flags := sqlitegen.LifecycleTaskStateOwned
+	if status.HasRunning {
+		flags |= sqlitegen.LifecycleTaskStateRunning
+	}
+	if status.HasQueued {
+		flags |= sqlitegen.LifecycleTaskStateQueued
+	}
+	if status.WaitingQuestion {
+		flags |= sqlitegen.LifecycleTaskStateWaitingQuestion
+	}
+	if status.WaitingApproval {
+		flags |= sqlitegen.LifecycleTaskStateWaitingApproval
+	}
+	return sqlitegen.LifecycleTaskQueryState{Flags: flags}, nil
 }
 
 func (p *LifecyclePublication) Close() error {

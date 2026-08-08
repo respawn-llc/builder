@@ -689,28 +689,9 @@ func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
 	}
 }
 
-func TestTaskListAppliesPinnedLifecycleOverrideBeforeColumnAndStatusFilters(t *testing.T) {
+func TestTaskListAppliesPinnedLifecycleStatusBeforeColumnAndStatusFilters(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Pinned List task")
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	overrideNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
-	overrideNodeKey := ""
-	for _, node := range definition.Nodes {
-		if workflow.NodeIDOf(node) == overrideNodeID {
-			overrideNodeKey = string(workflow.NodeKey(node))
-			break
-		}
-	}
-	if overrideNodeKey == "" {
-		t.Fatalf("override node %q has no key", overrideNodeID)
-	}
-	overrideReference, err := workflow.NewCurrentNodeReference(started.task.ID, overrideNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference override: %v", err)
-	}
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
@@ -720,8 +701,8 @@ func TestTaskListAppliesPinnedLifecycleOverrideBeforeColumnAndStatusFilters(t *t
 			observation: workflowexecution.WorkflowTaskExecutionObservation{
 				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
 					started.task.ID: {
-						CurrentNodes:       []workflow.CurrentNode{{Reference: overrideReference}},
-						QueuedCurrentNodes: []workflow.CurrentNodeReference{overrideReference},
+						CurrentNodes:       []workflow.CurrentNode{{Reference: started.currentNode}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{started.currentNode},
 					},
 				},
 			},
@@ -744,7 +725,7 @@ func TestTaskListAppliesPinnedLifecycleOverrideBeforeColumnAndStatusFilters(t *t
 	page, err := taskList.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
-		ColumnKeys:  []string{overrideNodeKey},
+		ColumnKeys:  []string{"agent"},
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued},
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		Limit:       &limit,
@@ -756,7 +737,7 @@ func TestTaskListAppliesPinnedLifecycleOverrideBeforeColumnAndStatusFilters(t *t
 		page.Tasks[0].TaskID != string(started.task.ID) ||
 		page.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
 		page.Tasks[0].ColumnKeys == nil ||
-		!slices.Equal(*page.Tasks[0].ColumnKeys, []string{overrideNodeKey}) {
+		!slices.Equal(*page.Tasks[0].ColumnKeys, []string{"agent"}) {
 		t.Fatalf("Task List pinned lifecycle page = %+v", page.Tasks)
 	}
 	if page.NextOffset != nil {

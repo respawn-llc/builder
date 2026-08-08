@@ -28,11 +28,7 @@
 {{.Indent}}            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
 {{.Indent}}            ELSE durable.primary_status_rank
 {{.Indent}}        END AS INTEGER) AS primary_status_rank,
-{{.Indent}}        CASE
-{{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) != 0
-{{.Indent}}                THEN kent_lifecycle_current_node_ids_v1({{.LifecycleStateToken}}, durable.task_id)
-{{.Indent}}            ELSE durable.node_ids_json
-{{.Indent}}        END AS node_ids_json,
+{{.Indent}}        durable.node_ids_json,
 {{.Indent}}        CASE
 {{.Indent}}            WHEN (kent_lifecycle_task_state_v1({{.LifecycleStateToken}}, durable.task_id) & 1) = 0
 {{.Indent}}              AND durable.is_done != 0 THEN durable.attention_types_json

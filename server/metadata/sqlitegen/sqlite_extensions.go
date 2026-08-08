@@ -2,7 +2,6 @@ package sqlitegen
 
 import (
 	"database/sql/driver"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,7 +19,6 @@ const LabelCollationName = "kent_label_casefold_v1"
 const LabelFoldFunctionName = "kent_label_casefold_v1_fold"
 const LiteralOccurrenceCountFunctionName = "kent_task_search_occurrence_count_v1"
 const LifecycleTaskStateFunctionName = "kent_lifecycle_task_state_v1"
-const LifecycleCurrentNodeIDsFunctionName = "kent_lifecycle_current_node_ids_v1"
 
 const (
 	LifecycleTaskStateOwned int64 = 1 << iota
@@ -31,8 +29,7 @@ const (
 )
 
 type LifecycleTaskQueryState struct {
-	Flags          int64
-	CurrentNodeIDs []string
+	Flags int64
 }
 
 type LifecycleTaskStateResolver func(taskID string) (LifecycleTaskQueryState, error)
@@ -102,16 +99,6 @@ func RegisterSQLiteExtensions() error {
 			}
 			return
 		}
-		if err := sqlitedriver.RegisterScalarFunction(
-			LifecycleCurrentNodeIDsFunctionName,
-			2,
-			lifecycleCurrentNodeIDs,
-		); err != nil {
-			registrationErr = &RegistrationError{
-				ExtensionName: LifecycleCurrentNodeIDsFunctionName,
-				Cause:         err,
-			}
-		}
 	})
 	return registrationErr
 }
@@ -140,25 +127,6 @@ func lifecycleTaskState(_ *sqlitedriver.FunctionContext, arguments []driver.Valu
 		return nil, err
 	}
 	return state.Flags, nil
-}
-
-func lifecycleCurrentNodeIDs(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {
-	resolver, taskID, err := lifecycleTaskStateResolver(arguments)
-	if err != nil {
-		return nil, err
-	}
-	state, err := resolver(taskID)
-	if err != nil {
-		return nil, err
-	}
-	if state.Flags&LifecycleTaskStateOwned == 0 {
-		return nil, nil
-	}
-	encoded, err := json.Marshal(state.CurrentNodeIDs)
-	if err != nil {
-		return nil, fmt.Errorf("encode SQLite lifecycle Current Node ids: %w", err)
-	}
-	return string(encoded), nil
 }
 
 func lifecycleTaskStateResolver(arguments []driver.Value) (LifecycleTaskStateResolver, string, error) {

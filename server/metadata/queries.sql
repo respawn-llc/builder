@@ -1763,11 +1763,7 @@ effective_status AS (
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
             ELSE durable.primary_status_rank
         END AS INTEGER) AS primary_status_rank,
-        CASE
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) != 0
-                THEN kent_lifecycle_current_node_ids_v1((SELECT lifecycle_state_token FROM args), durable.task_id)
-            ELSE durable.node_ids_json
-        END AS node_ids_json,
+        durable.node_ids_json,
         CASE
             WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 1) = 0
               AND durable.is_done != 0 THEN durable.attention_types_json
@@ -1794,19 +1790,14 @@ effective_status AS (
 current_positions AS (
     SELECT
         t.id AS task_id,
-        CAST(COALESCE(root_node.value, current_node.node_id) AS TEXT) AS node_id
+        CAST(current_node.node_id AS TEXT) AS node_id
     FROM args
     CROSS JOIN project_workflow_links task_link
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
-    LEFT JOIN task_current_nodes current_node
-      ON current_node.task_id = t.id
-     AND (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) = 0
-    LEFT JOIN json_each(kent_lifecycle_current_node_ids_v1(args.lifecycle_state_token, t.id)) root_node
-      ON (kent_lifecycle_task_state_v1(args.lifecycle_state_token, t.id) & 1) != 0
+    JOIN task_current_nodes current_node ON current_node.task_id = t.id
     WHERE task_link.project_id = args.project_id
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND t.project_workflow_link_id = task_link.id
-      AND COALESCE(root_node.value, current_node.node_id) IS NOT NULL
 ),
 column_positions AS (
     SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank

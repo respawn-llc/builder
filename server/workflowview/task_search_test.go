@@ -452,19 +452,10 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	}
 }
 
-func TestTaskSearchAppliesPinnedLifecycleOverrideBeforeStatusFilterAndPagination(t *testing.T) {
+func TestTaskSearchAppliesPinnedLifecycleStatusBeforeFilterAndPagination(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Pinned Search", "needle")
 	started := startTaskSearchTask(t, fixture, task)
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	overrideNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
-	overrideReference, err := workflow.NewCurrentNodeReference(task.ID, overrideNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference override: %v", err)
-	}
 	snapshotCalls := 0
 	queryCalls := 0
 	projection, err := NewTaskStatusProjection(
@@ -478,8 +469,8 @@ func TestTaskSearchAppliesPinnedLifecycleOverrideBeforeStatusFilterAndPagination
 			observation: workflowexecution.WorkflowTaskExecutionObservation{
 				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
 					task.ID: {
-						CurrentNodes:       []workflow.CurrentNode{{Reference: overrideReference}},
-						QueuedCurrentNodes: []workflow.CurrentNodeReference{overrideReference},
+						CurrentNodes:       []workflow.CurrentNode{{Reference: started.currentNode}},
+						QueuedCurrentNodes: []workflow.CurrentNodeReference{started.currentNode},
 					},
 				},
 			},
@@ -502,7 +493,7 @@ func TestTaskSearchAppliesPinnedLifecycleOverrideBeforeStatusFilterAndPagination
 	if len(response.Groups) != 1 ||
 		response.Groups[0].TaskID != string(started.task.ID) ||
 		response.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
-		!slices.Equal(response.Groups[0].Status.NodeIDs, []string{string(overrideNodeID)}) {
+		!slices.Equal(response.Groups[0].Status.NodeIDs, []string{string(started.currentNode.NodeID)}) {
 		t.Fatalf("Task Search pinned lifecycle response = %+v", response)
 	}
 	if response.NextOffset != nil {
