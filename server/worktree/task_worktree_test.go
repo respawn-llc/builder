@@ -154,8 +154,15 @@ func TestPrepareTaskExecutionRootReplacesDifferentCommitCleanWorktree(t *testing
 	if _, err := env.store.GetWorktreeRecordByID(env.ctx, first.Root.Managed.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("clean previous record remains: %v", err)
 	}
-	branch := runGit(t, replacement.Root.Managed.Root, "branch", "--show-current")
-	if branch == "" {
+	identity, err := env.service.git.ValidateManagedWorktreeIdentity(env.ctx, ManagedWorktreeIdentitySpec{
+		SourceWorkspaceRoot:  env.workspaceRoot,
+		ExpectedWorktreeRoot: replacement.Root.Managed.Root,
+	})
+	if err != nil {
+		t.Fatalf("ValidateManagedWorktreeIdentity: %v", err)
+	}
+	branch, named := identity.NamedBranch()
+	if !named {
 		t.Fatal("replacement worktree has no named branch")
 	}
 	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branch); branchErr != nil {
