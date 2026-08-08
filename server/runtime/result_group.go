@@ -158,18 +158,19 @@ func newResultGroupCollector(roster []resultGroupCallIdentity) (*resultGroupColl
 func (c *resultGroupCollector) report(
 	callID string,
 	unit resultGroupUnit,
-) (resultGroupReportOutcome, error) {
+) (*resultGroupReportOutcome, error) {
 	if c == nil {
-		return 0, errors.New("result group collector is required")
+		return nil, errors.New("result group collector is required")
 	}
 	switch c.state {
 	case resultGroupCollectorAborted:
-		return resultGroupReportIgnoredAfterAbort, nil
+		outcome := resultGroupReportIgnoredAfterAbort
+		return &outcome, nil
 	case resultGroupCollectorClosed:
-		return 0, errors.New("result group collector is closed")
+		return nil, errors.New("result group collector is closed")
 	case resultGroupCollectorActive:
 	default:
-		return 0, fmt.Errorf("result group collector has invalid state %d", c.state)
+		return nil, fmt.Errorf("result group collector has invalid state %d", c.state)
 	}
 	callID = strings.TrimSpace(callID)
 	for index := range c.slots {
@@ -178,13 +179,14 @@ func (c *resultGroupCollector) report(
 			continue
 		}
 		if slot.result != nil {
-			return 0, fmt.Errorf("result group call %q was already reported", callID)
+			return nil, fmt.Errorf("result group call %q was already reported", callID)
 		}
 		copyUnit := cloneResultGroupUnit(unit)
 		slot.result = &copyUnit
-		return resultGroupReportAccepted, nil
+		outcome := resultGroupReportAccepted
+		return &outcome, nil
 	}
-	return 0, fmt.Errorf("result group call %q is not in the roster", callID)
+	return nil, fmt.Errorf("result group call %q is not in the roster", callID)
 }
 
 func (c *resultGroupCollector) readyPrefix() []resultGroupUnit {
@@ -264,6 +266,30 @@ func (c *resultGroupCollector) abort(fatal resultGroupFatal) {
 	}
 }
 
+func (c *resultGroupCollector) abortOperational(cause error) (*resultGroupFatal, error) {
+	if c == nil {
+		return nil, errors.New("result group collector is required")
+	}
+	if cause == nil {
+		return nil, errors.New("result group operational abort cause is required")
+	}
+	if fatal := c.fatalSnapshot(); fatal != nil {
+		return fatal, nil
+	}
+	if c.state != resultGroupCollectorActive {
+		return nil, fmt.Errorf(
+			"result group collector cannot abort operationally in state %d",
+			c.state,
+		)
+	}
+	c.abort(resultGroupFatal{Committed: false, Cause: cause})
+	fatal := c.fatalSnapshot()
+	if fatal == nil {
+		panic("result group operational abort did not store fatal")
+	}
+	return fatal, nil
+}
+
 func (c *resultGroupCollector) fatalSnapshot() *resultGroupFatal {
 	if c == nil {
 		return nil
@@ -274,6 +300,36 @@ func (c *resultGroupCollector) fatalSnapshot() *resultGroupFatal {
 	}
 	copyFatal := *fatal
 	return &copyFatal
+}
+
+func (e *Engine) abortResultGroupForOperationalFailure(
+	stepID string,
+	collector *resultGroupCollector,
+	cause error,
+) *resultGroupFatal {
+	if collector == nil {
+		panic("result group operational failure requires collector")
+	}
+	if cause == nil {
+		panic("result group operational failure requires cause")
+	}
+	if fatal := collector.fatalSnapshot(); fatal != nil {
+		return fatal
+	}
+	steerErr := e.steerRuntimeClose(
+		stepID,
+		steerResultGroupOperationalFailureIntent(collector, cause),
+	)
+	fatal := collector.fatalSnapshot()
+	if fatal == nil {
+		panic(fmt.Sprintf(
+			"result group operational failure was not stored (step_id=%q cause=%v steer_error=%v)",
+			stepID,
+			cause,
+			steerErr,
+		))
+	}
+	return fatal
 }
 
 func (c *resultGroupCollector) close() error {

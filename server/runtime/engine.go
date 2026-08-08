@@ -1086,6 +1086,21 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 	if err != nil {
 		return nil, false, err
 	}
+	abortBeforeLocalExecution := func(cause error) ([]tools.Result, bool, error) {
+		fatal := e.abortResultGroupForOperationalFailure(
+			stepID,
+			collector,
+			cause,
+		)
+		postJoin, coordinateErr := e.coordinateAcceptedResponsePostJoin(
+			stepID,
+			prepared,
+			make([]*completedToolResult, len(prepared)),
+			collector,
+			fatal,
+		)
+		return postJoin.results, false, coordinateErr
+	}
 	for _, ref := range executionCalls.order {
 		if ref.source != acceptedResponseCallHosted {
 			continue
@@ -1098,22 +1113,41 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 			ToolCall:                   &normalized,
 			CommittedTranscriptChanged: true,
 		})); err != nil {
-			return nil, false, err
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"persist hosted tool started (call_id=%s tool=%s): %w",
+					hosted.Call.ID,
+					hosted.Call.Name,
+					err,
+				),
+			)
 		}
-		outcome := resultGroupReportOutcome(0)
+		var outcome *resultGroupReportOutcome
 		if err := e.steer(stepID, steerResultGroupReportIntent(
 			collector,
 			hosted.Call.ID,
 			resultGroupUnit{result: hosted.Result},
 			&outcome,
 		)); err != nil {
-			return nil, false, err
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"report hosted tool result (call_id=%s tool=%s): %w",
+					hosted.Call.ID,
+					hosted.Call.Name,
+					err,
+				),
+			)
 		}
-		if outcome != resultGroupReportAccepted {
-			return nil, false, fmt.Errorf(
-				"result group ignored hosted result without fatal (call_id=%s tool=%s)",
-				hosted.Call.ID,
-				hosted.Call.Name,
+		if fatal := collector.fatalSnapshot(); fatal != nil {
+			return abortBeforeLocalExecution(fatal)
+		}
+		if outcome == nil || *outcome != resultGroupReportAccepted {
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"result group ignored hosted result without fatal (call_id=%s tool=%s)",
+					hosted.Call.ID,
+					hosted.Call.Name,
+				),
 			)
 		}
 	}
@@ -1160,7 +1194,7 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 				call.ID,
 				toolspec.ID(call.Name),
 			)
-			outcome := resultGroupReportOutcome(0)
+			var outcome *resultGroupReportOutcome
 			if err := e.steer(stepID, steerResultGroupReportIntent(
 				collector,
 				call.ID,
@@ -1177,9 +1211,9 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 					err,
 				))
 			}
-			if outcome != resultGroupReportAccepted {
+			if outcome == nil || *outcome != resultGroupReportAccepted {
 				panic(fmt.Sprintf(
-					"semantic close result group ignored interrupted tool result without fatal (call_id=%q tool=%q outcome=%d)",
+					"semantic close result group ignored interrupted tool result without fatal (call_id=%q tool=%q outcome=%v)",
 					call.ID,
 					call.Name,
 					outcome,
@@ -1188,7 +1222,10 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 			results[index] = interrupted
 		}
 	}
-	closeErr := e.steer(stepID, steerResultGroupCloseIntent(collector))
+	closeErr := e.steerRuntimeClose(
+		stepID,
+		steerResultGroupCloseIntent(collector),
+	)
 	var goalErr error
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return acceptedResponsePostJoinOutcome{results: results}, fatal

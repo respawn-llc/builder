@@ -57,6 +57,11 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	)
 
 	for i := range preparedCalls {
+		if fatal := collector.fatalSnapshot(); fatal != nil {
+			cancelExecution()
+			callErrs[i] = fatal
+			break
+		}
 		prepared := preparedCalls[i]
 		call := prepared.call
 		toolID := prepared.toolID
@@ -69,8 +74,20 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 			started.CommittedEntryStartSet = true
 		}
 		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
-			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
-			continue
+			failure := fmt.Errorf(
+				"persist tool started (call_id=%s tool=%s): %w",
+				call.ID,
+				executableCall.Name,
+				err,
+			)
+			fatal := e.abortResultGroupForOperationalFailure(
+				stepID,
+				collector,
+				failure,
+			)
+			cancelExecution()
+			callErrs[i] = fatal
+			break
 		}
 		idx := i
 		serialOrdinal := -1
@@ -96,7 +113,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				return
 			}
 			res := completed.result
-			outcome := resultGroupReportOutcome(0)
+			var outcome *resultGroupReportOutcome
 			if err := e.steer(stepID, steerResultGroupReportIntent(
 				collector,
 				tc.ID,
@@ -104,25 +121,41 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				&outcome,
 			)); err != nil {
 				if fatal := collector.fatalSnapshot(); fatal != nil {
+					cancelExecution()
+					callErrs[idx] = fatal
 					return
 				}
-				callErrs[idx] = errors.Join(callErr, fmt.Errorf(
+				failure := errors.Join(callErr, fmt.Errorf(
 					"report tool result (call_id=%s tool=%s): %w",
 					tc.ID,
 					res.Name,
 					err,
 				))
+				fatal := e.abortResultGroupForOperationalFailure(
+					stepID,
+					collector,
+					failure,
+				)
+				cancelExecution()
+				callErrs[idx] = fatal
 				return
 			}
 			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
-			if outcome != resultGroupReportAccepted {
-				callErrs[idx] = fmt.Errorf(
+			if outcome == nil || *outcome != resultGroupReportAccepted {
+				failure := fmt.Errorf(
 					"result group ignored tool result without fatal (call_id=%s tool=%s)",
 					tc.ID,
 					res.Name,
 				)
+				fatal := e.abortResultGroupForOperationalFailure(
+					stepID,
+					collector,
+					failure,
+				)
+				cancelExecution()
+				callErrs[idx] = fatal
 				return
 			}
 			results[idx] = completed

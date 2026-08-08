@@ -145,10 +145,11 @@ type steeringHistoryReplacement struct {
 }
 
 type steeringResultGroupReport struct {
-	collector *resultGroupCollector
-	callID    string
-	unit      resultGroupUnit
-	outcome   *resultGroupReportOutcome
+	collector          *resultGroupCollector
+	callID             string
+	unit               *resultGroupUnit
+	operationalFailure error
+	outcome            **resultGroupReportOutcome
 }
 
 type steeringResultGroupFlush struct {
@@ -308,15 +309,29 @@ func steerResultGroupReportIntent(
 	collector *resultGroupCollector,
 	callID string,
 	unit resultGroupUnit,
-	outcome *resultGroupReportOutcome,
+	outcome **resultGroupReportOutcome,
 ) steeringIntent {
+	copyUnit := cloneResultGroupUnit(unit)
 	return steeringIntent{
 		priority: steeringPriorityNormal,
 		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
 			collector: collector,
 			callID:    callID,
-			unit:      cloneResultGroupUnit(unit),
+			unit:      &copyUnit,
 			outcome:   outcome,
+		}}},
+	}
+}
+
+func steerResultGroupOperationalFailureIntent(
+	collector *resultGroupCollector,
+	cause error,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
+			collector:          collector,
+			operationalFailure: cause,
 		}}},
 	}
 }
@@ -588,11 +603,43 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.resultGroupReport != nil {
 		report := item.resultGroupReport
-		if report.collector == nil || report.outcome == nil {
-			return errors.New("result group report requires collector and outcome")
+		if report.collector == nil {
+			return errors.New("result group report requires collector")
 		}
-		outcome, err := report.collector.report(report.callID, report.unit)
+		if report.operationalFailure != nil {
+			if report.unit != nil || report.outcome != nil {
+				return errors.New(
+					"result group operational failure cannot include a completed result",
+				)
+			}
+			fatal, err := report.collector.abortOperational(
+				report.operationalFailure,
+			)
+			if err != nil {
+				return err
+			}
+			return fatal
+		}
+		if report.unit == nil || report.outcome == nil {
+			return errors.New(
+				"result group completed report requires unit and outcome destination",
+			)
+		}
+		outcome, err := report.collector.report(report.callID, *report.unit)
 		if err != nil {
+			if report.collector.state == resultGroupCollectorActive {
+				fatal, abortErr := report.collector.abortOperational(
+					fmt.Errorf(
+						"report result group call %q: %w",
+						report.callID,
+						err,
+					),
+				)
+				if abortErr != nil {
+					return errors.Join(err, abortErr)
+				}
+				return fatal
+			}
 			return err
 		}
 		*report.outcome = outcome

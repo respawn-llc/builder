@@ -874,7 +874,7 @@ func TestFirstQuestionBarrierFatalLeavesNoAttentionBatch(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("start hosted sibling: %v", err)
 	}
-	outcome := resultGroupReportOutcome(0)
+	var outcome *resultGroupReportOutcome
 	if err := engine.steer(
 		"step",
 		steerResultGroupReportIntent(

@@ -98,7 +98,7 @@ func reportAndFlushSimpleResultGroup(
 	collector *resultGroupCollector,
 	callID string,
 ) error {
-	outcome := resultGroupReportOutcome(0)
+	var outcome *resultGroupReportOutcome
 	return engine.steer(
 		stepID,
 		steerResultGroupReportIntent(
@@ -228,8 +228,8 @@ func TestResultGroupCollectorFatalAbortKeepsFirstCauseAndIgnoresReports(t *testi
 	if err != nil {
 		t.Fatalf("report after abort: %v", err)
 	}
-	if outcome != resultGroupReportIgnoredAfterAbort {
-		t.Fatalf("report outcome = %d, want ignored after abort", outcome)
+	if outcome == nil || *outcome != resultGroupReportIgnoredAfterAbort {
+		t.Fatalf("report outcome = %v, want ignored after abort", outcome)
 	}
 	fatal := collector.fatalSnapshot()
 	if fatal == nil || fatal.Committed || !errors.Is(fatal.Cause, firstCause) {
@@ -266,7 +266,7 @@ func TestResultGroupReportUsesCentralSteeringHandler(t *testing.T) {
 		Config{Model: "gpt-5"},
 	)
 	collector := testResultGroupCollector(t, "first")
-	outcome := resultGroupReportOutcome(0)
+	var outcome *resultGroupReportOutcome
 
 	if err := engine.steer(
 		"step",
@@ -279,12 +279,80 @@ func TestResultGroupReportUsesCentralSteeringHandler(t *testing.T) {
 	); err != nil {
 		t.Fatalf("steer result group report: %v", err)
 	}
-	if outcome != resultGroupReportAccepted {
-		t.Fatalf("report outcome = %d, want accepted", outcome)
+	if outcome == nil || *outcome != resultGroupReportAccepted {
+		t.Fatalf("report outcome = %v, want accepted", outcome)
 	}
 	ready := collector.readyPrefix()
 	if len(ready) != 1 || ready[0].result.CallID != "first" {
 		t.Fatalf("steered ready prefix = %+v, want first", ready)
+	}
+}
+
+func TestResultGroupSteeringReportFailureAbortsCollector(t *testing.T) {
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	collector := testResultGroupCollector(t, "first")
+	var firstOutcome *resultGroupReportOutcome
+	if err := engine.steer(
+		"step",
+		steerResultGroupReportIntent(
+			collector,
+			"first",
+			testResultGroupUnit("first"),
+			&firstOutcome,
+		),
+	); err != nil ||
+		firstOutcome == nil ||
+		*firstOutcome != resultGroupReportAccepted {
+		t.Fatalf("first report = outcome:%v error:%v", firstOutcome, err)
+	}
+
+	var duplicateOutcome *resultGroupReportOutcome
+	err := engine.steer(
+		"step",
+		steerResultGroupReportIntent(
+			collector,
+			"first",
+			testResultGroupUnit("first"),
+			&duplicateOutcome,
+		),
+	)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		fatal.Committed ||
+		fatal.Cause == nil ||
+		duplicateOutcome != nil {
+		t.Fatalf(
+			"duplicate steering report = outcome:%v error:%v fatal:%+v",
+			duplicateOutcome,
+			err,
+			fatal,
+		)
+	}
+	if collector.state != resultGroupCollectorAborted ||
+		collector.cursor != 0 {
+		t.Fatalf(
+			"duplicate-report collector = state:%d cursor:%d",
+			collector.state,
+			collector.cursor,
+		)
+	}
+	if err := engine.steerRuntimeClose(
+		"step",
+		steerResultGroupCloseIntent(collector),
+	); !errors.As(err, &fatal) {
+		t.Fatalf("close duplicate-report collector = %v, want fatal", err)
+	}
+	if collector.state != resultGroupCollectorClosed {
+		t.Fatalf(
+			"duplicate-report collector state = %d, want closed",
+			collector.state,
+		)
 	}
 }
 
@@ -316,7 +384,7 @@ func TestResultGroupFlushAtomicallyPersistsCompletionOutputAndDiagnostic(t *test
 	if err != nil {
 		t.Fatalf("new result group collector: %v", err)
 	}
-	outcome := resultGroupReportOutcome(0)
+	var outcome *resultGroupReportOutcome
 	if err := engine.steer(
 		"step-delete",
 		steerResultGroupReportIntent(
@@ -329,9 +397,11 @@ func TestResultGroupFlushAtomicallyPersistsCompletionOutputAndDiagnostic(t *test
 	); err != nil {
 		t.Fatalf("report and flush result group: %v", err)
 	}
-	if outcome != resultGroupReportAccepted || collector.cursor != 1 {
+	if outcome == nil ||
+		*outcome != resultGroupReportAccepted ||
+		collector.cursor != 1 {
 		t.Fatalf(
-			"result group outcome=%d cursor=%d, want accepted cursor 1",
+			"result group outcome=%v cursor=%d, want accepted cursor 1",
 			outcome,
 			collector.cursor,
 		)
@@ -437,7 +507,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 		t.Fatalf("new result group collector: %v", err)
 	}
 	appendsBefore, _ := observer.snapshot()
-	secondOutcome := resultGroupReportOutcome(0)
+	var secondOutcome *resultGroupReportOutcome
 	if err := engine.steer(
 		"step",
 		steerResultGroupReportIntent(
@@ -463,7 +533,7 @@ func TestResultGroupFlushCommitsOutOfOrderReadyResultsInRosterOrder(t *testing.T
 			collector.cursor,
 		)
 	}
-	firstOutcome := resultGroupReportOutcome(0)
+	var firstOutcome *resultGroupReportOutcome
 	if err := engine.steer(
 		"step",
 		steerResultGroupReportIntent(

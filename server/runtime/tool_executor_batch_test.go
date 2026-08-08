@@ -42,6 +42,257 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	}
 }
 
+func TestToolStartOperationalFailureAbortsResultGroupWithoutSyntheticInterruption(t *testing.T) {
+	t.Parallel()
+	probe := &toolExecutionProbe{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: probe,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	engine.ensureOrchestrationCollaborators()
+	collector, err := newResultGroupCollector([]resultGroupCallIdentity{{
+		CallID:     "accepted-call",
+		Name:       toolspec.ToolExecCommand,
+		OutputKind: session.ToolOutputKindFunction,
+	}})
+	if err != nil {
+		t.Fatalf("new result group collector: %v", err)
+	}
+	prepared := []executorToolCall{{
+		call:      llm.ToolCall{Name: string(toolspec.ToolExecCommand)},
+		toolID:    toolspec.ToolExecCommand,
+		knownTool: true,
+	}}
+
+	completed, executeErr := engine.toolFlow.ExecuteToolCalls(
+		context.Background(),
+		"step",
+		prepared,
+		collector,
+	)
+	fatal := collector.fatalSnapshot()
+	if fatal == nil ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrMissingProviderToolCallID) ||
+		!errors.Is(executeErr, ErrMissingProviderToolCallID) {
+		t.Fatalf(
+			"start failure = execute:%v fatal:%+v, want uncommitted missing-ID abort",
+			executeErr,
+			fatal,
+		)
+	}
+	if probe.calls.Load() != 0 {
+		t.Fatal("tool handler ran after live-start steering failed")
+	}
+	if len(completed) != 1 || completed[0] != nil {
+		t.Fatalf("completed cells = %+v, want one absent cell", completed)
+	}
+
+	if _, err := engine.coordinateAcceptedResponsePostJoin(
+		"step",
+		prepared,
+		completed,
+		collector,
+		executeErr,
+	); !errors.As(err, &fatal) {
+		t.Fatalf("post-join error = %v, want Result Group fatal", err)
+	}
+	if collector.state != resultGroupCollectorClosed ||
+		collector.cursor != 0 ||
+		collector.slots[0].result != nil {
+		t.Fatalf(
+			"start-failure collector = state:%d cursor:%d slot:%+v",
+			collector.state,
+			collector.cursor,
+			collector.slots[0],
+		)
+	}
+}
+
+func TestToolReportOperationalFailureAbortsResultGroupWithoutSyntheticInterruption(t *testing.T) {
+	t.Parallel()
+	handler := &closeEngineBeforeResultReportHandler{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	handler.engine = engine
+	engine.ensureOrchestrationCollaborators()
+	call := llm.ToolCall{
+		ID:    "report-failure",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"true"}`),
+	}
+	prepared := []executorToolCall{{
+		call:      call,
+		toolID:    toolspec.ToolExecCommand,
+		knownTool: true,
+	}}
+	collector, err := newResultGroupCollector([]resultGroupCallIdentity{
+		resultGroupIdentityFromToolCall(call),
+	})
+	if err != nil {
+		t.Fatalf("new result group collector: %v", err)
+	}
+
+	completed, executeErr := engine.toolFlow.ExecuteToolCalls(
+		context.Background(),
+		"step",
+		prepared,
+		collector,
+	)
+	engine.closed.Store(false)
+	fatal := collector.fatalSnapshot()
+	if fatal == nil ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrEngineClosed) ||
+		!errors.Is(executeErr, ErrEngineClosed) {
+		t.Fatalf(
+			"report failure = execute:%v fatal:%+v, want uncommitted engine-closed abort",
+			executeErr,
+			fatal,
+		)
+	}
+	if handler.calls.Load() != 1 {
+		t.Fatalf("tool handler calls = %d, want 1", handler.calls.Load())
+	}
+	if len(completed) != 1 || completed[0] != nil {
+		t.Fatalf("completed cells = %+v, want provisional result discarded", completed)
+	}
+
+	if _, err := engine.coordinateAcceptedResponsePostJoin(
+		"step",
+		prepared,
+		completed,
+		collector,
+		executeErr,
+	); !errors.As(err, &fatal) {
+		t.Fatalf("post-join error = %v, want Result Group fatal", err)
+	}
+	if collector.state != resultGroupCollectorClosed ||
+		collector.cursor != 0 ||
+		collector.slots[0].result != nil {
+		t.Fatalf(
+			"report-failure collector = state:%d cursor:%d slot:%+v",
+			collector.state,
+			collector.cursor,
+			collector.slots[0],
+		)
+	}
+}
+
+func TestHostedStartOperationalFailureAbortsResultGroupWithoutSyntheticInterruption(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	engine.closed.Store(true)
+
+	results, _, err := engine.executeAcceptedToolCallsCoordinated(
+		context.Background(),
+		"step",
+		acceptedHostedExecution("hosted-start-failure"),
+	)
+	engine.closed.Store(false)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrEngineClosed) {
+		t.Fatalf(
+			"hosted start failure = results:%+v error:%v fatal:%+v",
+			results,
+			err,
+			fatal,
+		)
+	}
+	if len(results) != 0 {
+		t.Fatalf("hosted start failure results = %+v, want none", results)
+	}
+	if _, found := engine.transcriptRuntimeState().
+		ToolCompletionSnapshot("hosted-start-failure"); found {
+		t.Fatal("hosted start failure produced a synthetic completion")
+	}
+}
+
+func TestHostedReportOperationalFailureAbortsResultGroupWithoutSyntheticInterruption(t *testing.T) {
+	t.Parallel()
+	var engine *Engine
+	engine = mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if engine != nil && event.Kind == EventToolCallStarted {
+					engine.closed.Store(true)
+				}
+			},
+		},
+	)
+
+	results, _, err := engine.executeAcceptedToolCallsCoordinated(
+		context.Background(),
+		"step",
+		acceptedHostedExecution("hosted-report-failure"),
+	)
+	engine.closed.Store(false)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) ||
+		fatal.Committed ||
+		!errors.Is(fatal.Cause, ErrEngineClosed) {
+		t.Fatalf(
+			"hosted report failure = results:%+v error:%v fatal:%+v",
+			results,
+			err,
+			fatal,
+		)
+	}
+	if len(results) != 0 {
+		t.Fatalf("hosted report failure results = %+v, want none", results)
+	}
+	if _, found := engine.transcriptRuntimeState().
+		ToolCompletionSnapshot("hosted-report-failure"); found {
+		t.Fatal("hosted report failure produced a synthetic completion")
+	}
+}
+
+func acceptedHostedExecution(callID string) acceptedResponseCalls {
+	return acceptedResponseCalls{
+		hosted: []hostedToolExecution{{
+			Call: llm.ToolCall{
+				ID:   callID,
+				Name: string(toolspec.ToolWebSearch),
+			},
+			Result: tools.Result{
+				CallID: callID,
+				Name:   toolspec.ToolWebSearch,
+				Output: json.RawMessage(`{"ok":true}`),
+			},
+		}},
+		order: []acceptedResponseCallRef{{
+			source: acceptedResponseCallHosted,
+		}},
+	}
+}
+
 func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -627,4 +878,22 @@ type webSearchExecutionProbe struct {
 func (p *webSearchExecutionProbe) Call(context.Context, tools.Call) (tools.Result, error) {
 	p.calls.Add(1)
 	return tools.Result{}, nil
+}
+
+type closeEngineBeforeResultReportHandler struct {
+	engine *Engine
+	calls  atomic.Int32
+}
+
+func (h *closeEngineBeforeResultReportHandler) Call(
+	_ context.Context,
+	call tools.Call,
+) (tools.Result, error) {
+	h.calls.Add(1)
+	h.engine.closed.Store(true)
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+	}, nil
 }

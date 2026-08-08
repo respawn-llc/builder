@@ -60,11 +60,6 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 
 - `docs/dev/specs/` is authoritative for locked product and product-architecture decisions. Do not create or change a spec without prior explicit user approval, and do not alter a spec to match implementation drift.
   - When the user explicitly changes product behavior or architecture, update the owning spec.
-  - Specs describe product behavior and product-architecture invariants only. Never
-    record code symbols, file or package names, storage or transaction layouts,
-    helper boundaries, instrumentation mechanics, test scaffolding, or other
-    implementation internals in a spec; keep them in implementation plans and
-    engineering artifacts.
   - Before writing, rewriting, reviewing, or validating specs, read and follow `.kent/skills/spec-writing/SKILL.md`.
 - **No guarantee maximalism or non-functional-requirement gold-plating.** Match consistency, atomicity, durability, ordering, rollback, retry, and recovery guarantees to explicitly approved product behavior and risk.
   - Existing code, tests, locks, transactions, ownership boundaries, and recovery behavior are evidence, not product authority. Do not infer requirements from them. Validate every claimed invariant against an owning spec or explicit product decision before preserving it.

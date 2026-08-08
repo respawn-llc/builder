@@ -458,14 +458,14 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 		Name:   toolspec.ToolExecCommand,
 		Output: json.RawMessage(`{"ok":true}`),
 	}
-	outcome := resultGroupReportOutcome(0)
+	var outcome *resultGroupReportOutcome
 	if err := engine.steer("step", steerResultGroupReportIntent(
 		collector,
 		first.CallID,
 		resultGroupUnit{result: first},
 		&outcome,
-	)); err != nil || outcome != resultGroupReportAccepted {
-		t.Fatalf("report completed cell = outcome:%d err:%v", outcome, err)
+	)); err != nil || outcome == nil || *outcome != resultGroupReportAccepted {
+		t.Fatalf("report completed cell = outcome:%v err:%v", outcome, err)
 	}
 
 	postJoin, err := engine.coordinateAcceptedResponsePostJoin(
@@ -795,6 +795,99 @@ func TestBackgroundProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T)
 		t.Fatalf("background continuation error = %v, want provider failure", err)
 	}
 	assertRunFailureDiagnosticPrecedesTerminal(t, engine, *events)
+}
+
+func TestBackgroundLifecycleFailurePersistsDeveloperDiagnosticOutsideStepCallback(t *testing.T) {
+	t.Parallel()
+	lifecycleErr := errors.New("background step lifecycle failed")
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	steps := &stubExclusiveStepLifecycle{
+		runFn: func(
+			context.Context,
+			exclusiveStepOptions,
+			func(context.Context, string) error,
+		) error {
+			return lifecycleErr
+		},
+	}
+	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
+	scheduler.queueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	}, false)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); !errors.Is(err, lifecycleErr) {
+		t.Fatalf("background lifecycle error = %v, want injected failure", err)
+	}
+	entries := engine.ChatSnapshot().Entries
+	if len(entries) != 1 ||
+		entries[0].Role != string(transcript.EntryRoleDeveloperErrorFeedback) ||
+		entries[0].Text == "" {
+		t.Fatalf(
+			"background lifecycle failure entries = %+v, want durable developer diagnostic",
+			entries,
+		)
+	}
+}
+
+func TestBackgroundTerminalLifecycleFailurePersistsSeparatelyFromCallbackFailure(t *testing.T) {
+	t.Parallel()
+	providerErr := &llm.APIStatusError{StatusCode: 401}
+	lifecycleErr := errors.New("background terminal lifecycle failed")
+	lifecycle := &callbackStepLifecycleSink{
+		onTransition: func(transition StepLifecycleTransition) error {
+			if transition == StepLifecycleTransitionEnded {
+				return lifecycleErr
+			}
+			return nil
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{errors: []error{providerErr}},
+		tools.NewRegistry(),
+		Config{
+			Model:         "gpt-5",
+			StepLifecycle: lifecycle,
+		},
+	)
+	scheduler := &defaultBackgroundNoticeScheduler{
+		engine: engine,
+		steps:  engine.stepLifecycle,
+	}
+	scheduler.queueDeveloperNotice(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("queued background notice"),
+	}, false)
+
+	if _, err := scheduler.runQueuedNotices(context.Background()); !errors.Is(
+		err,
+		providerErr,
+	) || !errors.Is(err, lifecycleErr) {
+		t.Fatalf(
+			"background terminal errors = %v, want provider and lifecycle failures",
+			err,
+		)
+	}
+	diagnostics := 0
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics++
+		}
+	}
+	if diagnostics != 2 {
+		t.Fatalf(
+			"background terminal developer diagnostics = %d, want callback and lifecycle entries",
+			diagnostics,
+		)
+	}
 }
 
 func newProviderFailureOrderingEngine(
