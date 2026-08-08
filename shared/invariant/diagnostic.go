@@ -21,6 +21,7 @@ type Field string
 const (
 	FieldOperation                Field = "operation"
 	FieldSessionID                Field = "session_id"
+	FieldPromptID                 Field = "prompt_id"
 	FieldCachedServerActivity     Field = "cached_server_activity"
 	FieldLocalProjection          Field = "local_projection"
 	FieldPendingInterrupt         Field = "pending_interrupt"
@@ -71,6 +72,12 @@ func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
 			FieldInvariantError: causeText,
 		}),
 	}
+}
+
+func WorkflowPromptDiagnostic(operation string, promptID string, cause error) Diagnostic {
+	diagnostic := FailureDiagnostic(ScopeWorkflowExecution, operation, cause)
+	diagnostic.Fields[FieldPromptID] = promptID
+	return diagnostic
 }
 
 type TUIProjectionDiagnosticInput struct {

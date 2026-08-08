@@ -79,6 +79,7 @@ type AttentionNotificationService interface {
 type PromptControlService interface {
 	AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error
 	AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error
+	AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error)
 }
 
 type RunPromptService interface {

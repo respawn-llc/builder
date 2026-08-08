@@ -394,7 +394,7 @@ func (s *Starter) startCurrentNodeAgent(
 	}
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
-		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
@@ -935,15 +935,15 @@ type executionPromptAwaiter struct {
 	scope     sessionruntime.ExecutionScope
 }
 
-func (a executionPromptAwaiter) AwaitPromptResponse(ctx context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	return a.authority.AwaitPromptResponse(ctx, a.scope.ID(), req)
+func (a executionPromptAwaiter) AwaitPromptResolution(ctx context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+	return a.authority.AwaitPromptResolution(ctx, a.scope.ID(), req)
 }
 
 func currentNodeQuestionContext(input workflowstore.CurrentNodeStartContext, sessionID string) workflowattention.TaskQuestionContext {
 	return workflowattention.TaskQuestionContext{Task: input.Task, CurrentNode: input.CurrentNode.Reference, SessionID: sessionID}
 }
 
-func (s *Starter) handleCurrentNodeAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, input workflowstore.CurrentNodeStartContext, sessionID string, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+func (s *Starter) handleCurrentNodeAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, input workflowstore.CurrentNodeStartContext, sessionID string, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 	context := currentNodeQuestionContext(input, sessionID)
 	if askReq.Approval {
 		return workflowattention.HandleTaskApprovalQuestion(ctx, awaiter, s.attention, workflowattention.TaskQuestionRequest{Context: context, Question: askReq})

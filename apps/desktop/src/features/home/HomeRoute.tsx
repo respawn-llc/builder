@@ -7,7 +7,7 @@ import { errorMessage } from "@/api";
 import { basename, formatRelativeTime, projectKeyFromName } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
-import { useSidebar } from "@/app-facade";
+import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } from "@/app-facade";
 import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -33,12 +33,16 @@ import {
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
 export function HomeRoute() {
+  return <SidebarRootOwner><HomeRouteContent /></SidebarRootOwner>;
+}
+
+function HomeRouteContent() {
   const { t } = useTranslation();
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
   const navigation = useAppNavigation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   const queryClient = useQueryClient();
   const creation = useProjectCreation();
   const projects = useProjectPages();
@@ -173,7 +177,7 @@ export function HomeRoute() {
             disabled={disabled}
             onChooseWorkspace={() => void chooseWorkspace()}
             onCreateWorkflow={() => {
-              void openSidebar({ kind: "workflowCreate", mode: "overlay" });
+              open({ kind: "workflowCreate", mode: "overlay" });
             }}
             onTabChange={setPrimaryTab}
             projectItems={projectItems}
@@ -198,7 +202,7 @@ type AttentionListProps = Readonly<{
 
 function AttentionList({ items, query }: AttentionListProps) {
   const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
+  const { open } = useOwnedSidebarRoots();
   if (query.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
   }
@@ -228,7 +232,7 @@ function AttentionList({ items, query }: AttentionListProps) {
       onLoadMore={() => void query.fetchNextPage()}
       paddingEnd={16}
       paddingStart={16}
-      renderItem={(item) => <AttentionRow item={item} openSidebar={openSidebar} />}
+      renderItem={(item) => <AttentionRow item={item} openSidebar={open} />}
     />
   );
 }
@@ -238,7 +242,7 @@ const AttentionRow = memo(function AttentionRow({
   openSidebar,
 }: Readonly<{
   item: AttentionItem;
-  openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+  openSidebar: SidebarRootController["open"];
 }>) {
   const { t } = useTranslation();
   const message =
@@ -254,7 +258,7 @@ const AttentionRow = memo(function AttentionRow({
       )}
       data-testid="attention-row"
       onClick={() => {
-        void openSidebar({
+        openSidebar({
           kind: "taskDetail",
           initialFocus: taskDetailInitialFocusFromAttentionItem(item),
           inboxNav: true,
@@ -285,11 +289,11 @@ const AttentionRow = memo(function AttentionRow({
 function attentionRowPropsEqual(
   previous: Readonly<{
     item: AttentionItem;
-    openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+    openSidebar: SidebarRootController["open"];
   }>,
   next: Readonly<{
     item: AttentionItem;
-    openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+    openSidebar: SidebarRootController["open"];
   }>,
 ): boolean {
   return previous.openSidebar === next.openSidebar && attentionItemsEqual(previous.item, next.item);

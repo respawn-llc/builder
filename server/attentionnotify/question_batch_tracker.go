@@ -12,11 +12,11 @@ type QuestionBatchTracker struct {
 	mu     sync.Mutex
 	broker *Broker
 
-	batches map[string]*questionBatch
+	byStep map[string]*questionBatch
 }
 
 type QuestionBatch struct {
-	ID             string
+	StepID         string
 	Route          RoutingScope
 	Target         clientui.AttentionNotificationTarget
 	Preview        string
@@ -42,7 +42,7 @@ const (
 )
 
 func NewQuestionBatchTracker(broker *Broker) *QuestionBatchTracker {
-	return &QuestionBatchTracker{broker: broker, batches: map[string]*questionBatch{}}
+	return &QuestionBatchTracker{broker: broker, byStep: map[string]*questionBatch{}}
 }
 
 func (t *QuestionBatchTracker) Prepare(batch QuestionBatch) error {
@@ -52,14 +52,14 @@ func (t *QuestionBatchTracker) Prepare(batch QuestionBatch) error {
 }
 
 func (t *QuestionBatchTracker) prepareLocked(batch QuestionBatch) error {
-	if batch.ID == "" {
-		return fmt.Errorf("question batch id is required")
+	if batch.StepID == "" {
+		return fmt.Errorf("question batch step id is required")
 	}
 	if len(batch.PreparedAskIDs) == 0 {
 		return fmt.Errorf("question batch prepared ask ids are required")
 	}
-	if _, ok := t.batches[batch.ID]; ok {
-		existing := t.batches[batch.ID]
+	if _, ok := t.byStep[batch.StepID]; ok {
+		existing := t.byStep[batch.StepID]
 		if existing.Preview == "" {
 			existing.Preview = batch.Preview
 		}
@@ -77,14 +77,14 @@ func (t *QuestionBatchTracker) prepareLocked(batch QuestionBatch) error {
 		}
 		status[askID] = questionAskPending
 	}
-	t.batches[batch.ID] = &questionBatch{QuestionBatch: batch, status: status}
+	t.byStep[batch.StepID] = &questionBatch{QuestionBatch: batch, status: status}
 	return nil
 }
 
-func (t *QuestionBatchTracker) MarkMaterialized(batchID string, askID string) error {
+func (t *QuestionBatchTracker) MarkMaterialized(stepID string, askID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	batch, err := t.batch(batchID, askID)
+	batch, err := t.batch(stepID, askID)
 	if err != nil {
 		return err
 	}
@@ -109,13 +109,13 @@ func (t *QuestionBatchTracker) EnqueueSnapshot(sub *Subscription, batch Question
 	if len(materializedAskIDs) == 0 {
 		return fmt.Errorf("question batch snapshot materialized ask ids are required")
 	}
-	current := t.batches[batch.ID]
+	current := t.byStep[batch.StepID]
 	if current.resolved {
 		return nil
 	}
 	for _, askID := range materializedAskIDs {
 		if _, ok := current.status[askID]; !ok {
-			return fmt.Errorf("question batch %q does not contain ask %q", batch.ID, askID)
+			return fmt.Errorf("question batch Step %q does not contain ask %q", batch.StepID, askID)
 		}
 		if current.status[askID] == questionAskPending {
 			current.status[askID] = questionAskMaterialized
@@ -132,10 +132,10 @@ func (t *QuestionBatchTracker) EnqueueSnapshot(sub *Subscription, batch Question
 	})
 }
 
-func (t *QuestionBatchTracker) MarkSkipped(batchID string, askID string) error {
+func (t *QuestionBatchTracker) MarkSkipped(stepID string, askID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	batch, err := t.batch(batchID, askID)
+	batch, err := t.batch(stepID, askID)
 	if err != nil {
 		return err
 	}
@@ -148,10 +148,10 @@ func (t *QuestionBatchTracker) MarkSkipped(batchID string, askID string) error {
 	return t.resolveIfComplete(batch)
 }
 
-func (t *QuestionBatchTracker) MarkDurablyCleared(batchID string, askID string) error {
+func (t *QuestionBatchTracker) MarkDurablyCleared(stepID string, askID string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	batch, err := t.batch(batchID, askID)
+	batch, err := t.batch(stepID, askID)
 	if err != nil {
 		return err
 	}
@@ -164,16 +164,16 @@ func (t *QuestionBatchTracker) MarkDurablyCleared(batchID string, askID string) 
 	return t.resolveIfComplete(batch)
 }
 
-func (t *QuestionBatchTracker) batch(batchID string, askID string) (*questionBatch, error) {
+func (t *QuestionBatchTracker) batch(stepID string, askID string) (*questionBatch, error) {
 	if t == nil {
 		return nil, ErrBatchNotFound
 	}
-	batch, ok := t.batches[batchID]
+	batch, ok := t.byStep[stepID]
 	if !ok {
 		return nil, ErrBatchNotFound
 	}
 	if _, ok := batch.status[askID]; !ok {
-		return nil, fmt.Errorf("question batch %q does not contain ask %q", batchID, askID)
+		return nil, fmt.Errorf("question batch Step %q does not contain ask %q", stepID, askID)
 	}
 	return batch, nil
 }
@@ -196,7 +196,7 @@ func (b *questionBatch) notification() *clientui.AttentionNotification {
 	return &clientui.AttentionNotification{
 		ID: clientui.AttentionNotificationID{
 			Kind: clientui.AttentionNotificationKindQuestion,
-			UUID: b.ID,
+			UUID: b.StepID,
 		},
 		Kind:       clientui.AttentionNotificationKindQuestion,
 		OccurredAt: b.OccurredAt,
@@ -212,18 +212,18 @@ func (t *QuestionBatchTracker) resolveIfComplete(batch *questionBatch) error {
 	}
 	if !batch.emitted {
 		batch.resolved = true
-		delete(t.batches, batch.ID)
+		delete(t.byStep, batch.StepID)
 		return nil
 	}
 	id := clientui.AttentionNotificationID{
 		Kind: clientui.AttentionNotificationKindQuestion,
-		UUID: batch.ID,
+		UUID: batch.StepID,
 	}
 	if err := t.broker.PublishResolved(batch.Route, id, clientui.AttentionNotificationKindQuestion, time.Now().UTC()); err != nil {
 		return err
 	}
 	batch.resolved = true
-	delete(t.batches, batch.ID)
+	delete(t.byStep, batch.StepID)
 	return nil
 }
 

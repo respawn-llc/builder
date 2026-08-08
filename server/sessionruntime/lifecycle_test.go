@@ -446,9 +446,9 @@ func TestQuestionBarrierDurabilityAbortClosesLifecycleAndRetiresCurrentGeneratio
 			context.Context,
 			ExecutionScope,
 			tools.AskQuestionRequest,
-		) (tools.AskQuestionResponse, error) {
+		) (tools.AskQuestionResolution, error) {
 			askCalls.Add(1)
-			return tools.AskQuestionResponse{}, errors.New("Question handler must remain blocked")
+			return nil, errors.New("Question handler must remain blocked")
 		},
 		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
 			return bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {

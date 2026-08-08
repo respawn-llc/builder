@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
 import { appI18n } from "@/i18n";
-import { SidebarContext, type SidebarController } from "@/app-facade";
+import { SidebarRootContext, type SidebarRootController } from "@/app-facade";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import {
   TaskSearchGlobalTrigger,
@@ -202,20 +202,18 @@ const shortIDSearchResponse = {
   ],
 } as const;
 
-const testSidebarController: SidebarController = {
-  activeDestination: null,
-  closeSidebar: vi.fn(),
-  openSidebar: async () => ({ status: "canceled", reason: "closed" }),
-  phase: "open",
-  replaceSidebar: vi.fn(),
-  resolveSidebar: vi.fn(),
-  resizeSidebar: vi.fn(),
-  sidebarWidthPx: 0,
+const openSidebarRoot = vi.fn<SidebarRootController["open"]>(() => ({
+  lifecycle: Promise.resolve("closed" as const),
+  release: vi.fn(),
+}));
+const testSidebarRoots: SidebarRootController = {
+  open: openSidebarRoot,
 };
 
 describe("Board Task Search", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    openSidebarRoot.mockClear();
   });
 
   afterEach(() => {
@@ -292,6 +290,26 @@ describe("Board Task Search", () => {
       },
     ]);
     expect(services.transport.dedicatedCalls[0]?.params).not.toHaveProperty("project_ids");
+  });
+
+  it("opens a global Search result as an owned sidebar root", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([{ method: "workflow.task.search", result: searchResponse }]);
+
+    renderSearch(services, null);
+    fireEvent.keyDown(window, { code: "KeyS", metaKey: true });
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "search" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(openSidebarRoot).toHaveBeenCalledWith({
+        kind: "taskDetail",
+        mode: "overlay",
+        taskID: "task-1",
+      });
+    });
   });
 
   it("replaces an open Project Search with the single global dialog", async () => {
@@ -570,10 +588,10 @@ function renderSearch(
   return render(
     <TestAppProviders services={services}>
       <TaskSearchProvider>
-        <SidebarContext.Provider value={testSidebarController}>
+        <SidebarRootContext.Provider value={testSidebarRoots}>
           <TaskSearchHost />
           {search}
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </TaskSearchProvider>
     </TestAppProviders>,
   );
@@ -586,10 +604,10 @@ function renderProjectSearchTree(
   return (
     <TestAppProviders services={services}>
       <TaskSearchProvider>
-        <SidebarContext.Provider value={testSidebarController}>
+        <SidebarRootContext.Provider value={testSidebarRoots}>
           <TaskSearchHost />
           <TaskSearchProjectTrigger onOpenTask={vi.fn()} projectID={projectID} />
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </TaskSearchProvider>
     </TestAppProviders>
   );

@@ -93,7 +93,13 @@ export { Toaster } from "./Sonner";
 export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "./radix/popover";
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 export { dismissStatusToast, showStatusToast } from "./statusToast";
-export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+export {
+  VirtualizedInfiniteList,
+} from "./VirtualizedInfiniteList";
+export {
+  createVirtualizedPixelOffsetRequest,
+  type VirtualizedPixelOffsetRequest,
+} from "./virtualizedPixelOffsetRequest";
 export { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 export { useStableCallback } from "./useStableCallback";
 export type { StatusNotice, ToastTone } from "./statusToast";

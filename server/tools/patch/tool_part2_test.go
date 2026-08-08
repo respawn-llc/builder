@@ -68,8 +68,9 @@ func outsideUpdateApprovalError(
 }
 
 func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
+	commentary := "not allowed by policy"
 	errMessage, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: "not allowed by policy"}, nil
+		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: &commentary}, nil
 	})
 	want := "Patch failed: user denied the edit for " + target + ".\nUser said: not allowed by policy"
 	if errMessage != want {
@@ -404,13 +405,13 @@ func toolError(t *testing.T, result tools.Result) string {
 }
 
 type toolFailureErrorPayload struct {
-	Error      string `json:"error"`
-	Kind       string `json:"kind,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	NearLine   bool   `json:"near_line,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	Commentary string `json:"commentary,omitempty"`
+	Error      string  `json:"error"`
+	Kind       string  `json:"kind,omitempty"`
+	Path       string  `json:"path,omitempty"`
+	Line       int     `json:"line,omitempty"`
+	NearLine   bool    `json:"near_line,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Commentary *string `json:"commentary,omitempty"`
 }
 
 func toolFailurePayload(t *testing.T, result tools.Result) toolFailureErrorPayload {

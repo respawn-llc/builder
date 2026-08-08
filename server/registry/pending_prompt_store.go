@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -101,14 +102,7 @@ func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromp
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return pendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
+		return sessionruntime.PendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
 	})
 	return items
-}
-
-func pendingPromptOrderLess(leftCreatedAt time.Time, leftID string, rightCreatedAt time.Time, rightID string) bool {
-	if leftCreatedAt.Equal(rightCreatedAt) {
-		return leftID < rightID
-	}
-	return leftCreatedAt.Before(rightCreatedAt)
 }

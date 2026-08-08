@@ -13,8 +13,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type defaultToolExecutor struct {
@@ -332,7 +330,6 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 	if len(askCandidateIndexes) == 0 {
 		return prepared, nil
 	}
-	batchID := uuid.NewString()
 	for ordinal, index := range askCandidateIndexes {
 		promptIDs := append([]string(nil), askCandidatePromptIDs...)
 		call := prepared[index].call
@@ -340,7 +337,6 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               runID,
 			StepID:              stepID,
-			BatchID:             batchID,
 			PromptID:            call.ID,
 			BatchPromptIDs:      promptIDs,
 			CandidateOrdinal:    ordinal,

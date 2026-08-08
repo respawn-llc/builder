@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 )
 
 type QuestionAwaiter interface {
-	AwaitPromptResponse(context.Context, string, askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
+	AwaitPromptResolution(context.Context, string, askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error)
 }
 
 type QuestionAttentionRegistry interface {
@@ -59,46 +58,46 @@ type TaskQuestionRequest struct {
 
 // HandleTaskQuestion owns only volatile prompt waiting and attention
 // lifecycle. It must never persist a waiting-question marker.
-func HandleTaskQuestion(ctx context.Context, awaiter QuestionAwaiter, attention QuestionAttentionRegistry, req TaskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+func HandleTaskQuestion(ctx context.Context, awaiter QuestionAwaiter, attention QuestionAttentionRegistry, req TaskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 	if err := req.Context.validate(); err != nil {
-		return askquestion.AskQuestionResponse{}, err
+		return nil, err
 	}
 	if awaiter == nil {
-		return askquestion.AskQuestionResponse{}, errors.New("workflow question awaiter is required")
+		return nil, errors.New("workflow question awaiter is required")
 	}
 	askReq := req.Question
 	if askReq.Origin != askquestion.AskQuestionOriginModelTool || askReq.QuestionBatch == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("workflow task question missing batch metadata: operation=ask_question task_id=%s node_id=%s step_id=%s call_id=%s ask_id=%s approval=%t", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.StepID, askReq.ToolCallID, askReq.ID, askReq.Approval)
+		return nil, fmt.Errorf("workflow task question missing batch metadata: operation=ask_question task_id=%s node_id=%s step_id=%s call_id=%s ask_id=%s approval=%t", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.StepID, askReq.ToolCallID, askReq.ID, askReq.Approval)
 	}
 	askReq.AttentionTarget = TaskQuestionAttentionTarget(req.Context, *askReq.QuestionBatch)
-	resp, askErr := awaiter.AwaitPromptResponse(ctx, req.Context.SessionID, askReq)
+	resolution, askErr := awaiter.AwaitPromptResolution(ctx, req.Context.SessionID, askReq)
 	if attention != nil {
 		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
-		if ShouldSkipRemainingTaskQuestions(askErr, ctx.Err()) {
+		if askquestion.ShouldSkipRemainingQuestionBatch(askErr, context.Cause(ctx)) {
 			MarkTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ID)
 		}
 	}
-	return resp, askErr
+	return resolution, askErr
 }
 
-func HandleTaskApprovalQuestion(ctx context.Context, awaiter QuestionAwaiter, attention ApprovalQuestionAttentionRegistry, req TaskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+func HandleTaskApprovalQuestion(ctx context.Context, awaiter QuestionAwaiter, attention ApprovalQuestionAttentionRegistry, req TaskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 	if err := req.Context.validate(); err != nil {
-		return askquestion.AskQuestionResponse{}, err
+		return nil, err
 	}
 	if awaiter == nil {
-		return askquestion.AskQuestionResponse{}, errors.New("workflow approval question awaiter is required")
+		return nil, errors.New("workflow approval question awaiter is required")
 	}
 	askReq := req.Question
 	if !askReq.Approval {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("workflow task approval question requires approval prompt: task_id=%s node_id=%s ask_id=%s", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.ID)
+		return nil, fmt.Errorf("workflow task approval question requires approval prompt: task_id=%s node_id=%s ask_id=%s", req.Context.Task.ID, req.Context.CurrentNode.NodeID, askReq.ID)
 	}
 	target := TaskApprovalQuestionAttentionTarget(req.Context, askReq.ID)
 	askReq.AttentionTarget = target
-	resp, askErr := awaiter.AwaitPromptResponse(ctx, req.Context.SessionID, askReq)
+	resolution, askErr := awaiter.AwaitPromptResolution(ctx, req.Context.SessionID, askReq)
 	if attention != nil {
 		attention.MarkTaskApprovalQuestionCleared(*target, askReq.ID)
 	}
-	return resp, askErr
+	return resolution, askErr
 }
 
 func PrepareSkippedTaskQuestionBatch(attention QuestionAttentionRegistry, context TaskQuestionContext, batch askquestion.AskQuestionBatchMetadata, occurredAt time.Time) error {
@@ -112,10 +111,6 @@ func PrepareSkippedTaskQuestionBatch(attention QuestionAttentionRegistry, contex
 	err := attention.PrepareTaskQuestionBatch(batch, context.SessionID, target, "", occurredAt)
 	MarkTaskQuestionBatchSkipped(attention, batch, "")
 	return err
-}
-
-func ShouldSkipRemainingTaskQuestions(askErr error, ctxErr error) bool {
-	return ctxErr != nil || errors.Is(askErr, context.Canceled) || errors.Is(askErr, io.EOF)
 }
 
 func MarkTaskQuestionBatchSkipped(attention QuestionAttentionRegistry, batch askquestion.AskQuestionBatchMetadata, materializedAskID string) {

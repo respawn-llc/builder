@@ -584,8 +584,14 @@ type currentNodePendingPrompt struct {
 }
 
 type currentNodePromptResult struct {
-	response askquestion.AskQuestionResponse
-	err      error
+	resolution askquestion.AskQuestionResolution
+	err        error
+}
+
+func currentNodeQuestionAnswer(answer string) askquestion.AskQuestionAnswer {
+	return askquestion.AskQuestionAnswer{
+		Freeform: &answer,
+	}
 }
 
 type currentNodeQuestionLLMClient struct{}
@@ -606,10 +612,10 @@ func (f currentNodeQuestionFixture) answerWorkflowQuestion(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	askID string,
-	response askquestion.AskQuestionResponse,
+	resolution askquestion.AskQuestionResolution,
 	submitErr error,
 ) error {
-	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, response, submitErr)
+	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, resolution, submitErr)
 	if err != nil {
 		return err
 	}
@@ -664,8 +670,8 @@ func (f currentNodeQuestionFixture) startPendingPrompt(t *testing.T, reference w
 	t.Helper()
 	result := make(chan currentNodePromptResult, 1)
 	handle, sessionID := f.startQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-		response, askErr := f.authority.AwaitPromptResponse(ctx, scope.ID(), request)
-		result <- currentNodePromptResult{response: response, err: askErr}
+		resolution, askErr := f.authority.AwaitPromptResolution(ctx, scope.ID(), request)
+		result <- currentNodePromptResult{resolution: resolution, err: askErr}
 		return askErr
 	})
 	return currentNodePendingPrompt{handle: handle, sessionID: sessionID, result: result}

@@ -226,7 +226,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		Descriptor: plan.Descriptor,
 		Runtime:    &runtimePlan,
 		Resource:   sessionruntime.ReplaceAgentResource{},
-		Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 			return RunPromptAskHandler(req)
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
@@ -332,6 +332,6 @@ func (r *headlessPromptRuntime) publishSessionStarted() {
 	})
 }
 
-func RunPromptAskHandler(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	return askquestion.AskQuestionResponse{}, ErrHeadlessAskUnsupported
+func RunPromptAskHandler(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+	return nil, ErrHeadlessAskUnsupported
 }

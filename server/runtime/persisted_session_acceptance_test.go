@@ -428,12 +428,10 @@ func runPersistedEffectRecoveryCase(
 	broker.SetAskHandler(func(
 		context.Context,
 		tools.AskQuestionRequest,
-	) (tools.AskQuestionResponse, error) {
+	) (tools.AskQuestionResolution, error) {
 		brokerCalls++
-		return tools.AskQuestionResponse{
-			Approval: &tools.AskQuestionApprovalPayload{
-				Decision: tools.AskQuestionApprovalDecisionAllowOnce,
-			},
+		return tools.AskQuestionApproval{
+			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
 		}, nil
 	})
 	fixture := newPersistedEffectFixture(t, workspace, outside, toolID, broker)
@@ -539,8 +537,8 @@ func newPersistedEffectFixture(
 		if err != nil {
 			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionDeny}, err
 		}
-		if response.Approval == nil ||
-			response.Approval.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
+		approval, ok := response.(tools.AskQuestionApproval)
+		if !ok || approval.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
 			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionDeny}, nil
 		}
 		return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil

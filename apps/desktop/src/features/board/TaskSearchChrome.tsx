@@ -11,7 +11,11 @@ import {
 import { SearchIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useSidebar, useTaskSearchMemory } from "@/app-facade";
+import {
+  SidebarRootOwner,
+  useOwnedSidebarRoots,
+  useTaskSearchMemory,
+} from "@/app-facade";
 import { InteractiveChip } from "@/ui";
 import {
   adjacentSearchResult,
@@ -147,8 +151,16 @@ function TaskSearchTrigger({
 }
 
 export function TaskSearchHost() {
+  return (
+    <SidebarRootOwner>
+      <OwnedTaskSearchHost />
+    </SidebarRootOwner>
+  );
+}
+
+function OwnedTaskSearchHost() {
   const { invocation, close, open, openSearch } = useTaskSearchController();
-  const { openSidebar } = useSidebar();
+  const { open: openSidebar } = useOwnedSidebarRoots();
   const memory = useTaskSearchMemory();
   const pendingActivationRef = useRef<
     Readonly<{ invocation: TaskSearchInvocation; taskID: string }> | null
@@ -191,7 +203,7 @@ export function TaskSearchHost() {
       return;
     }
     const destination = { kind: "taskDetail" as const, mode: "overlay" as const, taskID: pending.taskID };
-    void openSidebar(destination);
+    openSidebar(destination);
   }, [openSidebar]);
   const openGlobalSearch = useCallback((): void => {
     pendingActivationRef.current = null;

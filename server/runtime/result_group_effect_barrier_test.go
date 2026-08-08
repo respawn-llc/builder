@@ -16,6 +16,7 @@ import (
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -110,12 +111,12 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 	flushes := &resultGroupFlushRecorder{}
 	var engine *Engine
 	var interactionErr error
-	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); !found {
 			interactionErr = errors.New("Question became visible before the ready hosted sibling committed")
-			return tools.AskQuestionResponse{}, interactionErr
+			return nil, interactionErr
 		}
-		return tools.AskQuestionResponse{RequestID: req.ID, Answer: "continue"}, nil
+		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil
 	})
 	engine = mustNewTestEngine(
 		t,
@@ -183,16 +184,13 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 	flushes := &resultGroupFlushRecorder{}
 	var engine *Engine
 	var interactionErr error
-	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		if _, found := engine.transcriptRuntimeState().ToolCompletionSnapshot("hosted"); !found {
 			interactionErr = errors.New("Approval became visible before the ready hosted sibling committed")
-			return tools.AskQuestionResponse{}, interactionErr
+			return nil, interactionErr
 		}
-		return tools.AskQuestionResponse{
-			RequestID: req.ID,
-			Approval: &tools.AskQuestionApprovalPayload{
-				Decision: tools.AskQuestionApprovalDecisionAllowOnce,
-			},
+		return tools.AskQuestionApproval{
+			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
 		}, nil
 	})
 	engine = mustNewTestEngine(
@@ -269,9 +267,9 @@ func TestQuestionBarrierPreCommitFailureBlocksInteractionAndSemanticResult(t *te
 	store := mustCreateTestSession(t)
 	broker := tools.NewAskQuestionBroker()
 	handlerCalled := false
-	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		handlerCalled = true
-		return tools.AskQuestionResponse{RequestID: req.ID, Answer: "continue"}, nil
+		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil
 	})
 	skipped := 0
 	engine := mustNewTestEngine(
@@ -339,9 +337,9 @@ func TestQuestionBarrierCommittedObserverFailureRetainsPrefixAndBlocksInteractio
 	)
 	broker := tools.NewAskQuestionBroker()
 	handlerCalled := false
-	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		handlerCalled = true
-		return tools.AskQuestionResponse{RequestID: req.ID, Answer: "continue"}, nil
+		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil
 	})
 	skipped := 0
 	engine := mustNewTestEngine(
@@ -416,9 +414,9 @@ func TestQuestionBarrierCommittedProjectionFailureBlocksInteractionAndHydratesPr
 	)
 	broker := tools.NewAskQuestionBroker()
 	handlerCalled := false
-	broker.SetAskHandler(func(_ context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, _ tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		handlerCalled = true
-		return tools.AskQuestionResponse{RequestID: req.ID, Answer: "continue"}, nil
+		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil
 	})
 	skipped := 0
 	engine := mustNewTestEngine(
@@ -499,9 +497,9 @@ func TestQuestionBarrierOrdinaryBrokerErrorRemainsSemantic(t *testing.T) {
 	brokerErr := errors.New("broker unavailable")
 	broker := tools.NewAskQuestionBroker()
 	handlerCalled := false
-	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		handlerCalled = true
-		return tools.AskQuestionResponse{}, brokerErr
+		return nil, brokerErr
 	})
 	engine := mustNewTestEngine(
 		t,
@@ -541,9 +539,9 @@ func TestQuestionBarrierOrdinaryBrokerErrorRemainsSemantic(t *testing.T) {
 func TestQuestionBarrierOrdinaryCancellationRemainsSemantic(t *testing.T) {
 	broker := tools.NewAskQuestionBroker()
 	handlerCalled := false
-	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(context.Context, tools.AskQuestionRequest) (tools.AskQuestionResolution, error) {
 		handlerCalled = true
-		return tools.AskQuestionResponse{}, nil
+		return nil, nil
 	})
 	engine := mustNewTestEngine(
 		t,
@@ -667,23 +665,23 @@ func runSecondQuestionBarrierAttentionCase(
 		skippedCalls int
 		trackerErr   error
 		handlerErr   error
-		batchID      string
+		stepID       string
 		secondAskID  string
 	)
 	askBroker.SetAskHandler(func(
 		_ context.Context,
 		req tools.AskQuestionRequest,
-	) (tools.AskQuestionResponse, error) {
+	) (tools.AskQuestionResolution, error) {
 		stateMu.Lock()
 		defer stateMu.Unlock()
 		handlerCalls++
 		if handlerCalls != 1 {
 			handlerErr = fmt.Errorf("blocked second Question entered handler: %+v", req)
-			return tools.AskQuestionResponse{}, handlerErr
+			return nil, handlerErr
 		}
 		if req.QuestionBatch == nil {
 			handlerErr = errors.New("first Question has no production batch metadata")
-			return tools.AskQuestionResponse{}, handlerErr
+			return nil, handlerErr
 		}
 		batch := *req.QuestionBatch
 		if len(batch.BatchPromptIDs) != 2 {
@@ -691,15 +689,15 @@ func runSecondQuestionBarrierAttentionCase(
 				"first Question batch prompt IDs = %v, want two",
 				batch.BatchPromptIDs,
 			)
-			return tools.AskQuestionResponse{}, handlerErr
+			return nil, handlerErr
 		}
-		batchID = batch.BatchID
+		stepID = batch.StepID
 		secondAskID = batch.BatchPromptIDs[1]
 		trackerErr = errors.Join(
 			trackerErr,
 			tracker.Prepare(questionBarrierAttentionBatch(batch, req.Question)),
-			tracker.MarkMaterialized(batch.BatchID, req.ID),
-			tracker.MarkDurablyCleared(batch.BatchID, req.ID),
+			tracker.MarkMaterialized(batch.StepID, req.ID),
+			tracker.MarkDurablyCleared(batch.StepID, req.ID),
 		)
 		switch failure {
 		case questionBarrierFailureUncommitted:
@@ -712,7 +710,7 @@ func runSecondQuestionBarrierAttentionCase(
 				engine.transcriptRuntimeState().CompleteLiveTool(req.ID)
 			})
 		}
-		return tools.AskQuestionResponse{RequestID: req.ID, Answer: "continue"}, nil
+		return tools.AskQuestionAnswer{Freeform: textutil.Value("continue")}, nil
 	})
 	engine = mustNewTestEngine(
 		t,
@@ -730,7 +728,7 @@ func runSecondQuestionBarrierAttentionCase(
 				skippedCalls++
 				trackerErr = errors.Join(
 					trackerErr,
-					tracker.MarkSkipped(batch.BatchID, batch.PromptID),
+					tracker.MarkSkipped(batch.StepID, batch.PromptID),
 				)
 			},
 		},
@@ -747,7 +745,7 @@ func runSecondQuestionBarrierAttentionCase(
 	skippedCallsAfterExecution := skippedCalls
 	trackerErrAfterExecution := trackerErr
 	handlerErrAfterExecution := handlerErr
-	batchIDAfterExecution := batchID
+	stepIDAfterExecution := stepID
 	secondAskIDAfterExecution := secondAskID
 	stateMu.Unlock()
 	if restoreAfterExecution != nil {
@@ -786,13 +784,13 @@ func runSecondQuestionBarrierAttentionCase(
 	pending := nextQuestionBarrierAttentionEvent(t, attentionSub)
 	if pending.Type != clientui.AttentionNotificationEventPending ||
 		pending.Pending == nil ||
-		pending.Pending.ID.UUID != batchIDAfterExecution {
+		pending.Pending.ID.UUID != stepIDAfterExecution {
 		t.Fatalf("pending Question attention = %+v", pending)
 	}
 	resolved := nextQuestionBarrierAttentionEvent(t, attentionSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved ||
 		resolved.ID == nil ||
-		resolved.ID.UUID != batchIDAfterExecution {
+		resolved.ID.UUID != stepIDAfterExecution {
 		t.Fatalf("resolved Question attention = %+v", resolved)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -800,7 +798,7 @@ func runSecondQuestionBarrierAttentionCase(
 	if extra, err := attentionSub.Next(ctx); err == nil {
 		t.Fatalf("duplicate Question attention event = %+v", extra)
 	}
-	if err := tracker.MarkSkipped(batchIDAfterExecution, secondAskIDAfterExecution); !errors.Is(err, attentionnotify.ErrBatchNotFound) {
+	if err := tracker.MarkSkipped(stepIDAfterExecution, secondAskIDAfterExecution); !errors.Is(err, attentionnotify.ErrBatchNotFound) {
 		t.Fatalf("resolved Question batch remained registered: %v", err)
 	}
 }
@@ -820,9 +818,9 @@ func TestFirstQuestionBarrierFatalLeavesNoAttentionBatch(t *testing.T) {
 	askBroker.SetAskHandler(func(
 		context.Context,
 		tools.AskQuestionRequest,
-	) (tools.AskQuestionResponse, error) {
+	) (tools.AskQuestionResolution, error) {
 		handlerCalls++
-		return tools.AskQuestionResponse{}, nil
+		return nil, nil
 	})
 	skippedCalls := 0
 	var trackerErr error
@@ -840,7 +838,7 @@ func TestFirstQuestionBarrierFatalLeavesNoAttentionBatch(t *testing.T) {
 				skippedCalls++
 				trackerErr = errors.Join(
 					trackerErr,
-					tracker.MarkSkipped(batch.BatchID, batch.PromptID),
+					tracker.MarkSkipped(batch.StepID, batch.PromptID),
 				)
 			},
 		},
@@ -937,7 +935,7 @@ func TestFirstQuestionBarrierFatalLeavesNoAttentionBatch(t *testing.T) {
 		t.Fatalf("first-Question fatal published attention: %+v", event)
 	}
 	if err := tracker.MarkSkipped(
-		batch.BatchID,
+		batch.StepID,
 		batch.BatchPromptIDs[0],
 	); !errors.Is(err, attentionnotify.ErrBatchNotFound) {
 		t.Fatalf("first-Question fatal retained attention batch: %v", err)
@@ -950,8 +948,8 @@ func questionBarrierAttentionBatch(
 ) attentionnotify.QuestionBatch {
 	workflowID := runtimeids.NewWorkflowID()
 	return attentionnotify.QuestionBatch{
-		ID:    batch.BatchID,
-		Route: attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: "task-1"},
+		StepID: batch.StepID,
+		Route:  attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: "task-1"},
 		Target: clientui.AttentionNotificationTarget{
 			Kind:        clientui.AttentionNotificationTargetWorkflowTask,
 			WorkflowID:  &workflowID,

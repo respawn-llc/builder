@@ -20,7 +20,7 @@ type FSGuardFailureFactory struct {
 	UserDenied            func(FSGuardRequest, FSGuardApproval, string) error
 	NoPermission          func(string, string) error
 	DefaultApprovalFailed func(string, string) error
-	DefaultUserDenied     func(string, string) error
+	DefaultUserDenied     func(string, *string) error
 }
 
 type FSGuardRequest struct {
@@ -39,7 +39,7 @@ const (
 
 type FSGuardApproval struct {
 	Decision   FSGuardDecision
-	Commentary string
+	Commentary *string
 }
 
 type FSGuardApprover func(context.Context, FSGuardRequest) (FSGuardApproval, error)
@@ -349,13 +349,13 @@ func (g FSGuard) approvalFailed(path, reason string) error {
 	return fmt.Errorf("file edit approval failed for %s: %s", path, reason)
 }
 
-func (g FSGuard) userDenied(path, commentary string, instruction string) error {
+func (g FSGuard) userDenied(path string, commentary *string, instruction string) error {
 	if g.failures.DefaultUserDenied != nil {
 		return g.failures.DefaultUserDenied(path, commentary)
 	}
 	message := fmt.Sprintf("user denied edit for %s", path)
-	if strings.TrimSpace(commentary) != "" {
-		message += ": " + strings.TrimSpace(commentary)
+	if commentary != nil {
+		message += ": " + strings.TrimSpace(*commentary)
 	}
 	if strings.TrimSpace(instruction) != "" {
 		message += ": " + strings.TrimSpace(instruction)
