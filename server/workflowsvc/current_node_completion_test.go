@@ -15,6 +15,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
@@ -204,7 +205,8 @@ func TestAnswerWorkflowTaskApprovalNormalizesAbsentCommentary(t *testing.T) {
 		TaskID:          "task-question",
 		AskID:           "ask-approval",
 		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
-			Decision: clientui.ApprovalDecisionAllowOnce,
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "  ",
 		},
 	}
 
@@ -295,6 +297,73 @@ func TestAnswerWorkflowTaskQuestionRejectsConflictingIdempotentPayload(t *testin
 	request.Answer = "stop"
 	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("conflicting idempotent answer error = %v, want client request id reuse", err)
+	}
+}
+
+func TestAnswerWorkflowTaskQuestionMemoIdentityPreservesExactWhitespaceFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  serverapi.WorkflowTaskQuestionAnswerRequest
+		mutate func(*serverapi.WorkflowTaskQuestionAnswerRequest)
+	}{
+		{
+			name: "answer",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.Answer = "  "
+			},
+		},
+		{
+			name: "freeform answer",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.FreeformAnswer = "  "
+			},
+		},
+		{
+			name: "error message",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.ErrorMessage = "  "
+			},
+		},
+		{
+			name: "approval commentary",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+					Decision: clientui.ApprovalDecisionAllowOnce,
+				},
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.Approval.Commentary = "  "
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			execution := &currentNodeCompletionExecutionStub{}
+			service := currentNodeCompletionService(execution)
+			request := test.first
+			request.ClientRequestID = "task-question-exact-whitespace"
+			request.TaskID = "task-question"
+			request.AskID = "ask-question"
+			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+				t.Fatalf("AnswerWorkflowTaskQuestion first: %v", err)
+			}
+			test.mutate(&request)
+			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+				t.Fatalf("AnswerWorkflowTaskQuestion whitespace-distinct replay error = %v, want payload mismatch", err)
+			}
+			if execution.questionAcceptCalls != 1 {
+				t.Fatalf("question acceptance calls = %d, want 1", execution.questionAcceptCalls)
+			}
+		})
 	}
 }
 

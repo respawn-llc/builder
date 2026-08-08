@@ -44,18 +44,18 @@ type PromptControlService struct {
 type askAnswerMemoRequest struct {
 	SessionID            string
 	AskID                string
-	ErrorMessage         *string
-	Answer               *string
+	ErrorMessage         string
+	Answer               string
 	SelectedOptionNumber *int
-	FreeformAnswer       *string
+	FreeformAnswer       string
 }
 
 type approvalAnswerMemoRequest struct {
 	SessionID    string
 	ApprovalID   string
-	ErrorMessage *string
+	ErrorMessage string
 	Decision     clientui.ApprovalDecision
-	Commentary   *string
+	Commentary   string
 }
 
 func NewPromptControlService(prompts PendingPromptResponder) *PromptControlService {
@@ -73,25 +73,23 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
-	errorMessage := textutil.OptionalExactString(req.ErrorMessage)
-	answer := textutil.OptionalExactString(req.Answer)
-	freeformAnswer := textutil.OptionalExactString(req.FreeformAnswer)
 	memoReq := askAnswerMemoRequest{
 		SessionID:            req.SessionID,
 		AskID:                req.AskID,
-		ErrorMessage:         errorMessage,
-		Answer:               answer,
+		ErrorMessage:         req.ErrorMessage,
+		Answer:               req.Answer,
 		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-		FreeformAnswer:       freeformAnswer,
+		FreeformAnswer:       req.FreeformAnswer,
 	}
 	acceptance, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(context.Context) (PromptResponseAcceptance, error) {
+		errorMessage := textutil.OptionalExactString(req.ErrorMessage)
 		if errorMessage != nil {
 			return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, nil, errors.New(*errorMessage))
 		}
 		return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, askquestion.AskQuestionLegacyAnswer{
-			Answer:               answer,
+			Answer:               textutil.OptionalExactString(req.Answer),
 			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       freeformAnswer,
+			FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
 		}, nil)
 	})
 	if err != nil {
@@ -107,15 +105,19 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
-	errorMessage := textutil.OptionalExactString(req.ErrorMessage)
+	commentary := ""
+	if req.Commentary != nil {
+		commentary = *req.Commentary
+	}
 	memoReq := approvalAnswerMemoRequest{
 		SessionID:    req.SessionID,
 		ApprovalID:   req.ApprovalID,
-		ErrorMessage: errorMessage,
+		ErrorMessage: req.ErrorMessage,
 		Decision:     req.Decision,
-		Commentary:   textutil.Pointer(req.Commentary),
+		Commentary:   commentary,
 	}
 	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
+		errorMessage := textutil.OptionalExactString(req.ErrorMessage)
 		if errorMessage != nil {
 			_, err := s.prompts.AcceptPromptResolution(req.SessionID, req.ApprovalID, nil, errors.New(*errorMessage))
 			return struct{}{}, err
@@ -222,18 +224,18 @@ func appendPromptAnswerBatchResult(
 func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bool {
 	return a.SessionID == b.SessionID &&
 		a.AskID == b.AskID &&
-		textutil.EqualOptional(a.ErrorMessage, b.ErrorMessage) &&
-		textutil.EqualOptional(a.Answer, b.Answer) &&
+		a.ErrorMessage == b.ErrorMessage &&
+		a.Answer == b.Answer &&
 		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
-		textutil.EqualOptional(a.FreeformAnswer, b.FreeformAnswer)
+		a.FreeformAnswer == b.FreeformAnswer
 }
 
 func sameApprovalAnswerMemoRequest(a approvalAnswerMemoRequest, b approvalAnswerMemoRequest) bool {
 	return a.SessionID == b.SessionID &&
 		a.ApprovalID == b.ApprovalID &&
-		textutil.EqualOptional(a.ErrorMessage, b.ErrorMessage) &&
+		a.ErrorMessage == b.ErrorMessage &&
 		a.Decision == b.Decision &&
-		textutil.EqualOptional(a.Commentary, b.Commentary)
+		a.Commentary == b.Commentary
 }
 
 var _ servicecontract.PromptControlService = (*PromptControlService)(nil)

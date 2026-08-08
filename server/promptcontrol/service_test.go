@@ -217,6 +217,30 @@ func TestServiceAnswerAskPreservesAbsentLegacyTextSlots(t *testing.T) {
 	}
 }
 
+func TestServiceAnswerAskNormalizesWhitespaceSlotsAfterMemoAdmission(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-option-whitespace")
+	req.SelectedOptionNumber = textutil.Value(1)
+	req.Answer = "  "
+	req.FreeformAnswer = "\t"
+	req.ErrorMessage = "\n"
+
+	if err := service.AnswerAsk(context.Background(), req); err != nil {
+		t.Fatalf("AnswerAsk: %v", err)
+	}
+	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	if answer.Answer != nil || answer.FreeformAnswer != nil {
+		t.Fatalf(
+			"legacy text slots = Answer %v FreeformAnswer %v, want both absent",
+			answer.Answer,
+			answer.FreeformAnswer,
+		)
+	}
+	if responder.err != nil {
+		t.Fatalf("prompt submission error = %v, want absent whitespace error", responder.err)
+	}
+}
+
 func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-option")
@@ -243,6 +267,49 @@ func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.
 	request.SelectedOptionNumber = textutil.Value(1)
 	if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("AnswerAsk present selection replay error = %v, want payload mismatch", err)
+	}
+}
+
+func TestServiceAnswerAskMemoIdentityPreservesExactWhitespaceFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*serverapi.AskAnswerRequest)
+	}{
+		{
+			name: "answer",
+			mutate: func(request *serverapi.AskAnswerRequest) {
+				request.Answer = "  "
+			},
+		},
+		{
+			name: "freeform answer",
+			mutate: func(request *serverapi.AskAnswerRequest) {
+				request.FreeformAnswer = "  "
+			},
+		},
+		{
+			name: "error message",
+			mutate: func(request *serverapi.AskAnswerRequest) {
+				request.ErrorMessage = "  "
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, responder := newPromptControlTestService()
+			request := askAnswerRequest("req-exact-whitespace")
+			request.SelectedOptionNumber = textutil.Value(1)
+			if err := service.AnswerAsk(context.Background(), request); err != nil {
+				t.Fatalf("AnswerAsk first: %v", err)
+			}
+			test.mutate(&request)
+			if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+				t.Fatalf("AnswerAsk whitespace-distinct replay error = %v, want payload mismatch", err)
+			}
+			if responder.calls != 1 {
+				t.Fatalf("responder calls = %d, want 1", responder.calls)
+			}
+		})
 	}
 }
 
@@ -330,6 +397,21 @@ func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
 	}
 	if responder.resolution != nil {
 		t.Fatalf("unexpected resolution for prompt error: %+v", responder.resolution)
+	}
+}
+
+func TestServiceAnswerApprovalMemoIdentityPreservesExactWhitespaceError(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	request := approvalAnswerRequest("approval-exact-whitespace")
+	if err := service.AnswerApproval(context.Background(), request); err != nil {
+		t.Fatalf("AnswerApproval first: %v", err)
+	}
+	request.ErrorMessage = "  "
+	if err := service.AnswerApproval(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("AnswerApproval whitespace-distinct replay error = %v, want payload mismatch", err)
+	}
+	if responder.calls != 1 {
+		t.Fatalf("responder calls = %d, want 1", responder.calls)
 	}
 }
 

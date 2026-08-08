@@ -146,12 +146,12 @@ const (
 type taskQuestionAnswerMemoRequest struct {
 	TaskID               string
 	AskID                string
-	ErrorMessage         *string
-	Answer               *string
+	ErrorMessage         string
+	Answer               string
 	SelectedOptionNumber *int
-	FreeformAnswer       *string
+	FreeformAnswer       string
 	ApprovalDecision     clientui.ApprovalDecision
-	ApprovalCommentary   *string
+	ApprovalCommentary   string
 }
 
 type Option func(*Service)
@@ -1923,14 +1923,14 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 	memoReq := taskQuestionAnswerMemoRequest{
 		TaskID:               req.TaskID,
 		AskID:                req.AskID,
-		ErrorMessage:         textutil.OptionalExactString(req.ErrorMessage),
-		Answer:               textutil.OptionalExactString(req.Answer),
+		ErrorMessage:         req.ErrorMessage,
+		Answer:               req.Answer,
 		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-		FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
+		FreeformAnswer:       req.FreeformAnswer,
 	}
 	if req.Approval != nil {
 		memoReq.ApprovalDecision = req.Approval.Decision
-		memoReq.ApprovalCommentary = textutil.OptionalExactString(req.Approval.Commentary)
+		memoReq.ApprovalCommentary = req.Approval.Commentary
 	}
 	acceptance, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (workflowexecution.WorkflowQuestionAcceptance, error) {
 		return s.acceptWorkflowTaskQuestion(ctx, req)
@@ -1987,12 +1987,12 @@ func (s *Service) acceptWorkflowTaskQuestion(
 func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQuestionAnswerMemoRequest) bool {
 	return a.TaskID == b.TaskID &&
 		a.AskID == b.AskID &&
-		textutil.EqualOptional(a.ErrorMessage, b.ErrorMessage) &&
-		textutil.EqualOptional(a.Answer, b.Answer) &&
+		a.ErrorMessage == b.ErrorMessage &&
+		a.Answer == b.Answer &&
 		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
-		textutil.EqualOptional(a.FreeformAnswer, b.FreeformAnswer) &&
+		a.FreeformAnswer == b.FreeformAnswer &&
 		a.ApprovalDecision == b.ApprovalDecision &&
-		textutil.EqualOptional(a.ApprovalCommentary, b.ApprovalCommentary)
+		a.ApprovalCommentary == b.ApprovalCommentary
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
