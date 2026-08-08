@@ -1241,7 +1241,7 @@ func prepareCurrentNodeResume(
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	if err := repairCurrentNodeSessionAssociation(ctx, q, currentNode); err != nil {
+	if err := ensureCurrentNodeSessionAssociation(ctx, q, currentNode); err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
 	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)

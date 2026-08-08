@@ -2802,6 +2802,76 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 	return i, err
 }
 
+const hasBranchCurrentNodeSessionAssociation = `-- name: HasBranchCurrentNodeSessionAssociation :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_current_nodes current_node
+    JOIN sessions session
+      ON session.id = current_node.session_id
+     AND session.task_id = current_node.task_id
+    JOIN session_workflow_node_associations association
+      ON association.session_id = current_node.session_id
+     AND association.node_id = current_node.node_id
+     AND association.transition_branch_key = current_node.transition_branch_key
+    WHERE current_node.task_id = ?1
+      AND current_node.node_id = ?2
+      AND current_node.transition_branch_key = ?3
+      AND current_node.session_id = ?4
+)
+`
+
+type HasBranchCurrentNodeSessionAssociationParams struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	SessionID           sql.NullString
+}
+
+func (q *Queries) HasBranchCurrentNodeSessionAssociation(ctx context.Context, arg HasBranchCurrentNodeSessionAssociationParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasBranchCurrentNodeSessionAssociation,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.SessionID,
+	)
+	var exists bool
+	err := recordQueryError(ctx, row.Scan(&exists), hasBranchCurrentNodeSessionAssociation, 4)
+
+	return exists, err
+}
+
+const hasSerialCurrentNodeSessionAssociation = `-- name: HasSerialCurrentNodeSessionAssociation :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_current_nodes current_node
+    JOIN sessions session
+      ON session.id = current_node.session_id
+     AND session.task_id = current_node.task_id
+    JOIN session_workflow_node_associations association
+      ON association.session_id = current_node.session_id
+     AND association.node_id = current_node.node_id
+     AND association.transition_branch_key IS NULL
+    WHERE current_node.task_id = ?1
+      AND current_node.node_id = ?2
+      AND current_node.transition_branch_key IS NULL
+      AND current_node.session_id = ?3
+)
+`
+
+type HasSerialCurrentNodeSessionAssociationParams struct {
+	TaskID    string
+	NodeID    string
+	SessionID sql.NullString
+}
+
+func (q *Queries) HasSerialCurrentNodeSessionAssociation(ctx context.Context, arg HasSerialCurrentNodeSessionAssociationParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasSerialCurrentNodeSessionAssociation, arg.TaskID, arg.NodeID, arg.SessionID)
+	var exists bool
+	err := recordQueryError(ctx, row.Scan(&exists), hasSerialCurrentNodeSessionAssociation, 3)
+
+	return exists, err
+}
+
 const hasTaskPendingApprovalForCurrentNode = `-- name: HasTaskPendingApprovalForCurrentNode :one
 SELECT EXISTS (
     SELECT 1
@@ -4443,6 +4513,49 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 13); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentNodeReferencesBySession = `-- name: ListCurrentNodeReferencesBySession :many
+SELECT
+    task_id,
+    node_id,
+    transition_branch_key
+FROM task_current_nodes
+WHERE session_id = ?1
+ORDER BY
+    task_id,
+    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    transition_branch_key
+`
+
+type ListCurrentNodeReferencesBySessionRow struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+}
+
+func (q *Queries) ListCurrentNodeReferencesBySession(ctx context.Context, sessionID sql.NullString) ([]ListCurrentNodeReferencesBySessionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentNodeReferencesBySession, sessionID)
+	err = recordQueryError(ctx, err, listCurrentNodeReferencesBySession, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCurrentNodeReferencesBySessionRow
+	for rows.Next() {
+		var i ListCurrentNodeReferencesBySessionRow
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.NodeID, &i.TransitionBranchKey), listCurrentNodeReferencesBySession, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listCurrentNodeReferencesBySession, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listCurrentNodeReferencesBySession, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8675,7 +8788,7 @@ WHERE current_node.task_id = ?2
   AND current_node.transition_branch_key = ?4
   AND current_node.session_id = ?5
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
-    associated_at_unix_ms = excluded.associated_at_unix_ms
+    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms
 `
 
 type RepairBranchCurrentNodeSessionAssociationParams struct {
@@ -8723,7 +8836,7 @@ WHERE current_node.task_id = ?2
   AND current_node.transition_branch_key IS NULL
   AND current_node.session_id = ?4
 ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
-    associated_at_unix_ms = excluded.associated_at_unix_ms
+    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms
 `
 
 type RepairSerialCurrentNodeSessionAssociationParams struct {

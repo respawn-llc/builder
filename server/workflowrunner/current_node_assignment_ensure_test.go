@@ -4,10 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"core/internal/testharness/workflowtest"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
@@ -106,73 +109,11 @@ func TestEnsureCurrentNodeAssignmentReusesMatchingAgentAssignmentAfterStartupRec
 }
 
 func TestResumeRepairsMissingRetainedSuccessorProvenance(t *testing.T) {
-	f := newCurrentNodeRunnerFixture(t)
-	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeContinueSession)
-	task := f.createTask(t, workflowID)
-	lockCurrentNodeAssignmentExecutionTarget(t, f, task.ID)
-	source := f.publishTaskStart(t, task.ID).Mutation.Created[0]
-
-	sourceEnsure, err := f.starter.EnsureCurrentNodeAssignment(
-		context.Background(),
-		source.Reference,
-		workflowruntime.TaskPromptDeliveryAssignment,
-	)
-	if err != nil {
-		t.Fatalf("ensure source assignment: %v", err)
-	}
-	if receipt, waitErr := sourceEnsure.Wait(t.Context()); waitErr != nil || !receipt.Committed {
-		t.Fatalf("source assignment ensure = %+v, error = %v", receipt, waitErr)
-	}
-	sourceContext, err := f.store.ResolveCurrentNodeStartContext(context.Background(), source.Reference)
-	if err != nil {
-		t.Fatalf("resolve source context: %v", err)
-	}
-	if sourceContext.CurrentNode.SessionID == nil {
-		t.Fatal("source Current Node has no retained Session")
-	}
-	sessionID := *sourceContext.CurrentNode.SessionID
-
-	completed, err := workflowtest.CompleteCurrentNode(
-		f.store,
-		context.Background(),
-		workflowstore.CurrentNodeCompletionRequest{
-			Source:       source.Reference,
-			TransitionID: "next",
-		},
-	)
-	if err != nil {
-		t.Fatalf("complete source: %v", err)
-	}
-	if len(completed.Mutation.Created) != 1 {
-		t.Fatalf("completion created = %+v, want one successor", completed.Mutation.Created)
-	}
-	successor := completed.Mutation.Created[0]
-	if successor.SessionID == nil || *successor.SessionID != sessionID {
-		t.Fatalf("successor Session = %v, want retained %s", successor.SessionID, sessionID)
-	}
-	if _, err := f.metadata.DB().ExecContext(
-		context.Background(),
-		`DELETE FROM session_workflow_node_associations
-WHERE session_id = ?
-  AND node_id = ?
-  AND transition_branch_key IS NULL`,
-		sessionID.String(),
-		string(successor.Reference.NodeID),
-	); err != nil {
-		t.Fatalf("remove successor Session provenance after publication: %v", err)
-	}
-	if count := currentNodeSessionAssociationCount(t, f, sessionID, successor.Reference); count != 0 {
-		t.Fatalf("successor Session associations after simulated crash = %d, want none", count)
-	}
-
-	if err := f.store.InterruptCurrentNode(
-		context.Background(),
-		successor.Reference,
-		"workflow_startup_recovery",
-		workflow.NewCurrentNodeInterruptionDetail("workflow_startup_recovery", nil),
-	); err != nil {
-		t.Fatalf("interrupt successor after simulated crash: %v", err)
-	}
+	state := newMissingProvenanceRetainedSuccessor(t)
+	f := state.fixture
+	task := state.task
+	successor := state.successor
+	sessionID := state.sessionID
 	publication, err := workflowstore.NewLifecyclePublication(f.store)
 	if err != nil {
 		t.Fatalf("NewLifecyclePublication: %v", err)
@@ -256,6 +197,163 @@ WHERE session_id = ?
 		successor.Reference,
 	); err != nil {
 		t.Fatalf("validate successor Session binding after repeated Resume: %v", err)
+	}
+}
+
+func TestInteractiveActivationRepairsMissingRetainedSuccessorProvenance(t *testing.T) {
+	modelEntered := make(chan struct{})
+	var enteredOnce sync.Once
+	state := newMissingProvenanceRetainedSuccessor(t, ScriptedRuntimeStep{
+		BeforeResponse: func(ctx context.Context) error {
+			enteredOnce.Do(func() { close(modelEntered) })
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	})
+
+	first, handled, err := state.fixture.controller.ActivateOrAttachRetainedSession(
+		context.Background(),
+		state.sessionID,
+		"owner-missing-provenance-a",
+	)
+	if err != nil {
+		t.Fatalf("first retained Session activation: %v", err)
+	}
+	if !handled {
+		t.Fatal("first retained Session activation was classified as ordinary")
+	}
+	t.Cleanup(func() {
+		_, _ = first.Release(context.Background(), sessionruntime.RuntimeReleaseDetach)
+	})
+	select {
+	case <-modelEntered:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("retained successor activation did not enter the model loop")
+	}
+	if count := currentNodeSessionAssociationCount(
+		t,
+		state.fixture,
+		state.sessionID,
+		state.successor.Reference,
+	); count != 1 {
+		t.Fatalf("successor Session associations after direct activation = %d, want one", count)
+	}
+
+	second, handled, err := state.fixture.controller.ActivateOrAttachRetainedSession(
+		context.Background(),
+		state.sessionID,
+		"owner-missing-provenance-b",
+	)
+	if err != nil {
+		t.Fatalf("second retained Session activation: %v", err)
+	}
+	if !handled {
+		t.Fatal("second retained Session activation was classified as ordinary")
+	}
+	t.Cleanup(func() {
+		_, _ = second.Release(context.Background(), sessionruntime.RuntimeReleaseDetach)
+	})
+	if first.Resource() != second.Resource() {
+		t.Fatalf("repeated activation resources = %v and %v, want one resource", first.Resource(), second.Resource())
+	}
+	snapshot := state.fixture.controller.Snapshot()
+	if len(snapshot.LiveScopes) != 1 || !snapshot.LiveScopes[0].CurrentNode.Equal(state.successor.Reference) {
+		t.Fatalf("controller snapshot after repeated direct activation = %+v, want one successor scope", snapshot)
+	}
+	if requests := state.fixture.client.Requests(); len(requests) != 1 {
+		t.Fatalf("model requests after repeated direct activation = %d, want one", len(requests))
+	}
+	if count := currentNodeSessionAssociationCount(
+		t,
+		state.fixture,
+		state.sessionID,
+		state.successor.Reference,
+	); count != 1 {
+		t.Fatalf("successor Session associations after repeated activation = %d, want one", count)
+	}
+}
+
+type missingProvenanceRetainedSuccessor struct {
+	fixture   *currentNodeRunnerFixture
+	task      workflowstore.TaskRecord
+	successor workflow.CurrentNode
+	sessionID runtimeids.SessionID
+}
+
+func newMissingProvenanceRetainedSuccessor(
+	t *testing.T,
+	steps ...ScriptedRuntimeStep,
+) missingProvenanceRetainedSuccessor {
+	t.Helper()
+	f := newCurrentNodeRunnerFixture(t, steps...)
+	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeContinueSession)
+	task := f.createTask(t, workflowID)
+	lockCurrentNodeAssignmentExecutionTarget(t, f, task.ID)
+	source := f.publishTaskStart(t, task.ID).Mutation.Created[0]
+	sourceEnsure, err := f.starter.EnsureCurrentNodeAssignment(
+		context.Background(),
+		source.Reference,
+		workflowruntime.TaskPromptDeliveryAssignment,
+	)
+	if err != nil {
+		t.Fatalf("ensure source assignment: %v", err)
+	}
+	if receipt, waitErr := sourceEnsure.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("source assignment ensure = %+v, error = %v", receipt, waitErr)
+	}
+	sourceContext, err := f.store.ResolveCurrentNodeStartContext(context.Background(), source.Reference)
+	if err != nil {
+		t.Fatalf("resolve source context: %v", err)
+	}
+	if sourceContext.CurrentNode.SessionID == nil {
+		t.Fatal("source Current Node has no retained Session")
+	}
+	sessionID := *sourceContext.CurrentNode.SessionID
+	completed, err := workflowtest.CompleteCurrentNode(
+		f.store,
+		context.Background(),
+		workflowstore.CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "next",
+		},
+	)
+	if err != nil {
+		t.Fatalf("complete source: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("completion created = %+v, want one successor", completed.Mutation.Created)
+	}
+	successor := completed.Mutation.Created[0]
+	if successor.SessionID == nil || *successor.SessionID != sessionID {
+		t.Fatalf("successor Session = %v, want retained %s", successor.SessionID, sessionID)
+	}
+	if _, err := f.metadata.DB().ExecContext(
+		context.Background(),
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(successor.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("remove successor Session provenance after publication: %v", err)
+	}
+	if count := currentNodeSessionAssociationCount(t, f, sessionID, successor.Reference); count != 0 {
+		t.Fatalf("successor Session associations after simulated crash = %d, want none", count)
+	}
+	if err := f.store.InterruptCurrentNode(
+		context.Background(),
+		successor.Reference,
+		"workflow_startup_recovery",
+		workflow.NewCurrentNodeInterruptionDetail("workflow_startup_recovery", nil),
+	); err != nil {
+		t.Fatalf("interrupt successor after simulated crash: %v", err)
+	}
+	return missingProvenanceRetainedSuccessor{
+		fixture:   f,
+		task:      task,
+		successor: successor,
+		sessionID: sessionID,
 	}
 }
 

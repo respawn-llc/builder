@@ -231,6 +231,68 @@ WHERE session_id = ?
 	}
 }
 
+func TestResolveCurrentSessionStartContextRejectsContradictoryTaskOwnership(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	currentNode := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode.Reference,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	otherTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.db.ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(currentNode.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("remove Current Node Session provenance: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET task_id = ? WHERE id = ?`,
+		string(otherTask.ID),
+		sessionID.String(),
+	); err != nil {
+		t.Fatalf("contradict Session Task ownership: %v", err)
+	}
+
+	_, err = store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if err == nil || errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("ResolveCurrentSessionStartContext error = %v, want explicit ownership contradiction", err)
+	}
+	var associationCount int
+	if err := store.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(currentNode.Reference.NodeID),
+	).Scan(&associationCount); err != nil {
+		t.Fatalf("count contradictory Session provenance: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("contradictory Session resolution repaired %d associations, want none", associationCount)
+	}
+}
+
 func TestBindSessionToBranchCurrentNodeReplacesExpectedFanoutSourceSession(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

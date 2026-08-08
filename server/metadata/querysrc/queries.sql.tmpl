@@ -2453,6 +2453,18 @@ WHERE id = sqlc.arg(session_id)
   AND task_id IS NOT NULL
 ORDER BY task_id ASC;
 
+-- name: ListCurrentNodeReferencesBySession :many
+SELECT
+    task_id,
+    node_id,
+    transition_branch_key
+FROM task_current_nodes
+WHERE session_id = sqlc.arg(session_id)
+ORDER BY
+    task_id,
+    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
+    transition_branch_key;
+
 -- name: BindSessionToTask :execrows
 UPDATE sessions
 SET task_id = sqlc.arg(task_id)
@@ -2549,7 +2561,24 @@ WHERE current_node.task_id = sqlc.arg(task_id)
   AND current_node.transition_branch_key IS NULL
   AND current_node.session_id = sqlc.arg(session_id)
 ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
-    associated_at_unix_ms = excluded.associated_at_unix_ms;
+    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms;
+
+-- name: HasSerialCurrentNodeSessionAssociation :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_current_nodes current_node
+    JOIN sessions session
+      ON session.id = current_node.session_id
+     AND session.task_id = current_node.task_id
+    JOIN session_workflow_node_associations association
+      ON association.session_id = current_node.session_id
+     AND association.node_id = current_node.node_id
+     AND association.transition_branch_key IS NULL
+    WHERE current_node.task_id = sqlc.arg(task_id)
+      AND current_node.node_id = sqlc.arg(node_id)
+      AND current_node.transition_branch_key IS NULL
+      AND current_node.session_id = sqlc.arg(session_id)
+);
 
 -- name: RepairBranchCurrentNodeSessionAssociation :execrows
 INSERT INTO session_workflow_node_associations (
@@ -2572,7 +2601,24 @@ WHERE current_node.task_id = sqlc.arg(task_id)
   AND current_node.transition_branch_key = sqlc.arg(transition_branch_key)
   AND current_node.session_id = sqlc.arg(session_id)
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
-    associated_at_unix_ms = excluded.associated_at_unix_ms;
+    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms;
+
+-- name: HasBranchCurrentNodeSessionAssociation :one
+SELECT EXISTS (
+    SELECT 1
+    FROM task_current_nodes current_node
+    JOIN sessions session
+      ON session.id = current_node.session_id
+     AND session.task_id = current_node.task_id
+    JOIN session_workflow_node_associations association
+      ON association.session_id = current_node.session_id
+     AND association.node_id = current_node.node_id
+     AND association.transition_branch_key = current_node.transition_branch_key
+    WHERE current_node.task_id = sqlc.arg(task_id)
+      AND current_node.node_id = sqlc.arg(node_id)
+      AND current_node.transition_branch_key = sqlc.arg(transition_branch_key)
+      AND current_node.session_id = sqlc.arg(session_id)
+);
 
 -- name: CountTaskSessions :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
