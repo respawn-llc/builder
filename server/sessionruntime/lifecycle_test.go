@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -506,6 +507,9 @@ func TestQuestionBarrierDurabilityAbortClosesLifecycleAndRetiresCurrentGeneratio
 }
 
 func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
+	previousMaxProcs := goruntime.GOMAXPROCS(1)
+	defer goruntime.GOMAXPROCS(previousMaxProcs)
+
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
@@ -582,15 +586,18 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 		t.Fatal("current runtime callback did not become active")
 	}
 
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(
-		_ context.Context,
-		engine *runtime.Engine,
-	) error {
-		if _, err := engine.SetGoal("continue autonomously", session.GoalActorUser); err != nil {
-			return err
-		}
-		return engine.StartGoalLoop()
-	}); err != nil {
+	if err := authority.RunCurrentAgentExecution(
+		context.Background(),
+		mustOpenSessionDescriptor(t, sessionID),
+		func(
+			_ context.Context,
+			engine *runtime.Engine,
+		) error {
+			if _, err := engine.SetGoal("continue autonomously", session.GoalActorUser); err != nil {
+				return err
+			}
+			return engine.StartGoalLoop()
+		}); err != nil {
 		t.Fatalf("start Goal lifecycle turn: %v", err)
 	}
 
