@@ -2166,6 +2166,7 @@ SELECT
     document.source_kind,
     document.task_id,
     document.comment_id,
+    content.short_id,
     content.title,
     content.body,
     content.comment
@@ -2181,6 +2182,7 @@ type GetTaskSearchSourceByDocumentIDRow struct {
 	SourceKind string
 	TaskID     sql.NullString
 	CommentID  sql.NullString
+	ShortID    interface{}
 	Title      interface{}
 	Body       interface{}
 	Comment    interface{}
@@ -2194,6 +2196,7 @@ func (q *Queries) GetTaskSearchSourceByDocumentID(ctx context.Context, documentI
 		&i.SourceKind,
 		&i.TaskID,
 		&i.CommentID,
+		&i.ShortID,
 		&i.Title,
 		&i.Body,
 		&i.Comment,

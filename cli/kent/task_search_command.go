@@ -15,7 +15,7 @@ import (
 func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task search", stderr, taskSearchUsage)
 	fts5 := fs.Bool("fts5", false, "interpret the query as a raw FTS5 expression")
-	caseSensitive := fs.Bool("case-sensitive", false, "require exact code points in literal search")
+	caseSensitive := fs.Bool("case-sensitive", false, "require exact code points in literal title, body, and Comment search")
 	contextSize := fs.Int("context", serverapi.TaskSearchDefaultContext, "context size for each matching source")
 	includeComments := fs.Bool("include-comments", false, "include Task Comments in the search")
 	pageSize := fs.Int("page-size", serverapi.TaskSearchDefaultPageSize, "maximum hits to print")
