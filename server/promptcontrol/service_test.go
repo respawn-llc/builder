@@ -325,30 +325,76 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResu
 	if len(responder.batchCommands) != 3 {
 		t.Fatalf("batch commands = %+v", responder.batchCommands)
 	}
-	question := responder.batchCommands[0]
-	if question.Disposition != sessionruntime.PromptAnswerDispositionAnswered ||
-		question.Response.SelectedOptionNumber == nil ||
-		*question.Response.SelectedOptionNumber != 2 ||
-		question.Response.FreeformAnswer != "question commentary" ||
-		question.Response.Approval != nil {
-		t.Fatalf("question command = %+v", question)
+	question, ok := responder.batchCommands[0].Payload.(sessionruntime.PromptQuestionAnswerCommand)
+	if !ok ||
+		question.SelectedOptionNumber == nil ||
+		*question.SelectedOptionNumber != 2 ||
+		question.Freeform == nil ||
+		*question.Freeform != "question commentary" {
+		t.Fatalf("question command = %+v", responder.batchCommands[0])
 	}
-	approval := responder.batchCommands[1]
-	if approval.Disposition != sessionruntime.PromptAnswerDispositionAnswered ||
-		approval.Response.Approval == nil ||
-		approval.Response.Approval.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
-		approval.Response.Approval.Commentary != "approval commentary" {
-		t.Fatalf("approval command = %+v", approval)
+	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
+	if !ok ||
+		approval.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
+		approval.Commentary == nil ||
+		*approval.Commentary != "approval commentary" {
+		t.Fatalf("approval command = %+v", responder.batchCommands[1])
 	}
-	declined := responder.batchCommands[2]
-	if declined.Disposition != sessionruntime.PromptAnswerDispositionDeclined ||
-		declined.Response.RequestID != "" ||
-		declined.Response.Approval != nil {
-		t.Fatalf("declined command = %+v", declined)
+	if _, ok := responder.batchCommands[2].Payload.(sessionruntime.PromptDeclinedCommand); !ok {
+		t.Fatalf("declined command = %+v", responder.batchCommands[2])
 	}
 	if err := serverapi.ValidatePromptAnswerBatchResponse(request, response); err != nil {
 		t.Fatalf("response correlation: %v", err)
 	}
+}
+
+func TestServiceAnswerPromptBatchPreservesAbsentOptionalText(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	request := promptAnswerBatchRequest(t)
+	request.Entries[0].QuestionAnswer.Freeform = nil
+	request.Entries[1].ApprovalAnswer.Commentary = nil
+	responder.batchResults = []sessionruntime.PromptAnswerResult{
+		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+	}
+
+	if _, err := service.AnswerPromptBatch(context.Background(), request); err != nil {
+		t.Fatalf("AnswerPromptBatch: %v", err)
+	}
+	question, ok := responder.batchCommands[0].Payload.(sessionruntime.PromptQuestionAnswerCommand)
+	if !ok {
+		t.Fatalf("question command = %+v", responder.batchCommands[0])
+	}
+	if question.Freeform != nil {
+		t.Fatal("absent Question freeform became present")
+	}
+	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
+	if !ok {
+		t.Fatalf("approval command = %+v", responder.batchCommands[1])
+	}
+	if approval.Commentary != nil {
+		t.Fatal("absent Approval commentary became present")
+	}
+}
+
+func TestPromptBatchTranslationInvariantUsesDebugAwarePolicy(t *testing.T) {
+	t.Run("production", func(t *testing.T) {
+		t.Setenv("KENT_DEBUG", "")
+		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+		if err := reportPromptBatchTranslationInvariant("prompt-1"); err == nil {
+			t.Fatal("translation invariant did not surface an error")
+		}
+	})
+	t.Run("debug", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "panic")
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("translation invariant did not panic in debug mode")
+			}
+		}()
+		_ = reportPromptBatchTranslationInvariant("prompt-1")
+	})
 }
 
 func TestServiceAnswerPromptBatchRejectsMalformedRuntimeResultSets(t *testing.T) {

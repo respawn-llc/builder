@@ -47,6 +47,52 @@ func TestExecutionPromptStoreResolvePromptBatchValidatesAllMatchingEntriesBefore
 	}
 }
 
+func TestAuthorityResolvePromptBatchRejectsMissingInternalUnionVariantBeforeStaleEvaluation(t *testing.T) {
+	authority := NewAuthority(AuthorityOptions{})
+	_, err := authority.ResolvePromptBatch(
+		context.Background(),
+		runtimeids.NewSessionID(),
+		promptBatchStepID(t),
+		[]PromptAnswerCommand{{
+			PromptID: "prompt-1",
+		}},
+	)
+	if err == nil {
+		t.Fatal("invalid internal command union was treated as stale")
+	}
+}
+
+func TestExecutionPromptStoreResolvePromptBatchPreservesOptionalTextInTypedDelivery(t *testing.T) {
+	store, _ := newPromptBatchStore(t)
+	stepID := promptBatchStepID(t)
+	question := promptBatchQuestion("question", stepID, time.Unix(1, 0))
+	approval := promptBatchApproval("approval", stepID, time.Unix(2, 0))
+	installPromptBatchEntries(&store, question, approval)
+	selected := 1
+
+	_, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
+		promptQuestionAnswer("question", &selected, nil),
+		promptApprovalAnswer("approval", tools.AskQuestionApprovalDecisionAllowOnce, nil),
+	})
+	if err != nil {
+		t.Fatalf("ResolvePromptBatch: %v", err)
+	}
+	questionResolution, ok := (<-question.response).resolution.(promptQuestionResolution)
+	if !ok {
+		t.Fatal("Question delivery did not retain its typed resolution")
+	}
+	if questionResolution.text != nil {
+		t.Fatal("absent Question freeform became present during runtime delivery")
+	}
+	approvalResolution, ok := (<-approval.response).resolution.(promptApprovalResolution)
+	if !ok {
+		t.Fatal("Approval delivery did not retain its typed resolution")
+	}
+	if approvalResolution.answer.Commentary != nil {
+		t.Fatal("absent Approval commentary became present during runtime delivery")
+	}
+}
+
 func TestExecutionPromptStoreResolvePromptBatchResolvesMixedEntriesInCanonicalOrder(t *testing.T) {
 	stepID := promptBatchStepID(t)
 	canonical := []*executionPromptEntry{
@@ -96,14 +142,17 @@ func TestExecutionPromptStoreResolvePromptBatchResolvesMixedEntriesInCanonicalOr
 			if !store.hasPendingID("omitted") {
 				t.Fatal("omitted prompt was resolved")
 			}
-			if result := <-entries[0].response; result.err != nil || result.response.SelectedOptionNumber == nil || *result.response.SelectedOptionNumber != selected {
-				t.Fatalf("question response = %+v", result)
+			questionResponse, questionErr := legacyPromptResult(entries[0].snapshot.Request.ID, (<-entries[0].response).resolution)
+			if questionErr != nil || questionResponse.SelectedOptionNumber == nil || *questionResponse.SelectedOptionNumber != selected {
+				t.Fatalf("question response = %+v, error = %v", questionResponse, questionErr)
 			}
-			if result := <-entries[1].response; result.err != nil || result.response.Approval == nil || result.response.Approval.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
-				t.Fatalf("approval response = %+v", result)
+			approvalResponse, approvalErr := legacyPromptResult(entries[1].snapshot.Request.ID, (<-entries[1].response).resolution)
+			if approvalErr != nil || approvalResponse.Approval == nil || approvalResponse.Approval.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
+				t.Fatalf("approval response = %+v, error = %v", approvalResponse, approvalErr)
 			}
-			if result := <-entries[2].response; !errors.Is(result.err, context.Canceled) {
-				t.Fatalf("declined response error = %v, want context.Canceled", result.err)
+			_, declinedErr := legacyPromptResult(entries[2].snapshot.Request.ID, (<-entries[2].response).resolution)
+			if !errors.Is(declinedErr, context.Canceled) {
+				t.Fatalf("declined response error = %v, want context.Canceled", declinedErr)
 			}
 		})
 	}
@@ -178,8 +227,9 @@ func TestExecutionPromptStoreResolvePromptBatchFirstResolverWins(t *testing.T) {
 		"first":  PromptAnswerOutcomeResolved,
 		"second": PromptAnswerOutcomeSkipped,
 	})
-	if result := <-second.response; result.err != nil || result.response.Answer != "external" {
-		t.Fatalf("external winner response = %+v", result)
+	externalResponse, externalErr := legacyPromptResult(second.snapshot.Request.ID, (<-second.response).resolution)
+	if externalErr != nil || externalResponse.Answer != "external" {
+		t.Fatalf("external winner response = %+v, error = %v", externalResponse, externalErr)
 	}
 }
 
@@ -353,11 +403,12 @@ func TestExecutionPromptStoreResolvePromptBatchDeclinedApprovalHasNoDecisionPayl
 		t.Fatalf("resolved approvals = %v, want %v", got, want)
 	}
 	result := <-approval.response
-	if !errors.Is(result.err, context.Canceled) {
-		t.Fatalf("declined Approval error = %v, want context.Canceled", result.err)
+	response, resultErr := legacyPromptResult(approval.snapshot.Request.ID, result.resolution)
+	if !errors.Is(resultErr, context.Canceled) {
+		t.Fatalf("declined Approval error = %v, want context.Canceled", resultErr)
 	}
-	if result.response.Approval != nil {
-		t.Fatalf("declined Approval delivered decision payload: %+v", result.response.Approval)
+	if response.Approval != nil {
+		t.Fatalf("declined Approval delivered decision payload: %+v", response.Approval)
 	}
 }
 
@@ -591,39 +642,29 @@ func clonePromptBatchEntries(entries ...*executionPromptEntry) []*executionPromp
 }
 
 func promptQuestionAnswer(promptID string, selected *int, freeform *string) PromptAnswerCommand {
-	response := tools.AskQuestionResponse{
-		RequestID:            promptID,
-		SelectedOptionNumber: selected,
-	}
-	if freeform != nil {
-		response.FreeformAnswer = *freeform
-	}
 	return PromptAnswerCommand{
-		PromptID:    clientui.PromptID(promptID),
-		Disposition: PromptAnswerDispositionAnswered,
-		Response:    response,
+		PromptID: clientui.PromptID(promptID),
+		Payload: PromptQuestionAnswerCommand{
+			SelectedOptionNumber: selected,
+			Freeform:             freeform,
+		},
 	}
 }
 
 func promptApprovalAnswer(promptID string, decision tools.AskQuestionApprovalDecision, commentary *string) PromptAnswerCommand {
-	payload := &tools.AskQuestionApprovalPayload{Decision: decision}
-	if commentary != nil {
-		payload.Commentary = *commentary
-	}
 	return PromptAnswerCommand{
-		PromptID:    clientui.PromptID(promptID),
-		Disposition: PromptAnswerDispositionAnswered,
-		Response: tools.AskQuestionResponse{
-			RequestID: promptID,
-			Approval:  payload,
+		PromptID: clientui.PromptID(promptID),
+		Payload: PromptApprovalAnswerCommand{
+			Decision:   decision,
+			Commentary: commentary,
 		},
 	}
 }
 
 func promptDeclined(promptID string) PromptAnswerCommand {
 	return PromptAnswerCommand{
-		PromptID:    clientui.PromptID(promptID),
-		Disposition: PromptAnswerDispositionDeclined,
+		PromptID: clientui.PromptID(promptID),
+		Payload:  PromptDeclinedCommand{},
 	}
 }
 

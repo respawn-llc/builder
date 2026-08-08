@@ -10,6 +10,7 @@ import (
 	askquestion "core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -142,31 +143,19 @@ func (s *PromptControlService) AnswerPromptBatch(
 		command := sessionruntime.PromptAnswerCommand{PromptID: entry.PromptID}
 		switch {
 		case entry.QuestionAnswer != nil:
-			command.Disposition = sessionruntime.PromptAnswerDispositionAnswered
-			command.Response = askquestion.AskQuestionResponse{
-				RequestID:            string(entry.PromptID),
+			command.Payload = sessionruntime.PromptQuestionAnswerCommand{
 				SelectedOptionNumber: textutil.Pointer(entry.QuestionAnswer.SelectedOptionNumber),
-			}
-			if entry.QuestionAnswer.Freeform != nil {
-				command.Response.FreeformAnswer = *entry.QuestionAnswer.Freeform
+				Freeform:             entry.QuestionAnswer.Freeform,
 			}
 		case entry.ApprovalAnswer != nil:
-			command.Disposition = sessionruntime.PromptAnswerDispositionAnswered
-			commentary := ""
-			if entry.ApprovalAnswer.Commentary != nil {
-				commentary = *entry.ApprovalAnswer.Commentary
-			}
-			command.Response = askquestion.AskQuestionResponse{
-				RequestID: string(entry.PromptID),
-				Approval: &askquestion.AskQuestionApprovalPayload{
-					Decision:   askquestion.AskQuestionApprovalDecision(entry.ApprovalAnswer.Decision),
-					Commentary: commentary,
-				},
+			command.Payload = sessionruntime.PromptApprovalAnswerCommand{
+				Decision:   askquestion.AskQuestionApprovalDecision(entry.ApprovalAnswer.Decision),
+				Commentary: entry.ApprovalAnswer.Commentary,
 			}
 		case entry.Declined != nil:
-			command.Disposition = sessionruntime.PromptAnswerDispositionDeclined
+			command.Payload = sessionruntime.PromptDeclinedCommand{}
 		default:
-			panic("validated prompt answer batch entry has no disposition")
+			return serverapi.PromptAnswerBatchResponse{}, reportPromptBatchTranslationInvariant(entry.PromptID)
 		}
 		commands = append(commands, command)
 	}
@@ -178,24 +167,51 @@ func (s *PromptControlService) AnswerPromptBatch(
 		Results: make([]serverapi.PromptAnswerBatchResult, 0, len(results)),
 	}
 	for _, result := range results {
-		outcome := serverapi.PromptAnswerBatchOutcome("")
 		switch result.Outcome {
 		case sessionruntime.PromptAnswerOutcomeResolved:
-			outcome = serverapi.PromptAnswerBatchOutcomeResolved
+			response.Results = appendPromptAnswerBatchResult(
+				response.Results,
+				result.PromptID,
+				serverapi.PromptAnswerBatchOutcomeResolved,
+			)
 		case sessionruntime.PromptAnswerOutcomeSkipped:
-			outcome = serverapi.PromptAnswerBatchOutcomeSkipped
+			response.Results = appendPromptAnswerBatchResult(
+				response.Results,
+				result.PromptID,
+				serverapi.PromptAnswerBatchOutcomeSkipped,
+			)
 		default:
-			return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf("prompt batch responder returned invalid outcome %q", result.Outcome)
+			return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf(
+				"prompt batch responder returned invalid outcome %q",
+				result.Outcome,
+			)
 		}
-		response.Results = append(response.Results, serverapi.PromptAnswerBatchResult{
-			PromptID: result.PromptID,
-			Outcome:  outcome,
-		})
 	}
 	if err := serverapi.ValidatePromptAnswerBatchResponse(req, response); err != nil {
 		return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf("validate prompt answer batch response: %w", err)
 	}
 	return response, nil
+}
+
+func reportPromptBatchTranslationInvariant(promptID clientui.PromptID) error {
+	err := fmt.Errorf("validated prompt answer batch entry %q has no disposition", promptID)
+	invariant.NewPolicy().Check(false, invariant.WorkflowPromptDiagnostic(
+		"translate_prompt_answer_batch_entry",
+		string(promptID),
+		err,
+	))
+	return err
+}
+
+func appendPromptAnswerBatchResult(
+	results []serverapi.PromptAnswerBatchResult,
+	promptID clientui.PromptID,
+	outcome serverapi.PromptAnswerBatchOutcome,
+) []serverapi.PromptAnswerBatchResult {
+	return append(results, serverapi.PromptAnswerBatchResult{
+		PromptID: promptID,
+		Outcome:  outcome,
+	})
 }
 
 func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bool {

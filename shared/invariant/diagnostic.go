@@ -21,6 +21,7 @@ type Field string
 const (
 	FieldOperation                Field = "operation"
 	FieldSessionID                Field = "session_id"
+	FieldPromptID                 Field = "prompt_id"
 	FieldCachedServerActivity     Field = "cached_server_activity"
 	FieldLocalProjection          Field = "local_projection"
 	FieldPendingInterrupt         Field = "pending_interrupt"
@@ -68,6 +69,21 @@ func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
 		Scope: scope,
 		Fields: fields(map[Field]string{
 			FieldOperation:      operation,
+			FieldInvariantError: causeText,
+		}),
+	}
+}
+
+func WorkflowPromptDiagnostic(operation string, promptID string, cause error) Diagnostic {
+	causeText := ""
+	if cause != nil {
+		causeText = cause.Error()
+	}
+	return Diagnostic{
+		Scope: ScopeWorkflowExecution,
+		Fields: fields(map[Field]string{
+			FieldOperation:      operation,
+			FieldPromptID:       promptID,
 			FieldInvariantError: causeText,
 		}),
 	}

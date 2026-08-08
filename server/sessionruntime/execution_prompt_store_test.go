@@ -10,15 +10,20 @@ import (
 	"core/shared/runtimeids"
 )
 
+type promptAwaitTestResult struct {
+	response tools.AskQuestionResponse
+	err      error
+}
+
 func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	feed := make(authorityPromptFeed)
 	store := newExecutionPromptStoreForTest(t, feed)
 	first := batchedPromptRequest("ask-1", 0)
 	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan executionPromptResult, 1)
+	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), first)
-		firstResult <- executionPromptResult{response: response, err: err}
+		firstResult <- promptAwaitTestResult{response: response, err: err}
 	}()
 	pending := <-feed
 	if pending.requestID != first.ID || pending.resolved {
@@ -56,10 +61,10 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	default:
 	}
 
-	secondResult := make(chan executionPromptResult, 1)
+	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), second)
-		secondResult <- executionPromptResult{response: response, err: err}
+		secondResult <- promptAwaitTestResult{response: response, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	select {
@@ -103,14 +108,33 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 }
 
+func TestPromptInvariantUsesDebugAwarePolicy(t *testing.T) {
+	t.Run("production", func(t *testing.T) {
+		t.Setenv("KENT_DEBUG", "")
+		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+		if err := reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure"); err == nil {
+			t.Fatal("prompt invariant did not surface an error")
+		}
+	})
+	t.Run("debug", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "panic")
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("prompt invariant did not panic in debug mode")
+			}
+		}()
+		_ = reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure")
+	})
+}
+
 func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *testing.T) {
 	feed := newGatedPromptFeed()
 	store := newExecutionPromptStoreForTest(t, feed)
 	request := tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}
-	awaitDone := make(chan executionPromptResult, 1)
+	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), request)
-		awaitDone <- executionPromptResult{response: response, err: err}
+		awaitDone <- promptAwaitTestResult{response: response, err: err}
 	}()
 	<-feed.pendingStarted
 
@@ -177,10 +201,10 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSuccessor(t *testing.T) {
 	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
 	request := batchedPromptRequest("ask-1", 0)
-	result := make(chan executionPromptResult, 1)
+	result := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), request)
-		result <- executionPromptResult{response: response, err: err}
+		result <- promptAwaitTestResult{response: response, err: err}
 	}()
 	requirePromptPending(t, &store, request.ID)
 
@@ -221,10 +245,10 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
 	first := batchedPromptRequest("ask-1", 0)
 	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan executionPromptResult, 1)
+	firstResult := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), first)
-		firstResult <- executionPromptResult{response: response, err: err}
+		firstResult <- promptAwaitTestResult{response: response, err: err}
 	}()
 	requirePromptPending(t, &store, first.ID)
 
@@ -244,10 +268,10 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 		t.Fatal("timed out waiting for first prompt response")
 	}
 
-	secondResult := make(chan executionPromptResult, 1)
+	secondResult := make(chan promptAwaitTestResult, 1)
 	go func() {
 		response, err := store.Await(context.Background(), second)
-		secondResult <- executionPromptResult{response: response, err: err}
+		secondResult <- promptAwaitTestResult{response: response, err: err}
 	}()
 	requirePromptPending(t, &store, second.ID)
 	if err := store.Submit(

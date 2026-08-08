@@ -12,6 +12,8 @@ import (
 	"core/server/runtime"
 	"core/server/tools"
 	"core/server/workflow"
+	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -314,9 +316,43 @@ func (e *execution) cleanup() error {
 }
 
 type executionPromptResult struct {
-	response tools.AskQuestionResponse
-	err      error
+	resolution promptResolution
 }
+
+type promptResolution interface {
+	promptResolution()
+}
+
+type promptQuestionResolution struct {
+	selectedOptionNumber *int
+	text                 *promptQuestionText
+}
+
+func (promptQuestionResolution) promptResolution() {}
+
+type promptQuestionTextTarget uint8
+
+const (
+	promptQuestionTextTargetAnswer promptQuestionTextTarget = iota + 1
+	promptQuestionTextTargetFreeform
+)
+
+type promptQuestionText struct {
+	target promptQuestionTextTarget
+	value  string
+}
+
+type promptApprovalResolution struct {
+	answer PromptApprovalAnswerCommand
+}
+
+func (promptApprovalResolution) promptResolution() {}
+
+type promptFailureResolution struct {
+	cause error
+}
+
+func (promptFailureResolution) promptResolution() {}
 
 // PromptResponseAcceptance is returned after a prompt response mutation has
 // been accepted. Successor observation is latched, so every retry sees the
@@ -459,7 +495,7 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	case <-ctx.Done():
 		return tools.AskQuestionResponse{}, context.Cause(ctx)
 	case result := <-entry.response:
-		return result.response, result.err
+		return legacyPromptResult(requestID, result.resolution)
 	}
 }
 
@@ -508,27 +544,157 @@ func (s *executionPromptStore) submit(
 	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
 	if err != nil {
 		if !s.removePromptEntryLocked(requestID, entry) {
-			panic(fmt.Sprintf("pending prompt %q changed while locked", requestID))
+			s.mu.Unlock()
+			return PromptResponseAcceptance{}, reportPromptInvariant(
+				"remove_invalid_prompt_response",
+				requestID,
+				"pending prompt changed while the prompt store lock was held",
+			)
 		}
 		s.mu.Unlock()
-		publicationErr := s.deliverPromptResolution(entry, tools.AskQuestionResponse{}, err)
+		publicationErr := s.deliverPromptResolution(entry, promptFailureResolution{cause: err})
 		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
 	}
+	resolution, err := promptResolutionFromLegacy(entry.snapshot.Request, resp, submitErr)
+	if err != nil {
+		s.mu.Unlock()
+		return PromptResponseAcceptance{}, err
+	}
 	acceptance := PromptResponseAcceptance{}
+	var observation *promptSuccessorObservation
 	if latchSuccessor {
-		observation := &promptSuccessorObservation{
+		observation = &promptSuccessorObservation{
 			done:         make(chan struct{}),
 			successorIDs: successorIDs,
 		}
 		acceptance.observation = observation
-		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	if !s.removePromptEntryLocked(requestID, entry) {
-		panic(fmt.Sprintf("pending prompt %q changed while locked", requestID))
+		s.mu.Unlock()
+		return PromptResponseAcceptance{}, reportPromptInvariant(
+			"remove_prompt_response",
+			requestID,
+			"pending prompt changed while the prompt store lock was held",
+		)
+	}
+	if observation != nil {
+		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	s.mu.Unlock()
-	publicationErr := s.deliverPromptResolution(entry, resp, submitErr)
+	publicationErr := s.deliverPromptResolution(entry, resolution)
 	return acceptance, publicationErr
+}
+
+func promptResolutionFromLegacy(
+	req tools.AskQuestionRequest,
+	resp tools.AskQuestionResponse,
+	submitErr error,
+) (promptResolution, error) {
+	if submitErr != nil {
+		return promptFailureResolution{cause: submitErr}, nil
+	}
+	if req.Approval {
+		if resp.Approval == nil {
+			return nil, reportPromptInvariant(
+				"translate_legacy_approval_response",
+				req.ID,
+				"validated approval response is missing its approval payload",
+			)
+		}
+		answer := PromptApprovalAnswerCommand{Decision: resp.Approval.Decision}
+		if commentary := strings.TrimSpace(resp.Approval.Commentary); commentary != "" {
+			answer.Commentary = &commentary
+		}
+		return promptApprovalResolution{answer: answer}, nil
+	}
+	answer := PromptQuestionAnswerCommand{
+		SelectedOptionNumber: resp.SelectedOptionNumber,
+	}
+	resolution := promptQuestionResolution{
+		selectedOptionNumber: answer.SelectedOptionNumber,
+	}
+	if freeform := strings.TrimSpace(resp.FreeformAnswer); freeform != "" {
+		resolution.text = &promptQuestionText{
+			target: promptQuestionTextTargetFreeform,
+			value:  freeform,
+		}
+	} else if answer := strings.TrimSpace(resp.Answer); answer != "" {
+		resolution.text = &promptQuestionText{
+			target: promptQuestionTextTargetAnswer,
+			value:  answer,
+		}
+	}
+	return resolution, nil
+}
+
+func legacyPromptResult(
+	requestID string,
+	resolution promptResolution,
+) (tools.AskQuestionResponse, error) {
+	switch typed := resolution.(type) {
+	case promptQuestionResolution:
+		if typed.selectedOptionNumber == nil && typed.text == nil {
+			return tools.AskQuestionResponse{}, reportPromptInvariant(
+				"deliver_prompt_question",
+				requestID,
+				"Question resolution has neither a selected option nor freeform text",
+			)
+		}
+		response := tools.AskQuestionResponse{
+			RequestID:            requestID,
+			SelectedOptionNumber: typed.selectedOptionNumber,
+		}
+		if typed.text == nil {
+			return response, nil
+		}
+		if strings.TrimSpace(typed.text.value) == "" {
+			return tools.AskQuestionResponse{}, reportPromptInvariant(
+				"deliver_prompt_question",
+				requestID,
+				"Question resolution text is blank",
+			)
+		}
+		switch typed.text.target {
+		case promptQuestionTextTargetAnswer:
+			response.Answer = typed.text.value
+		case promptQuestionTextTargetFreeform:
+			response.FreeformAnswer = typed.text.value
+		default:
+			return tools.AskQuestionResponse{}, reportPromptInvariant(
+				"deliver_prompt_question",
+				requestID,
+				fmt.Sprintf("text target %d is invalid", typed.text.target),
+			)
+		}
+		return response, nil
+	case promptApprovalResolution:
+		return approvalResolutionResponse(clientui.PromptID(requestID), typed.answer), nil
+	case promptFailureResolution:
+		if typed.cause == nil {
+			return tools.AskQuestionResponse{}, reportPromptInvariant(
+				"deliver_prompt_failure",
+				requestID,
+				"failure resolution has no cause",
+			)
+		}
+		return tools.AskQuestionResponse{RequestID: requestID}, typed.cause
+	default:
+		return tools.AskQuestionResponse{}, reportPromptInvariant(
+			"deliver_prompt_resolution",
+			requestID,
+			fmt.Sprintf("resolution type %T is invalid", resolution),
+		)
+	}
+}
+
+func reportPromptInvariant(operation string, promptID string, detail string) error {
+	err := fmt.Errorf("%s for prompt %q: %s", operation, promptID, detail)
+	invariant.NewPolicy().Check(false, invariant.WorkflowPromptDiagnostic(
+		operation,
+		promptID,
+		err,
+	))
+	return err
 }
 
 func preparedSuccessorPromptIDs(req tools.AskQuestionRequest, submitErr error) ([]string, error) {
@@ -647,7 +813,9 @@ func (s *executionPromptStore) publishClosure(closure executionPromptClosure) er
 
 func (s *executionPromptStore) releaseClosure(closure executionPromptClosure) {
 	for _, entry := range closure.entries {
-		entry.response <- executionPromptResult{err: closure.err}
+		entry.response <- executionPromptResult{
+			resolution: promptFailureResolution{cause: closure.err},
+		}
 	}
 	s.mu.Lock()
 	for _, observation := range closure.observations {

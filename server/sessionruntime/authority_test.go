@@ -2696,7 +2696,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
-	responseDone := make(chan executionPromptResult, 1)
+	responseDone := make(chan promptAwaitTestResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
@@ -2704,7 +2704,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			responseDone <- executionPromptResult{response: response, err: askErr}
+			responseDone <- promptAwaitTestResult{response: response, err: askErr}
 			return askErr
 		},
 	})
@@ -2775,10 +2775,10 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 		}
 	}()
 
-	awaitDone := make(chan executionPromptResult, 1)
+	awaitDone := make(chan promptAwaitTestResult, 1)
 	go func() {
 		answer, awaitErr := store.Await(context.Background(), request)
-		awaitDone <- executionPromptResult{response: answer, err: awaitErr}
+		awaitDone <- promptAwaitTestResult{response: answer, err: awaitErr}
 	}()
 	select {
 	case pending := <-feed:
@@ -2987,7 +2987,7 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	request := tools.AskQuestionRequest{ID: askID, StepID: uuid.NewString(), Question: "Proceed?"}
 	workflowRef := workflowExecutionRefForTest(t, "task-exact-prompt", "node-exact-prompt", nil)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	responseDone := make(chan executionPromptResult, 1)
+	responseDone := make(chan promptAwaitTestResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
@@ -2995,7 +2995,7 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
-			responseDone <- executionPromptResult{response: response, err: askErr}
+			responseDone <- promptAwaitTestResult{response: response, err: askErr}
 			return askErr
 		},
 	})
