@@ -631,7 +631,7 @@ func (s *Service) releaseProvisionalTaskWorktree(
 		return nil, err
 	}
 	if record.CreatedBranch {
-		if err := s.git.deleteBranch(ctx, workspace.RootPath, branchName, false); err != nil {
+		if err := s.git.deleteBranch(ctx, workspace.RootPath, branchName, true); err != nil {
 			return nil, err
 		}
 	}

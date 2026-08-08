@@ -172,6 +172,50 @@ func TestPrepareTaskExecutionRootReplacesDifferentCommitCleanWorktree(t *testing
 	}
 }
 
+func TestPrepareTaskExecutionRootReplacesCleanWorktreeFromUnmergedTargetCommit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	sourceBranch := runGit(t, env.workspaceRoot, "symbolic-ref", "--short", "HEAD")
+	runGit(t, env.workspaceRoot, "checkout", "-q", "-b", "divergent-target")
+	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "divergent-target.txt"), []byte("target\n"), 0o644); err != nil {
+		t.Fatalf("write divergent target: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "add", "divergent-target.txt")
+	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "divergent target")
+	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	runGit(t, env.workspaceRoot, "checkout", "-q", sourceBranch)
+	replacementTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+
+	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &firstTarget,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
+	}
+	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &replacementTarget,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
+	}
+	if first.Root.Managed == nil ||
+		replacement.Root.Managed == nil ||
+		replacement.Root.Managed.WorktreeID == first.Root.Managed.WorktreeID {
+		t.Fatalf("replacement roots = first:%+v replacement:%+v", first.Root, replacement.Root)
+	}
+	if replacement.RetainedPreviousWorktree != nil {
+		t.Fatalf("clean replacement retained previous worktree: %+v", replacement.RetainedPreviousWorktree)
+	}
+	if _, err := os.Stat(first.Root.Managed.Root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clean previous root remains: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, first.Root.Managed.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("clean previous record remains: %v", err)
+	}
+}
+
 func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanAdvancedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
