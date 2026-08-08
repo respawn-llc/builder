@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { appI18n } from "@/i18n";
 import {
   mountTaskDetailSurface,
   taskDetailResponse,
@@ -18,7 +19,7 @@ function taskWithActions(overrides: Record<string, unknown>) {
 }
 
 it("orders Start, Open, and targeted Interrupt in one wrapping action flow", async () => {
-  const sessionName = "A session name that is deliberately much too long";
+  const sessionName = `${"👨‍👩‍👧‍👦".repeat(31)}e\u0301x`;
   mountTaskDetailSurface(
     taskWithActions({
       live_sessions: [
@@ -36,23 +37,14 @@ it("orders Start, Open, and targeted Interrupt in one wrapping action flow", asy
   );
 
   const flow = await screen.findByTestId("task-detail-action-flow");
-  expect(
-    within(flow)
-      .getAllByRole("button")
-      .map((button) => button.textContent),
-  ).toEqual([
-    "Start",
-    `Open ${sessionName.slice(0, 31)}… Chat`,
-    `Interrupt ${sessionName.slice(0, 31)}… Chat`,
-  ]);
-  expect(within(flow).getByRole("button", { name: `Open ${sessionName} Chat` })).toHaveAttribute(
-    "title",
-    `Open ${sessionName} Chat`,
-  );
-  expect(within(flow).getByRole("button", { name: `Interrupt ${sessionName} Chat` })).toHaveAttribute(
-    "title",
-    `Interrupt ${sessionName} Chat`,
-  );
+  const start = within(flow).getByTestId("task-detail-start");
+  const openLabel = appI18n.t("task.openChat", { name: sessionName });
+  const interruptLabel = appI18n.t("task.interruptChat", { name: sessionName });
+  const open = within(flow).getByRole("button", { name: openLabel });
+  const interrupt = within(flow).getByRole("button", { name: interruptLabel });
+  expect(within(flow).getAllByRole("button")).toEqual([start, open, interrupt]);
+  expect(open).toHaveAttribute("title", openLabel);
+  expect(interrupt).toHaveAttribute("title", interruptLabel);
 });
 
 it("falls back to the Agent Node display name and keeps Task-wide Interrupt generic", async () => {
@@ -72,9 +64,15 @@ it("falls back to the Agent Node display name and keeps Task-wide Interrupt gene
     }),
   );
 
-  expect(await screen.findByRole("button", { name: "Open Implementation Chat" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Open Review Chat" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Interrupt" })).toBeInTheDocument();
+  const flow = await screen.findByTestId("task-detail-action-flow");
+  const firstOpen = within(flow).getByRole("button", {
+    name: appI18n.t("task.openChat", { name: "Implementation" }),
+  });
+  const secondOpen = within(flow).getByRole("button", {
+    name: appI18n.t("task.openChat", { name: "Review" }),
+  });
+  const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
+  expect(within(flow).getAllByRole("button")).toEqual([firstOpen, secondOpen, interrupt]);
 });
 
 it("keeps Interrupt generic when a Script is the live target", async () => {
@@ -88,8 +86,9 @@ it("keeps Interrupt generic when a Script is the live target", async () => {
     },
   });
 
-  expect(await screen.findByRole("button", { name: "Interrupt" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /Interrupt .* Chat/ })).not.toBeInTheDocument();
+  const flow = await screen.findByTestId("task-detail-action-flow");
+  const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
+  expect(within(flow).getAllByRole("button").at(-1)).toBe(interrupt);
 });
 
 it("disables Start while its request is pending and while disconnected", async () => {

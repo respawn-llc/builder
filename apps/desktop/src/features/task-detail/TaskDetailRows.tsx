@@ -18,6 +18,7 @@ import {
 } from "@/ui";
 import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
+import { ellipsizeActionTarget } from "./ellipsizeActionTarget";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskDetailLabels } from "./TaskDetailLabels";
 import { TaskDeleteButton } from "./TaskDeleteButton";
@@ -95,7 +96,7 @@ export function TaskHeaderIsland({
             aria-label={t("task.save")}
             aria-hidden={!dirty}
             className={`absolute inset-0 transition-opacity motion-reduce:transition-none ${
-              dirty ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+              dirty ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 disabled:opacity-0!"
             }`}
             data-testid="task-detail-save"
             disabled={!canSaveDraft || !dirty}
@@ -561,10 +562,6 @@ function taskInterruptTarget(detail: TaskDetail): string | null {
     }
   }
   return null;
-}
-
-function ellipsizeActionTarget(value: string): string {
-  return value.length <= 32 ? value : `${value.slice(0, 31)}…`;
 }
 
 function TaskStatusText({

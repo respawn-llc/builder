@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
@@ -128,6 +130,16 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	}
 	task = projected.Task
 	definition := projected.Definition
+	liveSessions, currentScripts, err := taskDetailLiveTargets(
+		ctx,
+		d.queries.ListSessionNamesByIDs,
+		task.ID,
+		projected.LiveExecutions,
+		definition,
+	)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
 	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, d.queries, []string{task.ID})
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -176,8 +188,8 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		ExecutionTarget:      executionTarget,
 		WorktreePath:         worktreePath,
 		CurrentNodes:         ProjectCurrentNodes(projected.CurrentNodes),
-		LiveSessions:         append(make([]serverapi.WorkflowTaskLiveSession, 0, len(projected.LiveSessions)), projected.LiveSessions...),
-		CurrentScripts:       append(make([]serverapi.WorkflowTaskCurrentScript, 0, len(projected.CurrentScripts)), projected.CurrentScripts...),
+		LiveSessions:         liveSessions,
+		CurrentScripts:       currentScripts,
 		RetainedSessionCount: int(retainedSessionCount),
 		Status:               projected.Status,
 		Actions:              projected.Actions,
@@ -186,6 +198,84 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	}
 	detail.Dependencies = projectedDependencies
 	return detail, nil
+}
+
+func taskDetailLiveTargets(
+	ctx context.Context,
+	nameLookup sessionNameLookup,
+	taskID string,
+	executions []sessionruntime.TaskExecution,
+	definition definitionSnapshot,
+) ([]serverapi.WorkflowTaskLiveSession, []serverapi.WorkflowTaskCurrentScript, error) {
+	type liveAgent struct {
+		sessionID       string
+		nodeDisplayName string
+	}
+	agents := make([]liveAgent, 0, len(executions))
+	sessionIDs := make([]string, 0, len(executions))
+	scripts := make([]serverapi.WorkflowTaskCurrentScript, 0, len(executions))
+	nodesByID := workflowNodesByID(definition.api)
+	seenSessionIDs := make(map[string]struct{}, len(executions))
+	for _, execution := range executions {
+		switch {
+		case execution.Agent != nil:
+			sessionID := execution.Agent.SessionID.String()
+			if _, exists := seenSessionIDs[sessionID]; exists {
+				return nil, nil, fmt.Errorf("task %q has duplicate live Session %q", taskID, sessionID)
+			}
+			seenSessionIDs[sessionID] = struct{}{}
+			nodeID := string(execution.Ref.CurrentNode.NodeID)
+			node, exists := nodesByID[nodeID]
+			if !exists {
+				return nil, nil, fmt.Errorf("task %q live Agent execution references unknown Node %q", taskID, nodeID)
+			}
+			if node.Kind != string(workflow.NodeKindAgent) {
+				return nil, nil, fmt.Errorf("task %q live Agent execution references %s Node %q", taskID, node.Kind, nodeID)
+			}
+			if strings.TrimSpace(node.DisplayName) == "" {
+				return nil, nil, fmt.Errorf("task %q live Agent execution Node %q has a blank display name", taskID, nodeID)
+			}
+			sessionIDs = append(sessionIDs, sessionID)
+			agents = append(agents, liveAgent{sessionID: sessionID, nodeDisplayName: node.DisplayName})
+		case execution.Script != nil:
+			if strings.TrimSpace(execution.Script.Path) == "" {
+				return nil, nil, fmt.Errorf("task %q live Script execution has a blank target path", taskID)
+			}
+			scripts = append(scripts, serverapi.WorkflowTaskCurrentScript{
+				CurrentNode: workflowCurrentNodeReference(execution.Ref.CurrentNode),
+				Path:        execution.Script.Path,
+			})
+		default:
+			return nil, nil, fmt.Errorf("task %q live workflow execution has no target", taskID)
+		}
+	}
+	names, err := resolveSessionNames(ctx, nameLookup, sessionIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task %q live Sessions: %w", taskID, err)
+	}
+	liveSessions := make([]serverapi.WorkflowTaskLiveSession, 0, len(agents))
+	for _, agent := range agents {
+		liveSessions = append(liveSessions, serverapi.WorkflowTaskLiveSession{
+			SessionID:       agent.sessionID,
+			SessionName:     names[agent.sessionID],
+			NodeDisplayName: agent.nodeDisplayName,
+		})
+	}
+	sort.Slice(liveSessions, func(i, j int) bool { return liveSessions[i].SessionID < liveSessions[j].SessionID })
+	sort.Slice(scripts, func(i, j int) bool {
+		if scripts[i].CurrentNode.NodeID != scripts[j].CurrentNode.NodeID {
+			return scripts[i].CurrentNode.NodeID < scripts[j].CurrentNode.NodeID
+		}
+		return optionalStringValue(scripts[i].CurrentNode.TransitionBranchKey) < optionalStringValue(scripts[j].CurrentNode.TransitionBranchKey)
+	})
+	return liveSessions, scripts, nil
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRecord, primaryWorkspaceID string) (serverapi.ProjectWorkspaceSummary, error) {

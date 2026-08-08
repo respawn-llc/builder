@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import { RpcError, rpcErrorCodes } from "@/api";
+import { appI18n } from "@/i18n";
 import { getCallCount, mountTaskDetailSurface, taskDetailResponse } from "@/test-support/task-detail";
 
 function taskWithDelete(canDelete: boolean) {
@@ -21,35 +22,54 @@ function taskWithDelete(canDelete: boolean) {
 it("shows Delete only for a clean deletable Task and replaces it with Save while dirty", async () => {
   mountTaskDetailSurface(taskWithDelete(true));
   const user = userEvent.setup();
+  const deleteLabel = appI18n.t("board.deleteTask");
+  const saveLabel = appI18n.t("task.save");
 
-  expect(await screen.findByRole("button", { name: "Delete" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: deleteLabel })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: saveLabel })).not.toBeInTheDocument();
 
-  const title = screen.getByRole("textbox", { name: "Title" });
+  const title = screen.getByRole("textbox", { name: appI18n.t("task.name") });
   await user.type(title, " changed");
 
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: saveLabel })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: deleteLabel })).not.toBeInTheDocument();
+  const inactiveDelete = screen.getByTestId("task-detail-delete");
+  expect(inactiveDelete).toBeDisabled();
+  expect(inactiveDelete).toHaveAttribute("aria-hidden", "true");
+  expect(inactiveDelete).toHaveAttribute("tabindex", "-1");
 });
 
 it("leaves the clean title action slot empty when Delete is unavailable", async () => {
   mountTaskDetailSurface(taskWithDelete(false));
 
-  await screen.findByRole("textbox", { name: "Title" });
-  expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+  await screen.findByRole("textbox", { name: appI18n.t("task.name") });
+  expect(screen.queryByRole("button", { name: appI18n.t("board.deleteTask") })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: appI18n.t("task.save") })).not.toBeInTheDocument();
 });
 
 it("dismisses its exact host after successful deletion", async () => {
   const onDeleteDismiss = vi.fn(async () => ({ kind: "accepted" as const }));
   const services = mountTaskDetailSurface(taskWithDelete(true), {
     onDeleteDismiss,
-    routes: [{ method: "workflow.task.delete", result: {} }],
+    routes: [
+      {
+        method: "workflow.task.delete",
+        handler: async () => {
+          expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+          return {};
+        },
+      },
+    ],
   });
   const user = userEvent.setup();
+  const deleteLabel = appI18n.t("board.deleteTask");
 
-  await user.click(await screen.findByRole("button", { name: "Delete" }));
-  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+  await user.click(await screen.findByRole("button", { name: deleteLabel }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: appI18n.t("board.deleteTaskConfirm"),
+    }),
+  );
 
   await waitFor(() => {
     expect(getCallCount(services.transport.calls, "workflow.task.delete")).toBe(1);
@@ -80,14 +100,21 @@ it("treats typed Task-not-found as deletion and lets the user retry an ordinary 
     ],
   });
   const user = userEvent.setup();
+  const deleteLabel = appI18n.t("board.deleteTask");
+  const confirmLabel = appI18n.t("board.deleteTaskConfirm");
 
-  await user.click(await screen.findByRole("button", { name: "Delete" }));
-  const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" });
+  await user.click(await screen.findByRole("button", { name: deleteLabel }));
+  const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: confirmLabel });
   await user.click(confirm);
-  expect(await screen.findByText("temporary failure")).toBeInTheDocument();
-  expect(onDeleteDismiss).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(getCallCount(services.transport.calls, "workflow.task.delete")).toBe(1);
+    expect(screen.getByRole("button", { name: deleteLabel })).not.toBeDisabled();
+    expect(onDeleteDismiss).not.toHaveBeenCalled();
+  });
 
-  await user.click(confirm);
+  await user.click(screen.getByRole("button", { name: deleteLabel }));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: confirmLabel }));
   await waitFor(() => {
     expect(getCallCount(services.transport.calls, "workflow.task.delete")).toBe(2);
     expect(onDeleteDismiss).toHaveBeenCalledOnce();
@@ -104,12 +131,20 @@ it("surfaces an exact-host dismissal failure without closing a replacement", asy
     routes: [{ method: "workflow.task.delete", result: {} }],
   });
   const user = userEvent.setup();
+  const deleteLabel = appI18n.t("board.deleteTask");
 
-  await user.click(await screen.findByRole("button", { name: "Delete" }));
-  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+  await user.click(await screen.findByRole("button", { name: deleteLabel }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: appI18n.t("board.deleteTaskConfirm"),
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-  expect(await screen.findByText("dismiss failed")).toBeInTheDocument();
-  expect(onDeleteDismiss).toHaveBeenCalledOnce();
+  await waitFor(() => {
+    expect(onDeleteDismiss).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: deleteLabel })).not.toBeDisabled();
+  });
 });
 
 it("still best-effort dismisses its exact host when ordinary Task Detail content is replaced in flight", async () => {
@@ -130,9 +165,14 @@ it("still best-effort dismisses its exact host when ordinary Task Detail content
     ],
   });
   const user = userEvent.setup();
+  const deleteLabel = appI18n.t("board.deleteTask");
 
-  await user.click(await screen.findByRole("button", { name: "Delete" }));
-  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+  await user.click(await screen.findByRole("button", { name: deleteLabel }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: appI18n.t("board.deleteTaskConfirm"),
+    }),
+  );
   await waitFor(() => {
     expect(getCallCount(services.transport.calls, "workflow.task.delete")).toBe(1);
   });

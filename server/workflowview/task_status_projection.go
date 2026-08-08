@@ -37,8 +37,6 @@ type TaskStatusProjectionResult struct {
 	LiveExecutions               []sessionruntime.TaskExecution
 	PendingTransitionApprovalIDs []string
 	Actions                      serverapi.WorkflowTaskActions
-	LiveSessions                 []serverapi.WorkflowTaskLiveSession
-	CurrentScripts               []serverapi.WorkflowTaskCurrentScript
 	AttentionCount               int
 }
 
@@ -243,16 +241,6 @@ func (p *TaskStatusProjection) Project(
 			Definition:     definition,
 			CanDelete:      quiescent,
 		})
-		liveSessions, currentScripts, err := taskStatusLiveTargets(
-			ctx,
-			durable.queries.ListSessionNamesByIDs,
-			taskID,
-			liveExecutions,
-			definition,
-		)
-		if err != nil {
-			return nil, err
-		}
 		results[taskID] = TaskStatusProjectionResult{
 			Task:                         task,
 			Definition:                   definition,
@@ -262,90 +250,10 @@ func (p *TaskStatusProjection) Project(
 			LiveExecutions:               liveExecutions,
 			PendingTransitionApprovalIDs: pendingApprovalIDs,
 			Actions:                      facts.Actions,
-			LiveSessions:                 liveSessions,
-			CurrentScripts:               currentScripts,
 			AttentionCount:               taskStatusAttentionCount(currentNodes, liveExecutions, len(pendingApprovalIDs)),
 		}
 	}
 	return results, nil
-}
-
-func taskStatusLiveTargets(
-	ctx context.Context,
-	nameLookup sessionNameLookup,
-	taskID workflow.TaskID,
-	executions []sessionruntime.TaskExecution,
-	definition definitionSnapshot,
-) ([]serverapi.WorkflowTaskLiveSession, []serverapi.WorkflowTaskCurrentScript, error) {
-	type liveAgent struct {
-		sessionID       string
-		nodeDisplayName string
-	}
-	agents := make([]liveAgent, 0, len(executions))
-	sessionIDs := make([]string, 0, len(executions))
-	scripts := make([]serverapi.WorkflowTaskCurrentScript, 0, len(executions))
-	nodesByID := workflowNodesByID(definition.api)
-	seenSessionIDs := make(map[string]struct{}, len(executions))
-	for _, execution := range executions {
-		switch {
-		case execution.Agent != nil:
-			sessionID := execution.Agent.SessionID.String()
-			if _, exists := seenSessionIDs[sessionID]; exists {
-				return nil, nil, fmt.Errorf("task %q has duplicate live Session %q", taskID, sessionID)
-			}
-			seenSessionIDs[sessionID] = struct{}{}
-			nodeID := string(execution.Ref.CurrentNode.NodeID)
-			node, exists := nodesByID[nodeID]
-			if !exists {
-				return nil, nil, fmt.Errorf("task %q live Agent execution references unknown Node %q", taskID, nodeID)
-			}
-			if node.Kind != string(workflow.NodeKindAgent) {
-				return nil, nil, fmt.Errorf("task %q live Agent execution references %s Node %q", taskID, node.Kind, nodeID)
-			}
-			if strings.TrimSpace(node.DisplayName) == "" {
-				return nil, nil, fmt.Errorf("task %q live Agent execution Node %q has a blank display name", taskID, nodeID)
-			}
-			sessionIDs = append(sessionIDs, sessionID)
-			agents = append(agents, liveAgent{sessionID: sessionID, nodeDisplayName: node.DisplayName})
-		case execution.Script != nil:
-			if strings.TrimSpace(execution.Script.Path) == "" {
-				return nil, nil, fmt.Errorf("task %q live Script execution has a blank target path", taskID)
-			}
-			scripts = append(scripts, serverapi.WorkflowTaskCurrentScript{
-				CurrentNode: workflowCurrentNodeReference(execution.Ref.CurrentNode),
-				Path:        execution.Script.Path,
-			})
-		default:
-			return nil, nil, fmt.Errorf("task %q live workflow execution has no target", taskID)
-		}
-	}
-	names, err := resolveSessionNames(ctx, nameLookup, sessionIDs)
-	if err != nil {
-		return nil, nil, fmt.Errorf("task %q live Sessions: %w", taskID, err)
-	}
-	liveSessions := make([]serverapi.WorkflowTaskLiveSession, 0, len(agents))
-	for _, agent := range agents {
-		liveSessions = append(liveSessions, serverapi.WorkflowTaskLiveSession{
-			SessionID:       agent.sessionID,
-			SessionName:     names[agent.sessionID],
-			NodeDisplayName: agent.nodeDisplayName,
-		})
-	}
-	sort.Slice(liveSessions, func(i, j int) bool { return liveSessions[i].SessionID < liveSessions[j].SessionID })
-	sort.Slice(scripts, func(i, j int) bool {
-		if scripts[i].CurrentNode.NodeID != scripts[j].CurrentNode.NodeID {
-			return scripts[i].CurrentNode.NodeID < scripts[j].CurrentNode.NodeID
-		}
-		return optionalStringValue(scripts[i].CurrentNode.TransitionBranchKey) < optionalStringValue(scripts[j].CurrentNode.TransitionBranchKey)
-	})
-	return liveSessions, scripts, nil
-}
-
-func optionalStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func taskStatusAttentionCount(currentNodes []workflow.CurrentNode, executions []sessionruntime.TaskExecution, pendingApprovalCount int) int {

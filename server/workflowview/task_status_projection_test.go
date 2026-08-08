@@ -511,8 +511,9 @@ func TestTaskStatusProjectionProjectsRetainedDurableAndLiveFactsInEitherCaptureO
 		if result.Status.Kind != "waiting_question" ||
 			result.Actions.CanInterrupt ||
 			result.Actions.CanDelete ||
-			len(result.LiveSessions) != 1 ||
-			result.LiveSessions[0].SessionID != sessionID.String() ||
+			len(result.LiveExecutions) != 1 ||
+			result.LiveExecutions[0].Agent == nil ||
+			result.LiveExecutions[0].Agent.SessionID != sessionID ||
 			result.AttentionCount != 1 ||
 			len(result.CurrentNodes) != 1 {
 			t.Fatalf("mixed projection result = %+v", result)
