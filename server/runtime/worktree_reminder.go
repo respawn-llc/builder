@@ -55,12 +55,9 @@ func (a WorktreeOutcomeAdmission) ReduceAfterRelease(
 	}
 	if a.admission.engine.agentSteps.boundary == nil {
 		releaseErr := grant.Release()
-		if !a.admission.engine.boundaryAgenda.hasEligibleHuman(idleBoundarySelection()) {
-			return releaseErr
-		}
 		return errors.Join(
 			releaseErr,
-			a.admission.engine.startRuntimeBoundHumanExecution(a.admission),
+			a.admission.engine.reduceIdleBoundary(a.admission),
 		)
 	}
 	_, err := a.admission.engine.resumeReducerBoundaryGrant(a.admission, grant, false)

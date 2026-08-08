@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"core/shared/runtimeids"
@@ -175,6 +176,29 @@ func (a *boundaryAgenda) selectNext(selection boundarySelection) boundaryAgendaI
 		}
 		a.entries = append(a.entries[:index], a.entries[index+1:]...)
 		return item
+	}
+	return nil
+}
+
+func (a *boundaryAgenda) selectNextLong(selection boundarySelection) boundaryLongAgendaItem {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return nil
+	}
+	for index, item := range a.entries {
+		if !boundaryAgendaItemEligible(item, selection) {
+			continue
+		}
+		long, ok := item.(boundaryLongAgendaItem)
+		if !ok {
+			return nil
+		}
+		a.entries = append(a.entries[:index], a.entries[index+1:]...)
+		return long
 	}
 	return nil
 }
@@ -532,6 +556,29 @@ func (a *boundaryAgenda) takeHumanScope(scopeID runtimeids.ExecutionScopeID) []*
 	}
 	a.entries = remaining
 	return selected
+}
+
+func (a *boundaryAgenda) consumeBackgroundSession(sessionID string) bool {
+	if a == nil {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	a.mu.Lock()
+	for index, entry := range a.entries {
+		notice, ok := entry.(*backgroundNoticeAgendaItem)
+		if !ok || notice.sessionID != sessionID {
+			continue
+		}
+		a.entries = append(a.entries[:index], a.entries[index+1:]...)
+		a.mu.Unlock()
+		notice.settleBoundaryAgenda(nil)
+		return true
+	}
+	a.mu.Unlock()
+	return false
 }
 
 func validateBoundaryAgendaBinding(binding boundaryAgendaBinding) error {

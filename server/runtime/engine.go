@@ -168,6 +168,7 @@ type Engine struct {
 	closed           atomic.Bool
 	runtimeEvents    *runtimecommand.Queue
 	boundaryAgenda   *boundaryAgenda
+	longBoundary     boundaryLongOrchestrator
 	agentSteps       agentStepAdmissionState
 	streamMutationMu sync.Mutex
 
@@ -198,7 +199,7 @@ type Engine struct {
 
 	phaseProtocol  phaseProtocolEnforcer
 	stepLifecycle  exclusiveStepLifecycle
-	backgroundFlow backgroundNoticeScheduler
+	backgroundFlow backgroundAgendaAdapter
 	compactionFlow contextCompactor
 	reviewerFlow   reviewerPipeline
 	messageFlow    messageLifecycle
@@ -496,6 +497,7 @@ func (e *Engine) applyRuntimeClose(admission runtimeEventAdmission) error {
 	if e == nil || e.boundaryAgenda == nil || !e.boundaryAgenda.close(errBoundaryRuntimeClosed) {
 		return nil
 	}
+	e.longBoundary.close(errBoundaryRuntimeClosed)
 	return admission.applySteering("runtime_close", steerLiveToolAbortIntent("canceled"))
 }
 

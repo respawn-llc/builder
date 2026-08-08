@@ -316,6 +316,7 @@ func (e *Engine) acceptReducerBoundaryGrant(
 	}
 	applied := humanBoundaryApplyResult{}
 	assignmentsApplied := 0
+	backgroundApplied := 0
 	for {
 		next := e.boundaryAgenda.peekNext(selection)
 		if next == nil {
@@ -344,6 +345,17 @@ func (e *Engine) acceptReducerBoundaryGrant(
 				return nil, errors.Join(err, grant.Release())
 			}
 			goto reduced
+		case *backgroundNoticeAgendaItem:
+			count, err := e.applyBackgroundNoticeBoundary(
+				admission,
+				step.origin.StepID,
+				selection,
+			)
+			backgroundApplied += count
+			if err != nil {
+				e.agentSteps.boundary = nil
+				return nil, errors.Join(err, grant.Release())
+			}
 		default:
 			e.agentSteps.boundary = nil
 			return nil, errors.Join(
@@ -357,7 +369,7 @@ reduced:
 	if assignmentsApplied > 0 {
 		return finishAgentTurnDecision{}, grant.Release()
 	}
-	if continueTurn || applied.applied > 0 {
+	if continueTurn || applied.applied > 0 || backgroundApplied > 0 {
 		if e.agentSteps.reducerGrant != nil {
 			panic("Agent Step reducer grant duplicated")
 		}

@@ -13,8 +13,6 @@ import (
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
-
-	"github.com/google/uuid"
 )
 
 type stubExclusiveStepLifecycle struct {
@@ -25,10 +23,6 @@ type stubExclusiveStepLifecycle struct {
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	snapshot     *RunSnapshot
 	activeStepID string
-}
-
-type stubBackgroundNoticeScheduler struct {
-	scheduleIfIdle func()
 }
 
 type callbackStepLifecycleSink struct {
@@ -64,24 +58,6 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 		}
 	}
 	return false
-}
-
-func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *stubBackgroundNoticeScheduler) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
-	return nil
-}
-func (s *stubBackgroundNoticeScheduler) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *stubBackgroundNoticeScheduler) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
-	return nil
-}
-func (s *stubBackgroundNoticeScheduler) QueueDeveloperNotice(llm.Message)           {}
-func (s *stubBackgroundNoticeScheduler) flushPendingNotices(string) (int, error)    { return 0, nil }
-func (s *stubBackgroundNoticeScheduler) HasPendingNotices() bool                    { return false }
-func (s *stubBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(string) bool { return false }
-func (s *stubBackgroundNoticeScheduler) ScheduleIfIdle() {
-	if s != nil && s.scheduleIfIdle != nil {
-		s.scheduleIfIdle()
-	}
 }
 
 func (s *stubExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
@@ -833,85 +809,6 @@ func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
 	}
 	if len(eng.transcriptRuntimeState().SnapshotMessages()) != 0 {
 		t.Fatalf("expected stale interrupt to avoid appending interruption message, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
-	}
-}
-
-func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	steps := &stubExclusiveStepLifecycle{}
-	steps.setBusy(true)
-	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
-	backgroundActivityID := uuid.NewString()
-
-	scheduler.QueueDeveloperNotice(llm.Message{
-		Role:        llm.RoleDeveloper,
-		MessageType: textutil.Value(llm.MessageTypeBackgroundNotice),
-		Name:        textutil.Value("1000"),
-		BackgroundActivityID: textutil.Value(
-			backgroundActivityID,
-		),
-		Content: textutil.Value("Background shell 1000 completed."),
-	})
-
-	if steps.calls() != 0 {
-		t.Fatalf("expected no scheduler run while busy, got %d", steps.calls())
-	}
-	client.mu.Lock()
-	busyCalls := len(client.calls)
-	client.mu.Unlock()
-	if busyCalls != 0 {
-		t.Fatalf("expected no model calls while scheduler busy, got %d", busyCalls)
-	}
-
-	steps.setBusy(false)
-	scheduler.ScheduleIfIdle()
-
-	deadline := time.After(3 * time.Second)
-	for {
-		client.mu.Lock()
-		callCount := len(client.calls)
-		client.mu.Unlock()
-		if callCount == 1 {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("timed out waiting for scheduled background run, calls=%d runs=%d", callCount, steps.calls())
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-	if steps.calls() != 1 {
-		t.Fatalf("expected one scheduled run after idle transition, got %d", steps.calls())
-	}
-	client.mu.Lock()
-	request := client.calls[0]
-	client.mu.Unlock()
-	foundNotice := false
-	for _, msg := range requestMessages(request) {
-		if msg.Role == llm.RoleDeveloper &&
-			msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice &&
-			msg.Name != nil && *msg.Name == "1000" &&
-			msg.BackgroundActivityID != nil && *msg.BackgroundActivityID == backgroundActivityID {
-			foundNotice = true
-			break
-		}
-	}
-	if !foundNotice {
-		t.Fatalf("expected scheduled request to include queued background notice, messages=%+v", requestMessages(request))
-	}
-	if pending := scheduler.pendingSnapshot(); len(pending) != 0 {
-		t.Fatalf("expected queued notices to be drained, got %+v", pending)
-	}
-	if err := eng.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
 	}
 }
 

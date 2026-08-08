@@ -38,16 +38,9 @@ type exclusiveStepLifecycle interface {
 	EndAgentStepBoundary()
 }
 
-type backgroundNoticeScheduler interface {
-	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
-	RecordBackgroundShellUpdate(BackgroundShellEvent) error
-	QueueBackgroundShellContinuation(BackgroundShellEvent)
-	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
-	QueueDeveloperNotice(msg llm.Message)
-	flushPendingNotices(stepID string) (int, error)
-	HasPendingNotices() bool
-	ConsumePendingBackgroundNotice(sessionID string) bool
-	ScheduleIfIdle()
+type backgroundAgendaAdapter interface {
+	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) error
+	QueueDeveloperNotice(msg llm.Message) error
 }
 
 type contextCompactor interface {
@@ -158,16 +151,13 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}
 		}
 		if e.backgroundFlow == nil {
-			e.backgroundFlow = &defaultBackgroundNoticeScheduler{engine: e, steps: e.stepLifecycle}
-		}
-		if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok && lifecycle.background == nil {
-			lifecycle.background = e.backgroundFlow
+			e.backgroundFlow = &defaultBackgroundAgendaAdapter{engine: e}
 		}
 		if e.phaseProtocol == nil {
 			e.phaseProtocol = &defaultPhaseProtocol{engine: e}
 		}
 		if e.messageFlow == nil {
-			e.messageFlow = newDefaultMessageLifecycle(e, e.backgroundFlow)
+			e.messageFlow = newDefaultMessageLifecycle(e)
 		}
 		if e.toolFlow == nil {
 			e.toolFlow = &defaultToolExecutor{engine: e}

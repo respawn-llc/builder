@@ -23,7 +23,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		goalAutoResume  string
 	}
 	expected := map[string]activeKindPolicy{
-		"server/runtime/background.go:runQueuedNotices": {
+		"server/runtime/background.go:runBackgroundNoticeSelection": {
 			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
 		},
 		"server/runtime/engine.go:submitUserMessage": {

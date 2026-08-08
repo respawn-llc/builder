@@ -447,8 +447,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 
 		if len(localToolCalls) == 0 {
 			if phaseTurn.MissingAssistantPhase {
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-					return stepLoopResult{}, err
+				if len(hostedToolExecutions) > 0 {
+					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
 				}
 				continue
 			}
@@ -456,39 +456,11 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(commentaryWithoutToolCallsWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-					return stepLoopResult{}, err
-				}
 				continue
 			}
 			if !e.currentNodeExecutionActive() && phaseTurn.EnforcePhaseProtocol && messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) && assistantMsg.Content == nil && !noopFinalAnswer {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)}})); err != nil {
 					return stepLoopResult{}, err
-				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-					return stepLoopResult{}, err
-				}
-				continue
-			}
-
-			flushed, err := s.flushPendingUserInjections(stepID, options)
-			if err != nil {
-				return stepLoopResult{}, err
-			}
-			if flushed > 0 {
-				if messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
-					assistantMsg.Content != nil &&
-					strings.TrimSpace(*assistantMsg.Content) != "" &&
-					!noopFinalAnswer {
-					deferredFinal = assistantMsg
-					deferredFinalCommittedCoordinate = cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
-					deferredFinalEventEmitted = assistantEventEmitted
-					hasDeferredFinal = true
-				}
-				if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
-					if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-						return stepLoopResult{}, err
-					}
 				}
 				continue
 			}
@@ -603,6 +575,18 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
+		applied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
+		if err != nil {
+			return stepLoopResult{}, err
+		}
+		if err := s.completeAgentStepBoundary(ctx); err != nil {
+			return stepLoopResult{}, err
+		}
+		patchEditsApplied = patchEditsApplied || applied
+		if terminal {
+			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+			return stepLoopResult{ExecutedToolCall: true}, nil
+		}
 	}
 }
 
@@ -616,13 +600,6 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status
 		Reviewer: status,
 	}))
 	return err
-}
-
-func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
-	if s.engine.backgroundFlow == nil {
-		return 0, nil
-	}
-	return s.engine.backgroundFlow.flushPendingNotices(stepID)
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {

@@ -98,7 +98,7 @@ func (e *Engine) acceptHumanAgendaItem(
 			}
 			e.emitQueuedUserMessageStatus(accepted, QueuedUserMessageAccepted, "", false)
 			if _, runtimeBound := binding.(runtimeAgendaBinding); runtimeBound {
-				if err := e.startRuntimeBoundHumanExecution(admission); err != nil {
+				if err := e.reduceIdleBoundary(admission); err != nil {
 					return QueuedUserMessage{}, err
 				}
 			}
@@ -138,17 +138,7 @@ func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID
 		scopeID,
 		func(admission runtimeEventAdmission, released runtimeids.ExecutionScopeID) (struct{}, error) {
 			e.invalidateAgentStepScope(released, errBoundaryScopeFinalized)
-			if _, assignmentErr := e.applyWorkflowAssignmentBoundary(
-				admission,
-				"",
-				idleBoundarySelection(),
-			); assignmentErr != nil {
-				return struct{}{}, assignmentErr
-			}
-			if !e.boundaryAgenda.hasEligibleHuman(idleBoundarySelection()) {
-				return struct{}{}, nil
-			}
-			return struct{}{}, e.startRuntimeBoundHumanExecution(admission)
+			return struct{}{}, e.reduceIdleBoundary(admission)
 		},
 	)
 	return err

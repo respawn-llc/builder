@@ -153,10 +153,7 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 
 func (e *Engine) HasQueuedUserWork() bool {
 	e.ensureOrchestrationCollaborators()
-	if len(e.boundaryAgenda.pendingHuman()) > 0 {
-		return true
-	}
-	return e.backgroundFlow != nil && e.backgroundFlow.HasPendingNotices()
+	return len(e.boundaryAgenda.pendingHuman()) > 0
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {

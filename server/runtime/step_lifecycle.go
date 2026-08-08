@@ -48,6 +48,18 @@ type RuntimeBoundHumanExecution interface {
 	Launch(context.Context) error
 }
 
+type RuntimeBoundLongExecutionLauncher interface {
+	RegisterRuntimeBoundLongExecution(context.Context) (RuntimeBoundLongExecution, error)
+}
+
+type RuntimeBoundLongExecution interface {
+	Launch(
+		context.Context,
+		func(context.Context, *Engine) error,
+	) (runtimeids.ExecutionScopeID, error)
+	Cancel(context.Context) error
+}
+
 type AgentStepScopeLifecycle interface {
 	AgentStepScopeLive(context.Context, runtimeids.ExecutionScopeID) bool
 	CurrentAgentExecutionScope(context.Context) (runtimeids.ExecutionScopeID, bool)

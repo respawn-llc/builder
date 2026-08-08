@@ -339,50 +339,6 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	}
 }
 
-func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	scheduled := false
-	var recoveryAtSchedule *session.PendingModelRecovery
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: engine,
-		background: &recoverySchedulingObserver{onSchedule: func() {
-			scheduled = true
-			if recovery := store.Meta().PendingModelRecovery; recovery != nil {
-				captured := cloneSessionPendingModelRecovery(recovery)
-				recoveryAtSchedule = &captured
-			}
-		}},
-	}
-
-	if err := lifecycle.Run(
-		context.Background(),
-		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
-		func(_ context.Context, stepID string) error {
-			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
-				return err
-			}
-			recovery := store.Meta().PendingModelRecovery
-			if recovery == nil || recovery.StepID != stepID {
-				t.Fatalf("pending recovery during exclusive step = %+v", recovery)
-			}
-			return nil
-		},
-	); err != nil {
-		t.Fatalf("run exclusive step: %v", err)
-	}
-	if !scheduled {
-		t.Fatal("background work was not scheduled after the exclusive step")
-	}
-	if recoveryAtSchedule != nil {
-		t.Fatalf("background work observed pending recovery = %+v", recoveryAtSchedule)
-	}
-	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
-		t.Fatalf("exclusive step retained pending recovery = %+v", recovery)
-	}
-}
-
 func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
 	t.Parallel()
 	const (
@@ -502,29 +458,6 @@ func TestReopenRepairsAskQuestionToolAttemptBeforeNextModelRequest(t *testing.T)
 		Name:  string(toolspec.ToolAskQuestion),
 		Input: json.RawMessage(`{"question":"continue?"}`),
 	})
-}
-
-type recoverySchedulingObserver struct {
-	onSchedule func()
-}
-
-func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *recoverySchedulingObserver) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
-	return nil
-}
-func (s *recoverySchedulingObserver) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *recoverySchedulingObserver) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
-	return nil
-}
-func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)           {}
-func (s *recoverySchedulingObserver) flushPendingNotices(string) (int, error)    { return 0, nil }
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                    { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool { return false }
-
-func (s *recoverySchedulingObserver) ScheduleIfIdle() {
-	if s != nil && s.onSchedule != nil {
-		s.onSchedule()
-	}
 }
 
 type finishFailureLifecycleSink struct {

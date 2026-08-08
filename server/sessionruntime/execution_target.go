@@ -379,24 +379,8 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 	resource.mu.Lock()
 	current := resource.current
 	resource.mu.Unlock()
-	if queueNotice && current == nil {
-		delivered := false
-		err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-			if recordErr := engine.RecordBackgroundShellUpdate(backgroundEvent); recordErr != nil {
-				return recordErr
-			}
-			delivered = true
-			return nil
-		})
-		if err != nil || !delivered {
-			return delivered, err
-		}
-		if resourceSessionHasWorkflowContract(resource) {
-			return true, nil
-		} else {
-			a.startBackgroundContinuation(resource, backgroundEvent)
-			return true, nil
-		}
+	if queueNotice && current == nil && resourceSessionHasWorkflowContract(resource) {
+		queueNotice = false
 	}
 	delivered := false
 	err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
@@ -405,57 +389,6 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		return nil
 	})
 	return delivered, err
-}
-
-func (a *Authority) startBackgroundContinuation(resource *agentResource, event runtime.BackgroundShellEvent) {
-	// Retried terminal events can arrive while OpenRuntime still holds the
-	// Session admission gate. Defer only admission; model work starts inside the
-	// Agent Execution Scope created below.
-	a.launchLifecycleTask(func(ctx context.Context) {
-		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
-		if err == nil {
-			_, err = a.StartAgentExecution(ctx, AgentExecutionRequest{
-				Descriptor: descriptor,
-				Resource:   CurrentAgentResource{},
-				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-					return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
-						return engine.RunBackgroundShellContinuation(engineCtx, event)
-					})
-				},
-			})
-		}
-		if err == nil {
-			return
-		}
-		if errors.Is(err, ErrSessionRunActive) {
-			err = a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueBackgroundShellContinuation(event)
-				return nil
-			})
-			if err == nil {
-				return
-			}
-		}
-		if backgroundContinuationLifecycleStopped(err) {
-			if resource.logger != nil {
-				resource.logger.Logf("runtime.background.continuation.start.skipped process_id=%s error=%q", event.ID, err.Error())
-			}
-			return
-		}
-		fallbackErr := a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			return engine.SteerBackgroundContinuationFailure(err)
-		})
-		err = errors.Join(err, fallbackErr)
-		if resource.logger != nil {
-			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
-		}
-	})
-}
-
-func backgroundContinuationLifecycleStopped(err error) bool {
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, ErrAuthorityClosed) ||
-		errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
 func resourceSessionHasWorkflowContract(resource *agentResource) bool {

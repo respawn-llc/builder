@@ -2037,6 +2037,229 @@ func TestBackgroundTerminalEventWaitsForNextRuntimeWhenSessionHasNoRuntime(t *te
 	}
 }
 
+func TestIdleBackgroundNoticesLaunchConsecutiveFreshExactExecutions(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := newSequentialBackgroundClient(2)
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(
+		t,
+		fixture.authority,
+		sessionID,
+		"background-owner",
+		&plan,
+	)
+	queue := func(id string, activityID uuid.UUID) {
+		t.Helper()
+		err := fixture.authority.WithRuntime(
+			context.Background(),
+			attachment.Resource(),
+			func(_ context.Context, engine *runtime.Engine) error {
+				engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
+					Type:       runtime.BackgroundShellEventCompleted,
+					ID:         id,
+					ActivityID: activityID,
+					State:      "completed",
+				}, true)
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("queue background notice %s: %v", id, err)
+		}
+	}
+
+	firstActivity := uuid.New()
+	queue("first", firstActivity)
+	firstRequest := client.awaitRequest(t)
+	firstExecution, active := fixture.authority.SessionExecution(sessionID)
+	if !active {
+		t.Fatal("first background request has no Exact Execution Scope")
+	}
+	firstScope := firstExecution.Scope().ID()
+	client.release(0)
+	if _, err := firstExecution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait first background execution: %v", err)
+	}
+
+	secondActivity := uuid.New()
+	queue("second", secondActivity)
+	secondRequest := client.awaitRequest(t)
+	secondExecution, active := fixture.authority.SessionExecution(sessionID)
+	if !active {
+		t.Fatal("second background request has no Exact Execution Scope")
+	}
+	secondScope := secondExecution.Scope().ID()
+	if firstScope.IsZero() || secondScope.IsZero() || firstScope == secondScope {
+		t.Fatalf(
+			"background execution scopes = first:%s second:%s, want fresh exact scopes",
+			firstScope,
+			secondScope,
+		)
+	}
+	assertRequestHasBackgroundActivity(t, firstRequest, firstActivity)
+	assertRequestHasBackgroundActivity(t, secondRequest, secondActivity)
+	client.release(1)
+	if _, err := secondExecution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait second background execution: %v", err)
+	}
+}
+
+func TestIdleWorktreeBoundaryDefersAcceptedBackgroundNotice(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := newSequentialBackgroundClient(1)
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(
+		t,
+		fixture.authority,
+		sessionID,
+		"background-worktree-boundary",
+		&plan,
+	)
+	claim, err := fixture.authority.ClaimWorktreeBoundary(
+		attachment.Resource(),
+		serverapi.NewWorktreeOperationID(),
+	)
+	if err != nil {
+		t.Fatalf("claim Worktree boundary: %v", err)
+	}
+	if err := claim.AwaitGrant(context.Background()); err != nil {
+		t.Fatalf("await Worktree boundary: %v", err)
+	}
+	activityID := uuid.New()
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
+				Type:       runtime.BackgroundShellEventCompleted,
+				ID:         "held",
+				ActivityID: activityID,
+				State:      "completed",
+			}, true)
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("accept background notice: %v", err)
+	}
+	select {
+	case request := <-client.requests:
+		t.Fatalf("Worktree-owned boundary launched background request: %+v", request)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if execution, active := fixture.authority.SessionExecution(sessionID); active {
+		t.Fatalf("Worktree-owned boundary registered Exact Execution Scope: %+v", execution.Scope())
+	}
+
+	grant, err := claim.Release()
+	if err != nil {
+		t.Fatalf("release Worktree boundary: %v", err)
+	}
+	if grant == nil {
+		t.Fatal("idle Worktree release returned no reducer grant")
+	}
+	if err := grant.Release(); err != nil {
+		t.Fatalf("release reducer grant: %v", err)
+	}
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			return engine.AgentExecutionScopeReleased(runtimeids.NewExecutionScopeID())
+		},
+	); err != nil {
+		t.Fatalf("trigger idle reduction: %v", err)
+	}
+	request := client.awaitRequest(t)
+	assertRequestHasBackgroundActivity(t, request, activityID)
+	execution, active := fixture.authority.SessionExecution(sessionID)
+	if !active {
+		t.Fatal("released Worktree boundary did not launch background execution")
+	}
+	client.release(0)
+	if _, err := execution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait background execution: %v", err)
+	}
+}
+
+type sequentialBackgroundClient struct {
+	requests chan llm.Request
+	releases []chan struct{}
+	mu       sync.Mutex
+	calls    int
+}
+
+func newSequentialBackgroundClient(count int) *sequentialBackgroundClient {
+	releases := make([]chan struct{}, count)
+	for index := range releases {
+		releases[index] = make(chan struct{})
+	}
+	return &sequentialBackgroundClient{
+		requests: make(chan llm.Request, count),
+		releases: releases,
+	}
+}
+
+func (c *sequentialBackgroundClient) Generate(
+	ctx context.Context,
+	request llm.Request,
+) (llm.Response, error) {
+	c.mu.Lock()
+	index := c.calls
+	c.calls++
+	if index >= len(c.releases) {
+		c.mu.Unlock()
+		return llm.Response{}, errors.New("unexpected background model request")
+	}
+	release := c.releases[index]
+	c.mu.Unlock()
+	c.requests <- request
+	select {
+	case <-release:
+	case <-ctx.Done():
+		return llm.Response{}, context.Cause(ctx)
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("done"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *sequentialBackgroundClient) awaitRequest(t *testing.T) llm.Request {
+	t.Helper()
+	select {
+	case request := <-c.requests:
+		return request
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for background model request")
+		return llm.Request{}
+	}
+}
+
+func (c *sequentialBackgroundClient) release(index int) {
+	close(c.releases[index])
+}
+
+func assertRequestHasBackgroundActivity(
+	t *testing.T,
+	request llm.Request,
+	activityID uuid.UUID,
+) {
+	t.Helper()
+	for _, message := range llm.MessagesFromItems(request.Items) {
+		if message.BackgroundActivityID != nil &&
+			*message.BackgroundActivityID == activityID.String() {
+			return
+		}
+	}
+	t.Fatalf("request omitted background activity %s", activityID)
+}
+
 func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

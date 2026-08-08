@@ -826,10 +826,15 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		}
 	}
 	resource.mu.Lock()
-	if resource.current != nil {
+	if resource.current != nil ||
+		resource.worktreeBoundary != nil ||
+		resource.reducerBoundary != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
+		return nil, errors.Join(
+			ErrSessionRunActive,
+			fmt.Errorf("session %s already has an agent execution or owned boundary", sessionID),
+		)
 	}
 	var workflowBinding *runtime.CurrentNodeExecutionBinding
 	closeWorkflowBinding := func() error {

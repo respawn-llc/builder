@@ -129,6 +129,75 @@ func TestWorkflowAssignmentApplicationFailureSettlesTypedSteer(t *testing.T) {
 	}
 }
 
+func TestWorkflowAssignmentSettlesWhenEarlierIdleWorkTransferFails(t *testing.T) {
+	launcher := newBackgroundExecutionLauncher()
+	launcher.active = true
+	launcher.scopeID = runtimeids.NewExecutionScopeID()
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", StepLifecycle: launcher},
+	)
+	launcher.engine = engine
+	background, err := newBackgroundNoticeAgendaItem(llm.Message{
+		Role:    llm.RoleDeveloper,
+		Content: textutil.Value("earlier technical notice"),
+	})
+	if err != nil {
+		t.Fatalf("new background item: %v", err)
+	}
+	if err := engine.boundaryAgenda.accept(background); err != nil {
+		t.Fatalf("accept background item: %v", err)
+	}
+	message, err := buildWorkflowAssignmentMessage(workflowAssignmentForCommitReceiptTest())
+	if err != nil {
+		t.Fatalf("build Workflow assignment: %v", err)
+	}
+	steer := newWorkflowAssignmentSteer()
+	assignment := newWorkflowAssignmentAgendaItem(
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityRuntimeContext,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{message},
+		),
+		steer,
+	)
+
+	accepted, err := submitRuntimeEvent(
+		engine,
+		assignment,
+		func(
+			admission runtimeEventAdmission,
+			item *workflowAssignmentAgendaItem,
+		) (WorkflowAssignmentSteer, error) {
+			if err := admission.startWork(func(context.Context) {}); err != nil {
+				return WorkflowAssignmentSteer{}, err
+			}
+			return engine.acceptWorkflowAssignmentAgendaItem(admission, item)
+		},
+	)
+	if err != nil {
+		t.Fatalf("accept Workflow assignment: %v", err)
+	}
+	receipt, err := accepted.Wait(context.Background())
+	if err == nil || receipt.Committed {
+		t.Fatalf("Workflow assignment settlement = %+v, %v; want typed transfer failure", receipt, err)
+	}
+	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 0 {
+		t.Fatalf("failed Workflow assignment remained pending: %+v", pending)
+	}
+	if engine.longBoundary.selected != nil || !background.settled {
+		t.Fatalf(
+			"earlier long work ownership = selected:%v settled:%t",
+			engine.longBoundary.selected,
+			background.settled,
+		)
+	}
+}
+
 func TestWorkflowAssignmentPreservesAdmissionOrderAgainstHumanInput(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

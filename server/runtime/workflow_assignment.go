@@ -143,23 +143,7 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 	acceptedSteer, err := submitRuntimeEvent(
 		e,
 		item,
-		func(
-			admission runtimeEventAdmission,
-			accepted *workflowAssignmentAgendaItem,
-		) (WorkflowAssignmentSteer, error) {
-			if err := e.boundaryAgenda.accept(accepted); err != nil {
-				return WorkflowAssignmentSteer{}, err
-			}
-			if !e.workflowAssignmentIdleEligible() {
-				return accepted.steer, nil
-			}
-			_, _ = e.applyWorkflowAssignmentBoundary(
-				admission,
-				"",
-				idleBoundarySelection(),
-			)
-			return accepted.steer, nil
-		},
+		e.acceptWorkflowAssignmentAgendaItem,
 	)
 	if err != nil {
 		steer.complete(session.CommitReceipt{}, err)
@@ -169,6 +153,25 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 		panic("Workflow assignment Runtime Event returned a different typed steer")
 	}
 	return steer, nil
+}
+
+func (e *Engine) acceptWorkflowAssignmentAgendaItem(
+	admission runtimeEventAdmission,
+	accepted *workflowAssignmentAgendaItem,
+) (WorkflowAssignmentSteer, error) {
+	if err := e.boundaryAgenda.accept(accepted); err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	if !e.workflowAssignmentIdleEligible() {
+		return accepted.steer, nil
+	}
+	if err := e.reduceIdleBoundary(admission); err != nil {
+		if !e.boundaryAgenda.discard(accepted.id, err) {
+			accepted.steer.complete(session.CommitReceipt{}, err)
+		}
+		return accepted.steer, nil
+	}
+	return accepted.steer, nil
 }
 
 func (e *Engine) workflowAssignmentIdleEligible() bool {

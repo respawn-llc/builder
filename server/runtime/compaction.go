@@ -195,7 +195,10 @@ func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx c
 
 func isAgentStepCapable(kind ActiveKind) bool {
 	switch kind {
-	case ActiveKindUserTurn, ActiveKindWorkflowTurn, ActiveKindGoalLoop:
+	case ActiveKindUserTurn,
+		ActiveKindWorkflowTurn,
+		ActiveKindGoalLoop,
+		ActiveKindBackground:
 		return true
 	default:
 		return false

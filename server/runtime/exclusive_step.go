@@ -23,8 +23,7 @@ var ErrExclusiveStepReservationPending = errors.New("manual compaction is alread
 var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
 
 type defaultExclusiveStepLifecycle struct {
-	engine     *Engine
-	background backgroundNoticeScheduler
+	engine *Engine
 
 	mu                 sync.Mutex
 	active             *exclusiveRunState
@@ -609,9 +608,6 @@ func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
 }
 
 func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(_ bool) error {
-	if s.background != nil {
-		s.background.ScheduleIfIdle()
-	}
 	return s.engine.startPendingGoalLoop()
 }
 

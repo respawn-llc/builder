@@ -204,8 +204,7 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
-		e.ensureOrchestrationCollaborators()
-		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
+		e.boundaryAgenda.consumeBackgroundSession(backgroundSessionID)
 	}
 }
 

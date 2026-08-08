@@ -16,15 +16,11 @@ import (
 )
 
 type defaultMessageLifecycle struct {
-	engine     *Engine
-	background backgroundNoticeScheduler
+	engine *Engine
 }
 
-func newDefaultMessageLifecycle(engine *Engine, background backgroundNoticeScheduler) *defaultMessageLifecycle {
-	return &defaultMessageLifecycle{
-		engine:     engine,
-		background: background,
-	}
+func newDefaultMessageLifecycle(engine *Engine) *defaultMessageLifecycle {
+	return &defaultMessageLifecycle{engine: engine}
 }
 
 func (m *defaultMessageLifecycle) RestoreMessages() error {
