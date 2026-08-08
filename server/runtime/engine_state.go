@@ -304,29 +304,42 @@ func (e *Engine) ClearWorkflowThinkingValue() error {
 }
 
 func (e *Engine) setThinkingValue(value string) error {
+	_, err := submitRuntimeEvent(e, strings.TrimSpace(value), func(
+		_ runtimeEventAdmission,
+		value string,
+	) (struct{}, error) {
+		e.applyThinkingValue(value)
+		return struct{}{}, nil
+	})
+	return err
+}
+
+func (e *Engine) applyThinkingValue(value string) {
 	e.mu.Lock()
 	e.cfg.ThinkingLevel = strings.TrimSpace(value)
 	e.mu.Unlock()
 	e.markCurrentRequestShapeDirty()
-	return nil
 }
 
 func (e *Engine) SetFastModeEnabled(enabled bool) (bool, error) {
 	if enabled && !e.FastModeAvailable() {
 		return false, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	if state := e.fastModeState(); state != nil {
-		changed := state.SetEnabled(enabled)
-		if changed {
-			e.markCurrentRequestShapeDirty()
+	return submitRuntimeEvent(e, enabled, func(
+		_ runtimeEventAdmission,
+		enabled bool,
+	) (bool, error) {
+		if state := e.fastModeState(); state != nil {
+			changed := state.SetEnabled(enabled)
+			if changed {
+				e.markCurrentRequestShapeDirty()
+			}
+			return changed, nil
 		}
+		changed := e.localFastModeEnabledChange(enabled)
+		e.applyFastModeEnabled(enabled)
 		return changed, nil
-	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed := e.localFastModeEnabledChange(enabled)
-	e.applyFastModeEnabled(enabled)
-	return changed, nil
+	})
 }
 
 func (e *Engine) fastModeState() *FastModeState {
@@ -355,7 +368,23 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	return changed
 }
 
-func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+type autoCompactionMutationResult struct {
+	changed bool
+	enabled bool
+}
+
+func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
+	result, err := submitRuntimeEvent(e, enabled, func(
+		_ runtimeEventAdmission,
+		enabled bool,
+	) (autoCompactionMutationResult, error) {
+		changed, current := e.applyAutoCompactionEnabled(enabled)
+		return autoCompactionMutationResult{changed: changed, enabled: current}, nil
+	})
+	return result.changed, result.enabled, err
+}
+
+func (e *Engine) applyAutoCompactionEnabled(enabled bool) (bool, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current := true
@@ -381,15 +410,24 @@ func (e *Engine) QuestionsEnabled() bool {
 	return *e.cfg.QuestionsEnabled
 }
 
-func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, current := e.questionsEnabledChange(enabled)
-	if changed {
-		e.applyQuestionsEnabled(enabled)
-		current = enabled
-	}
-	return changed, current
+type questionsMutationResult struct {
+	changed bool
+	enabled bool
+}
+
+func (e *Engine) SetQuestionsEnabled(enabled bool) (bool, bool, error) {
+	result, err := submitRuntimeEvent(e, enabled, func(
+		_ runtimeEventAdmission,
+		enabled bool,
+	) (questionsMutationResult, error) {
+		changed, current := e.questionsEnabledChange(enabled)
+		if changed {
+			e.applyQuestionsEnabled(enabled)
+			current = enabled
+		}
+		return questionsMutationResult{changed: changed, enabled: current}, nil
+	})
+	return result.changed, result.enabled, err
 }
 
 func (e *Engine) questionsEnabledChange(enabled bool) (bool, bool) {
@@ -420,14 +458,23 @@ func (e *Engine) applyQuestionsEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	changed, mode, err := e.reviewerEnabledChange(enabled)
-	if err != nil {
-		return false, mode, err
-	}
-	e.applyReviewerEnabled(enabled, mode)
-	return changed, mode, nil
+	result, err := submitRuntimeEvent(e, enabled, func(
+		_ runtimeEventAdmission,
+		enabled bool,
+	) (reviewerMutationResult, error) {
+		changed, mode, err := e.reviewerEnabledChange(enabled)
+		if err != nil {
+			return reviewerMutationResult{mode: mode}, err
+		}
+		e.applyReviewerEnabled(enabled, mode)
+		return reviewerMutationResult{changed: changed, mode: mode}, nil
+	})
+	return result.changed, result.mode, err
+}
+
+type reviewerMutationResult struct {
+	changed bool
+	mode    string
 }
 
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {

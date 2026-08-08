@@ -302,7 +302,7 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
 }
 
-func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
+func TestConcurrentGoalMutationsEnterRuntimeEventAdmissionBeforeMetadataCommit(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 4)
 	var eventsMu sync.Mutex
@@ -326,7 +326,10 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		_, err := engine.SetGoal("first goal", session.GoalActorUser)
 		firstDone <- err
 	}()
-	waitForGoalObjective(t, store, "first goal")
+	time.Sleep(50 * time.Millisecond)
+	if goal := store.Meta().Goal; goal != nil {
+		t.Fatalf("first Goal mutation committed before Runtime Event admission: %+v", goal)
+	}
 
 	secondDone := make(chan error, 1)
 	go func() {
@@ -334,8 +337,8 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		secondDone <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "first goal" {
-		t.Fatalf("second mutation interleaved before first status event completed: %+v", goal)
+	if goal := store.Meta().Goal; goal != nil {
+		t.Fatalf("Goal mutation committed before Runtime Event admission: %+v", goal)
 	}
 	eventsMu.Lock()
 	if len(events) != 0 {

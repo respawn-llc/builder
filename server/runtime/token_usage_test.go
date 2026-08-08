@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -297,7 +298,11 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	reopened, err := New(reopenedStore, mustMaterializeTestEventLog(t, reopenedStore), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	reopened, err := New(reopenedStore, mustMaterializeTestEventLog(t, reopenedStore), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:               "gpt-5",
+		ContextWindowTokens: 400_000,
+		RuntimeEvents:       runtimecommand.NewQueue(t.Context()),
+	})
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)
 	}

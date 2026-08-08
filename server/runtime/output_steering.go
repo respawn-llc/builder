@@ -543,36 +543,23 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	// A persisted steering Engine has no Active Session Runtime generation and
-	// therefore no Runtime Event queue. Its caller owns dormant Session admission.
-	if e.runtimeEvents == nil {
-		return e.applySteeringBatch(stepID, intents...)
-	}
 	if steeringContainsLineDelta(intents) {
 		if !steeringContainsOnlyLineDeltas(intents) {
 			return errors.New("line-by-line streaming deltas cannot share a durable steering batch")
 		}
 		return e.applyLineDeltas(stepID, intents)
 	}
-	e.ensureLifecycle()
-	deferred, err := runtimecommand.Submit(
-		e.lifecycleCtx,
-		e.runtimeEvents,
+	_, err := submitRuntimeEvent(
+		e,
 		steeringEvent{stepID: stepID, intents: intents},
 		func(
-			_ runtimecommand.Admission,
+			admission runtimeEventAdmission,
 			event steeringEvent,
-			complete func(struct{}, error),
-		) error {
-			complete(struct{}{}, e.applySteeringBatch(event.stepID, event.intents...))
-			return nil
+		) (struct{}, error) {
+			return struct{}{}, admission.applySteering(event.stepID, event.intents...)
 		},
 	)
-	if err != nil {
-		return runtimeSteeringError(err)
-	}
-	_, err = deferred.Await(e.lifecycleCtx)
-	return runtimeSteeringError(err)
+	return err
 }
 
 type steeringEvent struct {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -110,7 +111,10 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 		if len(window.Records) != 0 {
 			t.Fatalf("ignored legacy reviewer rollback records = %+v", window.Records)
 		}
-		engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{
+			Model:         "gpt-5",
+			RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+		})
 		if err != nil {
 			t.Fatalf("restore legacy reviewer rollback: %v", err)
 		}

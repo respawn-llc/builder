@@ -176,9 +176,6 @@ type Engine struct {
 	llm      llm.Client
 	registry *tools.Registry
 	cfg      Config
-	// controlMutationMu serializes multi-step control mutations that need to
-	// persist transcript feedback before applying in-memory runtime state.
-	controlMutationMu sync.Mutex
 	// pendingWorkMu owns the legacy Pending Work store until the Boundary Agenda
 	// cutover removes that secondary store.
 	pendingWorkMu              sync.Mutex

@@ -110,6 +110,19 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		"appendMessageRaw":             {"applySteeringItem": true},
 		"appendQueuedUserMessageFlush": {"applySteeringItem": true},
 		"applySteeringItem":            {"applySteeringBatch": true},
+		"applySteeringBatch": {
+			"applySteering":     true,
+			"CloseRuntimeState": true,
+		},
+	}
+	rejectedIdentifiers := map[string]bool{
+		"OrderedMutation":           true,
+		"OrderedMutationTurn":       true,
+		"OrderedMutationLease":      true,
+		"ExecutionMutation":         true,
+		"DirectOrderedMutationTurn": true,
+		"outputMutationMu":          true,
+		"controlMutationMu":         true,
 	}
 	sessionRuntimeBannedCalls := map[string]bool{
 		"AppendCommittedEntry":                  true,
@@ -142,6 +155,16 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		}
 		sessionAliases := packageImportAliases(file, "core/server/session")
 		sessionOwned := strings.HasPrefix(filepath.ToSlash(path), filepath.ToSlash(filepath.Join(repoRoot, "server", "session"))+"/")
+		ast.Inspect(file, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if ok && rejectedIdentifiers[identifier.Name] {
+				violations = append(violations, steeringViolation(
+					fileSet.Position(identifier.Pos()),
+					"uses rejected steering symbol "+identifier.Name,
+				))
+			}
+			return true
+		})
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok {

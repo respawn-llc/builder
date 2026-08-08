@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 )
@@ -32,7 +33,10 @@ func TestNewUsesPersistedProviderContractWhenLiveCapabilitiesUnavailable(t *test
 		mustMaterializeTestEventLog(t, store),
 		client,
 		tools.NewRegistry(),
-		Config{Model: "gpt-5.3-codex"},
+		Config{
+			Model:         "gpt-5.3-codex",
+			RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+		},
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

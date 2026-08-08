@@ -116,10 +116,26 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	objective = strings.TrimSpace(objective)
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
+	return submitRuntimeEvent(e, goalSetEvent{
+		stepID:    strings.TrimSpace(stepID),
+		objective: strings.TrimSpace(objective),
+		actor:     actor,
+	}, func(admission runtimeEventAdmission, event goalSetEvent) (GoalCommandResult, error) {
+		return e.applyGoalSet(admission, event)
+	})
+}
+
+type goalSetEvent struct {
+	stepID    string
+	objective string
+	actor     session.GoalActor
+}
+
+func (e *Engine) applyGoalSet(
+	admission runtimeEventAdmission,
+	event goalSetEvent,
+) (GoalCommandResult, error) {
+	goal, metadataReceipt, err := e.store.SetGoal(event.objective, event.actor)
 	result := goalCommandResult(GoalCommandApplied, goal, false, metadataReceipt, session.CommitReceipt{})
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
@@ -129,7 +145,12 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.applyGoalNoticeAndStatus(
+		admission,
+		event.stepID,
+		msg,
+		goalStatusUpdateFromState(goal),
+	)
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -150,19 +171,38 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	if current := e.Goal(); current != nil && current.Status == status {
-		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
+	return submitRuntimeEvent(e, goalStatusEvent{
+		stepID:               strings.TrimSpace(stepID),
+		status:               status,
+		actor:                actor,
+		requireGoalLoopStart: requireGoalLoopStart,
+	}, func(admission runtimeEventAdmission, event goalStatusEvent) (GoalCommandResult, error) {
+		return e.applyGoalStatus(admission, event)
+	})
+}
+
+type goalStatusEvent struct {
+	stepID               string
+	status               session.GoalStatus
+	actor                session.GoalActor
+	requireGoalLoopStart bool
+}
+
+func (e *Engine) applyGoalStatus(
+	admission runtimeEventAdmission,
+	event goalStatusEvent,
+) (GoalCommandResult, error) {
+	if current := e.Goal(); current != nil && current.Status == event.status {
+		if event.status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
 			return goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{}), nil
 		}
 	}
-	if status == session.GoalStatusActive && requireGoalLoopStart {
+	if event.status == session.GoalStatusActive && event.requireGoalLoopStart {
 		if err := e.RequireGoalLoopStartAllowed(); err != nil {
 			return GoalCommandResult{}, err
 		}
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	goal, transitioned, metadataReceipt, err := e.store.SetGoalStatus(status, actor)
+	goal, transitioned, metadataReceipt, err := e.store.SetGoalStatus(event.status, event.actor)
 	disposition := GoalCommandApplied
 	if err == nil && !transitioned {
 		disposition = GoalCommandNoop
@@ -176,7 +216,12 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.applyGoalNoticeAndStatus(
+		admission,
+		event.stepID,
+		msg,
+		goalStatusUpdateFromState(goal),
+	)
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -434,9 +479,24 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
-	goal, metadataReceipt, err := e.store.ClearGoal(actor)
+	return submitRuntimeEvent(e, goalClearEvent{
+		stepID: strings.TrimSpace(stepID),
+		actor:  actor,
+	}, func(admission runtimeEventAdmission, event goalClearEvent) (GoalCommandResult, error) {
+		return e.applyGoalClear(admission, event)
+	})
+}
+
+type goalClearEvent struct {
+	stepID string
+	actor  session.GoalActor
+}
+
+func (e *Engine) applyGoalClear(
+	admission runtimeEventAdmission,
+	event goalClearEvent,
+) (GoalCommandResult, error) {
+	goal, metadataReceipt, err := e.store.ClearGoal(event.actor)
 	result := goalCommandResult(GoalCommandApplied, goal, true, metadataReceipt, session.CommitReceipt{})
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
@@ -446,7 +506,12 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate())
+	noticeReceipt, err := e.applyGoalNoticeAndStatus(
+		admission,
+		event.stepID,
+		msg,
+		goalStatusClearUpdate(),
+	)
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -455,39 +520,43 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	if e == nil || e.store == nil {
 		return
 	}
-	if !e.WorkflowTerminalState().Completed {
-		return
-	}
-	goal := e.Goal()
-	if goal == nil || goal.Status != session.GoalStatusActive {
-		return
-	}
-	reportErr := func(err error) {
+	_, err := submitRuntimeEvent(e, struct{}{}, func(
+		admission runtimeEventAdmission,
+		_ struct{},
+	) (struct{}, error) {
+		return struct{}{}, e.applyWorkflowGoalCompletion(admission)
+	})
+	if err != nil {
 		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
 		}))
 	}
-	e.controlMutationMu.Lock()
-	defer e.controlMutationMu.Unlock()
+}
+
+func (e *Engine) applyWorkflowGoalCompletion(admission runtimeEventAdmission) error {
+	if !e.WorkflowTerminalState().Completed {
+		return nil
+	}
+	goal := e.Goal()
+	if goal == nil || goal.Status != session.GoalStatusActive {
+		return nil
+	}
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
-		reportErr(err)
-		return
+		return err
 	}
 	if !transitioned {
-		return
+		return nil
 	}
 	msg, err := goalNoticeMessage(GoalNoticeStatus, &completed)
 	if err != nil {
-		reportErr(err)
-		return
+		return err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
-		reportErr(err)
-	}
+	_, err = e.applyGoalNoticeAndStatus(admission, "", msg, goalStatusUpdateFromState(completed))
+	return err
 }
 
 func goalStatusUpdateFromState(goal session.GoalState) GoalStatusUpdate {
@@ -511,6 +580,19 @@ func (e *Engine) steerGoalNoticeAndStatus(
 		return session.CommitReceipt{}, ErrEngineClosed
 	}
 	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
+}
+
+func (e *Engine) applyGoalNoticeAndStatus(
+	admission runtimeEventAdmission,
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
+	receipt := session.CommitReceipt{}
+	intent := steerGoalNoticeAndStatusIntent(message, update)
+	intent.items[0].commitReceipt = &receipt
+	err := admission.applySteering(stepID, intent)
+	return receipt, err
 }
 
 func (e *Engine) StartGoalLoop() error {
