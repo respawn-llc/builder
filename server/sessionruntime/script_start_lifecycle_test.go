@@ -51,7 +51,7 @@ func TestWorkflowScriptReportsStartedOnlyAfterAdmissionLeaseRelease(t *testing.T
 		publicationDone <- handle.PublishRunning(context.Background(), workflowRunningPublicationStub{
 			publish: func(_ context.Context, running TaskExecution, activation WorkflowRunningActivation) error {
 				published <- running
-				return activation.Commit(func(ExecutionScope) error { return nil })
+				return activation.Activate()
 			},
 		})
 	}()

@@ -87,6 +87,7 @@ type LifecyclePublication interface {
 	PublishExactRegistration(
 		context.Context,
 		workflowstore.LifecycleExactExecution,
+		workflowstore.LifecycleExactRegistrationActivation,
 	) error
 	PublishExactPromptPending(
 		context.Context,

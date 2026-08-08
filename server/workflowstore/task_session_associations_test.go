@@ -138,6 +138,99 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 	}
 }
 
+func TestPublishResumeRejectsContradictoryCurrentNodeSessionOwnership(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	currentNode := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode.Reference,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	if err := store.InterruptCurrentNode(
+		ctx,
+		currentNode.Reference,
+		workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		workflow.NewCurrentNodeInterruptionDetail(
+			string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+			nil,
+		),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	otherTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.db.ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(currentNode.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("remove Current Node Session provenance: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET task_id = ? WHERE id = ?`,
+		string(otherTask.ID),
+		sessionID.String(),
+	); err != nil {
+		t.Fatalf("contradict Session Task ownership: %v", err)
+	}
+
+	publication, err := NewLifecyclePublication(store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication: %v", err)
+	}
+	t.Cleanup(func() { _ = publication.Close() })
+	delta, err := NewQueuedTaskLifecycleDelta(
+		task.ID,
+		[]workflow.CurrentNodeReference{currentNode.Reference},
+	)
+	if err != nil {
+		t.Fatalf("NewQueuedTaskLifecycleDelta: %v", err)
+	}
+	if _, err := publication.PublishResume(ctx, delta); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("PublishResume error = %v, want contradictory ownership failure", err)
+	}
+	var associationCount int
+	if err := store.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(currentNode.Reference.NodeID),
+	).Scan(&associationCount); err != nil {
+		t.Fatalf("count contradictory Session provenance: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("contradictory ownership repaired %d associations, want none", associationCount)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].Scheduling == nil ||
+		currentNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("contradictory Resume Current Nodes = %+v, want interrupted state preserved", currentNodes)
+	}
+}
+
 func TestBindSessionToBranchCurrentNodeReplacesExpectedFanoutSourceSession(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

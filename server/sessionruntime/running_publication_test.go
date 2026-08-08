@@ -30,7 +30,7 @@ func TestWorkflowScriptInterruptVisibilityStartsAtRunningPublication(t *testing.
 		) error {
 			close(entered)
 			<-release
-			return activation.Commit(func(ExecutionScope) error { return nil })
+			return activation.Activate()
 		},
 	}
 	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
@@ -87,7 +87,7 @@ func TestWorkflowAgentInterruptVisibilityStartsAtRunningPublication(t *testing.T
 		) error {
 			close(entered)
 			<-release
-			return activation.Commit(func(ExecutionScope) error { return nil })
+			return activation.Activate()
 		},
 	}
 	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
@@ -178,7 +178,7 @@ func TestTaskInterruptBeforeAgentActivationPreventsRunnerStart(t *testing.T) {
 			) error {
 				close(publicationEntered)
 				<-releasePublication
-				return activation.Commit(func(ExecutionScope) error { return nil })
+				return activation.Activate()
 			},
 		},
 		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {

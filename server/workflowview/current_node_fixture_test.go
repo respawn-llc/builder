@@ -613,7 +613,7 @@ func (workflowViewRunningPublicationStub) PublishWorkflowRunning(
 	_ sessionruntime.TaskExecution,
 	activation sessionruntime.WorkflowRunningActivation,
 ) error {
-	return activation.Commit(func(sessionruntime.ExecutionScope) error { return nil })
+	return activation.Activate()
 }
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {

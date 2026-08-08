@@ -744,6 +744,7 @@ func (p *currentNodeControllerLifecyclePublication) PublishCurrentNodeAdmission(
 func (p *currentNodeControllerLifecyclePublication) PublishExactRegistration(
 	_ context.Context,
 	exact workflowstore.LifecycleExactExecution,
+	activation workflowstore.LifecycleExactRegistrationActivation,
 ) error {
 	reference := exact.CurrentNode
 	p.mu.Lock()
@@ -758,6 +759,9 @@ func (p *currentNodeControllerLifecyclePublication) PublishExactRegistration(
 		if current.CurrentNode.Equal(reference) {
 			return errors.New("lifecycle Exact predecessor conflict")
 		}
+	}
+	if err := activation.Activate(); err != nil {
+		return err
 	}
 	p.exact[reference.TaskID] = append(p.exact[reference.TaskID], exact)
 	return nil

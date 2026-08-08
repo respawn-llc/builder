@@ -2528,6 +2528,52 @@ INSERT INTO session_workflow_node_associations (
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
     associated_at_unix_ms = excluded.associated_at_unix_ms;
 
+-- name: RepairSerialCurrentNodeSessionAssociation :execrows
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+)
+SELECT
+    current_node.session_id,
+    current_node.node_id,
+    NULL,
+    sqlc.arg(associated_at_unix_ms)
+FROM task_current_nodes current_node
+JOIN sessions session
+  ON session.id = current_node.session_id
+ AND session.task_id = current_node.task_id
+WHERE current_node.task_id = sqlc.arg(task_id)
+  AND current_node.node_id = sqlc.arg(node_id)
+  AND current_node.transition_branch_key IS NULL
+  AND current_node.session_id = sqlc.arg(session_id)
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms;
+
+-- name: RepairBranchCurrentNodeSessionAssociation :execrows
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+)
+SELECT
+    current_node.session_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    sqlc.arg(associated_at_unix_ms)
+FROM task_current_nodes current_node
+JOIN sessions session
+  ON session.id = current_node.session_id
+ AND session.task_id = current_node.task_id
+WHERE current_node.task_id = sqlc.arg(task_id)
+  AND current_node.node_id = sqlc.arg(node_id)
+  AND current_node.transition_branch_key = sqlc.arg(transition_branch_key)
+  AND current_node.session_id = sqlc.arg(session_id)
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms;
+
 -- name: CountTaskSessions :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions

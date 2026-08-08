@@ -636,7 +636,7 @@ func TestLifecycleCaptureKeepsCompletePendingPromptAfterSuccessorPublication(t *
 		Agent:       &LifecycleAgentExecutionTarget{SessionID: sessionID},
 		Phase:       LifecycleExactExecutionRunning,
 	}
-	if err := publication.PublishExactRegistration(ctx, exact); err != nil {
+	if err := publication.PublishExactRegistration(ctx, exact, &lifecycleExactActivation{}); err != nil {
 		t.Fatalf("PublishExactRegistration: %v", err)
 	}
 	recommended := 1

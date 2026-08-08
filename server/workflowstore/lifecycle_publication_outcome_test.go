@@ -38,7 +38,7 @@ func TestLifecycleCompletionReportsCommittedWhenEventDeliveryFails(t *testing.T)
 		ScopeID:     scopeID,
 		Script:      &LifecycleScriptExecutionTarget{Path: "/test/script"},
 		Phase:       LifecycleExactExecutionFinalizing,
-	}); err != nil {
+	}, &lifecycleExactActivation{}); err != nil {
 		t.Fatalf("PublishExactRegistration: %v", err)
 	}
 

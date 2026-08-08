@@ -34,7 +34,7 @@ func TestLifecyclePublicationCompletesSerialCurrentNodeWithSuccessorRunBeforeSou
 		ScopeID:     sourceScope,
 		Script:      &LifecycleScriptExecutionTarget{Path: "/test/script"},
 		Phase:       LifecycleExactExecutionRunning,
-	}); err != nil {
+	}, &lifecycleExactActivation{}); err != nil {
 		t.Fatalf("PublishExactRegistration: %v", err)
 	}
 

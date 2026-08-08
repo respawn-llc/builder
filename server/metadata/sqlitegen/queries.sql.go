@@ -8654,6 +8654,100 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	return i, err
 }
 
+const repairBranchCurrentNodeSessionAssociation = `-- name: RepairBranchCurrentNodeSessionAssociation :execrows
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+)
+SELECT
+    current_node.session_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    ?1
+FROM task_current_nodes current_node
+JOIN sessions session
+  ON session.id = current_node.session_id
+ AND session.task_id = current_node.task_id
+WHERE current_node.task_id = ?2
+  AND current_node.node_id = ?3
+  AND current_node.transition_branch_key = ?4
+  AND current_node.session_id = ?5
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+`
+
+type RepairBranchCurrentNodeSessionAssociationParams struct {
+	AssociatedAtUnixMs  int64
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	SessionID           sql.NullString
+}
+
+func (q *Queries) RepairBranchCurrentNodeSessionAssociation(ctx context.Context, arg RepairBranchCurrentNodeSessionAssociationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, repairBranchCurrentNodeSessionAssociation,
+		arg.AssociatedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.SessionID,
+	)
+	err = recordQueryError(ctx, err, repairBranchCurrentNodeSessionAssociation, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const repairSerialCurrentNodeSessionAssociation = `-- name: RepairSerialCurrentNodeSessionAssociation :execrows
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+)
+SELECT
+    current_node.session_id,
+    current_node.node_id,
+    NULL,
+    ?1
+FROM task_current_nodes current_node
+JOIN sessions session
+  ON session.id = current_node.session_id
+ AND session.task_id = current_node.task_id
+WHERE current_node.task_id = ?2
+  AND current_node.node_id = ?3
+  AND current_node.transition_branch_key IS NULL
+  AND current_node.session_id = ?4
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+`
+
+type RepairSerialCurrentNodeSessionAssociationParams struct {
+	AssociatedAtUnixMs int64
+	TaskID             string
+	NodeID             string
+	SessionID          sql.NullString
+}
+
+func (q *Queries) RepairSerialCurrentNodeSessionAssociation(ctx context.Context, arg RepairSerialCurrentNodeSessionAssociationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, repairSerialCurrentNodeSessionAssociation,
+		arg.AssociatedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.SessionID,
+	)
+	err = recordQueryError(ctx, err, repairSerialCurrentNodeSessionAssociation, 4)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'ready',

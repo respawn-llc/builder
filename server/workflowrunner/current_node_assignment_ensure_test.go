@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestEnsureCurrentNodeAssignmentForScriptIsCommittedNoOp(t *testing.T) {
@@ -104,7 +105,7 @@ func TestEnsureCurrentNodeAssignmentReusesMatchingAgentAssignmentAfterStartupRec
 	}
 }
 
-func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
+func TestResumeRepairsMissingRetainedSuccessorProvenance(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeContinueSession)
 	task := f.createTask(t, workflowID)
@@ -149,6 +150,20 @@ func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
 	if successor.SessionID == nil || *successor.SessionID != sessionID {
 		t.Fatalf("successor Session = %v, want retained %s", successor.SessionID, sessionID)
 	}
+	if _, err := f.metadata.DB().ExecContext(
+		context.Background(),
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		string(successor.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("remove successor Session provenance after publication: %v", err)
+	}
+	if count := currentNodeSessionAssociationCount(t, f, sessionID, successor.Reference); count != 0 {
+		t.Fatalf("successor Session associations after simulated crash = %d, want none", count)
+	}
 
 	if err := f.store.InterruptCurrentNode(
 		context.Background(),
@@ -162,7 +177,6 @@ func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLifecyclePublication: %v", err)
 	}
-	t.Cleanup(func() { _ = publication.Close() })
 	delta, err := workflowstore.NewQueuedTaskLifecycleDelta(
 		task.ID,
 		[]workflow.CurrentNodeReference{successor.Reference},
@@ -172,6 +186,9 @@ func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
 	}
 	if _, err := publication.PublishResume(context.Background(), delta); err != nil {
 		t.Fatalf("PublishResume: %v", err)
+	}
+	if count := currentNodeSessionAssociationCount(t, f, sessionID, successor.Reference); count != 1 {
+		t.Fatalf("successor Session associations after first Resume = %d, want one", count)
 	}
 
 	before := currentNodeWorkflowAssignmentCount(t, f, successor.Reference)
@@ -189,6 +206,35 @@ func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
 	afterFirst := currentNodeWorkflowAssignmentCount(t, f, successor.Reference)
 	if afterFirst != before+1 {
 		t.Fatalf("successor assignment count after first Resume = %d, want %d", afterFirst, before+1)
+	}
+	if err := publication.Close(); err != nil {
+		t.Fatalf("close first lifecycle publication: %v", err)
+	}
+	if err := f.store.InterruptCurrentNode(
+		context.Background(),
+		successor.Reference,
+		"workflow_startup_recovery",
+		workflow.NewCurrentNodeInterruptionDetail("workflow_startup_recovery", nil),
+	); err != nil {
+		t.Fatalf("interrupt successor before repeated Resume: %v", err)
+	}
+	repeatedPublication, err := workflowstore.NewLifecyclePublication(f.store)
+	if err != nil {
+		t.Fatalf("NewLifecyclePublication for repeated Resume: %v", err)
+	}
+	t.Cleanup(func() { _ = repeatedPublication.Close() })
+	repeatedDelta, err := workflowstore.NewQueuedTaskLifecycleDelta(
+		task.ID,
+		[]workflow.CurrentNodeReference{successor.Reference},
+	)
+	if err != nil {
+		t.Fatalf("NewQueuedTaskLifecycleDelta for repeated Resume: %v", err)
+	}
+	if _, err := repeatedPublication.PublishResume(context.Background(), repeatedDelta); err != nil {
+		t.Fatalf("repeated PublishResume: %v", err)
+	}
+	if count := currentNodeSessionAssociationCount(t, f, sessionID, successor.Reference); count != 1 {
+		t.Fatalf("successor Session associations after repeated Resume = %d, want one", count)
 	}
 	second, err := f.starter.EnsureCurrentNodeAssignment(
 		context.Background(),
@@ -211,6 +257,46 @@ func TestResumeRetainedSuccessorAfterCrashBeforeStarterBinding(t *testing.T) {
 	); err != nil {
 		t.Fatalf("validate successor Session binding after repeated Resume: %v", err)
 	}
+}
+
+func currentNodeSessionAssociationCount(
+	t *testing.T,
+	f *currentNodeRunnerFixture,
+	sessionID runtimeids.SessionID,
+	reference workflow.CurrentNodeReference,
+) int {
+	t.Helper()
+	var count int
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	var err error
+	if branchScoped {
+		err = f.metadata.DB().QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key = ?`,
+			sessionID.String(),
+			string(reference.NodeID),
+			string(branchKey),
+		).Scan(&count)
+	} else {
+		err = f.metadata.DB().QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+			sessionID.String(),
+			string(reference.NodeID),
+		).Scan(&count)
+	}
+	if err != nil {
+		t.Fatalf("count Current Node Session associations: %v", err)
+	}
+	return count
 }
 
 func lockCurrentNodeAssignmentExecutionTarget(

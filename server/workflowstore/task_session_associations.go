@@ -290,6 +290,50 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	return nil
 }
 
+func repairCurrentNodeSessionAssociation(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+) error {
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	sessionID := *currentNode.SessionID
+	reference := currentNode.Reference
+	associatedAt := time.Now().UTC()
+	var repaired int64
+	var err error
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		repaired, err = q.RepairBranchCurrentNodeSessionAssociation(
+			ctx,
+			sqlitegen.RepairBranchCurrentNodeSessionAssociationParams{
+				AssociatedAtUnixMs:  associatedAt.UnixMilli(),
+				TaskID:              string(reference.TaskID),
+				NodeID:              string(reference.NodeID),
+				TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+				SessionID:           sql.NullString{String: sessionID.String(), Valid: true},
+			},
+		)
+	} else {
+		repaired, err = q.RepairSerialCurrentNodeSessionAssociation(
+			ctx,
+			sqlitegen.RepairSerialCurrentNodeSessionAssociationParams{
+				AssociatedAtUnixMs: associatedAt.UnixMilli(),
+				TaskID:             string(reference.TaskID),
+				NodeID:             string(reference.NodeID),
+				SessionID:          sql.NullString{String: sessionID.String(), Valid: true},
+			},
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if repaired != 1 {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	return nil
+}
+
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node
 // from its own materialized values and the latest definition. It never
 // reconstructs discarded execution history.

@@ -29,8 +29,12 @@ type WorkflowRunningPublication interface {
 	PublishWorkflowRunning(context.Context, TaskExecution, WorkflowRunningActivation) error
 }
 
+// WorkflowRunningActivation is a single-use staged Authority capability.
+// Lifecycle Publication activates it only after every fallible root validation
+// has succeeded and immediately before the infallible root swap.
 type WorkflowRunningActivation interface {
-	Commit(func(ExecutionScope) error) error
+	Scope() ExecutionScope
+	Activate() error
 }
 
 type WorkflowRunningPublicationError struct {
@@ -174,7 +178,6 @@ type workflowRunningActivationState uint8
 
 const (
 	workflowRunningActivationPrepared workflowRunningActivationState = iota + 1
-	workflowRunningActivationCommitting
 	workflowRunningActivationCommitted
 	workflowRunningActivationFailed
 )
@@ -185,21 +188,22 @@ type workflowRunningActivation struct {
 	state     workflowRunningActivationState
 }
 
-func (a *workflowRunningActivation) Commit(commit func(ExecutionScope) error) error {
+func (a *workflowRunningActivation) Scope() ExecutionScope {
+	if a == nil || a.execution == nil {
+		return ExecutionScope{}
+	}
+	return a.execution.scope
+}
+
+func (a *workflowRunningActivation) Activate() error {
 	if a == nil || a.execution == nil {
 		return errors.New("workflow running activation is required")
 	}
-	if commit == nil {
-		return errors.New("workflow running activation commit is required")
-	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.state != workflowRunningActivationPrepared {
-		state := a.state
-		a.mu.Unlock()
-		return fmt.Errorf("workflow running activation cannot commit from state %d", state)
+		return fmt.Errorf("workflow running activation cannot activate from state %d", a.state)
 	}
-	a.state = workflowRunningActivationCommitting
-	a.mu.Unlock()
 
 	execution := a.execution
 	authority := execution.authority
@@ -218,20 +222,17 @@ func (a *workflowRunningActivation) Commit(commit func(ExecutionScope) error) er
 	case context.Cause(execution.ctx) != nil:
 		err = context.Cause(execution.ctx)
 	default:
-		err = commit(execution.scope)
-		if err == nil && execution.phase == executionPhasePublishing {
+		if execution.phase == executionPhasePublishing {
 			execution.phase = executionPhaseRunning
 		}
 	}
 	authority.mu.Unlock()
 
-	a.mu.Lock()
 	if err == nil {
 		a.state = workflowRunningActivationCommitted
 	} else {
 		a.state = workflowRunningActivationFailed
 	}
-	a.mu.Unlock()
 	return err
 }
 

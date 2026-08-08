@@ -243,6 +243,13 @@ type LifecycleExactExecution struct {
 	PendingPrompts []LifecyclePendingPrompt
 }
 
+// LifecycleExactRegistrationActivation commits only the staged execution
+// owner's private running state. It must not call controller or publication
+// behavior because PublishExactRegistration invokes it inside publication.
+type LifecycleExactRegistrationActivation interface {
+	Activate() error
+}
+
 func validateLifecycleExactExecution(exact LifecycleExactExecution) error {
 	if strings.TrimSpace(exact.ProjectID) == "" {
 		return errors.New("published Exact execution project id is required")
@@ -733,9 +740,13 @@ func (p *LifecyclePublication) PublishCurrentNodeAdmission(
 func (p *LifecyclePublication) PublishExactRegistration(
 	ctx context.Context,
 	exact LifecycleExactExecution,
+	activation LifecycleExactRegistrationActivation,
 ) error {
 	if err := validateLifecycleExactExecution(exact); err != nil {
 		return err
+	}
+	if activation == nil {
+		return errors.New("Exact registration activation is required")
 	}
 	if p == nil || p.store == nil {
 		return errors.New("LifecyclePublication is required")
@@ -767,10 +778,9 @@ func (p *LifecyclePublication) PublishExactRegistration(
 	if err := applyTaskLifecycleDelta(candidate, delta); err != nil {
 		return err
 	}
-	key, _ := exact.CurrentNode.Key()
-	entry := cloneLifecycleTaskEntry(candidate[exact.CurrentNode.TaskID])
-	entry.exact[key] = cloneLifecycleExactExecution(exact)
-	candidate[exact.CurrentNode.TaskID] = entry
+	if err := activation.Activate(); err != nil {
+		return err
+	}
 	p.root = candidate
 	return nil
 }
@@ -1226,6 +1236,13 @@ func prepareCurrentNodeResume(
 	}
 	if locked != 1 {
 		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
+	currentNode, err := currentNodeForReference(ctx, q, reference)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	if err := repairCurrentNodeSessionAssociation(ctx, q, currentNode); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
 	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
 	if err != nil {
