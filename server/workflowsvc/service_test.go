@@ -2749,7 +2749,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, definitions, projection)
+	attention, err := workflowview.NewAttention(metadataStore, projection)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}

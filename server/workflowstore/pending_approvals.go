@@ -103,11 +103,19 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 }
 
 func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflow.PendingApproval, error) {
+	return PendingApprovalWithQueries(ctx, s.queries, approvalID)
+}
+
+// PendingApprovalWithQueries decodes an Approval through the supplied query snapshot.
+func PendingApprovalWithQueries(ctx context.Context, q *sqlitegen.Queries, approvalID workflow.ApprovalID) (workflow.PendingApproval, error) {
+	if q == nil {
+		return workflow.PendingApproval{}, errors.New("workflow queries are required")
+	}
 	normalizedID, err := normalizeApprovalID(approvalID)
 	if err != nil {
 		return workflow.PendingApproval{}, err
 	}
-	return pendingApprovalByID(ctx, s.queries, normalizedID)
+	return pendingApprovalByID(ctx, q, normalizedID)
 }
 
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {

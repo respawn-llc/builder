@@ -22,29 +22,23 @@ import (
 )
 
 type Attention struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	status      *TaskStatusProjection
+	queries *sqlitegen.Queries
+	status  *TaskStatusProjection
 }
 
 func NewAttention(
 	metadataStore *metadata.Store,
-	definitions *DefinitionProjection,
 	status *TaskStatusProjection,
 ) (*Attention, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	if definitions == nil {
-		return nil, errors.New("definition projection is required")
-	}
 	if status == nil {
 		return nil, errors.New("task status projection is required")
 	}
 	return &Attention{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		status:      status,
+		queries: metadataStore.Queries(),
+		status:  status,
 	}, nil
 }
 
@@ -201,7 +195,7 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 	switch typed := reference.(type) {
 	case DurableApprovalAttentionReference:
 		approvalID := typed.ApprovalID.String()
-		approval, err := a.pendingApproval(ctx, workflow.TaskID(row.TaskID), approvalID)
+		approval, err := workflowstore.PendingApprovalWithQueries(ctx, a.queries, typed.ApprovalID)
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, err
 		}
@@ -247,19 +241,6 @@ func (a *Attention) durableCandidate(ctx context.Context, row sqlitegen.ListWork
 	default:
 		return serverapi.WorkflowAttentionItem{}, fmt.Errorf("unsupported durable workflow attention notification reference %T", reference)
 	}
-}
-
-func (a *Attention) pendingApproval(ctx context.Context, taskID workflow.TaskID, approvalID string) (workflow.PendingApproval, error) {
-	approvals, err := a.definitions.store.ListPendingApprovals(ctx, taskID)
-	if err != nil {
-		return workflow.PendingApproval{}, err
-	}
-	for _, approval := range approvals {
-		if approval.ID.String() == approvalID {
-			return approval, nil
-		}
-	}
-	return workflow.PendingApproval{}, fmt.Errorf("approval attention candidate %q is no longer pending for task %q", approvalID, taskID)
 }
 
 func approvalAttentionSnapshot(approval workflow.PendingApproval) serverapi.WorkflowAttentionApprovalSnapshot {

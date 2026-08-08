@@ -295,7 +295,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	}
 	workflowAttention, err := workflowview.NewAttention(
 		metadataStore,
-		workflowDefinitions,
 		workflowTaskStatusProjection,
 	)
 	if err != nil {

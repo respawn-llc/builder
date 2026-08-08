@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -41,15 +42,26 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 
-	approvalAttention := approvalFixture.attention(t)
-	approvals, err := approvalAttention.ListTask(approvalFixture.ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(approvalStarted.task.ID)})
-	if err != nil {
-		t.Fatalf("Attention.ListTask approval: %v", err)
+	var approval serverapi.WorkflowAttentionItem
+	if err = approvalFixture.projection.WithBoundedLifecycle(approvalFixture.ctx, func(_ string, durable *TaskStatusDurableSnapshot, _ workflowexecution.WorkflowTaskLifecycleReader) error {
+		snapshot := *approvalFixture.attention(t)
+		snapshot.queries = durable.queries
+		taskID := string(approvalStarted.task.ID)
+		rows, err := snapshot.durableCandidateRows(approvalFixture.ctx, attentionPageCursor{}, &taskID, 0)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return errors.New("pinned approval attention candidate is missing")
+		}
+		if _, err := approvalFixture.metadata.DB().ExecContext(approvalFixture.ctx, `DELETE FROM task_pending_approvals WHERE id = ?`, completed.PendingApproval.ID.String()); err != nil {
+			return err
+		}
+		approval, err = snapshot.durableCandidate(approvalFixture.ctx, rows[0])
+		return err
+	}); err != nil {
+		t.Fatalf("project pinned approval attention: %v", err)
 	}
-	if len(approvals.Items) != 1 {
-		t.Fatalf("approval attention = %+v, want one approval", approvals.Items)
-	}
-	approval := approvals.Items[0]
 	if approval.Kind != "approval" ||
 		approval.ApprovalID == nil ||
 		*approval.ApprovalID != completed.PendingApproval.ID.String() ||
@@ -253,7 +265,6 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	attention, err := NewAttention(
 		fixture.metadata,
-		mustDefinitionProjection(t, fixture.store),
 		attentionProjection,
 	)
 	if err != nil {
@@ -321,7 +332,6 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 	attention, err := NewAttention(
 		fixture.metadata,
-		mustDefinitionProjection(t, fixture.store),
 		surfaces.projection,
 	)
 	if err != nil {
@@ -362,7 +372,6 @@ func TestAttentionKeepsPublishedPromptWithoutASecondLivePromptLookup(t *testing.
 	}
 	attention, err := NewAttention(
 		fixture.metadata,
-		mustDefinitionProjection(t, fixture.store),
 		surfaces.projection,
 	)
 	if err != nil {

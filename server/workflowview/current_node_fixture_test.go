@@ -724,7 +724,7 @@ func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime
 
 func (f currentNodeViewFixture) attention(t *testing.T) *Attention {
 	t.Helper()
-	attention, err := NewAttention(f.metadata, mustDefinitionProjection(t, f.store), f.projection)
+	attention, err := NewAttention(f.metadata, f.projection)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
