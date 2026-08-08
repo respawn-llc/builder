@@ -38,7 +38,7 @@ it("orders Start, Open, and targeted Interrupt in one wrapping action flow", asy
 
   const flow = await screen.findByTestId("task-detail-action-flow");
   const start = within(flow).getByTestId("task-detail-start");
-  const openLabel = appI18n.t("task.openChat", { name: sessionName });
+  const openLabel = appI18n.t("task.openInCli", { name: sessionName });
   const interruptLabel = appI18n.t("task.interruptChat", { name: sessionName });
   const open = within(flow).getByRole("button", { name: openLabel });
   const interrupt = within(flow).getByRole("button", { name: interruptLabel });
@@ -66,10 +66,10 @@ it("falls back to the Agent Node display name and keeps Task-wide Interrupt gene
 
   const flow = await screen.findByTestId("task-detail-action-flow");
   const firstOpen = within(flow).getByRole("button", {
-    name: appI18n.t("task.openChat", { name: "Implementation" }),
+    name: appI18n.t("task.openInCli", { name: "Implementation" }),
   });
   const secondOpen = within(flow).getByRole("button", {
-    name: appI18n.t("task.openChat", { name: "Review" }),
+    name: appI18n.t("task.openInCli", { name: "Review" }),
   });
   const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
   expect(within(flow).getAllByRole("button")).toEqual([firstOpen, secondOpen, interrupt]);
