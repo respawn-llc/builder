@@ -1564,10 +1564,20 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 	preparation := <-preparations
 	preparationErr := preparation.Prepare(ctx)
 	var typed *workflowexecution.TaskStartPreparationError
-	if !errors.As(preparationErr, &typed) ||
-		typed.InterruptionDetail().SetupRecovery == nil ||
-		typed.InterruptionDetail().SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
+	if !errors.As(preparationErr, &typed) {
 		t.Fatalf("preparation error = %T %v, want typed setup recovery", preparationErr, preparationErr)
+	}
+	interruptionDetail := typed.InterruptionDetail()
+	if interruptionDetail.SetupRecovery == nil ||
+		interruptionDetail.SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
+		t.Fatalf("preparation interruption detail = %+v, want typed setup recovery", interruptionDetail)
+	}
+	if _, duplicated := interruptionDetail.Fields[workflow.CurrentNodeInterruptionDiagnosticField]; duplicated {
+		t.Fatalf("preparation interruption detail duplicated setup diagnostic: %+v", interruptionDetail.Fields)
+	}
+	diagnostic := interruptionDetail.Diagnostic()
+	if diagnostic == nil || *diagnostic != setupErr.Error() {
+		t.Fatalf("preparation diagnostic = %v, want %q", diagnostic, setupErr.Error())
 	}
 	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
 		Kind:  workflowexecution.TaskPreparationFailed,

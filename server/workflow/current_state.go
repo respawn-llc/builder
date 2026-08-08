@@ -160,6 +160,9 @@ func (d CurrentNodeInterruptionDetail) Validate() error {
 		}
 	}
 	if d.SetupRecovery != nil {
+		if _, duplicated := d.Fields[CurrentNodeInterruptionDiagnosticField]; duplicated {
+			return errors.New("setup recovery diagnostic must not be duplicated in interruption fields")
+		}
 		return d.SetupRecovery.Validate()
 	}
 	return nil
@@ -250,6 +253,13 @@ func NewCurrentNodeInterruptionDetail(code string, diagnostic error) CurrentNode
 }
 
 func (d CurrentNodeInterruptionDetail) Diagnostic() *string {
+	if d.SetupRecovery != nil {
+		value := d.SetupRecovery.Diagnostic
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		return &value
+	}
 	if d.Fields == nil {
 		return nil
 	}

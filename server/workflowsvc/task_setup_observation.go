@@ -234,10 +234,7 @@ func taskPreparationError(
 			return errors.Join(err, retainedErr)
 		}
 	}
-	if detail.Fields == nil {
-		detail.Fields = make(map[string]string)
-	}
-	detail.Fields[workflow.CurrentNodeInterruptionDiagnosticField] = failed.Diagnostic
+	delete(detail.Fields, workflow.CurrentNodeInterruptionDiagnosticField)
 	detail.SetupRecovery = &workflow.CurrentNodeSetupRecoveryDetail{
 		SetupOperationID:         uuid.UUID(setupOperationID),
 		Cause:                    workflow.CurrentNodeSetupRecoveryCause(failed.Cause.Kind),

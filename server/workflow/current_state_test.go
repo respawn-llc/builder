@@ -51,6 +51,17 @@ func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 		Code:          "workflow_setup_recovery",
 		SetupRecovery: &recovery,
 	}
+	diagnostic := detail.Diagnostic()
+	if diagnostic == nil || *diagnostic != recovery.Diagnostic {
+		t.Fatalf("derived setup recovery diagnostic = %v, want %q", diagnostic, recovery.Diagnostic)
+	}
+	duplicated := detail
+	duplicated.Fields = map[string]string{
+		workflow.CurrentNodeInterruptionDiagnosticField: "contradictory generic diagnostic",
+	}
+	if err := duplicated.Validate(); err == nil {
+		t.Fatal("setup recovery with a duplicated generic diagnostic validated")
+	}
 	raw, err := json.Marshal(detail)
 	if err != nil {
 		t.Fatalf("marshal interruption detail: %v", err)
