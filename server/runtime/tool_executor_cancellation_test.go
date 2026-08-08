@@ -187,7 +187,8 @@ type orderedCancellationTool struct {
 }
 
 func (t *orderedCancellationTool) Call(ctx context.Context, call tools.Call) (tools.Result, error) {
-	if t.calls.Add(1) == 1 {
+	sequence := t.calls.Add(1)
+	if sequence == 1 {
 		return tools.Result{
 			CallID:  call.ID,
 			Name:    call.Name,
@@ -195,7 +196,7 @@ func (t *orderedCancellationTool) Call(ctx context.Context, call tools.Call) (to
 			Summary: textutil.Value("complete"),
 		}, nil
 	}
-	if t.calls.Load() == 2 {
+	if sequence == 2 {
 		close(t.secondStarted)
 		<-ctx.Done()
 		return tools.Result{
