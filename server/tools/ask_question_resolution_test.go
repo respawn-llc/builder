@@ -5,15 +5,11 @@ import (
 	"testing"
 )
 
-func TestAskQuestionBrokerPreservesLosslessLegacyQuestionResolution(t *testing.T) {
-	answer := "  legacy answer  "
-	freeform := "  legacy freeform  "
+func TestAskQuestionBrokerPreservesCanonicalQuestionResolution(t *testing.T) {
+	freeform := "  exact freeform  "
 	broker := NewAskQuestionBroker()
 	broker.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResolution, error) {
-		return AskQuestionLegacyAnswer{
-			Answer:         &answer,
-			FreeformAnswer: &freeform,
-		}, nil
+		return AskQuestionAnswer{Freeform: &freeform}, nil
 	})
 
 	resolution, err := broker.Ask(
@@ -23,15 +19,12 @@ func TestAskQuestionBrokerPreservesLosslessLegacyQuestionResolution(t *testing.T
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
-	legacy, ok := resolution.(AskQuestionLegacyAnswer)
+	answer, ok := resolution.(AskQuestionAnswer)
 	if !ok {
-		t.Fatalf("resolution type = %T, want AskQuestionLegacyAnswer", resolution)
+		t.Fatalf("resolution type = %T, want AskQuestionAnswer", resolution)
 	}
-	if legacy.Answer == nil || *legacy.Answer != answer {
-		t.Fatalf("legacy answer = %v, want exact submitted value", legacy.Answer)
-	}
-	if legacy.FreeformAnswer == nil || *legacy.FreeformAnswer != freeform {
-		t.Fatalf("legacy freeform = %v, want exact submitted value", legacy.FreeformAnswer)
+	if answer.Freeform == nil || *answer.Freeform != freeform {
+		t.Fatalf("freeform = %v, want exact submitted value", answer.Freeform)
 	}
 }
 
@@ -60,21 +53,5 @@ func TestQuestionResolutionFormattingPreservesAbsentOptionalText(t *testing.T) {
 	}
 	if text.freeform != nil {
 		t.Fatalf("freeform = %q, want absent", *text.freeform)
-	}
-}
-
-func TestValidateLegacyQuestionResolutionUsesOptionalSlotPresence(t *testing.T) {
-	selected := 1
-	if err := ValidateAskQuestionResolutionShape(AskQuestionLegacyAnswer{
-		SelectedOptionNumber: &selected,
-	}); err != nil {
-		t.Fatalf("selected-only legacy resolution: %v", err)
-	}
-	blank := ""
-	if err := ValidateAskQuestionResolutionShape(AskQuestionLegacyAnswer{
-		SelectedOptionNumber: &selected,
-		Answer:               &blank,
-	}); err == nil {
-		t.Fatal("present blank legacy answer unexpectedly validated")
 	}
 }

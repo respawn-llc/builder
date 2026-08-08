@@ -220,7 +220,7 @@ func TestExecutionPromptStoreResolvePromptBatchFirstResolverWins(t *testing.T) {
 	}()
 	<-feed.blocked
 
-	if err := store.Submit("second", testLegacyQuestionResolution("external"), nil); err != nil {
+	if err := store.Submit("second", testQuestionResolution("external"), nil); err != nil {
 		t.Fatalf("external Submit: %v", err)
 	}
 	close(feed.release)
@@ -236,7 +236,7 @@ func TestExecutionPromptStoreResolvePromptBatchFirstResolverWins(t *testing.T) {
 	if externalResult.err != nil {
 		t.Fatalf("external winner error = %v", externalResult.err)
 	}
-	requireLegacyQuestionAnswer(t, externalResult.resolution, "external")
+	requireQuestionAnswer(t, externalResult.resolution, "external")
 }
 
 func TestExecutionPromptStoreResolvePromptBatchSkipsReplacedExactEntry(t *testing.T) {

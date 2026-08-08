@@ -15,21 +15,21 @@ type promptAwaitTestResult struct {
 	err        error
 }
 
-func testLegacyQuestionResolution(answer string) tools.AskQuestionLegacyAnswer {
-	return tools.AskQuestionLegacyAnswer{
-		Answer: &answer,
+func testQuestionResolution(answer string) tools.AskQuestionAnswer {
+	return tools.AskQuestionAnswer{
+		Freeform: &answer,
 	}
 }
 
-func requireLegacyQuestionAnswer(
+func requireQuestionAnswer(
 	t *testing.T,
 	resolution tools.AskQuestionResolution,
 	want string,
 ) {
 	t.Helper()
-	answer, ok := resolution.(tools.AskQuestionLegacyAnswer)
-	if !ok || answer.Answer == nil || *answer.Answer != want {
-		t.Fatalf("legacy Question resolution = %+v, want Answer %q", resolution, want)
+	answer, ok := resolution.(tools.AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != want {
+		t.Fatalf("Question resolution = %+v, want freeform %q", resolution, want)
 	}
 }
 
@@ -53,7 +53,7 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	go func() {
 		acceptance, err := store.Accept(
 			first.ID,
-			testLegacyQuestionResolution("one"),
+			testQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -107,7 +107,7 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	go func() {
 		submitDone <- store.Submit(
 			second.ID,
-			testLegacyQuestionResolution("two"),
+			testQuestionResolution("two"),
 			nil,
 		)
 	}()
@@ -128,9 +128,9 @@ func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
 	}
 }
 
-func TestExecutionPromptStorePreservesExactLegacyQuestionSlots(t *testing.T) {
+func TestExecutionPromptStorePreservesCanonicalQuestionResolution(t *testing.T) {
 	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	request := tools.AskQuestionRequest{ID: "legacy-question", Question: "Proceed?"}
+	request := tools.AskQuestionRequest{ID: "question", Question: "Proceed?"}
 	result := make(chan promptAwaitTestResult, 1)
 	go func() {
 		resolution, err := store.Await(context.Background(), request)
@@ -138,11 +138,9 @@ func TestExecutionPromptStorePreservesExactLegacyQuestionSlots(t *testing.T) {
 	}()
 	requirePromptPending(t, &store, request.ID)
 
-	answer := "  exact answer  "
 	freeform := "  exact freeform  "
-	if err := store.Submit(request.ID, tools.AskQuestionLegacyAnswer{
-		Answer:         &answer,
-		FreeformAnswer: &freeform,
+	if err := store.Submit(request.ID, tools.AskQuestionAnswer{
+		Freeform: &freeform,
 	}, nil); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -150,15 +148,12 @@ func TestExecutionPromptStorePreservesExactLegacyQuestionSlots(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("Await: %v", got.err)
 	}
-	legacy, ok := got.resolution.(tools.AskQuestionLegacyAnswer)
+	answer, ok := got.resolution.(tools.AskQuestionAnswer)
 	if !ok {
 		t.Fatalf("resolution type = %T", got.resolution)
 	}
-	if legacy.Answer == nil || *legacy.Answer != answer {
-		t.Fatalf("Answer slot = %v, want exact value", legacy.Answer)
-	}
-	if legacy.FreeformAnswer == nil || *legacy.FreeformAnswer != freeform {
-		t.Fatalf("FreeformAnswer slot = %v, want exact value", legacy.FreeformAnswer)
+	if answer.Freeform == nil || *answer.Freeform != freeform {
+		t.Fatalf("freeform = %v, want exact value", answer.Freeform)
 	}
 }
 
@@ -301,7 +296,7 @@ func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSucc
 	go func() {
 		acceptance, err := store.Accept(
 			request.ID,
-			testLegacyQuestionResolution("one"),
+			testQuestionResolution("one"),
 			nil,
 		)
 		if err != nil {
@@ -344,7 +339,7 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 
 	acceptance, err := store.Accept(
 		first.ID,
-		testLegacyQuestionResolution("one"),
+		testQuestionResolution("one"),
 		nil,
 	)
 	if err != nil {
@@ -367,7 +362,7 @@ func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing
 	requirePromptPending(t, &store, second.ID)
 	if err := store.Submit(
 		second.ID,
-		testLegacyQuestionResolution("two"),
+		testQuestionResolution("two"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit second prompt response: %v", err)

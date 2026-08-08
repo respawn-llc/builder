@@ -588,9 +588,9 @@ type currentNodePromptResult struct {
 	err        error
 }
 
-func currentNodeLegacyQuestionAnswer(answer string) askquestion.AskQuestionLegacyAnswer {
-	return askquestion.AskQuestionLegacyAnswer{
-		Answer: &answer,
+func currentNodeQuestionAnswer(answer string) askquestion.AskQuestionAnswer {
+	return askquestion.AskQuestionAnswer{
+		Freeform: &answer,
 	}
 }
 

@@ -191,9 +191,9 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 		execution.questionSubmitErr != nil {
 		t.Fatalf("question dispatch = %+v, want task-scoped exact answer", execution)
 	}
-	answer, ok := execution.questionResolution.(askquestion.AskQuestionLegacyAnswer)
-	if !ok || answer.Answer == nil || *answer.Answer != request.Answer {
-		t.Fatalf("question resolution = %+v, want exact legacy answer", execution.questionResolution)
+	answer, ok := execution.questionResolution.(askquestion.AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != request.Answer {
+		t.Fatalf("question resolution = %+v, want canonical exact answer", execution.questionResolution)
 	}
 }
 

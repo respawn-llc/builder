@@ -2155,7 +2155,7 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	if err := authority.SubmitPromptResolution(
 		sessionID,
 		pending.requestID,
-		testLegacyQuestionResolution("yes"),
+		testQuestionResolution("yes"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit background question response: %v", err)
@@ -2735,7 +2735,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if err := authority.SubmitPromptResolution(
 		sessionID,
 		askID,
-		testLegacyQuestionResolution("yes"),
+		testQuestionResolution("yes"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit prompt response: %v", err)
@@ -2747,7 +2747,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if result := <-responseDone; result.err != nil {
 		t.Fatalf("prompt resolution error = %v", result.err)
 	} else {
-		requireLegacyQuestionAnswer(t, result.resolution, "yes")
+		requireQuestionAnswer(t, result.resolution, "yes")
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
@@ -2773,7 +2773,7 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 	request := tools.AskQuestionRequest{
 		ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Proceed?",
 	}
-	resolution := testLegacyQuestionResolution("yes")
+	resolution := testQuestionResolution("yes")
 
 	authority.mu.Lock()
 	unlocked := false
@@ -2814,7 +2814,7 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 		if result.err != nil {
 			t.Fatalf("prompt result error = %v", result.err)
 		}
-		requireLegacyQuestionAnswer(t, result.resolution, "yes")
+		requireQuestionAnswer(t, result.resolution, "yes")
 	case <-time.After(time.Second):
 		t.Fatal("prompt cleanup waited for the Authority lock")
 	}
@@ -3025,7 +3025,7 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	if err := authority.SubmitPromptResolutionForScope(
 		resolved.ScopeID,
 		askID,
-		testLegacyQuestionResolution("yes"),
+		testQuestionResolution("yes"),
 		nil,
 	); err != nil {
 		t.Fatalf("SubmitPromptResolutionForScope: %v", err)
@@ -3033,7 +3033,7 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	if result := <-responseDone; result.err != nil {
 		t.Fatalf("prompt resolution error = %v", result.err)
 	} else {
-		requireLegacyQuestionAnswer(t, result.resolution, "yes")
+		requireQuestionAnswer(t, result.resolution, "yes")
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
@@ -3080,7 +3080,7 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	if err := authority.SubmitPromptResolution(
 		sessionID,
 		askID,
-		testLegacyQuestionResolution("yes"),
+		testQuestionResolution("yes"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit prompt response: %v", err)

@@ -157,14 +157,14 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	if responder.awaits != 1 {
 		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
-	answer, ok := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	answer, ok := responder.resolution.(askquestion.AskQuestionAnswer)
 	if responder.sessionID != "session-1" || responder.promptID != "ask-1" || !ok ||
-		answer.Answer == nil || *answer.Answer != "hello" {
+		answer.Freeform == nil || *answer.Freeform != "hello" {
 		t.Fatalf("unexpected stored resolution: session=%q prompt=%q resolution=%+v", responder.sessionID, responder.promptID, responder.resolution)
 	}
 }
 
-func TestServiceAnswerAskPreservesExactLegacyQuestionSlots(t *testing.T) {
+func TestServiceAnswerAskCanonicalizesLegacyQuestionTextAtBoundary(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	req := askAnswerRequest("req-exact")
 	req.Answer = "  answer  "
@@ -173,15 +173,12 @@ func TestServiceAnswerAskPreservesExactLegacyQuestionSlots(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	answer, ok := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	answer, ok := responder.resolution.(askquestion.AskQuestionAnswer)
 	if !ok {
 		t.Fatalf("resolution type = %T", responder.resolution)
 	}
-	if answer.Answer == nil || *answer.Answer != req.Answer {
-		t.Fatalf("Answer slot = %v, want exact submitted value", answer.Answer)
-	}
-	if answer.FreeformAnswer == nil || *answer.FreeformAnswer != req.FreeformAnswer {
-		t.Fatalf("FreeformAnswer slot = %v, want exact submitted value", answer.FreeformAnswer)
+	if answer.Freeform == nil || *answer.Freeform != req.FreeformAnswer {
+		t.Fatalf("canonical freeform = %v, want exact preferred freeform value", answer.Freeform)
 	}
 }
 
@@ -193,13 +190,13 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
 	if answer.SelectedOptionNumber != nil {
 		t.Fatalf("selected option = %v, want nil", *answer.SelectedOptionNumber)
 	}
 }
 
-func TestServiceAnswerAskPreservesAbsentLegacyTextSlots(t *testing.T) {
+func TestServiceAnswerAskPreservesAbsentCanonicalText(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	req := askAnswerRequest("req-option-only")
 	req.SelectedOptionNumber = textutil.Value(1)
@@ -207,13 +204,9 @@ func TestServiceAnswerAskPreservesAbsentLegacyTextSlots(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
-	if answer.Answer != nil || answer.FreeformAnswer != nil {
-		t.Fatalf(
-			"legacy text slots = Answer %v FreeformAnswer %v, want both absent",
-			answer.Answer,
-			answer.FreeformAnswer,
-		)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
+	if answer.Freeform != nil {
+		t.Fatalf("canonical freeform = %v, want absent", answer.Freeform)
 	}
 }
 
@@ -228,13 +221,9 @@ func TestServiceAnswerAskNormalizesWhitespaceSlotsAfterMemoAdmission(t *testing.
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	answer := responder.resolution.(askquestion.AskQuestionLegacyAnswer)
-	if answer.Answer != nil || answer.FreeformAnswer != nil {
-		t.Fatalf(
-			"legacy text slots = Answer %v FreeformAnswer %v, want both absent",
-			answer.Answer,
-			answer.FreeformAnswer,
-		)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
+	if answer.Freeform != nil {
+		t.Fatalf("canonical freeform = %v, want absent", answer.Freeform)
 	}
 	if responder.err != nil {
 		t.Fatalf("prompt submission error = %v, want absent whitespace error", responder.err)

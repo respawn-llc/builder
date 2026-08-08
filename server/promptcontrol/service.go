@@ -86,11 +86,16 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 		if errorMessage != nil {
 			return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, nil, errors.New(*errorMessage))
 		}
-		return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, askquestion.AskQuestionLegacyAnswer{
-			Answer:               textutil.OptionalExactString(req.Answer),
-			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
-		}, nil)
+		return s.prompts.AcceptPromptResolution(
+			req.SessionID,
+			req.AskID,
+			askquestion.AskQuestionAnswerFromLegacyFields(
+				textutil.Pointer(req.SelectedOptionNumber),
+				textutil.OptionalExactString(req.Answer),
+				textutil.OptionalExactString(req.FreeformAnswer),
+			),
+			nil,
+		)
 	})
 	if err != nil {
 		return err

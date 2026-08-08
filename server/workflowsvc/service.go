@@ -1956,11 +1956,11 @@ func (s *Service) acceptWorkflowTaskQuestion(
 			Commentary: textutil.OptionalExactString(req.Approval.Commentary),
 		}
 	} else {
-		resolution = askquestion.AskQuestionLegacyAnswer{
-			Answer:               textutil.OptionalExactString(req.Answer),
-			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       textutil.OptionalExactString(req.FreeformAnswer),
-		}
+		resolution = askquestion.AskQuestionAnswerFromLegacyFields(
+			textutil.Pointer(req.SelectedOptionNumber),
+			textutil.OptionalExactString(req.Answer),
+			textutil.OptionalExactString(req.FreeformAnswer),
+		)
 	}
 	acceptance, err := s.currentNodeExecution.AcceptWorkflowQuestion(
 		ctx,

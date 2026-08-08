@@ -219,7 +219,7 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 		context.Background(),
 		reference.TaskID,
 		"different-ask-id",
-		currentNodeLegacyQuestionAnswer("yes"),
+		currentNodeQuestionAnswer("yes"),
 		nil,
 	); !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("unknown prompt answer error = %v, want prompt not found", err)
@@ -228,7 +228,7 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 		context.Background(),
 		reference.TaskID,
 		request.ID,
-		currentNodeLegacyQuestionAnswer("yes"),
+		currentNodeQuestionAnswer("yes"),
 		nil,
 	); err != nil {
 		t.Fatalf("AnswerWorkflowQuestion: %v", err)
@@ -320,7 +320,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 			context.Background(),
 			reference.TaskID,
 			firstID,
-			currentNodeLegacyQuestionAnswer("one"),
+			currentNodeQuestionAnswer("one"),
 			nil,
 		)
 	}()
@@ -339,7 +339,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 			context.Background(),
 			independentReference.TaskID,
 			independentRequest.ID,
-			currentNodeLegacyQuestionAnswer("independent"),
+			currentNodeQuestionAnswer("independent"),
 			nil,
 		)
 	}()
@@ -381,7 +381,7 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 	if err := fixture.authority.SubmitPromptResolution(
 		sessionID,
 		secondID,
-		currentNodeLegacyQuestionAnswer("two"),
+		currentNodeQuestionAnswer("two"),
 		nil,
 	); err != nil {
 		t.Fatalf("submit second prompt: %v", err)
@@ -425,7 +425,7 @@ func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariant
 		context.Background(),
 		reference.TaskID,
 		request.ID,
-		currentNodeLegacyQuestionAnswer("yes"),
+		currentNodeQuestionAnswer("yes"),
 		nil,
 	)
 	var invariantErr sessionruntime.PromptBatchInvariantError
@@ -464,7 +464,7 @@ func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *t
 		context.Background(),
 		reference.TaskID,
 		request.ID,
-		currentNodeLegacyQuestionAnswer("yes"),
+		currentNodeQuestionAnswer("yes"),
 		nil,
 	)
 	if !errors.Is(err, serverapi.ErrPromptNotFound) {
@@ -505,7 +505,7 @@ func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 		context.Background(),
 		taskID,
 		request.ID,
-		currentNodeLegacyQuestionAnswer("yes"),
+		currentNodeQuestionAnswer("yes"),
 		nil,
 	)
 	if !errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous) {

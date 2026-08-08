@@ -17,16 +17,21 @@ type AskQuestionAnswer struct {
 
 func (AskQuestionAnswer) askQuestionResolution() {}
 
-// AskQuestionLegacyAnswer preserves both exact temporary single-prompt text
-// slots until KENT-461 deletes that API. Nil means the corresponding legacy
-// wire slot was semantically absent.
-type AskQuestionLegacyAnswer struct {
-	Answer               *string
-	SelectedOptionNumber *int
-	FreeformAnswer       *string
+// AskQuestionAnswerFromLegacyFields translates the temporary single-prompt
+// wire fields after request-memo admission. KENT-461 deletes those fields.
+func AskQuestionAnswerFromLegacyFields(
+	selectedOptionNumber *int,
+	answer *string,
+	freeformAnswer *string,
+) AskQuestionAnswer {
+	if freeformAnswer == nil {
+		freeformAnswer = answer
+	}
+	return AskQuestionAnswer{
+		SelectedOptionNumber: selectedOptionNumber,
+		Freeform:             freeformAnswer,
+	}
 }
-
-func (AskQuestionLegacyAnswer) askQuestionResolution() {}
 
 type AskQuestionApproval struct {
 	Decision   AskQuestionApprovalDecision
@@ -48,22 +53,6 @@ func ValidateAskQuestionResolutionShape(resolution AskQuestionResolution) error 
 			return ErrAskQuestionNonApprovalRequiresAnswer
 		}
 		return nil
-	case AskQuestionLegacyAnswer:
-		if answer.SelectedOptionNumber != nil && *answer.SelectedOptionNumber <= 0 {
-			return errors.New("selected option number must be positive when present")
-		}
-		if answer.Answer != nil && strings.TrimSpace(*answer.Answer) == "" {
-			return errors.New("legacy answer must be non-blank when present")
-		}
-		if answer.FreeformAnswer != nil && strings.TrimSpace(*answer.FreeformAnswer) == "" {
-			return errors.New("legacy freeform answer must be non-blank when present")
-		}
-		if answer.SelectedOptionNumber == nil &&
-			answer.Answer == nil &&
-			answer.FreeformAnswer == nil {
-			return ErrAskQuestionNonApprovalRequiresAnswer
-		}
-		return nil
 	case AskQuestionApproval:
 		if answer.Commentary != nil && strings.TrimSpace(*answer.Commentary) == "" {
 			return errors.New("approval commentary must be non-blank when present")
@@ -80,11 +69,6 @@ func ValidateAskQuestionResolution(req AskQuestionRequest, resolution AskQuestio
 	}
 	switch answer := resolution.(type) {
 	case AskQuestionAnswer:
-		if req.Approval {
-			return ErrAskQuestionApprovalRequiresResponse
-		}
-		return validateSelectedOptionOffer(req, answer.SelectedOptionNumber)
-	case AskQuestionLegacyAnswer:
 		if req.Approval {
 			return ErrAskQuestionApprovalRequiresResponse
 		}
@@ -132,15 +116,6 @@ func resolutionQuestionText(resolution AskQuestionResolution) (questionResolutio
 		return questionResolutionText{
 			selected: answer.SelectedOptionNumber,
 			freeform: normalizedResolutionText(answer.Freeform),
-		}, nil
-	case AskQuestionLegacyAnswer:
-		freeform := answer.FreeformAnswer
-		if freeform == nil {
-			freeform = answer.Answer
-		}
-		return questionResolutionText{
-			selected: answer.SelectedOptionNumber,
-			freeform: normalizedResolutionText(freeform),
 		}, nil
 	default:
 		return questionResolutionText{}, fmt.Errorf("Question resolution type %T is invalid", resolution)
