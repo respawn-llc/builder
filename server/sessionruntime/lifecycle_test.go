@@ -557,6 +557,30 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 	authority.mu.Lock()
 	failedResource = authority.resources[sessionID]
 	authority.mu.Unlock()
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	var releaseCallbackOnce sync.Once
+	releaseActiveCallback := func() {
+		releaseCallbackOnce.Do(func() { close(releaseCallback) })
+	}
+	t.Cleanup(releaseActiveCallback)
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- authority.WithCurrentRuntime(
+			context.Background(),
+			sessionID,
+			func(context.Context, *runtime.Engine) error {
+				close(callbackEntered)
+				<-releaseCallback
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-callbackEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("current runtime callback did not become active")
+	}
 
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(
 		_ context.Context,
@@ -582,6 +606,18 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 	case <-lifecycle.draining:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Goal lifecycle runtime abort did not retire the resource")
+	}
+	if state := failedResource.descriptor().State; state != AgentResourceDraining {
+		t.Fatalf("Goal lifecycle resource state = %v, want draining while callback is active", state)
+	}
+	releaseActiveCallback()
+	select {
+	case callbackErr := <-callbackDone:
+		if callbackErr != nil {
+			t.Fatalf("release current runtime callback: %v", callbackErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("current runtime callback did not release")
 	}
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore Goal lifecycle event log: %v", err)
