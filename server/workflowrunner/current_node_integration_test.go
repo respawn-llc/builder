@@ -1908,24 +1908,6 @@ func TestRuntimeBoundWorkflowAssignmentLaunchesFreshRetainedSuccessorWithoutBloc
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("source Current Node did not start")
 	}
-	sourceScopeID := runtimeids.ExecutionScopeID{}
-	for _, live := range f.controller.Snapshot().LiveScopes {
-		if live.CurrentNode.Equal(source) {
-			sourceScopeID = live.ScopeID
-			break
-		}
-	}
-	if sourceScopeID.IsZero() {
-		t.Fatal("source Current Node reached its provider without an Exact Execution Scope")
-	}
-	sourceExecution, live := f.authority.ExecutionByScope(sourceScopeID)
-	if !live {
-		t.Fatalf("source Exact Execution Scope %s is not live", sourceScopeID)
-	}
-	sourceResource, hasResource := sourceExecution.Scope().Resource()
-	if !hasResource {
-		t.Fatalf("source Exact Execution Scope %s has no Active Session Runtime", sourceScopeID)
-	}
 	sourceNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
 	})
@@ -1934,9 +1916,10 @@ func TestRuntimeBoundWorkflowAssignmentLaunchesFreshRetainedSuccessorWithoutBloc
 	if !live {
 		t.Fatal("source Current Node reached its provider without an Exact Execution Scope")
 	}
+	sourceScopeID := sourceExecution.Scope().ID()
 	sourceResource, hasResource := sourceExecution.Scope().Resource()
 	if !hasResource {
-		t.Fatal("source Exact Execution Scope has no Active Session Runtime")
+		t.Fatalf("source Exact Execution Scope %s has no Active Session Runtime", sourceScopeID)
 	}
 	transcript, err := f.runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
 		SessionID: sessionID.String(),
@@ -1957,23 +1940,17 @@ func TestRuntimeBoundWorkflowAssignmentLaunchesFreshRetainedSuccessorWithoutBloc
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("continued Session successor did not reach its model turn")
 	}
-	successorScopeID := runtimeids.ExecutionScopeID{}
-	for _, live := range f.controller.Snapshot().LiveScopes {
-		if live.CurrentNode.Equal(successor) {
-			successorScopeID = live.ScopeID
-			break
-		}
+	successorExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("successor Current Node reached its provider without an Exact Execution Scope")
 	}
+	successorScopeID := successorExecution.Scope().ID()
 	if successorScopeID.IsZero() || successorScopeID == sourceScopeID {
 		t.Fatalf(
 			"successor Exact Execution Scope = %s, want fresh scope distinct from %s",
 			successorScopeID,
 			sourceScopeID,
 		)
-	}
-	successorExecution, live := f.authority.ExecutionByScope(successorScopeID)
-	if !live {
-		t.Fatalf("successor Exact Execution Scope %s is not live", successorScopeID)
 	}
 	successorResource, hasResource := successorExecution.Scope().Resource()
 	if !hasResource || successorResource != sourceResource {

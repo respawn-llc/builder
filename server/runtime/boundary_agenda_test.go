@@ -241,65 +241,6 @@ func TestHumanBoundaryAgendaTakesOnlyTheStoppedExactScope(t *testing.T) {
 	}
 }
 
-func TestWorkflowAssignmentBoundaryAgendaIsCanonicalAndRuntimeBound(t *testing.T) {
-	agenda := newBoundaryAgenda()
-	scopeID := runtimeids.NewExecutionScopeID()
-	origin := newTestAgentStepOrigin(t)
-	steer := newWorkflowAssignmentSteer()
-	item := newWorkflowAssignmentAgendaItem(
-		steerMessagesWithPersistenceIntent(
-			steeringPriorityRuntimeContext,
-			steeringMessageEventDefault,
-			true,
-			[]llm.Message{{
-				Role:    llm.RoleDeveloper,
-				Content: textutil.Value("next workflow assignment"),
-			}},
-		),
-		steer,
-	)
-
-	if err := agenda.accept(item); err != nil {
-		t.Fatalf("accept workflow assignment: %v", err)
-	}
-	if pending := pendingWorkflowAssignmentsForTest(agenda); len(pending) != 1 || pending[0] != item {
-		t.Fatalf("pending Workflow assignments = %+v, want canonical item %p", pending, item)
-	}
-
-	agenda.finalizeScope(scopeID, errBoundaryScopeFinalized)
-	if pending := pendingWorkflowAssignmentsForTest(agenda); len(pending) != 1 || pending[0] != item {
-		t.Fatalf("source-scope finalization changed Workflow assignment projection: %+v", pending)
-	}
-
-	if selected := agenda.selectNext(stepBoundarySelection(scopeID, origin)); selected != item {
-		t.Fatalf("Step Boundary selected = %p, want Workflow assignment %p", selected, item)
-	}
-	if pending := pendingWorkflowAssignmentsForTest(agenda); len(pending) != 0 {
-		t.Fatalf("pending Workflow assignments after selection = %+v", pending)
-	}
-
-	closingSteer := newWorkflowAssignmentSteer()
-	closingItem := newWorkflowAssignmentAgendaItem(item.intent, closingSteer)
-	if err := agenda.accept(closingItem); err != nil {
-		t.Fatalf("accept closing Workflow assignment: %v", err)
-	}
-	agenda.close(errBoundaryRuntimeClosed)
-	if receipt, err := closingSteer.Wait(t.Context()); !errors.Is(err, errBoundaryRuntimeClosed) || receipt.Committed {
-		t.Fatalf("runtime-close Workflow assignment settlement = %+v, %v", receipt, err)
-	}
-}
-
-func pendingWorkflowAssignmentsForTest(agenda *boundaryAgenda) []*workflowAssignmentAgendaItem {
-	pending := make([]*workflowAssignmentAgendaItem, 0)
-	for _, entry := range agenda.pending() {
-		assignment, ok := entry.(*workflowAssignmentAgendaItem)
-		if ok {
-			pending = append(pending, assignment)
-		}
-	}
-	return pending
-}
-
 type testBoundaryAgendaItem struct {
 	id          boundaryAgendaItemID
 	binding     boundaryAgendaBinding

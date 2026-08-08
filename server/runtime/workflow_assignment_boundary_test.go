@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
@@ -31,9 +33,10 @@ func TestWorkflowAssignmentAppliesAtAgentStepBoundary(t *testing.T) {
 			return nil
 		},
 	}
+	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		client,
 		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
@@ -54,14 +57,12 @@ func TestWorkflowAssignmentAppliesAtAgentStepBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SteerWorkflowAssignment: %v", err)
 	}
-	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 1 {
-		t.Fatalf("pending Workflow assignments = %d, want one canonical item", len(pending))
-	}
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelWait()
 	if receipt, waitErr := steer.Wait(waitCtx); !errors.Is(waitErr, context.DeadlineExceeded) || receipt.Committed {
 		t.Fatalf("pre-Boundary Workflow assignment = %+v, %v; want pending", receipt, waitErr)
 	}
+	assertWorkflowAssignmentRecordCount(t, store, 0)
 
 	close(release)
 	select {
@@ -76,16 +77,14 @@ func TestWorkflowAssignmentAppliesAtAgentStepBoundary(t *testing.T) {
 	if err != nil || !receipt.Committed {
 		t.Fatalf("Workflow assignment settlement = %+v, %v; want committed", receipt, err)
 	}
-	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 0 {
-		t.Fatalf("pending Workflow assignments after Boundary = %d, want zero", len(pending))
-	}
-	assertWorkflowAssignmentRecordCount(t, engine, 1)
+	assertWorkflowAssignmentRecordCount(t, store, 1)
 }
 
 func TestWorkflowAssignmentAppliesImmediatelyOnIdleRuntime(t *testing.T) {
+	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		&fakeClient{},
 		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
@@ -99,10 +98,7 @@ func TestWorkflowAssignmentAppliesImmediatelyOnIdleRuntime(t *testing.T) {
 	if err != nil || !receipt.Committed {
 		t.Fatalf("idle Workflow assignment settlement = %+v, %v; want committed", receipt, err)
 	}
-	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 0 {
-		t.Fatalf("idle pending Workflow assignments = %d, want zero", len(pending))
-	}
-	assertWorkflowAssignmentRecordCount(t, engine, 1)
+	assertWorkflowAssignmentRecordCount(t, store, 1)
 }
 
 func TestWorkflowAssignmentApplicationFailureSettlesTypedSteer(t *testing.T) {
@@ -123,9 +119,6 @@ func TestWorkflowAssignmentApplicationFailureSettlesTypedSteer(t *testing.T) {
 	receipt, err := steer.Wait(context.Background())
 	if err == nil || receipt.Committed {
 		t.Fatalf("failed Workflow assignment settlement = %+v, %v; want typed uncommitted failure", receipt, err)
-	}
-	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 0 {
-		t.Fatalf("failed Workflow assignment remained pending: %+v", pending)
 	}
 }
 
@@ -186,15 +179,84 @@ func TestWorkflowAssignmentSettlesWhenEarlierIdleWorkTransferFails(t *testing.T)
 	if err == nil || receipt.Committed {
 		t.Fatalf("Workflow assignment settlement = %+v, %v; want typed transfer failure", receipt, err)
 	}
-	if pending := pendingWorkflowAssignmentsForTest(engine.boundaryAgenda); len(pending) != 0 {
-		t.Fatalf("failed Workflow assignment remained pending: %+v", pending)
-	}
 	if engine.longBoundary.selected != nil || !background.settled {
 		t.Fatalf(
 			"earlier long work ownership = selected:%v settled:%t",
 			engine.longBoundary.selected,
 			background.settled,
 		)
+	}
+}
+
+func TestWorkflowAssignmentSurvivesSourceScopeRelease(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := &hookClient{
+		response: llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("source complete"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		beforeReturn: func() error {
+			close(started)
+			<-release
+			return nil
+		},
+	}
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &workflowAssignmentScopeLifecycle{scopeID: scopeID}
+	lifecycle.live.Store(true)
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", StepLifecycle: lifecycle},
+	)
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "finish source")
+		runDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("source Agent Step did not start")
+	}
+
+	steer, err := engine.SteerWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
+	if err != nil {
+		t.Fatalf("SteerWorkflowAssignment: %v", err)
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if receipt, waitErr := steer.Wait(waitCtx); !errors.Is(waitErr, context.DeadlineExceeded) || receipt.Committed {
+		cancelWait()
+		t.Fatalf("pre-release Workflow assignment = %+v, %v; want pending", receipt, waitErr)
+	}
+	cancelWait()
+
+	lifecycle.live.Store(false)
+	if err := engine.AgentExecutionScopeReleased(scopeID); err != nil {
+		t.Fatalf("release source Exact Execution Scope: %v", err)
+	}
+	if receipt, err := steer.Wait(context.Background()); err != nil || !receipt.Committed {
+		t.Fatalf("post-release Workflow assignment settlement = %+v, %v; want committed", receipt, err)
+	}
+	assertWorkflowAssignmentRecordCount(t, store, 1)
+
+	close(release)
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("source Agent Turn: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("source Agent Turn did not finish")
 	}
 }
 
@@ -216,9 +278,10 @@ func TestWorkflowAssignmentPreservesAdmissionOrderAgainstHumanInput(t *testing.T
 			return nil
 		},
 	}
+	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(
 		t,
-		mustCreateTestSession(t),
+		store,
 		client,
 		tools.NewRegistry(),
 		Config{Model: "gpt-5"},
@@ -261,13 +324,17 @@ func TestWorkflowAssignmentPreservesAdmissionOrderAgainstHumanInput(t *testing.T
 	if receipt, err := steer.Wait(context.Background()); err != nil || !receipt.Committed {
 		t.Fatalf("Workflow assignment settlement = %+v, %v", receipt, err)
 	}
-	assertWorkflowAssignmentRecordCount(t, engine, 1)
-	assertUserMessageRecordCount(t, engine, "later human input", 0)
+	assertWorkflowAssignmentRecordCount(t, store, 1)
+	assertUserMessageRecordCount(t, store, "later human input", 0)
 }
 
-func assertWorkflowAssignmentRecordCount(t *testing.T, engine *Engine, want int) {
+func assertWorkflowAssignmentRecordCount(t *testing.T, store *session.Store, want int) {
 	t.Helper()
-	recent, err := engine.eventLog.ReadRecentRecords(100)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize workflow assignment event log: %v", err)
+	}
+	recent, err := eventLog.ReadRecentRecords(100)
 	if err != nil {
 		t.Fatalf("read workflow assignment records: %v", err)
 	}
@@ -287,9 +354,13 @@ func assertWorkflowAssignmentRecordCount(t *testing.T, engine *Engine, want int)
 	}
 }
 
-func assertUserMessageRecordCount(t *testing.T, engine *Engine, text string, want int) {
+func assertUserMessageRecordCount(t *testing.T, store *session.Store, text string, want int) {
 	t.Helper()
-	recent, err := engine.eventLog.ReadRecentRecords(100)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize user-message event log: %v", err)
+	}
+	recent, err := eventLog.ReadRecentRecords(100)
 	if err != nil {
 		t.Fatalf("read user message records: %v", err)
 	}
@@ -307,4 +378,44 @@ func assertUserMessageRecordCount(t *testing.T, engine *Engine, text string, wan
 	if got != want {
 		t.Fatalf("user message %q records = %d, want %d", text, got, want)
 	}
+}
+
+type workflowAssignmentScopeLifecycle struct {
+	scopeID runtimeids.ExecutionScopeID
+	live    atomic.Bool
+}
+
+func (*workflowAssignmentScopeLifecycle) StepBegan(context.Context, StepLifecycleSnapshot) error {
+	return nil
+}
+
+func (*workflowAssignmentScopeLifecycle) StepEnded(context.Context, StepLifecycleSnapshot) error {
+	return nil
+}
+
+func (l *workflowAssignmentScopeLifecycle) AgentStepBegan(
+	context.Context,
+	serverapi.RuntimeStepOrigin,
+) (runtimeids.ExecutionScopeID, error) {
+	return l.scopeID, nil
+}
+
+func (*workflowAssignmentScopeLifecycle) AgentStepBoundary(
+	context.Context,
+	serverapi.RuntimeStepOrigin,
+) (AgentStepBoundaryTransfer, error) {
+	return nil, errors.New("released source Agent Step reached a Boundary")
+}
+
+func (l *workflowAssignmentScopeLifecycle) AgentStepScopeLive(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+) bool {
+	return l.live.Load()
+}
+
+func (l *workflowAssignmentScopeLifecycle) CurrentAgentExecutionScope(
+	context.Context,
+) (runtimeids.ExecutionScopeID, bool) {
+	return l.scopeID, l.live.Load()
 }
