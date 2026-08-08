@@ -295,7 +295,7 @@ func validPromptAnswerBatchRequest(t *testing.T) PromptAnswerBatchRequest {
 
 func mustPromptBatchSessionID(t *testing.T) runtimeids.SessionID {
 	t.Helper()
-	id, err := runtimeids.ParseSessionID("session-1")
+	id, err := runtimeids.ParseSessionID("11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}

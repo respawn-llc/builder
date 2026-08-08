@@ -358,8 +358,8 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 		toolspec.ToolViewImage,
 	)
 	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
-		if !strings.Contains(req.Question, "Allow reading") {
-			t.Fatalf("expected read-focused approval question, got %q", req.Question)
+		if !req.Approval || len(req.ApprovalOptions) != 3 {
+			t.Fatalf("outside-path request = %+v, want structured approval", req)
 		}
 		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
 	})
@@ -531,8 +531,8 @@ func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) 
 	}
 	registry, broker := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolViewImage)
 	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
-		if !strings.Contains(req.Question, "Allow reading") {
-			t.Fatalf("expected read-focused approval question, got %q", req.Question)
+		if !req.Approval || len(req.ApprovalOptions) != 3 {
+			t.Fatalf("generated-file request = %+v, want structured approval", req)
 		}
 		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
 	})

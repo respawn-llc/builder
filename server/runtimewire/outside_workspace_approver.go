@@ -73,6 +73,9 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 func OutsideWorkspaceApprovalFromResolution(
 	resolution askquestion.AskQuestionResolution,
 ) (patchtool.OutsideWorkspaceApproval, error) {
+	if err := askquestion.ValidateAskQuestionResolutionShape(resolution); err != nil {
+		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("validate approval resolution: %w", err)
+	}
 	answer, ok := resolution.(askquestion.AskQuestionApproval)
 	if !ok {
 		return patchtool.OutsideWorkspaceApproval{}, errors.New("missing approval payload")
