@@ -90,6 +90,12 @@ func commitStagedFiles(
 		}
 		return rollbackErr
 	}
+	rollbackAfterFailure := func(primary error) error {
+		if rollbackErr := rollback(); rollbackErr != nil {
+			return errors.Join(primary, fmt.Errorf("rollback failed: %w", rollbackErr))
+		}
+		return primary
+	}
 
 	removePath := func(path string, label string) (fileSnapshot, error) {
 		if _, seen := removedPaths[path]; seen {
@@ -108,7 +114,7 @@ func commitStagedFiles(
 			return before, nil
 		}
 		if err := revalidateCommitPath(tool, path); err != nil {
-			return fileSnapshot{}, err
+			return fileSnapshot{}, rollbackAfterFailure(err)
 		}
 		if err := os.Remove(path); err != nil {
 			primary := fmt.Errorf("remove %s %s: %w", label, path, err)
@@ -157,7 +163,7 @@ func commitStagedFiles(
 
 	for _, s := range states {
 		if err := revalidateCommitPath(tool, s.NewPath); err != nil {
-			return nil, err
+			return nil, rollbackAfterFailure(err)
 		}
 		if err := os.MkdirAll(filepath.Dir(s.NewPath), 0o755); err != nil {
 			primary := fmt.Errorf("create parent dir for %s: %w", s.NewPath, err)
@@ -175,7 +181,7 @@ func commitStagedFiles(
 			return nil, primary
 		}
 		if err := revalidateCommitPath(tool, s.NewPath); err != nil {
-			return nil, err
+			return nil, rollbackAfterFailure(err)
 		}
 		if err := os.Rename(s.StagedPath, s.NewPath); err != nil {
 			primary := fmt.Errorf("commit write %s: %w", s.NewPath, err)

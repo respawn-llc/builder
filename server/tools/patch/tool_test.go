@@ -665,6 +665,49 @@ func TestCommitStagedFilesRollsBackCommittedTargetsOnLaterFailure(t *testing.T) 
 	}
 }
 
+func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	currentWorkspace := filepath.Join(currentRoot, "nested")
+	for _, dir := range []string{currentWorkspace, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	deleteTarget := filepath.Join(currentRoot, "delete.txt")
+	if err := os.WriteFile(deleteTarget, []byte("restore me\n"), 0o644); err != nil {
+		t.Fatalf("seed delete target: %v", err)
+	}
+	foreignTarget := filepath.Join(foreignRoot, "foreign.txt")
+	stage, err := createStagedFile(foreignTarget, []byte("must not commit\n"), 0o644)
+	if err != nil {
+		t.Fatalf("stage foreign target: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(stage) })
+
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, currentWorkspace, WithManagedWorktreePathContext(context))
+
+	_, err = commitStagedFiles(
+		tool,
+		[]*patchFileState{{Exists: false, NewPath: foreignTarget, Original: foreignTarget, StagedPath: stage}},
+		map[string]wholeFileDeletionTarget{
+			deleteTarget: {},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), tools.ForeignManagedWorktreeEditDeniedMessage) {
+		t.Fatalf("expected managed-worktree revalidation error, got %v", err)
+	}
+	assertPatchFileContent(t, deleteTarget, "restore me\n")
+	if _, statErr := os.Stat(foreignTarget); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("foreign target was committed, stat err=%v", statErr)
+	}
+}
+
 func TestOutsideWorkspaceEditAllowedWhenConfigured(t *testing.T) {
 	workspace := t.TempDir()
 	outsideRoot := outsideNonTempDir(t)
