@@ -232,7 +232,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 				)
 			}
 			return errors.Join(
-				abortErr,
+				taskErr, abortErr,
 				a.closeRetiringResource(context.Background(), resource),
 			)
 		},

@@ -412,7 +412,8 @@ func (e *Engine) flushResultGroup(
 	}
 	plan, err := e.prepareResultGroupProjection(stepID, collector, ready)
 	if err != nil {
-		return err
+		collector.abort(resultGroupFatal{Committed: false, Cause: err})
+		return collector.fatalSnapshot()
 	}
 	started := time.Now()
 	records, receipt, appendErr := e.eventLog.AppendRecordsAtomic(

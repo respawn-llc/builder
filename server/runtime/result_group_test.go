@@ -662,6 +662,55 @@ func TestResultGroupFlushPreCommitFailureProjectsNothingAndDoesNotRetryOnClose(t
 	}
 }
 
+func TestResultGroupPreparationFailureAbortsBeforeCommit(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	prepareSimpleResultGroupCall(t, engine, "step", "malformed")
+	collector := testResultGroupCollector(t, "malformed")
+	unit := testResultGroupUnit("malformed")
+	unit.result.Output = []byte(`{"broken"`)
+	var outcome *resultGroupReportOutcome
+
+	err := engine.steer(
+		"step",
+		steerResultGroupReportIntent(
+			collector,
+			"malformed",
+			unit,
+			&outcome,
+		),
+		steerResultGroupFlushIntent(collector, ResultGroupFlushQuestion),
+	)
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) || fatal.Committed || fatal.Cause == nil {
+		t.Fatalf("preparation error = %v, want uncommitted fatal", err)
+	}
+	if outcome == nil ||
+		*outcome != resultGroupReportAccepted ||
+		collector.state != resultGroupCollectorAborted ||
+		collector.cursor != 0 {
+		t.Fatalf(
+			"preparation outcome=%v state=%d cursor=%d, want accepted aborted cursor 0",
+			outcome,
+			collector.state,
+			collector.cursor,
+		)
+	}
+	var closeFatal *resultGroupFatal
+	if closeErr := engine.steer(
+		"step",
+		steerResultGroupCloseIntent(collector),
+	); !errors.As(closeErr, &closeFatal) || closeFatal.Cause != fatal.Cause {
+		t.Fatalf("close preparation failure = %v, want stored fatal %+v", closeErr, fatal)
+	}
+}
+
 func TestResultGroupCommittedObserverFailureProjectsOnceAndStoresFatal(t *testing.T) {
 	observerErr := errors.New("result group observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
