@@ -506,24 +506,34 @@ func TestTaskDetailCurrentScriptOrderingIsNilAwareAndTotal(t *testing.T) {
 
 	sortTaskDetailCurrentScripts(scripts)
 
-	got := make([]string, 0, len(scripts))
-	for _, script := range scripts {
-		branch := "<none>"
-		if script.CurrentNode.TransitionBranchKey != nil {
-			branch = *script.CurrentNode.TransitionBranchKey
-		}
-		got = append(got, script.CurrentNode.NodeID+":"+branch+":"+script.Path)
+	want := []serverapi.WorkflowTaskCurrentScript{
+		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "a"},
+		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "z"},
+		{
+			CurrentNode: serverapi.WorkflowTaskCurrentNode{
+				NodeID:              "node-a",
+				TransitionBranchKey: &branchA,
+			},
+			Path: "a",
+		},
+		{
+			CurrentNode: serverapi.WorkflowTaskCurrentNode{
+				NodeID:              "node-a",
+				TransitionBranchKey: &branchA,
+			},
+			Path: "z",
+		},
+		{
+			CurrentNode: serverapi.WorkflowTaskCurrentNode{
+				NodeID:              "node-a",
+				TransitionBranchKey: &branchZ,
+			},
+			Path: "z",
+		},
+		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-b"}, Path: "b"},
 	}
-	want := []string{
-		"node-a:<none>:a",
-		"node-a:<none>:z",
-		"node-a:a:a",
-		"node-a:a:z",
-		"node-a:z:z",
-		"node-b:<none>:b",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Current Script order = %v, want %v", got, want)
+	if !reflect.DeepEqual(scripts, want) {
+		t.Fatalf("Current Script order = %+v, want %+v", scripts, want)
 	}
 }
 

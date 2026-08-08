@@ -407,7 +407,7 @@ export const englishResources = {
       noActivityTitle: "No activity yet",
       noCommentsTitle: "No comments yet",
       sessions: "Sessions",
-      openChat: "Open {{name}} Chat",
+      openInCli: "Open {{name}} in CLI",
       interruptChat: "Interrupt {{name}} Chat",
       openScript: "Open script",
       cliCommandCopied: "Copied command to clipboard",
